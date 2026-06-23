@@ -1,0 +1,148 @@
+- generic [ref=e1]:
+  - generic [ref=e726]:
+    - complementary [ref=e727]:
+      - generic [ref=e728]:
+        - generic [ref=e729]: G
+        - generic [ref=e730]:
+          - strong [ref=e731]: GEO Monitor
+          - generic [ref=e732]: 客户企业端
+      - generic [ref=e733]:
+        - img [ref=e914]
+        - generic [ref=e737]:
+          - generic [ref=e738]: AIEO 企业管理员
+          - generic [ref=e739]: 北京艾迪亚控股集团有限公司
+      - navigation [ref=e740]:
+        - link "运营工作台" [ref=e918] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e919]
+          - generic [ref=e922]: 运营工作台
+        - link "品牌资产" [ref=e923] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e924]
+          - generic [ref=e928]: 品牌资产
+        - link "实时检测" [ref=e929] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e930]
+          - generic [ref=e933]: 实时检测
+        - link "批量监控" [ref=e934] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e935]
+          - generic [ref=e939]: 批量监控
+        - link "GEO监测" [ref=e940] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e941]
+          - generic [ref=e943]: GEO监测
+        - link "舆情监控" [ref=e944] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e945]
+          - generic [ref=e947]: 舆情监控
+        - link "推广链接检测" [ref=e948] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e949]
+          - generic [ref=e952]: 推广链接检测
+        - link "品牌诊断" [ref=e953] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e954]
+          - generic [ref=e958]: 品牌诊断
+        - link "竞品分析" [ref=e959] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e960]
+          - generic [ref=e962]: 竞品分析
+        - link "引用来源" [ref=e963] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e964]
+          - generic [ref=e968]: 引用来源
+        - link "报告中心" [ref=e969] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e970]
+          - generic [ref=e973]: 报告中心
+        - link "企业知识库" [ref=e974] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e975]
+          - generic [ref=e977]: 企业知识库
+    - generic [ref=e800]:
+      - generic [ref=e801]:
+        - generic [ref=e802]: GEO Monitor / 运营工作台
+        - generic [ref=e803]:
+          - button "当前身份 AIEO 企业管理员" [active] [ref=e978] [cursor=pointer]:
+            - generic [ref=e806]:
+              - generic [ref=e807]: 当前身份
+              - generic [ref=e808]: AIEO 企业管理员
+            - img [ref=e809]
+          - generic [ref=e811]:
+            - generic [ref=e812]: 小
+            - generic [ref=e813]:
+              - generic [ref=e814]: 小明
+              - generic [ref=e815]: demo
+          - button "退出登录" [ref=e816] [cursor=pointer]:
+            - img [ref=e817]
+      - main [ref=e820]:
+        - generic [ref=e821]:
+          - generic [ref=e822]:
+            - heading "运营工作台" [level=1] [ref=e979]
+            - paragraph [ref=e824]: 品牌曝光、推荐排名、引用来源与监测趋势
+          - generic [ref=e825]: 数据服务正常
+        - generic [ref=e827]:
+          - article [ref=e980]:
+            - generic [ref=e981]: 总检测次数
+            - strong [ref=e982]: 128,430
+            - generic [ref=e983]: +18.6%
+          - article [ref=e984]:
+            - generic [ref=e985]: 品牌总曝光率
+            - strong [ref=e986]: 76.8%
+            - generic [ref=e987]: +6.4%
+          - article [ref=e988]:
+            - generic [ref=e989]: 平均推荐排名
+            - strong [ref=e990]: "3.2"
+            - generic [ref=e991]: 2 个平台需关注
+          - article [ref=e992]:
+            - generic [ref=e993]: 可用模型平台
+            - strong [ref=e994]: "11"
+            - generic [ref=e995]: 运行正常
+        - generic [ref=e844]:
+          - article [ref=e845]:
+            - generic [ref=e846]:
+              - heading "核心指标趋势" [level=2] [ref=e847]
+              - generic [ref=e848]: 最近 7 天
+            - generic [ref=e849]:
+              - generic [ref=e850]:
+                - generic [ref=e851]: "52"
+                - generic [ref=e853]: 周一
+              - generic [ref=e854]:
+                - generic [ref=e855]: "64"
+                - generic [ref=e857]: 周二
+              - generic [ref=e858]:
+                - generic [ref=e859]: "58"
+                - generic [ref=e861]: 周三
+              - generic [ref=e862]:
+                - generic [ref=e863]: "76"
+                - generic [ref=e865]: 周四
+              - generic [ref=e866]:
+                - generic [ref=e867]: "84"
+                - generic [ref=e869]: 周五
+              - generic [ref=e870]:
+                - generic [ref=e871]: "79"
+                - generic [ref=e873]: 周六
+              - generic [ref=e874]:
+                - generic [ref=e875]: "91"
+                - generic [ref=e877]: 今日
+          - article [ref=e878]:
+            - generic [ref=e879]:
+              - heading "模型曝光排行" [level=2] [ref=e996]
+              - generic [ref=e881]: 实时更新
+            - generic [ref=e882]:
+              - generic [ref=e997]:
+                - generic [ref=e998]: "1"
+                - generic [ref=e999]: 豆包 82.4%
+              - generic [ref=e1001]:
+                - generic [ref=e1002]: "2"
+                - generic [ref=e1003]: DeepSeek 78.9%
+              - generic [ref=e1005]:
+                - generic [ref=e1006]: "3"
+                - generic [ref=e1007]: 通义千问 71.6%
+              - generic [ref=e1009]:
+                - generic [ref=e1010]: "4"
+                - generic [ref=e1011]: 百度 AI+ 68.2%
+  - alert [ref=e1013]:
+    - img [ref=e1015]
+    - paragraph [ref=e1017]: 已切换至AIEO 企业管理员

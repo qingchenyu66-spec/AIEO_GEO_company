@@ -1,0 +1,76 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e17]:
+        - strong [ref=e18]: GEO Monitor
+        - generic [ref=e19]: AI 平台推广监测系统
+    - generic [ref=e20]:
+      - generic [ref=e21]:
+        - heading "让品牌在 AI 回答中被看见" [level=1] [ref=e22]
+        - paragraph [ref=e23]: 覆盖主流 AI 平台，持续洞察品牌曝光、推荐排名与引用表现
+      - generic "主流 AI 平台动态接入生态" [ref=e24]:
+        - generic [ref=e28]:
+          - img [ref=e31]
+          - strong [ref=e41]: GEO
+          - generic [ref=e42]: AI 可见度中枢
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]: D
+            - generic [ref=e46]: DeepSeek
+          - generic [ref=e48]:
+            - generic [ref=e49]: 豆
+            - generic [ref=e50]: 豆包
+          - generic [ref=e52]:
+            - generic [ref=e53]: K
+            - generic [ref=e54]: Kimi
+          - generic [ref=e56]:
+            - generic [ref=e57]: 百
+            - generic [ref=e58]: 百度 AI+
+          - generic [ref=e60]:
+            - generic [ref=e61]: 千
+            - generic [ref=e62]: 通义千问
+          - generic [ref=e64]:
+            - generic [ref=e65]: 元
+            - generic [ref=e66]: 元宝
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - img [ref=e70]
+          - generic [ref=e74]: 品牌曝光
+        - generic [ref=e75]:
+          - img [ref=e76]
+          - generic [ref=e78]: 推荐排名
+        - generic [ref=e79]:
+          - img [ref=e80]
+          - generic [ref=e83]: 引用来源
+        - generic [ref=e84]:
+          - img [ref=e85]
+          - generic [ref=e87]: 舆情风险
+  - generic [ref=e88]:
+    - img [ref=e90]
+    - generic [ref=e100]:
+      - generic [ref=e101]:
+        - text: 欢迎回来
+        - heading "GEO Monitor" [level=2] [ref=e102]
+      - generic [ref=e104]: 账号
+      - generic [ref=e105]:
+        - img [ref=e106]
+        - textbox "账号" [ref=e109]:
+          - /placeholder: 请输入账号
+          - text: demo
+      - generic [ref=e110]: 密码
+      - generic [ref=e111]:
+        - img [ref=e112]
+        - textbox "密码" [ref=e116]:
+          - /placeholder: 请输入密码
+          - text: Geo@2026
+        - button "显示或隐藏密码" [ref=e117] [cursor=pointer]:
+          - img [ref=e118]
+      - generic [ref=e121]:
+        - generic [ref=e122] [cursor=pointer]:
+          - checkbox "记住账号" [checked] [ref=e123]
+          - text: 记住账号
+        - button "忘记密码" [ref=e124] [cursor=pointer]
+      - button "登录系统" [ref=e125] [cursor=pointer]:
+        - generic [ref=e126]: 登录系统
+        - img [ref=e127]

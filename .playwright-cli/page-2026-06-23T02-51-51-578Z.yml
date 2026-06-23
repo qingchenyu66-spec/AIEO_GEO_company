@@ -1,0 +1,227 @@
+- generic [ref=e163]:
+  - complementary [ref=e164]:
+    - generic [ref=e165]:
+      - generic [ref=e166]: G
+      - generic [ref=e167]:
+        - strong [ref=e168]: GEO Monitor
+        - generic [ref=e169]: 平台运营端
+    - generic [ref=e170]:
+      - img [ref=e171]
+      - generic [ref=e174]:
+        - generic [ref=e175]: 平台运营管理员
+        - generic [ref=e176]: GEO Monitor 平台
+    - navigation [ref=e177]:
+      - link "运营总览" [ref=e178] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e179]
+        - generic [ref=e182]: 运营总览
+      - link "企业审核" [ref=e183] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e184]
+        - generic [ref=e188]: 企业审核
+      - button "用户管理" [ref=e189] [cursor=pointer]:
+        - img [ref=e190]
+        - generic [ref=e195]: 用户管理
+        - img [ref=e196]
+      - generic [ref=e341]:
+        - link "用户新增" [ref=e342] [cursor=pointer]:
+          - /url: "#"
+        - link "用户列表" [active] [ref=e343] [cursor=pointer]:
+          - /url: "#"
+      - link "套餐额度" [ref=e198] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e199]
+        - generic [ref=e200]: 套餐额度
+      - link "管理员账号" [ref=e201] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e202]
+        - generic [ref=e214]: 管理员账号
+      - link "模型平台" [ref=e215] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e216]
+        - generic [ref=e220]: 模型平台
+      - link "预警阈值" [ref=e221] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e222]
+        - generic [ref=e227]: 预警阈值
+      - link "操作日志" [ref=e228] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e229]
+        - generic [ref=e231]: 操作日志
+      - link "系统配置" [ref=e232] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e233]
+        - generic [ref=e236]: 系统配置
+  - generic [ref=e237]:
+    - generic [ref=e238]:
+      - generic [ref=e239]: GEO Monitor / 用户列表
+      - generic [ref=e240]:
+        - button "当前身份 平台运营管理员" [ref=e242] [cursor=pointer]:
+          - generic [ref=e243]:
+            - generic [ref=e244]: 当前身份
+            - generic [ref=e245]: 平台运营管理员
+          - img [ref=e246]
+        - generic [ref=e248]:
+          - generic [ref=e249]: 小
+          - generic [ref=e250]:
+            - generic [ref=e251]: 小明
+            - generic [ref=e252]: demo
+        - button "退出登录" [ref=e253] [cursor=pointer]:
+          - img [ref=e254]
+    - main [ref=e257]:
+      - generic [ref=e258]:
+        - generic [ref=e259]:
+          - heading "用户列表" [level=1] [ref=e590]
+          - paragraph [ref=e261]: 按公司、姓名、身份和状态筛选账号，支持编辑、禁用、重置密码和恢复
+        - generic [ref=e262]: 数据服务正常
+      - article [ref=e592]:
+        - generic [ref=e593]:
+          - generic [ref=e594]:
+            - heading "用户列表" [level=2] [ref=e595]
+            - paragraph [ref=e596]: 集中管理平台账号、客户账号、双身份账号和账号状态
+          - generic [ref=e597]:
+            - generic [ref=e598]: 共 9 人
+            - button "新增用户" [ref=e599] [cursor=pointer]
+        - generic [ref=e600]:
+          - generic [ref=e601]:
+            - generic [ref=e602]: 搜索
+            - textbox "搜索" [ref=e603]:
+              - /placeholder: 姓名 / 账号 / 身份名称
+          - generic [ref=e604]:
+            - generic [ref=e605]: 所属公司
+            - combobox "所属公司" [ref=e606]:
+              - option "全部公司" [selected]
+              - option "测试公司"
+              - option "北京同鑫鹏程科技有限公司"
+              - option "手动输入测试企业"
+              - option "北京艾迪亚控股集团有限公司"
+          - generic [ref=e607]:
+            - generic [ref=e608]: 身份
+            - combobox "身份" [ref=e609]:
+              - option "全部身份" [selected]
+              - option "平台运营端"
+              - option "客户企业端"
+          - generic [ref=e610]:
+            - generic [ref=e611]: 状态
+            - combobox "状态" [ref=e612]:
+              - option "全部状态" [selected]
+              - option "启用"
+              - option "停用"
+          - generic [ref=e613] [cursor=pointer]:
+            - checkbox "已删除账号" [ref=e614]
+            - generic [ref=e615]: 已删除账号
+          - button "查询" [ref=e616] [cursor=pointer]
+          - button "重置" [ref=e617] [cursor=pointer]
+        - generic [ref=e618]:
+          - generic [ref=e619]:
+            - generic [ref=e620]:
+              - generic [ref=e621]: 二号
+              - generic [ref=e622]: erhaoceshi
+            - generic [ref=e623]: 启用
+            - paragraph [ref=e624]: 平台运营专员 · 平台运营专员
+            - generic [ref=e625]:
+              - button "编辑/权限" [ref=e626] [cursor=pointer]
+              - button "重置密码" [ref=e627] [cursor=pointer]
+              - button "禁用" [ref=e628] [cursor=pointer]
+              - button "删除" [ref=e629] [cursor=pointer]
+          - generic [ref=e630]:
+            - generic [ref=e631]:
+              - generic [ref=e632]: 一号
+              - generic [ref=e633]: yihaocehsi
+            - generic [ref=e634]: 启用
+            - paragraph [ref=e635]:
+              - text: 客户企业成员 · 客户企业管理员
+              - emphasis [ref=e636]: · 测试公司
+            - generic [ref=e637]:
+              - button "编辑/权限" [ref=e638] [cursor=pointer]
+              - button "重置密码" [ref=e639] [cursor=pointer]
+              - button "禁用" [ref=e640] [cursor=pointer]
+              - button "删除" [ref=e641] [cursor=pointer]
+          - generic [ref=e642]:
+            - generic [ref=e643]:
+              - generic [ref=e644]: 三号
+              - generic [ref=e645]: sanhaoceshi
+            - generic [ref=e646]: 启用
+            - paragraph [ref=e647]: 平台运营专员 · 平台运营管理员
+            - generic [ref=e648]:
+              - button "编辑/权限" [ref=e649] [cursor=pointer]
+              - button "重置密码" [ref=e650] [cursor=pointer]
+              - button "禁用" [ref=e651] [cursor=pointer]
+              - button "删除" [ref=e652] [cursor=pointer]
+          - generic [ref=e653]:
+            - generic [ref=e654]:
+              - generic [ref=e655]: 老于
+              - generic [ref=e656]: yu_01
+            - generic [ref=e657]: 启用
+            - paragraph [ref=e658]: 平台运营专员 · 平台运营管理员
+            - paragraph [ref=e659]:
+              - text: 客户企业成员 · 客户企业管理员
+              - emphasis [ref=e660]: · 北京同鑫鹏程科技有限公司
+            - generic [ref=e661]:
+              - button "编辑/权限" [ref=e662] [cursor=pointer]
+              - button "重置密码" [ref=e663] [cursor=pointer]
+              - button "禁用" [ref=e664] [cursor=pointer]
+              - button "删除" [ref=e665] [cursor=pointer]
+          - generic [ref=e666]:
+            - generic [ref=e667]:
+              - generic [ref=e668]: 双身份测试员
+              - generic [ref=e669]: dual_142716
+            - generic [ref=e670]: 启用
+            - paragraph [ref=e671]: 平台运营专员 · 平台运营专员
+            - paragraph [ref=e672]:
+              - text: 客户企业管理员 · 客户企业管理员
+              - emphasis [ref=e673]: · 手动输入测试企业
+            - generic [ref=e674]:
+              - button "编辑/权限" [ref=e675] [cursor=pointer]
+              - button "重置密码" [ref=e676] [cursor=pointer]
+              - button "禁用" [ref=e677] [cursor=pointer]
+              - button "删除" [ref=e678] [cursor=pointer]
+          - generic [ref=e679]:
+            - generic [ref=e680]:
+              - generic [ref=e681]: 权限测试员更新
+              - generic [ref=e682]: codex_test_141639
+            - generic [ref=e683]: 启用
+            - paragraph [ref=e684]: 平台运营专员 · 平台运营专员
+            - generic [ref=e685]:
+              - button "编辑/权限" [ref=e686] [cursor=pointer]
+              - button "重置密码" [ref=e687] [cursor=pointer]
+              - button "禁用" [ref=e688] [cursor=pointer]
+              - button "删除" [ref=e689] [cursor=pointer]
+          - generic [ref=e690]:
+            - generic [ref=e691]:
+              - generic [ref=e692]: 企业管理员
+              - generic [ref=e693]: client
+            - generic [ref=e694]: 启用
+            - paragraph [ref=e695]:
+              - text: AIEO 企业管理员 · 客户企业管理员
+              - emphasis [ref=e696]: · 北京艾迪亚控股集团有限公司
+            - generic [ref=e697]:
+              - button "编辑/权限" [ref=e698] [cursor=pointer]
+              - button "重置密码" [ref=e699] [cursor=pointer]
+              - button "禁用" [ref=e700] [cursor=pointer]
+              - button "删除" [ref=e701] [cursor=pointer]
+          - generic [ref=e702]:
+            - generic [ref=e703]:
+              - generic [ref=e704]: 平台管理员
+              - generic [ref=e705]: platform
+            - generic [ref=e706]: 启用
+            - paragraph [ref=e707]: 平台运营管理员 · 平台运营管理员
+            - generic [ref=e708]:
+              - button "编辑/权限" [ref=e709] [cursor=pointer]
+              - button "重置密码" [ref=e710] [cursor=pointer]
+              - button "禁用" [ref=e711] [cursor=pointer]
+              - button "删除" [ref=e712] [cursor=pointer]
+          - generic [ref=e713]:
+            - generic [ref=e714]:
+              - generic [ref=e715]: 小明
+              - generic [ref=e716]: demo
+            - generic [ref=e717]: 启用
+            - paragraph [ref=e718]: 平台运营管理员 · 平台运营管理员
+            - paragraph [ref=e719]:
+              - text: AIEO 企业管理员 · 客户企业管理员
+              - emphasis [ref=e720]: · 北京艾迪亚控股集团有限公司
+            - generic [ref=e721]:
+              - button "编辑/权限" [ref=e722] [cursor=pointer]
+              - button "重置密码" [ref=e723] [cursor=pointer]
+              - button "禁用" [ref=e724] [cursor=pointer]
+              - button "删除" [ref=e725] [cursor=pointer]

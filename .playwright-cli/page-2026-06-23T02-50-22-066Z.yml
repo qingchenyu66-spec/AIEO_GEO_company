@@ -1,0 +1,259 @@
+- generic [ref=e163]:
+  - complementary [ref=e164]:
+    - generic [ref=e165]:
+      - generic [ref=e166]: G
+      - generic [ref=e167]:
+        - strong [ref=e168]: GEO Monitor
+        - generic [ref=e169]: 平台运营端
+    - generic [ref=e170]:
+      - img [ref=e171]
+      - generic [ref=e174]:
+        - generic [ref=e175]: 平台运营管理员
+        - generic [ref=e176]: GEO Monitor 平台
+    - navigation [ref=e177]:
+      - link "运营总览" [ref=e178] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e179]
+        - generic [ref=e182]: 运营总览
+      - link "企业审核" [ref=e183] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e184]
+        - generic [ref=e188]: 企业审核
+      - button "用户管理" [ref=e189] [cursor=pointer]:
+        - img [ref=e190]
+        - generic [ref=e195]: 用户管理
+        - img [ref=e196]
+      - generic [ref=e341]:
+        - link "用户新增" [ref=e342] [cursor=pointer]:
+          - /url: "#"
+        - link "用户列表" [ref=e343] [cursor=pointer]:
+          - /url: "#"
+      - link "套餐额度" [ref=e198] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e199]
+        - generic [ref=e200]: 套餐额度
+      - link "管理员账号" [ref=e201] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e202]
+        - generic [ref=e214]: 管理员账号
+      - link "模型平台" [ref=e215] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e216]
+        - generic [ref=e220]: 模型平台
+      - link "预警阈值" [ref=e221] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e222]
+        - generic [ref=e227]: 预警阈值
+      - link "操作日志" [ref=e228] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e229]
+        - generic [ref=e231]: 操作日志
+      - link "系统配置" [ref=e232] [cursor=pointer]:
+        - /url: "#"
+        - img [ref=e233]
+        - generic [ref=e236]: 系统配置
+  - generic [ref=e237]:
+    - generic [ref=e238]:
+      - generic [ref=e239]: GEO Monitor / 用户新增
+      - generic [ref=e240]:
+        - button "当前身份 平台运营管理员" [ref=e242] [cursor=pointer]:
+          - generic [ref=e243]:
+            - generic [ref=e244]: 当前身份
+            - generic [ref=e245]: 平台运营管理员
+          - img [ref=e246]
+        - generic [ref=e248]:
+          - generic [ref=e249]: 小
+          - generic [ref=e250]:
+            - generic [ref=e251]: 小明
+            - generic [ref=e252]: demo
+        - button "退出登录" [ref=e253] [cursor=pointer]:
+          - img [ref=e254]
+    - main [ref=e257]:
+      - generic [ref=e258]:
+        - generic [ref=e259]:
+          - heading "用户新增" [level=1] [ref=e344]
+          - paragraph [ref=e261]: 创建账号、分配身份、绑定所属企业，并配置可访问菜单
+        - generic [ref=e262]: 数据服务正常
+      - article [ref=e346]:
+        - generic [ref=e347]:
+          - heading "新增用户与权限分配" [level=2] [ref=e348]
+          - generic [ref=e349]: 菜单来自数据库
+        - generic [ref=e350]:
+          - generic [ref=e351]:
+            - generic [ref=e352]:
+              - text: 登录账号
+              - img [ref=e353]
+            - textbox "登录账号" [ref=e356]:
+              - /placeholder: 例如 zhangsan_01
+          - generic [ref=e357]:
+            - generic [ref=e358]:
+              - text: 用户姓名
+              - img [ref=e359]
+            - textbox "用户姓名" [ref=e362]:
+              - /placeholder: 例如 张三
+          - generic [ref=e363]:
+            - generic [ref=e364]:
+              - text: 初始密码
+              - img [ref=e365]
+            - textbox "初始密码" [ref=e368]:
+              - /placeholder: 至少 6 位
+              - text: Geo@2026
+        - generic [ref=e369]:
+          - generic [ref=e370] [cursor=pointer]:
+            - checkbox "平台运营端 可进入本公司后台，按菜单权限管理客户和系统" [checked] [ref=e371]
+            - img [ref=e372]
+            - generic [ref=e375]:
+              - generic [ref=e376]: 平台运营端
+              - generic [ref=e377]: 可进入本公司后台，按菜单权限管理客户和系统
+          - generic [ref=e378] [cursor=pointer]:
+            - checkbox "客户企业端 可进入客户侧工作台，查看检测、诊断和报告" [checked] [active] [ref=e379]
+            - img [ref=e380]
+            - generic [ref=e384]:
+              - generic [ref=e385]: 客户企业端
+              - generic [ref=e386]: 可进入客户侧工作台，查看检测、诊断和报告
+        - generic [ref=e387]:
+          - generic [ref=e388]:
+            - generic [ref=e389]: 平台运营端权限
+            - generic [ref=e390]: 允许新建、编辑、禁用和导出
+          - generic [ref=e391]:
+            - generic [ref=e392]:
+              - generic [ref=e393]:
+                - text: 角色
+                - img [ref=e394]
+              - combobox "角色" [ref=e397]:
+                - option "请选择角色" [disabled]
+                - option "平台运营管理员" [selected]
+                - option "平台运营专员"
+            - generic [ref=e398]:
+              - generic [ref=e399]:
+                - text: 身份名称
+                - img [ref=e400]
+              - textbox "身份名称" [ref=e403]: 平台运营专员
+          - generic [ref=e404]:
+            - generic [ref=e405] [cursor=pointer]:
+              - checkbox "运营总览" [checked] [ref=e406]
+              - img [ref=e407]
+              - generic [ref=e410]: 运营总览
+            - generic [ref=e411] [cursor=pointer]:
+              - checkbox "企业审核" [checked] [ref=e412]
+              - img [ref=e413]
+              - generic [ref=e417]: 企业审核
+            - generic [ref=e418] [cursor=pointer]:
+              - checkbox "用户管理" [checked] [ref=e419]
+              - img [ref=e420]
+              - generic [ref=e425]: 用户管理
+            - generic [ref=e426] [cursor=pointer]:
+              - checkbox "用户新增" [checked] [ref=e427]
+              - img [ref=e428]
+              - generic [ref=e433]: 用户新增
+            - generic [ref=e434] [cursor=pointer]:
+              - checkbox "用户列表" [checked] [ref=e435]
+              - img [ref=e436]
+              - generic [ref=e441]: 用户列表
+            - generic [ref=e442] [cursor=pointer]:
+              - checkbox "套餐额度" [checked] [ref=e443]
+              - img [ref=e444]
+              - generic [ref=e445]: 套餐额度
+            - generic [ref=e446] [cursor=pointer]:
+              - checkbox "管理员账号" [checked] [ref=e447]
+              - img [ref=e448]
+              - generic [ref=e460]: 管理员账号
+            - generic [ref=e461] [cursor=pointer]:
+              - checkbox "模型平台" [checked] [ref=e462]
+              - img [ref=e463]
+              - generic [ref=e467]: 模型平台
+            - generic [ref=e468] [cursor=pointer]:
+              - checkbox "预警阈值" [checked] [ref=e469]
+              - img [ref=e470]
+              - generic [ref=e475]: 预警阈值
+            - generic [ref=e476] [cursor=pointer]:
+              - checkbox "操作日志" [checked] [ref=e477]
+              - img [ref=e478]
+              - generic [ref=e480]: 操作日志
+            - generic [ref=e481] [cursor=pointer]:
+              - checkbox "系统配置" [checked] [ref=e482]
+              - img [ref=e483]
+              - generic [ref=e486]: 系统配置
+        - generic [ref=e488]:
+          - generic [ref=e489]:
+            - generic [ref=e490]: 客户企业端权限
+            - generic [ref=e491]: 客户侧默认只读展示，可导出
+          - generic [ref=e492]:
+            - generic [ref=e493]:
+              - generic [ref=e494]:
+                - text: 角色
+                - img [ref=e495]
+              - combobox "角色" [ref=e498]:
+                - option "请选择角色" [disabled]
+                - option "客户企业管理员" [selected]
+            - generic [ref=e499]:
+              - generic [ref=e500]:
+                - text: 身份名称
+                - img [ref=e501]
+              - textbox "身份名称" [ref=e504]: 客户企业成员
+            - generic [ref=e505]:
+              - generic [ref=e506]:
+                - text: 选择已有企业
+                - img [ref=e507]
+              - combobox "选择已有企业" [ref=e510]:
+                - option "不选择，手动输入"
+                - option "测试公司" [selected]
+                - option "北京同鑫鹏程科技有限公司"
+                - option "手动输入测试企业"
+                - option "北京艾迪亚控股集团有限公司"
+            - generic [ref=e511]:
+              - generic [ref=e512]:
+                - text: 新企业名称
+                - img [ref=e513]
+              - textbox "新企业名称" [disabled] [ref=e516]:
+                - /placeholder: 没有企业时直接输入
+          - generic [ref=e517]:
+            - generic [ref=e518] [cursor=pointer]:
+              - checkbox "运营工作台" [checked] [ref=e519]
+              - img [ref=e520]
+              - generic [ref=e523]: 运营工作台
+            - generic [ref=e524] [cursor=pointer]:
+              - checkbox "品牌资产" [checked] [ref=e525]
+              - img [ref=e526]
+              - generic [ref=e530]: 品牌资产
+            - generic [ref=e531] [cursor=pointer]:
+              - checkbox "实时检测" [checked] [ref=e532]
+              - img [ref=e533]
+              - generic [ref=e536]: 实时检测
+            - generic [ref=e537] [cursor=pointer]:
+              - checkbox "批量监控" [checked] [ref=e538]
+              - img [ref=e539]
+              - generic [ref=e543]: 批量监控
+            - generic [ref=e544] [cursor=pointer]:
+              - checkbox "GEO监测" [checked] [ref=e545]
+              - img [ref=e546]
+              - generic [ref=e548]: GEO监测
+            - generic [ref=e549] [cursor=pointer]:
+              - checkbox "舆情监控" [checked] [ref=e550]
+              - img [ref=e551]
+              - generic [ref=e553]: 舆情监控
+            - generic [ref=e554] [cursor=pointer]:
+              - checkbox "推广链接检测" [checked] [ref=e555]
+              - img [ref=e556]
+              - generic [ref=e559]: 推广链接检测
+            - generic [ref=e560] [cursor=pointer]:
+              - checkbox "品牌诊断" [checked] [ref=e561]
+              - img [ref=e562]
+              - generic [ref=e566]: 品牌诊断
+            - generic [ref=e567] [cursor=pointer]:
+              - checkbox "竞品分析" [checked] [ref=e568]
+              - img [ref=e569]
+              - generic [ref=e571]: 竞品分析
+            - generic [ref=e572] [cursor=pointer]:
+              - checkbox "引用来源" [checked] [ref=e573]
+              - img [ref=e574]
+              - generic [ref=e578]: 引用来源
+            - generic [ref=e579] [cursor=pointer]:
+              - checkbox "报告中心" [checked] [ref=e580]
+              - img [ref=e581]
+              - generic [ref=e584]: 报告中心
+            - generic [ref=e585] [cursor=pointer]:
+              - checkbox "企业知识库" [checked] [ref=e586]
+              - img [ref=e587]
+              - generic [ref=e589]: 企业知识库
+        - button "新增用户并保存权限" [ref=e487] [cursor=pointer]

@@ -1,0 +1,140 @@
+- generic [ref=e1]:
+  - generic [ref=e726]:
+    - complementary [ref=e727]:
+      - generic [ref=e728]:
+        - generic [ref=e729]: G
+        - generic [ref=e730]:
+          - strong [ref=e731]: GEO Monitor
+          - generic [ref=e732]: 平台运营端
+      - generic [ref=e733]:
+        - img [ref=e734]
+        - generic [ref=e737]:
+          - generic [ref=e738]: 平台运营管理员
+          - generic [ref=e739]: GEO Monitor 平台
+      - navigation [ref=e740]:
+        - link "运营总览" [ref=e741] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e742]
+          - generic [ref=e745]: 运营总览
+        - link "企业审核" [ref=e746] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e747]
+          - generic [ref=e751]: 企业审核
+        - button "用户管理" [ref=e752] [cursor=pointer]:
+          - img [ref=e753]
+          - generic [ref=e758]: 用户管理
+          - img [ref=e759]
+        - link "套餐额度" [ref=e761] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e762]
+          - generic [ref=e763]: 套餐额度
+        - link "管理员账号" [ref=e764] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e765]
+          - generic [ref=e777]: 管理员账号
+        - link "模型平台" [ref=e778] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e779]
+          - generic [ref=e783]: 模型平台
+        - link "预警阈值" [ref=e784] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e785]
+          - generic [ref=e790]: 预警阈值
+        - link "操作日志" [ref=e791] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e792]
+          - generic [ref=e794]: 操作日志
+        - link "系统配置" [ref=e795] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e796]
+          - generic [ref=e799]: 系统配置
+    - generic [ref=e800]:
+      - generic [ref=e801]:
+        - generic [ref=e802]: GEO Monitor / 运营总览
+        - generic [ref=e803]:
+          - button "当前身份 平台运营管理员" [expanded] [ref=e805] [cursor=pointer]:
+            - generic [ref=e806]:
+              - generic [ref=e807]: 当前身份
+              - generic [ref=e808]: 平台运营管理员
+            - img [ref=e809]
+          - generic [ref=e811]:
+            - generic [ref=e812]: 小
+            - generic [ref=e813]:
+              - generic [ref=e814]: 小明
+              - generic [ref=e815]: demo
+          - button "退出登录" [ref=e816] [cursor=pointer]:
+            - img [ref=e817]
+      - main [ref=e820]:
+        - generic [ref=e821]:
+          - generic [ref=e822]:
+            - heading "运营总览" [level=1] [ref=e823]
+            - paragraph [ref=e824]: 企业运营、任务消耗、平台运行与风险情况
+          - generic [ref=e825]: 数据服务正常
+        - generic [ref=e827]:
+          - article [ref=e828]:
+            - generic [ref=e829]: 企业客户
+            - strong [ref=e830]: 1,286
+            - generic [ref=e831]: "+126"
+          - article [ref=e832]:
+            - generic [ref=e833]: 待审核企业
+            - strong [ref=e834]: "18"
+            - generic [ref=e835]: 平均 12 分钟
+          - article [ref=e836]:
+            - generic [ref=e837]: 平台任务消耗
+            - strong [ref=e838]: 64%
+            - generic [ref=e839]: 额度充足
+          - article [ref=e840]:
+            - generic [ref=e841]: 风险预警
+            - strong [ref=e842]: "7"
+            - generic [ref=e843]: 需及时处理
+        - generic [ref=e844]:
+          - article [ref=e845]:
+            - generic [ref=e846]:
+              - heading "核心指标趋势" [level=2] [ref=e847]
+              - generic [ref=e848]: 最近 7 天
+            - generic [ref=e849]:
+              - generic [ref=e850]:
+                - generic [ref=e851]: "52"
+                - generic [ref=e853]: 周一
+              - generic [ref=e854]:
+                - generic [ref=e855]: "64"
+                - generic [ref=e857]: 周二
+              - generic [ref=e858]:
+                - generic [ref=e859]: "58"
+                - generic [ref=e861]: 周三
+              - generic [ref=e862]:
+                - generic [ref=e863]: "76"
+                - generic [ref=e865]: 周四
+              - generic [ref=e866]:
+                - generic [ref=e867]: "84"
+                - generic [ref=e869]: 周五
+              - generic [ref=e870]:
+                - generic [ref=e871]: "79"
+                - generic [ref=e873]: 周六
+              - generic [ref=e874]:
+                - generic [ref=e875]: "91"
+                - generic [ref=e877]: 今日
+          - article [ref=e878]:
+            - generic [ref=e879]:
+              - heading "待处理事项" [level=2] [ref=e880]
+              - generic [ref=e881]: 实时更新
+            - generic [ref=e882]:
+              - generic [ref=e883]:
+                - generic [ref=e884]: "1"
+                - generic [ref=e885]: 企业审核 18 项
+              - generic [ref=e887]:
+                - generic [ref=e888]: "2"
+                - generic [ref=e889]: 高风险预警 7 项
+              - generic [ref=e891]:
+                - generic [ref=e892]: "3"
+                - generic [ref=e893]: 套餐额度提醒 12 项
+              - generic [ref=e895]:
+                - generic [ref=e896]: "4"
+                - generic [ref=e897]: 异常任务 4 项
+  - menu "当前身份 平台运营管理员" [active] [ref=e903]:
+    - menuitem "平台运营管理员" [disabled] [ref=e904]:
+      - img [ref=e905]
+      - text: 平台运营管理员
+    - menuitem "AIEO 企业管理员" [ref=e908] [cursor=pointer]:
+      - img [ref=e909]
+      - text: AIEO 企业管理员

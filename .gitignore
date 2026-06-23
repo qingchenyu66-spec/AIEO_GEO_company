@@ -1,0 +1,12 @@
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+backend/.venv/
+backend/.env
+frontend/node_modules/
+frontend/dist/
+*.log
+

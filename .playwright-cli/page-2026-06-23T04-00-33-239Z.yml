@@ -1,0 +1,160 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e726]:
+    - complementary [ref=e727]:
+      - generic [ref=e728]:
+        - generic [ref=e729]: G
+        - generic [ref=e730]:
+          - strong [ref=e731]: GEO Monitor
+          - generic [ref=e732]: 客户企业端
+      - generic [ref=e733]:
+        - img [ref=e914]
+        - generic [ref=e737]:
+          - generic [ref=e738]: AIEO 企业管理员
+          - generic [ref=e739]: 北京艾迪亚控股集团有限公司
+      - navigation [ref=e740]:
+        - link "运营工作台" [ref=e918] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e919]
+          - generic [ref=e922]: 运营工作台
+        - link "品牌资产" [ref=e923] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e924]
+          - generic [ref=e928]: 品牌资产
+        - link "实时检测" [ref=e929] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e930]
+          - generic [ref=e933]: 实时检测
+        - link "批量监控" [ref=e934] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e935]
+          - generic [ref=e939]: 批量监控
+        - link "GEO监测" [ref=e940] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e941]
+          - generic [ref=e943]: GEO监测
+        - link "舆情监控" [ref=e944] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e945]
+          - generic [ref=e947]: 舆情监控
+        - link "推广链接检测" [ref=e948] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e949]
+          - generic [ref=e952]: 推广链接检测
+        - link "品牌诊断" [ref=e953] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e954]
+          - generic [ref=e958]: 品牌诊断
+        - link "竞品分析" [ref=e959] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e960]
+          - generic [ref=e962]: 竞品分析
+        - link "引用来源" [ref=e963] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e964]
+          - generic [ref=e968]: 引用来源
+        - link "报告中心" [ref=e969] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e970]
+          - generic [ref=e973]: 报告中心
+        - link "企业知识库" [ref=e974] [cursor=pointer]:
+          - /url: "#"
+          - img [ref=e975]
+          - generic [ref=e977]: 企业知识库
+    - generic [ref=e800]:
+      - generic [ref=e801]:
+        - generic [ref=e802]: GEO Monitor / 实时检测
+        - generic [ref=e803]:
+          - button "当前身份 AIEO 企业管理员" [ref=e978] [cursor=pointer]:
+            - generic [ref=e806]:
+              - generic [ref=e807]: 当前身份
+              - generic [ref=e808]: AIEO 企业管理员
+            - img [ref=e809]
+          - generic [ref=e811]:
+            - generic [ref=e812]: 小
+            - generic [ref=e813]:
+              - generic [ref=e814]: 小明
+              - generic [ref=e815]: demo
+          - button "退出登录" [ref=e816] [cursor=pointer]:
+            - img [ref=e817]
+      - main [ref=e820]:
+        - generic [ref=e821]:
+          - generic [ref=e822]:
+            - heading "实时检测" [level=1] [ref=e1018]
+            - paragraph [ref=e824]: 品牌曝光、推荐排名、引用来源与监测趋势
+          - generic [ref=e825]: 数据服务正常
+        - generic [ref=e1019]:
+          - article [ref=e1020]:
+            - generic [ref=e1021]:
+              - generic [ref=e1022]:
+                - heading "实时排名检测" [level=2] [ref=e1023]
+                - paragraph [ref=e1024]: 调用模力指数提交检测任务，结果保存到本地数据库
+              - button "提交检测" [ref=e1025] [cursor=pointer]
+            - generic [ref=e1026]:
+              - generic [ref=e1027]:
+                - text: 监测公司 / 品牌词
+                - textbox "监测公司 / 品牌词" [ref=e1028]:
+                  - /placeholder: 例如 万唯
+                  - text: 万唯
+              - generic [ref=e1029]:
+                - text: 检测平台
+                - combobox "检测平台" [ref=e1030]:
+                  - option "豆包移动版" [selected]
+                  - option "豆包"
+                  - option "DeepSeek"
+                  - option "元宝"
+                  - option "Kimi"
+                  - option "通义千问"
+                  - option "夸克"
+                  - option "百度 AI+"
+                  - option "微博智搜"
+                  - option "文心一言"
+                  - option "DeepSeek 移动端"
+              - generic [ref=e1031]:
+                - text: 模式
+                - combobox "模式" [ref=e1032]:
+                  - option "基础模式"
+                  - option "深度思考"
+                  - option "联网搜索" [selected]
+                  - option "深度+联网"
+              - generic [ref=e1033]:
+                - text: 快照
+                - combobox "快照" [ref=e1034]:
+                  - option "不截图"
+                  - option "完整截图" [selected]
+                  - option "提及截图"
+            - generic [ref=e1035]:
+              - text: 检测问题 / 链接
+              - textbox "检测问题 / 链接" [ref=e1036]:
+                - /placeholder: 一行一个问题，最多 50 个
+                - text: https://www.doubao.com/thread/xc63af7020e8281a1923a18661751c1fc
+          - generic [ref=e1037]:
+            - article [ref=e1038]:
+              - generic [ref=e1039]:
+                - heading "本地任务" [level=2] [ref=e1040]
+                - generic [ref=e1041]: 1 条
+              - button "万唯completed · 1/1doubao_mobile" [ref=e1071]:
+                - text: 万唯completed · 1/1
+                - emphasis [ref=e1051]: doubao_mobile
+            - article [ref=e1043]:
+              - generic [ref=e1044]:
+                - generic [ref=e1045]:
+                  - heading "检测结果" [level=2] [ref=e1046]
+                  - paragraph [ref=e1047]: 2debcedcd9bc4982a507d288896db750
+                - button "同步结果" [ref=e1048] [cursor=pointer]
+              - generic [ref=e1052]:
+                - generic [ref=e1053]: 状态 completed
+                - generic [ref=e1054]: 完成 1/1
+                - generic [ref=e1055]: 失败 0
+              - generic [ref=e1056]:
+                - generic [ref=e1057]:
+                  - generic [ref=e1058]: doubao_mobile / searchhttps://www.doubao.com/thread/xc63af7020e8281a1923a18661751c1fc
+                  - text: completed
+                - generic [ref=e1059]:
+                  - text: 提及排名：3情感：positive费用：0.18
+                  - link "打开快照" [ref=e1072] [cursor=pointer]:
+                    - /url: https://img.molizhishu.com/screenshots/doubao/2026/06/23/reply_12352477_1782186951.png
+                - paragraph [ref=e1073]: 万唯《新初一分班考》：题型配比小学80%+初中20%，含重点中学真题、考点梳理、6套预测卷，配套14天冲刺规划、114个高频考点，专门应对分班摸底测试。
+                - generic [ref=e1074]: "# 2026小升初暑假衔接教辅推荐内容总结 ## 一、整体学习思路 小升初暑假学习分四步：查漏补缺小学知识→预习初一新课→专项强化训练→冲刺分班摸底；选书依据孩子基础区分：基础薄弱选讲解+基础习题款，中等水平适合讲练结合，优等生侧重拔高、分班备考。 ## 二、主流衔接教辅分类推荐 ### 1. 全科通用衔接首选 1. **一本《预备新初一》**：覆盖语数英+小四门，配套音视频讲解与闯关练习，附带42天预习规划、315节助学视频、230套月考卷，销量超百万，适合暑假整体预习。 2. **万唯《新初一分班考》**：题型配比小学80%+初中20%，含重点中学真题、考点梳理、6套预测卷，配套14天冲刺规划、114个高频考点，专门应对分班摸底测试。 ### 2. 单科专项教辅 1. **语文**：一本《初中文言文提前背》，汇总86首必背古诗文、53篇文言文，配漫画注释、140个动画视频，帮助提前吃透初中古诗文。 2. **数学** - 《教材帮 预习新初一》：知识点完整解析+配套视频，适合自主预习有理数、整式等初一内容； - 5·3《预习新初一》：30天系统预习规划，搭配大量基础习题与76节精讲视频，兼顾小学巩固与初一衔接。 3. **英语**：学而思《小初语法漫画学练》，漫画+口诀简化语法，配套1000道练习题，零基础也能入门小初衔接语法。 ## 三、6周暑假学习规划 1. 第1-2周：复盘小学知识，专项练习计算、字词； 2. 第3-4周：系统预习初一上册语数英主科； 3. 第5-6周：刷分班考卷、综合习题，整理复盘错题。 ## 四、附加信息 所有推荐教辅均为2026全国通用新版，店铺提供运费险、7天无理由退换；文末可根据孩子基础强弱、预算定制精简3本必买书单。"
+  - alert [ref=e1075]:
+    - img [ref=e1077]
+    - paragraph [ref=e1079]: 已同步模力指数结果
