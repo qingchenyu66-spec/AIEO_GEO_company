@@ -9,10 +9,27 @@ export interface RoleInfo {
   data_scope: string
 }
 
+export interface PositionInfo {
+  id: number
+  position_code: string
+  position_name: string
+  identity_type: IdentityType
+  role_code: string
+  description: string | null
+  menu_ids: number[]
+}
+
 export interface TenantInfo {
   id: number
   name: string
   code: string
+  status: boolean
+  owner_user_id: number | null
+  stop_reason: 'manual' | 'canceled' | 'expired' | null
+  stopped_at: string | null
+  stopped_by: number | null
+  service_start_date: string | null
+  service_end_date: string | null
 }
 
 export interface ManagedUser {
@@ -27,10 +44,78 @@ export interface ManagedUser {
     identity_type: IdentityType
     identity_name: string
     role_code: string
+    position_id: number | null
     tenant_id: number | null
     tenant_name: string | null
     menu_ids: number[]
   }>
+}
+
+export interface OperationLogRecord {
+  id: number
+  operator_name: string
+  action_type: string
+  description: string
+  risk_level: string
+  ip_address: string | null
+  created_at: string
+}
+
+export interface SystemConfigRecord {
+  id: number
+  config_key: string
+  config_name: string
+  config_value: string
+  scope: string
+  status: string
+  remark: string | null
+  updated_at: string
+}
+
+export interface PlatformOverview {
+  kpis: {
+    today_tasks: number
+    today_completed_tasks: number
+    today_failed_tasks: number
+    today_cost: number
+    active_tenants: number
+    expiring_tenants: number
+    api_success_rate: number
+  }
+  service_counts: Record<string, number>
+  expiring_tenants: Array<{ id: number; name: string; service_end_date: string; days_left: number }>
+  platform_stats: Array<{ platform: string; total: number; completed: number; failed: number; cost: number; success_rate: number }>
+  cost_ranking: Array<{ tenant_id: number | null; tenant_name: string; cost: number }>
+  quota_overview: {
+    used_amount: number
+    today_amount: number
+    estimated_month_amount: number
+    total_subtasks: number
+    avg_cost_per_subtask: number
+  }
+  customer_data: {
+    tenant_total: number
+    active_tenants: number
+    task_total: number
+    subtask_total: number
+    mention_rate: number
+    source_count: number
+  }
+  recent_tasks: Array<{
+    task_id: string
+    tenant_name: string
+    monitor_keywords: string | null
+    status: string
+    total_items: number
+    completed_items: number
+    failed_items: number
+    created_at: string
+    last_error: string | null
+  }>
+  alerts: Array<{ title: string; value: number; level: string }>
+  todo_items: Array<{ type: string; title: string; count: number; level: string }>
+  operation_logs: OperationLogRecord[]
+  system_health: Array<{ name: string; status: string; detail: string }>
 }
 
 export interface CreateUserPayload {
@@ -40,7 +125,8 @@ export interface CreateUserPayload {
   identities: Array<{
     identity_type: IdentityType
     role_code: string
-    identity_name: string
+    identity_name?: string | null
+    position_id?: number | null
     tenant_id: number | null
     tenant_name: string | null
     menu_ids: number[]
@@ -57,18 +143,71 @@ export async function getManagementRoles(identityType: IdentityType): Promise<Ro
   return response.data.data
 }
 
+export async function getManagementPositions(identityType: IdentityType): Promise<PositionInfo[]> {
+  const response = await http.get('/v1/management/positions', { params: { identity_type: identityType } })
+  return response.data.data
+}
+
+export interface PositionPayload {
+  position_name: string
+  identity_type: IdentityType
+  role_code: string
+  description?: string | null
+  menu_ids: number[]
+  status: boolean
+}
+
+export async function createManagementPosition(payload: PositionPayload): Promise<PositionInfo> {
+  const response = await http.post('/v1/management/positions', payload)
+  return response.data.data
+}
+
+export async function updateManagementPosition(positionId: number, payload: PositionPayload): Promise<PositionInfo> {
+  const response = await http.put(`/v1/management/positions/${positionId}`, payload)
+  return response.data.data
+}
+
+export async function deleteManagementPosition(positionId: number): Promise<void> {
+  await http.delete(`/v1/management/positions/${positionId}`)
+}
+
 export async function getTenants(): Promise<TenantInfo[]> {
   const response = await http.get('/v1/management/tenants')
   return response.data.data
 }
 
-export async function createTenant(payload: { name: string; code?: string | null }): Promise<TenantInfo> {
+export async function getOperationLogs(): Promise<OperationLogRecord[]> {
+  const response = await http.get('/v1/management/operation-logs')
+  return response.data.data
+}
+
+export async function getSystemConfigs(): Promise<SystemConfigRecord[]> {
+  const response = await http.get('/v1/management/system-configs')
+  return response.data.data
+}
+
+export async function getPlatformOverview(): Promise<PlatformOverview> {
+  const response = await http.get('/v1/management/overview')
+  return response.data.data
+}
+
+export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<TenantInfo> {
   const response = await http.post('/v1/management/tenants', payload)
+  return response.data.data
+}
+
+export async function updateTenant(tenantId: number, payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null; status: boolean }): Promise<TenantInfo> {
+  const response = await http.put(`/v1/management/tenants/${tenantId}`, payload)
   return response.data.data
 }
 
 export async function deleteTenant(tenantId: number): Promise<void> {
   await http.delete(`/v1/management/tenants/${tenantId}`)
+}
+
+export async function restoreTenant(tenantId: number): Promise<TenantInfo> {
+  const response = await http.patch(`/v1/management/tenants/${tenantId}/restore`)
+  return response.data.data
 }
 
 export interface ManagedUserQuery {

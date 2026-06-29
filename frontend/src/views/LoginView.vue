@@ -21,6 +21,9 @@ const identityDialog = ref(false)
 const selectedIdentity = ref<number | null>(null)
 
 const selected = computed(() => auth.pendingIdentities.find(item => item.id === selectedIdentity.value))
+function identityDisplayName(identity: { position_name?: string | null; identity_name?: string }) {
+  return identity.position_name || identity.identity_name || '登录身份'
+}
 const platforms = [
   { name: 'DeepSeek', mark: 'D', tone: 'deepseek' },
   { name: '豆包', mark: '豆', tone: 'doubao' },
@@ -63,7 +66,7 @@ async function enterWithIdentity() {
   try {
     await auth.selectIdentity(selectedIdentity.value)
     identityDialog.value = false
-    ElMessage.success(`已进入${selected.value?.identity_name || '系统'}`)
+    ElMessage.success(`已进入${selected.value ? identityDisplayName(selected.value) : '系统'}`)
     await router.replace(auth.portalPath)
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '身份切换失败')
@@ -139,7 +142,7 @@ async function enterWithIdentity() {
       <div class="identity-list">
         <button v-for="identity in auth.pendingIdentities" :key="identity.id" type="button" class="identity-option" :class="{ selected: selectedIdentity === identity.id }" @click="selectedIdentity = identity.id">
           <div class="identity-icon"><ShieldCheck v-if="identity.identity_type === 'PLATFORM'" /><Building2 v-else /></div>
-          <div class="identity-copy"><strong>{{ identity.identity_name }}</strong><span>{{ identity.identity_type === 'PLATFORM' ? '管理企业、用户、套餐、模型与系统配置' : identity.tenant_name }}</span></div>
+          <div class="identity-copy"><strong>{{ identityDisplayName(identity) }}</strong><span>{{ identity.identity_type === 'PLATFORM' ? '管理企业、用户、套餐、模型与系统配置' : identity.tenant_name }}</span></div>
           <div class="radio-dot"><Check v-if="selectedIdentity === identity.id" /></div>
         </button>
       </div>

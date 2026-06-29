@@ -20,6 +20,8 @@ class IdentityInfo(BaseModel):
     identity_type: str
     identity_name: str
     role_code: str
+    position_id: int | None = None
+    position_name: str | None = None
     tenant_id: int | None
     tenant_name: str | None
     is_default: bool

@@ -1,0 +1,266 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, WalletCards, Zap } from '@lucide/vue'
+import { getPlatformOverview, type PlatformOverview } from '../../services/management'
+
+const props = defineProps<{
+  platformLabelMap: Record<string, string>
+  monitorStatusLabelMap: Record<string, string>
+  navigateTo: (menuCode: string) => void
+}>()
+
+const overview = ref<PlatformOverview | null>(null)
+const loading = ref(false)
+const errorText = ref('')
+
+const kpiCards = computed(() => {
+  const kpis = overview.value?.kpis
+  return [
+    { label: '今日任务', value: String(kpis?.today_tasks ?? 0), note: `已完成 ${kpis?.today_completed_tasks ?? 0}`, icon: Clock3, tone: 'blue' },
+    { label: '异常任务', value: String(kpis?.today_failed_tasks ?? 0), note: '失败 / 停止 / 待复核', icon: AlertTriangle, tone: (kpis?.today_failed_tasks ?? 0) > 0 ? 'red' : 'green' },
+    { label: '服务中企业', value: String(kpis?.active_tenants ?? 0), note: '当前正常服务客户', icon: Building2, tone: 'green' },
+    { label: '今日消耗', value: String(kpis?.today_cost ?? 0), note: '模力接口扣费', icon: WalletCards, tone: 'cyan' },
+    { label: '即将到期', value: String(kpis?.expiring_tenants ?? 0), note: '30 天内到期', icon: FileBarChart, tone: (kpis?.expiring_tenants ?? 0) > 0 ? 'amber' : 'green' },
+    { label: '接口成功率', value: `${kpis?.api_success_rate ?? 0}%`, note: '今日调度提交', icon: Gauge, tone: 'purple' },
+  ]
+})
+
+const serviceRows = computed(() => {
+  const counts = overview.value?.service_counts || {}
+  return [
+    { label: '服务中', value: counts.active || 0, tone: 'green' },
+    { label: '未开始', value: counts.pending || 0, tone: 'slate' },
+    { label: '人工停服', value: counts.manual_stopped || 0, tone: 'amber' },
+    { label: '已取消', value: counts.canceled || 0, tone: 'slate' },
+    { label: '已到期', value: counts.expired || 0, tone: 'red' },
+  ]
+})
+
+const taskRate = computed(() => {
+  const kpis = overview.value?.kpis
+  return kpis?.today_tasks ? Math.round(((kpis.today_completed_tasks || 0) / kpis.today_tasks) * 100) : 0
+})
+
+const customerDataRows = computed(() => {
+  const data = overview.value?.customer_data
+  return [
+    { label: '企业总数', value: data?.tenant_total ?? 0 },
+    { label: '服务中企业', value: data?.active_tenants ?? 0 },
+    { label: '累计任务', value: data?.task_total ?? 0 },
+    { label: '检测子任务', value: data?.subtask_total ?? 0 },
+    { label: '品牌曝光率', value: `${data?.mention_rate ?? 0}%` },
+    { label: '信源记录', value: data?.source_count ?? 0 },
+  ]
+})
+
+const quotaRows = computed(() => {
+  const quota = overview.value?.quota_overview
+  return [
+    { label: '累计消耗', value: quota?.used_amount ?? 0 },
+    { label: '今日消耗', value: quota?.today_amount ?? 0 },
+    { label: '预计月消耗', value: quota?.estimated_month_amount ?? 0 },
+    { label: '单条均价', value: quota?.avg_cost_per_subtask ?? 0 },
+  ]
+})
+
+async function loadOverview() {
+  loading.value = true
+  errorText.value = ''
+  try {
+    overview.value = await getPlatformOverview()
+  } catch (error: any) {
+    errorText.value = error?.response?.data?.message || error?.message || '运营总览加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadOverview)
+</script>
+
+<template>
+  <section class="ops-dashboard-page">
+    <section class="ops-hero">
+      <div>
+        <span>平台运营驾驶舱</span>
+        <h2>任务运行、客户服务、接口成本一屏掌控</h2>
+        <p>运营总览只展示平台内部需要处理的真实运行状态，不混入客户侧分析页面。</p>
+      </div>
+      <button class="ops-refresh" :disabled="loading" @click="loadOverview">
+        <RefreshCw :class="{ spinning: loading }" />
+        {{ loading ? '刷新中' : '刷新数据' }}
+      </button>
+    </section>
+
+    <div v-if="errorText" class="ops-error">{{ errorText }}</div>
+
+    <section class="ops-kpi-grid">
+      <article v-for="item in kpiCards" :key="item.label" :class="['ops-kpi-card', `tone-${item.tone}`]">
+        <div><component :is="item.icon" /></div>
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
+        <small>{{ item.note }}</small>
+      </article>
+    </section>
+
+    <section class="ops-first-grid">
+      <article class="panel ops-trend-card">
+        <div class="panel-head">
+          <div><h2>任务完成趋势</h2><p>今日任务完成率与成功率趋势</p></div>
+          <span>{{ taskRate }}%</span>
+        </div>
+        <div class="ops-progress-ring">
+          <div :style="{ '--rate': `${taskRate}%` }">
+            <b>{{ taskRate }}%</b>
+            <span>完成率</span>
+          </div>
+          <ul>
+            <li><i></i>今日任务 {{ overview?.kpis.today_tasks || 0 }}</li>
+            <li><i></i>已完成 {{ overview?.kpis.today_completed_tasks || 0 }}</li>
+            <li><i></i>异常任务 {{ overview?.kpis.today_failed_tasks || 0 }}</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="panel ops-alert-card">
+        <div class="panel-head">
+          <div><h2>异常预警</h2><p>需要运营优先确认的事项</p></div>
+          <AlertTriangle />
+        </div>
+        <div class="ops-alert-list">
+          <div v-for="item in overview?.alerts || []" :key="item.title" :class="item.level">
+            <span>{{ item.title }}</span>
+            <b>{{ item.value }}</b>
+          </div>
+          <div v-if="!overview?.alerts?.length" class="mini-empty">暂无异常预警。</div>
+        </div>
+      </article>
+
+      <article class="panel ops-todo-card">
+        <div class="panel-head">
+          <div><h2>待办事项</h2><p>续费、失败任务和同步事项</p></div>
+          <Zap />
+        </div>
+        <div class="ops-todo-list">
+          <button v-for="item in overview?.todo_items || []" :key="item.type" @click="props.navigateTo(item.type === 'renewal' ? 'platform.audit' : 'customer.realtime')">
+            <span>{{ item.title }}</span>
+            <b>{{ item.count }}</b>
+            <ArrowRight />
+          </button>
+          <div v-if="!overview?.todo_items?.length" class="mini-empty compact-empty">今日暂无待处理事项。</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="ops-second-grid">
+      <article class="panel">
+        <div class="panel-head"><div><h2>客户服务状态</h2><p>服务中、未开始、停服和到期客户分布</p></div><span>客户生命周期</span></div>
+        <div class="ops-service-grid">
+          <div v-for="row in serviceRows" :key="row.label" :class="row.tone">
+            <span>{{ row.label }}</span>
+            <b>{{ row.value }}</b>
+          </div>
+        </div>
+        <div class="ops-expire-list">
+          <b>即将到期客户</b>
+          <p v-for="tenant in overview?.expiring_tenants || []" :key="tenant.id">{{ tenant.name }} <span>{{ tenant.days_left }} 天后到期</span></p>
+          <p v-if="!overview?.expiring_tenants?.length">暂无 30 天内到期客户</p>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>模型平台运行情况</h2><p>按平台统计任务量、成功率和费用</p></div><Activity /></div>
+        <div class="ops-platform-list">
+          <div v-for="item in overview?.platform_stats || []" :key="item.platform">
+            <b>{{ props.platformLabelMap[item.platform] || item.platform }}</b>
+            <span>已返回 {{ item.completed }} 条 · 成功率 {{ item.success_rate }}%</span>
+            <i><em :style="{ width: `${Math.min(100, item.success_rate)}%` }"></em></i>
+            <small>失败 {{ item.failed }} · 费用 {{ item.cost }}</small>
+          </div>
+          <div v-if="!overview?.platform_stats?.length" class="mini-empty">暂无平台运行数据。</div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>费用额度</h2><p>接口消耗、预计月消耗与单条均价</p></div><WalletCards /></div>
+        <div class="ops-quota-grid">
+          <div v-for="row in quotaRows" :key="row.label">
+            <span>{{ row.label }}</span>
+            <b>{{ row.value }}</b>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>费用消耗排行</h2><p>按企业汇总接口消耗</p></div><WalletCards /></div>
+        <div class="ops-cost-list">
+          <div v-for="(item, index) in overview?.cost_ranking || []" :key="`${item.tenant_id}-${index}`">
+            <i>{{ index + 1 }}</i>
+            <span>{{ item.tenant_name }}</span>
+            <b>{{ item.cost }}</b>
+          </div>
+          <div v-if="!overview?.cost_ranking?.length" class="mini-empty">暂无费用数据。</div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>最近任务队列</h2><p>最新提交和同步状态</p></div><BarChart3 /></div>
+        <div class="ops-task-list">
+          <div v-for="task in overview?.recent_tasks || []" :key="task.task_id">
+            <b>{{ task.tenant_name }}</b>
+            <span>{{ task.monitor_keywords || '未填监测词' }}</span>
+            <em>{{ props.monitorStatusLabelMap[task.status] || task.status }} · {{ task.completed_items }}/{{ task.total_items }}</em>
+          </div>
+          <div v-if="!overview?.recent_tasks?.length" class="mini-empty">暂无最近任务。</div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>客户数据概况</h2><p>企业、任务、曝光和信源数据总览</p></div><FileBarChart /></div>
+        <div class="ops-customer-data-grid">
+          <div v-for="row in customerDataRows" :key="row.label">
+            <span>{{ row.label }}</span>
+            <b>{{ row.value }}</b>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="ops-third-grid">
+      <article class="panel">
+        <div class="panel-head"><div><h2>最近操作日志</h2><p>平台内部关键配置变更</p></div><Database /></div>
+        <div class="ops-log-list">
+          <div v-for="log in overview?.operation_logs || []" :key="log.id">
+            <span>{{ log.created_at }}</span>
+            <b>{{ log.operator_name }}</b>
+            <em>{{ log.action_type }}</em>
+            <p>{{ log.description }}</p>
+          </div>
+          <div v-if="!overview?.operation_logs?.length" class="mini-empty">暂无操作日志。</div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>快捷操作</h2><p>常用运营入口</p></div><Settings /></div>
+        <div class="ops-shortcuts">
+          <button @click="props.navigateTo('platform.audit')">企业管理</button>
+          <button @click="props.navigateTo('platform.users.create')">新增用户</button>
+          <button @click="props.navigateTo('customer.realtime')">查看任务</button>
+          <button @click="props.navigateTo('platform.logs')">操作日志</button>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><div><h2>系统健康状态</h2><p>服务、数据库、调度和同步</p></div><Gauge /></div>
+        <div class="ops-health-list">
+          <div v-for="item in overview?.system_health || []" :key="item.name">
+            <i :class="{ warn: item.status !== '正常' }"></i>
+            <span>{{ item.name }}</span>
+            <b>{{ item.status }}</b>
+            <small>{{ item.detail }}</small>
+          </div>
+        </div>
+      </article>
+    </section>
+  </section>
+</template>

@@ -87,3 +87,22 @@ class GeoMonitorCallbackEvent(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="处理失败原因")
     received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="接收时间")
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="处理完成时间")
+
+
+class GeoMonitorScheduleRun(Base):
+    """企业定时监测执行记录，用唯一调度键避免同一时间窗口重复提交任务。"""
+
+    __tablename__ = "geo_monitor_schedule_run"
+    __table_args__ = (UniqueConstraint("tenant_id", "schedule_key", name="uk_geo_schedule_tenant_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="调度执行记录ID")
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False, comment="所属企业ID")
+    schedule_key: Mapped[str] = mapped_column(String(80), nullable=False, comment="调度窗口唯一键，例如20260624-0930")
+    task_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True, comment="提交成功后的模力指数主任务ID")
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, comment="调度状态：submitted、skipped、failed")
+    prompt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="本次提交问题数量")
+    platform_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="本次提交平台数量")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="提交失败原因")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("sys_user.id"), index=True, nullable=True, comment="触发调度的用户ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="调度创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="调度更新时间")

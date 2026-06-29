@@ -7,6 +7,8 @@ export interface IdentityInfo {
   identity_type: IdentityType
   identity_name: string
   role_code: string
+  position_id: number | null
+  position_name: string | null
   tenant_id: number | null
   tenant_name: string | null
   is_default: boolean
@@ -61,5 +63,10 @@ export async function selectIdentityApi(ticket: string, identityId: number): Pro
 
 export async function switchIdentityApi(identityId: number): Promise<AuthSession> {
   const response = await http.post('/v1/auth/switch-identity', { identity_id: identityId })
+  return response.data.data
+}
+
+export async function meApi(): Promise<Omit<AuthSession, 'access_token' | 'token_type'>> {
+  const response = await http.get('/v1/auth/me')
   return response.data.data
 }

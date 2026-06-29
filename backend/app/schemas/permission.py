@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, Field
 
 
@@ -27,12 +29,32 @@ class RoleInfo(BaseModel):
     data_scope: str
 
 
+class PositionInfo(BaseModel):
+    id: int
+    position_code: str
+    position_name: str
+    identity_type: str
+    role_code: str
+    description: str | None = None
+    menu_ids: list[int] = Field(default_factory=list)
+
+
+class PositionSaveRequest(BaseModel):
+    position_name: str = Field(min_length=2, max_length=80)
+    identity_type: str = Field(pattern="^(PLATFORM|CUSTOMER)$")
+    role_code: str = Field(min_length=2, max_length=50)
+    description: str | None = Field(default=None, max_length=255)
+    menu_ids: list[int] = Field(default_factory=list)
+    status: bool = True
+
+
 class UserIdentityCreateItem(BaseModel):
     """新增用户时某一个登录身份的角色、企业和菜单权限。"""
 
     identity_type: str = Field(pattern="^(PLATFORM|CUSTOMER)$")
     role_code: str = Field(min_length=2, max_length=50)
-    identity_name: str = Field(min_length=2, max_length=80)
+    identity_name: str | None = Field(default=None, max_length=80)
+    position_id: int | None = None
     tenant_id: int | None = None
     tenant_name: str | None = Field(default=None, max_length=100)
     menu_ids: list[int] = Field(default_factory=list)
@@ -65,6 +87,18 @@ class TenantCreateRequest(BaseModel):
 
     name: str = Field(min_length=2, max_length=100)
     code: str | None = Field(default=None, max_length=50)
+    service_start_date: date | None = None
+    service_end_date: date | None = None
+
+
+class TenantUpdateRequest(BaseModel):
+    """平台端维护企业服务期限和启停状态。"""
+
+    name: str = Field(min_length=2, max_length=100)
+    code: str | None = Field(default=None, max_length=50)
+    service_start_date: date | None = None
+    service_end_date: date | None = None
+    status: bool = True
 
 
 class ManagedUserInfo(BaseModel):

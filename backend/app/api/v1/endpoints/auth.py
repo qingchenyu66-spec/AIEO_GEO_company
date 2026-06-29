@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
+from app.models.permission import Position
 from app.schemas.auth import IdentityInfo, IdentitySelectRequest, IdentitySwitchRequest, LoginRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import authenticate, create_access_token, create_identity_ticket
@@ -15,12 +16,17 @@ from app.services.permission_service import get_identity_menus
 router = APIRouter(prefix="/auth")
 
 
-def identity_info(identity: UserIdentity) -> dict:
+def identity_info(identity: UserIdentity, db: Session) -> dict:
+    position_name = None
+    if identity.position_id:
+        position_name = db.scalar(select(Position.position_name).where(Position.id == identity.position_id, Position.deleted.is_(False)))
     return IdentityInfo(
         id=identity.id,
         identity_type=identity.identity_type,
         identity_name=identity.identity_name,
         role_code=identity.role_code,
+        position_id=identity.position_id,
+        position_name=position_name,
         tenant_id=identity.tenant_id,
         tenant_name=identity.tenant.name if identity.tenant else None,
         is_default=identity.is_default,
@@ -34,8 +40,8 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
         "access_token": create_access_token(user, identity),
         "token_type": "bearer",
         "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
-        "identity": identity_info(identity),
-        "identities": [identity_info(item) for item in identities],
+        "identity": identity_info(identity, db),
+        "identities": [identity_info(item, db) for item in identities],
         "menus": menus,
     }
 
@@ -52,7 +58,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> ApiResponse[d
         "requires_identity_selection": True,
         "ticket": create_identity_ticket(user),
         "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
-        "identities": [identity_info(item) for item in identities],
+        "identities": [identity_info(item, db) for item in identities],
     })
 
 
@@ -81,8 +87,8 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
     return ApiResponse(data={
         "user": {"id": current.user.id, "username": current.user.username, "display_name": current.user.display_name},
-        "identity": identity_info(current.identity),
-        "identities": [identity_info(item) for item in identities],
+        "identity": identity_info(current.identity, db),
+        "identities": [identity_info(item, db) for item in identities],
         "menus": [item.model_dump() for item in get_identity_menus(db, current.identity)],
     })
 

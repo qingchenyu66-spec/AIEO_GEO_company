@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
-from app.models.brand import BrandAsset, BrandCompetitor
+from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, CompetitorSaveRequest
 
@@ -33,6 +33,82 @@ def get_brand_asset(db: Session, tenant_id: int) -> BrandAsset | None:
     return db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant_id, BrandAsset.deleted.is_(False)))
 
 
+def list_keyword_groups(db: Session, tenant_id: int) -> list[BrandKeywordGroup]:
+    """读取企业监测词组，按排序稳定返回。"""
+    return list(
+        db.scalars(
+            select(BrandKeywordGroup)
+            .where(BrandKeywordGroup.tenant_id == tenant_id, BrandKeywordGroup.deleted.is_(False))
+            .order_by(BrandKeywordGroup.sort_order.asc(), BrandKeywordGroup.id.asc())
+        )
+    )
+
+
+def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
+    """旧数据没有词组表时，用旧字段临时拼出一组可用关系。"""
+    monitor_keywords = _dedupe([asset.company_full_name, asset.brand_name, asset.brand_short_name, *(asset.monitor_keywords_json or [])])
+    aliases = _dedupe([asset.brand_short_name, *(asset.aliases_json or [])])
+    result: list[dict[str, Any]] = []
+    for index, keyword in enumerate(monitor_keywords):
+        result.append({
+            "id": None,
+            "tenant_id": asset.tenant_id,
+            "monitor_keyword": keyword,
+            "exposure_terms": aliases if index == 0 else [keyword],
+            "sort_order": index,
+            "status": True,
+        })
+    return result
+
+
+def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
+    """序列化监测词组。"""
+    return {
+        "id": group.id,
+        "tenant_id": group.tenant_id,
+        "monitor_keyword": group.monitor_keyword,
+        "exposure_terms": group.exposure_terms_json or [],
+        "sort_order": group.sort_order,
+        "status": group.status,
+    }
+
+
+def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveRequest) -> None:
+    """用前端提交的词组覆盖当前企业词组。"""
+    existing = {item.id: item for item in list_keyword_groups(db, asset.tenant_id)}
+    seen_ids: set[int] = set()
+    source_groups = payload.keyword_groups
+    if not source_groups:
+        source_groups = [
+            type("_Group", (), {"id": None, "monitor_keyword": keyword, "exposure_terms": [keyword], "sort_order": index, "status": True})()
+            for index, keyword in enumerate(_dedupe([payload.company_full_name, payload.brand_name, *payload.monitor_keywords]))
+        ]
+    for index, item in enumerate(source_groups):
+        keyword = item.monitor_keyword.strip()
+        if not keyword:
+            continue
+        group = existing.get(item.id) if item.id else None
+        if group is None:
+            group = BrandKeywordGroup(
+                tenant_id=asset.tenant_id,
+                brand_asset_id=asset.id,
+                monitor_keyword=keyword,
+                exposure_terms_json=[],
+            )
+            db.add(group)
+        group.brand_asset_id = asset.id
+        group.monitor_keyword = keyword
+        group.exposure_terms_json = _dedupe(item.exposure_terms or [keyword])
+        group.sort_order = item.sort_order if item.sort_order is not None else index
+        group.status = item.status
+        group.deleted = False
+        if group.id:
+            seen_ids.add(group.id)
+    for group_id, group in existing.items():
+        if group_id not in seen_ids:
+            group.deleted = True
+
+
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
     """新增或更新企业品牌资产。"""
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
@@ -47,6 +123,7 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
             monitor_keywords_json=[],
             aliases_json=[],
             product_keywords_json=[],
+            monitored_platforms_json=[],
             schedule_times_json=[],
             schedule_weekdays_json=[],
             schedule_month_days_json=[],
@@ -55,9 +132,11 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     asset.company_full_name = payload.company_full_name
     asset.brand_name = payload.brand_name
     asset.brand_short_name = payload.brand_short_name
-    asset.monitor_keywords_json = _dedupe([payload.brand_name, payload.brand_short_name, *payload.monitor_keywords])
+    asset.monitor_keywords_json = _dedupe([payload.brand_name, payload.brand_short_name, *payload.monitor_keywords, *payload.product_keywords])
     asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
-    asset.product_keywords_json = _dedupe(payload.product_keywords)
+    asset.product_keywords_json = []
+    asset.monitored_platforms_json = _dedupe(payload.monitored_platforms)
+    asset.region_code = payload.region_code.strip() if payload.region_code else None
     asset.official_url = payload.official_url
     asset.description = payload.description
     asset.schedule_type = payload.schedule_type
@@ -67,6 +146,8 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     asset.schedule_month_days_json = _int_dedupe(payload.schedule_month_days, 1, 31)
     asset.status = True
     asset.deleted = False
+    db.flush()
+    save_keyword_groups(db, asset, payload)
     db.commit()
     db.refresh(asset)
     return asset
@@ -129,7 +210,7 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
     db.commit()
 
 
-def asset_to_dict(asset: BrandAsset | None) -> dict[str, Any] | None:
+def asset_to_dict(asset: BrandAsset | None, keyword_groups: list[BrandKeywordGroup] | None = None) -> dict[str, Any] | None:
     """序列化品牌资产。"""
     if asset is None:
         return None
@@ -142,6 +223,9 @@ def asset_to_dict(asset: BrandAsset | None) -> dict[str, Any] | None:
         "monitor_keywords": asset.monitor_keywords_json,
         "aliases": asset.aliases_json,
         "product_keywords": asset.product_keywords_json,
+        "monitored_platforms": asset.monitored_platforms_json,
+        "keyword_groups": [keyword_group_to_dict(item) for item in (keyword_groups or [])],
+        "region_code": asset.region_code,
         "official_url": asset.official_url,
         "description": asset.description,
         "schedule_type": asset.schedule_type,
@@ -165,13 +249,28 @@ def competitor_to_dict(competitor: BrandCompetitor) -> dict[str, Any]:
     }
 
 
+def active_keyword_groups(db: Session, tenant_id: int) -> list[dict[str, Any]]:
+    """返回启用词组；没有新表数据时回退到旧字段。"""
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        return []
+    groups = [
+        keyword_group_to_dict(item)
+        for item in list_keyword_groups(db, tenant_id)
+        if item.status and item.monitor_keyword
+    ]
+    return groups or _fallback_keyword_groups(asset)
+
+
 def molizhishu_brand_payload(db: Session, tenant_id: int) -> tuple[str, list[str], list[dict[str, Any]]]:
     """把企业品牌资产转换为模力指数 monitorKeywords、aliases、competitors。"""
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         raise ValueError("当前企业未配置品牌资产，请先维护品牌主词和简称")
-    monitor_keyword = asset.brand_name
-    aliases = _dedupe([asset.company_full_name, asset.brand_short_name, *asset.monitor_keywords_json, *asset.aliases_json])
+    groups = active_keyword_groups(db, tenant_id)
+    first_group = groups[0] if groups else None
+    monitor_keyword = first_group["monitor_keyword"] if first_group else asset.brand_name
+    aliases = _dedupe(first_group["exposure_terms"] if first_group else [asset.company_full_name, asset.brand_short_name, *asset.monitor_keywords_json, *asset.aliases_json])
     competitors = [
         {"name": item.name, "aliases": item.aliases_json}
         for item in list_competitors(db, tenant_id)

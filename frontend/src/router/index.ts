@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import LoginView from '../views/LoginView.vue'
-import PortalView from '../views/PortalView.vue'
 import { useAuthStore } from '../stores/auth'
+
+const LoginView = () => import('../views/LoginView.vue')
+const PortalView = () => import('../views/PortalView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -22,4 +23,3 @@ router.beforeEach((to) => {
 })
 
 export default router
-

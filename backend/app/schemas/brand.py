@@ -1,6 +1,16 @@
 from pydantic import BaseModel, Field
 
 
+class BrandKeywordGroupSaveRequest(BaseModel):
+    """保存企业监测词组：一个监测关键词对应多个露出词。"""
+
+    id: int | None = None
+    monitor_keyword: str = Field(min_length=1, max_length=150)
+    exposure_terms: list[str] = Field(default_factory=list)
+    sort_order: int = 0
+    status: bool = True
+
+
 class BrandAssetSaveRequest(BaseModel):
     """保存企业品牌资产配置。"""
 
@@ -11,6 +21,9 @@ class BrandAssetSaveRequest(BaseModel):
     monitor_keywords: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     product_keywords: list[str] = Field(default_factory=list)
+    monitored_platforms: list[str] = Field(default_factory=list)
+    keyword_groups: list[BrandKeywordGroupSaveRequest] = Field(default_factory=list)
+    region_code: str | None = Field(default=None, max_length=20)
     official_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
     schedule_type: str = Field(default="daily_times", pattern="^(daily_times|fixed_times|weekly|monthly)$")

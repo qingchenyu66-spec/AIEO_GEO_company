@@ -12,6 +12,7 @@
     "@lucide/vue": "^1.21.0",
     "axios": "^1.18.0",
     "echarts": "^6.1.0",
+    "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.14.2",
     "pinia": "^3.0.4",
     "vue": "^3.5.34",

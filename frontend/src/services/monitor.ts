@@ -42,18 +42,69 @@ export interface MonitorSubtask {
   page_screenshot: string | null
   answer_content: string | null
   reference_list: Array<{ title?: string; url?: string; site?: string; index?: number }>
+  reference_count?: number
   citation_list: Array<{ title?: string; url?: string; site?: string; index?: number }>
   recommended_questions: string[]
   error_message: string | null
   mention_position: number | null
   mention_context: string | null
   sentiment: string | null
+  competitor_rankings: Array<Record<string, unknown>>
+  all_rankings: Array<Record<string, unknown>>
   amount: number | null
+  updated_at?: string | null
 }
 
 export interface MonitorTaskDetail {
   task: MonitorTask
   subtasks: MonitorSubtask[]
+}
+
+export interface MonitorSummary {
+  scope: 'PLATFORM' | 'CUSTOMER'
+  tenant_id: number | null
+  tenant_count: number
+  task_count: number
+  subtask_count: number
+  completed_count: number
+  failed_count: number
+  total_cost: number
+  mention_rate: number
+  avg_rank: number
+  platform_count: number
+  sentiment_counts: Record<string, number>
+  platform_stats: Array<{
+    platform: string
+    total: number
+    completed: number
+    mention_rate: number
+    avg_rank: number | null
+  }>
+  source_stats: Array<{
+    title: string
+    url: string
+    count: number
+    platforms?: string[]
+    keywords?: string[]
+    questions?: string[]
+    latest_time?: string | null
+  }>
+  daily_trend: Array<{ label: string; value: number }>
+  daily_labels: string[]
+  recent_tasks: Array<MonitorTask & { tenant_name?: string | null }>
+  recent_subtasks: Array<MonitorSubtask & { tenant_name?: string | null }>
+}
+
+export interface ScheduledMonitorPreview {
+  tenant_id: number
+  tenant_name: string
+  brand_name: string
+  schedule_type: string
+  schedule_times: string[]
+  platforms: MonitorPlatformConfig[]
+  prompt_count: number
+  prompts: string[]
+  competitor_count: number
 }
 
 export async function createMonitorTask(payload: MonitorTaskCreatePayload): Promise<MonitorTask> {
@@ -66,6 +117,11 @@ export async function getMonitorTasks(): Promise<MonitorTask[]> {
   return response.data.data
 }
 
+export async function getMonitorSummary(): Promise<MonitorSummary> {
+  const response = await http.get('/v1/monitor/summary')
+  return response.data.data
+}
+
 export async function getMonitorTaskDetail(taskId: string): Promise<MonitorTaskDetail> {
   const response = await http.get(`/v1/monitor/tasks/${taskId}`)
   return response.data.data
@@ -73,5 +129,15 @@ export async function getMonitorTaskDetail(taskId: string): Promise<MonitorTaskD
 
 export async function syncMonitorTask(taskId: string): Promise<MonitorTaskDetail> {
   const response = await http.post(`/v1/monitor/tasks/${taskId}/sync`)
+  return response.data.data
+}
+
+export async function previewScheduledMonitor(tenantId?: number | null, maxPrompts = 50): Promise<ScheduledMonitorPreview[]> {
+  const response = await http.get('/v1/monitor/scheduled/preview', { params: { tenant_id: tenantId || undefined, max_prompts: maxPrompts } })
+  return response.data.data
+}
+
+export async function runDueScheduledMonitor(params?: { tenant_id?: number | null; limit?: number; max_prompts?: number; force?: boolean }): Promise<Array<Record<string, unknown>>> {
+  const response = await http.post('/v1/monitor/scheduled/run-due', null, { params })
   return response.data.data
 }

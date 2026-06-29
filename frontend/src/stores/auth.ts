@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import {
-  loginApi, selectIdentityApi, switchIdentityApi,
+  loginApi, meApi, selectIdentityApi, switchIdentityApi,
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
 
@@ -48,6 +48,15 @@ export const useAuthStore = defineStore('auth', {
     async switchIdentity(identityId: number) {
       const session = await switchIdentityApi(identityId)
       this.saveSession(session)
+    },
+    async refreshSession() {
+      if (!this.session?.access_token) return
+      const latest = await meApi()
+      this.saveSession({
+        ...latest,
+        access_token: this.session.access_token,
+        token_type: this.session.token_type,
+      })
     },
     logout() {
       this.session = null

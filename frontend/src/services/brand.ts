@@ -9,6 +9,9 @@ export interface BrandAsset {
   monitor_keywords: string[]
   aliases: string[]
   product_keywords: string[]
+  monitored_platforms: string[]
+  keyword_groups: BrandKeywordGroup[]
+  region_code: string | null
   official_url: string | null
   description: string | null
   schedule_type: 'daily_times' | 'fixed_times' | 'weekly' | 'monthly'
@@ -16,6 +19,15 @@ export interface BrandAsset {
   schedule_frequency: number
   schedule_weekdays: number[]
   schedule_month_days: number[]
+}
+
+export interface BrandKeywordGroup {
+  id: number | null
+  tenant_id?: number
+  monitor_keyword: string
+  exposure_terms: string[]
+  sort_order: number
+  status: boolean
 }
 
 export interface BrandCompetitor {
@@ -36,6 +48,9 @@ export interface BrandAssetPayload {
   monitor_keywords: string[]
   aliases: string[]
   product_keywords: string[]
+  monitored_platforms: string[]
+  keyword_groups: BrandKeywordGroup[]
+  region_code?: string | null
   official_url?: string | null
   description?: string | null
   schedule_type: 'daily_times' | 'fixed_times' | 'weekly' | 'monthly'

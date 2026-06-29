@@ -9,6 +9,36 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 
 
+PLATFORM_MENUS = [
+    ("platform.dashboard", "运营总览", "/platform/dashboard", "Gauge", 10, True),
+    ("platform.audit", "企业管理", "/platform/audit", "ClipboardCheck", 20, True),
+    ("platform.users", "用户管理", "/platform/users", "Users", 30, True),
+    ("platform.users.create", "用户新增", "/platform/users/create", "Users", 31, True),
+    ("platform.users.list", "用户列表", "/platform/users/list", "Users", 32, True),
+    ("platform.users.create.platform", "新增平台运营端用户", "/platform/users/create/platform", "ShieldCheck", 311, False),
+    ("platform.users.create.customer", "新增客户企业端用户", "/platform/users/create/customer", "Building2", 312, False),
+    ("platform.diagnosis", "品牌诊断", "/platform/diagnosis", "ClipboardCheck", 39, True),
+    ("platform.plans", "套餐额度", "/platform/plans", "SlidersHorizontal", 40, True),
+    ("platform.admins", "管理员账号", "/platform/admins", "UserCog", 50, True),
+    ("platform.models", "模型平台", "/platform/models", "Database", 60, True),
+    ("platform.alerts", "预警阈值", "/platform/alerts", "BellRing", 70, True),
+    ("platform.logs", "操作日志", "/platform/logs", "Activity", 80, True),
+    ("platform.settings", "系统配置", "/platform/settings", "Settings", 90, True),
+]
+
+CUSTOMER_MENUS = [
+    ("customer.workspace", "运营工作台", "/customer/workspace", "Gauge", 10, True),
+    ("customer.realtime", "实时检测", "/customer/realtime", "Search", 30, True),
+    ("customer.sentiment", "舆情监控", "/customer/sentiment", "BarChart3", 60, True),
+    ("customer.links", "推广链接检测", "/customer/links", "Link2", 70, True),
+    ("customer.diagnosis", "品牌诊断", "/customer/diagnosis", "ClipboardCheck", 80, True),
+    ("customer.competitor", "竞品分析", "/customer/competitor", "BarChart3", 90, True),
+    ("customer.sources", "信源分析", "/customer/sources", "Database", 100, True),
+    ("customer.reports", "报告中心", "/customer/reports", "FileBarChart", 110, True),
+    ("customer.knowledge", "企业知识库", "/customer/knowledge", "BookOpen", 120, True),
+]
+
+
 def get_or_create_tenant(db) -> Tenant:
     tenant = db.scalar(select(Tenant).where(Tenant.code == "AIEO_DEMO"))
     if tenant is None:
@@ -24,55 +54,29 @@ def get_or_create_user(db, username: str, password: str, display_name: str) -> U
         user = User(username=username, password_hash=hash_password(password), display_name=display_name)
         db.add(user)
         db.flush()
+    else:
+        user.display_name = display_name
+        user.status = True
+        user.deleted = False
     return user
 
 
 def add_identity(db, *, user: User, code: str, identity_type: str, name: str, role: str, tenant: Tenant | None, default: bool) -> None:
-    exists = db.scalar(select(UserIdentity).where(UserIdentity.identity_code == code))
-    if exists is None:
-        db.add(UserIdentity(
-            identity_code=code,
-            user_id=user.id,
-            tenant_id=tenant.id if tenant else None,
-            identity_type=identity_type,
-            identity_name=name,
-            role_code=role,
-            is_default=default,
-        ))
-        db.flush()
-
-
-PLATFORM_MENUS = [
-    ("platform.dashboard", "运营总览", "/platform/dashboard", "Gauge", 10),
-    ("platform.audit", "企业管理", "/platform/audit", "ClipboardCheck", 20),
-    ("platform.users", "用户管理", "/platform/users", "Users", 30),
-    ("platform.users.create", "用户新增", "/platform/users/create", "Users", 31),
-    ("platform.users.list", "用户列表", "/platform/users/list", "Users", 32),
-    ("platform.plans", "套餐额度", "/platform/plans", "SlidersHorizontal", 40),
-    ("platform.admins", "管理员账号", "/platform/admins", "UserCog", 50),
-    ("platform.models", "模型平台", "/platform/models", "Database", 60),
-    ("platform.alerts", "预警阈值", "/platform/alerts", "BellRing", 70),
-    ("platform.logs", "操作日志", "/platform/logs", "Activity", 80),
-    ("platform.settings", "系统配置", "/platform/settings", "Settings", 90),
-]
-
-CUSTOMER_MENUS = [
-    ("customer.workspace", "运营工作台", "/customer/workspace", "Gauge", 10),
-    ("customer.realtime", "实时检测", "/customer/realtime", "Search", 30),
-    ("customer.batch", "批量监控", "/customer/batch", "Layers3", 40),
-    ("customer.geo", "GEO监测", "/customer/geo", "Activity", 50),
-    ("customer.sentiment", "舆情监控", "/customer/sentiment", "BarChart3", 60),
-    ("customer.links", "推广链接检测", "/customer/links", "Link2", 70),
-    ("customer.diagnosis", "品牌诊断", "/customer/diagnosis", "ClipboardCheck", 80),
-    ("customer.competitor", "竞品分析", "/customer/competitor", "BarChart3", 90),
-    ("customer.sources", "引用来源", "/customer/sources", "Database", 100),
-    ("customer.reports", "报告中心", "/customer/reports", "FileBarChart", 110),
-    ("customer.knowledge", "企业知识库", "/customer/knowledge", "BookOpen", 120),
-]
+    identity = db.scalar(select(UserIdentity).where(UserIdentity.identity_code == code))
+    if identity is None:
+        identity = UserIdentity(identity_code=code, user_id=user.id, identity_type=identity_type)
+        db.add(identity)
+    identity.user_id = user.id
+    identity.tenant_id = tenant.id if tenant else None
+    identity.identity_name = name
+    identity.role_code = role
+    identity.is_default = default
+    identity.status = True
+    identity.deleted = False
+    db.flush()
 
 
 def upsert_role(db, *, code: str, name: str, identity_type: str, data_scope: str, description: str) -> Role:
-    """创建或更新角色，保证演示环境可以重复执行种子脚本。"""
     role = db.scalar(select(Role).where(Role.role_code == code))
     if role is None:
         role = Role(role_code=code, role_name=name, identity_type=identity_type, data_scope=data_scope, description=description)
@@ -88,28 +92,25 @@ def upsert_role(db, *, code: str, name: str, identity_type: str, data_scope: str
     return role
 
 
-def upsert_menu(db, *, identity_type: str, item: tuple[str, str, str, str, int]) -> Menu:
-    """创建或更新菜单，菜单必须入库后才能做权限分配。"""
-    code, name, path, icon, sort_order = item
+def upsert_menu(db, *, identity_type: str, item: tuple[str, str, str, str, int, bool]) -> Menu:
+    code, name, path, icon, sort_order, is_visible = item
     menu = db.scalar(select(Menu).where(Menu.menu_code == code))
     if menu is None:
         menu = Menu(menu_code=code, menu_name=name, identity_type=identity_type, route_path=path, icon=icon, sort_order=sort_order)
         db.add(menu)
-    else:
-        menu.menu_name = name
-        menu.identity_type = identity_type
-        menu.route_path = path
-        menu.icon = icon
-        menu.sort_order = sort_order
-        menu.is_visible = True
-        menu.status = True
-        menu.deleted = False
+    menu.menu_name = name
+    menu.identity_type = identity_type
+    menu.route_path = path
+    menu.icon = icon
+    menu.sort_order = sort_order
+    menu.is_visible = is_visible
+    menu.status = True
+    menu.deleted = False
     db.flush()
     return menu
 
 
 def bind_role_menus(db, role: Role, menus: list[Menu]) -> None:
-    """绑定角色默认菜单，新增用户未单独选择菜单时会继承这组权限。"""
     for menu in menus:
         exists = db.scalar(select(RoleMenu).where(RoleMenu.role_id == role.id, RoleMenu.menu_id == menu.id))
         if exists is None:
@@ -118,7 +119,6 @@ def bind_role_menus(db, role: Role, menus: list[Menu]) -> None:
 
 
 def grant_identity_menus(db, identity: UserIdentity, menus: list[Menu], *, writable: bool) -> None:
-    """给已有演示身份补齐菜单权限。"""
     for menu in menus:
         exists = db.scalar(select(UserIdentityMenu).where(UserIdentityMenu.identity_id == identity.id, UserIdentityMenu.menu_id == menu.id))
         if exists is None:
@@ -134,8 +134,7 @@ def grant_identity_menus(db, identity: UserIdentity, menus: list[Menu], *, writa
 
 
 def seed_brand_assets(db, tenant: Tenant) -> None:
-    """为演示企业初始化品牌资产和竞品库；可重复执行。"""
-    asset = db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant.id, BrandAsset.deleted.is_(False)))
+    asset = db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant.id))
     if asset is None:
         asset = BrandAsset(
             tenant_id=tenant.id,
@@ -145,6 +144,7 @@ def seed_brand_assets(db, tenant: Tenant) -> None:
             monitor_keywords_json=[],
             aliases_json=[],
             product_keywords_json=[],
+            monitored_platforms_json=[],
             schedule_times_json=[],
             schedule_weekdays_json=[],
             schedule_month_days_json=[],
@@ -156,6 +156,7 @@ def seed_brand_assets(db, tenant: Tenant) -> None:
     asset.monitor_keywords_json = ["AIEO", "艾亿欧", "GEO优化", "AI平台推广监测"]
     asset.aliases_json = ["北京艾亿欧科技有限公司", "艾亿欧科技"]
     asset.product_keywords_json = ["品牌诊断", "实时检测", "报告交付", "竞品分析"]
+    asset.monitored_platforms_json = ["doubao_mobile", "deepseek_mobile", "yuanbao", "kimi", "baiduai"]
     asset.official_url = "https://www.aieo.cn"
     asset.description = "演示企业品牌资产，用于自动提交 GEO 检测任务。"
     asset.schedule_type = "daily_times"
@@ -196,7 +197,10 @@ def main() -> None:
         platform_menus = [upsert_menu(db, identity_type="PLATFORM", item=item) for item in PLATFORM_MENUS]
         customer_menus = [upsert_menu(db, identity_type="CUSTOMER", item=item) for item in CUSTOMER_MENUS]
         bind_role_menus(db, platform_role, platform_menus)
-        bind_role_menus(db, platform_operator_role, [menu for menu in platform_menus if menu.menu_code in {"platform.dashboard", "platform.users", "platform.users.create", "platform.users.list", "platform.logs"}])
+        bind_role_menus(db, platform_operator_role, [
+            menu for menu in platform_menus
+            if menu.menu_code in {"platform.dashboard", "platform.users", "platform.users.create", "platform.users.list", "platform.users.create.customer", "platform.logs"}
+        ])
         bind_role_menus(db, tenant_role, customer_menus)
 
         demo = get_or_create_user(db, "demo", "Geo@2026", "王明")
@@ -215,7 +219,6 @@ def main() -> None:
             grant_identity_menus(db, identity, customer_menus, writable=False)
 
         seed_brand_assets(db, tenant)
-
         db.commit()
         print("Demo accounts seeded: demo, platform, client")
 
