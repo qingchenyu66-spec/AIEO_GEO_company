@@ -6,13 +6,14 @@ import {
   ArrowRight, BarChart3, BookOpenCheck, Boxes, Building2, Check, Eye, EyeOff,
   LockKeyhole, MessageSquareWarning, SearchCheck, ShieldCheck, UserRound,
 } from '@lucide/vue'
+import { notifyOperationError } from '../utils/requestError'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
 const form = reactive({
-  username: localStorage.getItem('geo-last-user') || 'demo',
-  password: 'Geo@2026',
+  username: localStorage.getItem('geo-last-user') || (import.meta.env.DEV ? 'demo' : ''),
+  password: import.meta.env.DEV ? 'Geo@2026' : '',
   remember: true,
 })
 const loading = ref(false)
@@ -44,6 +45,7 @@ async function submitLogin() {
   loading.value = true
   try {
     const needsSelection = await auth.login(form.username.trim(), form.password)
+
     if (form.remember) localStorage.setItem('geo-last-user', form.username.trim())
     else localStorage.removeItem('geo-last-user')
     if (needsSelection) {
@@ -54,7 +56,8 @@ async function submitLogin() {
       await router.replace(auth.portalPath)
     }
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '登录失败，请稍后重试')
+    if (error?.response?.status === 401 && error?.config?.url?.includes('/auth/login')) return
+    notifyOperationError(error, '登录失败')
   } finally {
     loading.value = false
   }
@@ -69,11 +72,12 @@ async function enterWithIdentity() {
     ElMessage.success(`已进入${selected.value ? identityDisplayName(selected.value) : '系统'}`)
     await router.replace(auth.portalPath)
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '身份切换失败')
+    notifyOperationError(error, '身份选择失败')
   } finally {
     loading.value = false
   }
 }
+
 </script>
 
 <template>

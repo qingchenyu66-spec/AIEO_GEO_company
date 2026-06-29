@@ -1,0 +1,321 @@
+<script setup lang="ts">
+import { onMounted } from 'vue'
+import { HelpCircle } from '@lucide/vue'
+import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
+import { useBrandAudit } from '../composables/useBrandAudit'
+
+const emit = defineEmits<{
+  'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
+}>()
+
+const {
+  platformLabelMap,
+  supportedPlatforms,
+  regionOptions,
+  enterpriseDetailMode,
+  enterpriseDetailTab,
+  enterpriseInfoDialog,
+  enterpriseInfoLoading,
+  enterpriseInfoTenant,
+  enterpriseInfoAsset,
+  enterpriseInfoCompetitors,
+  enterpriseFilters,
+  tenantDialog,
+  tenantForm,
+  knowledgeFiles,
+  loadingKnowledgeFiles,
+  competitorRows,
+  keywordGroupRows,
+  competitorNameInput,
+  loadingBrand,
+  brandForm,
+  filteredTenants,
+  enterpriseFormServiceActive,
+  enterpriseFormServiceLabel,
+  visibleEnterpriseTabs,
+  canEditEnterpriseTab,
+  isTenantExpired,
+  isTenantPending,
+  tenantServiceLabel,
+  canStopTenantService,
+  canRestoreTenantService,
+  stopTenantActionLabel,
+  tenantServicePeriod,
+  addKeywordGroup,
+  removeKeywordGroup,
+  addExposureTerm,
+  removeExposureTerm,
+  addScheduleTime,
+  removeScheduleTime,
+  loadEnterpriseList,
+  openEnterpriseDetail,
+  openEnterpriseInfo,
+  backToEnterpriseList,
+  submitBrandAsset,
+  submitTenant,
+  removeTenant,
+  restoreTenantService,
+  addCompetitorTag,
+  removeCompetitorRow,
+  formatFileSize,
+  demoAction,
+  resetDetailMode,
+} = useBrandAudit({
+  onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
+})
+
+onMounted(loadEnterpriseList)
+
+defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
+</script>
+
+<template>
+  <section class="brand-page">
+    <article v-if="!enterpriseDetailMode" class="panel enterprise-list-panel">
+      <div class="panel-head">
+        <div>
+          <h2>企业列表</h2>
+          <p>先选择客户企业，再进入详情维护品牌资产、竞品库和自动监测配置。</p>
+        </div>
+        <div class="detail-actions">
+          <button class="filter-reset-btn" :disabled="loadingBrand" @click="loadEnterpriseList">刷新企业</button>
+          <button class="primary-btn small-btn" @click="tenantDialog = true">新增企业</button>
+        </div>
+      </div>
+      <div class="enterprise-filter-bar">
+        <label>
+          <span>企业名称</span>
+          <input v-model="enterpriseFilters.keyword" placeholder="输入企业名称 / 编码筛选" />
+        </label>
+        <label>
+          <span>服务状态</span>
+          <select v-model="enterpriseFilters.expiry">
+            <option value="all">全部企业</option>
+            <option value="active">服务中</option>
+            <option value="pending">未开始服务</option>
+            <option value="expired">服务已到期</option>
+            <option value="stopped">已停止服务</option>
+          </select>
+        </label>
+        <button class="filter-reset-btn" @click="enterpriseFilters.keyword = ''; enterpriseFilters.expiry = 'active'">重置</button>
+      </div>
+      <div class="enterprise-table">
+        <div v-for="tenant in filteredTenants" :key="tenant.id" class="enterprise-row" :class="{ stopped: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">
+          <div class="enterprise-main">
+            <b>{{ tenant.name }}</b>
+            <small>{{ tenantServicePeriod(tenant) }}</small>
+          </div>
+          <div class="enterprise-metrics">
+            <span><small>监测企业</small><b>{{ tenant.name }}</b></span>
+            <span><small>服务状态</small><b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b></span>
+            <span><small>自动监测</small><b>每日 3 次</b></span>
+          </div>
+          <div class="enterprise-actions">
+            <button class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+            <button class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+            <button class="filter-reset-btn" @click="openEnterpriseDetail(tenant); demoAction('已打开企业诊断配置')">诊断</button>
+            <button v-if="canStopTenantService(tenant)" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
+            <button v-else-if="canRestoreTenantService(tenant)" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
+          </div>
+        </div>
+        <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty">暂无符合筛选条件的企业。</div>
+      </div>
+    </article>
+
+    <article v-else class="panel brand-asset-panel">
+      <div class="panel-head">
+        <div>
+          <h2>企业资料与监控配置</h2>
+          <p>平台运营端维护客户企业、品牌词和竞品库，系统按配置定时提交监测任务。</p>
+        </div>
+        <div class="detail-actions">
+          <button class="filter-reset-btn" @click="backToEnterpriseList">返回列表</button>
+          <button v-if="canEditEnterpriseTab(enterpriseDetailTab)" class="primary-btn small-btn" :disabled="loadingBrand" @click="() => submitBrandAsset()">保存当前配置</button>
+        </div>
+      </div>
+      <div class="enterprise-detail-tabs">
+        <button v-for="tab in visibleEnterpriseTabs" :key="tab.code" :class="{ active: enterpriseDetailTab === tab.code }" @click="enterpriseDetailTab = tab.code">{{ tab.name }}</button>
+      </div>
+      <div v-if="enterpriseDetailTab === 'profile'" class="brand-form-grid">
+        <label><span>企业全称</span><input v-model="brandForm.company_full_name" :disabled="!canEditEnterpriseTab('profile')" placeholder="例如 北京艾亿欧科技有限公司" /></label>
+        <label><span>服务开始日期</span><input v-model="brandForm.service_start_date" :disabled="!canEditEnterpriseTab('profile')" type="date" /></label>
+        <label><span>服务结束日期</span><input v-model="brandForm.service_end_date" :disabled="!canEditEnterpriseTab('profile')" type="date" /></label>
+        <label><span>官网 / 主站</span><input v-model="brandForm.official_url" :disabled="!canEditEnterpriseTab('profile')" placeholder="https://..." /></label>
+        <label>
+          <span>企业状态</span>
+          <div class="readonly-status" :class="{ stopped: !enterpriseFormServiceActive }">{{ enterpriseFormServiceLabel }}</div>
+        </label>
+        <label class="region-field"><span>服务地区</span><select v-model="brandForm.region_code" :disabled="!canEditEnterpriseTab('profile')"><option v-for="region in regionOptions" :key="region.code" :value="region.code">{{ region.name }}</option></select></label>
+        <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
+      </div>
+      <div v-if="enterpriseDetailTab === 'profile' && canEditEnterpriseTab('profile')" class="section-save-actions keyword-save-actions">
+        <button class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('企业资料已保存')">保存企业资料</button>
+      </div>
+      <section v-if="enterpriseDetailTab === 'keywords'" class="keyword-group-panel">
+        <div class="panel-head">
+          <div>
+            <h2>监测词组配置</h2>
+            <p>一个监测关键词绑定多个露出词。监测关键词用于生成问题，露出词用于判断回答里是否有效提及。提交检测时以<strong>品牌简称</strong>为主监控词，<strong>露出词</strong>作为别名传给模力指数。</p>
+          </div>
+          <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" @click="addKeywordGroup">新增词组</button>
+        </div>
+        <div class="keyword-group-list">
+          <div v-for="(group, index) in keywordGroupRows" :key="group.id || `kw-${index}`" class="keyword-group-card">
+            <div class="keyword-group-main">
+              <label><span>监测关键词</span><input v-model="group.monitor_keyword" :disabled="!canEditEnterpriseTab('keywords')" placeholder="例如 北京艾迪亚控股集团有限公司" /></label>
+              <label><span>状态</span><select v-model="group.status" :disabled="!canEditEnterpriseTab('keywords')"><option :value="true">启用</option><option :value="false">停用</option></select></label>
+              <button v-if="canEditEnterpriseTab('keywords')" class="danger-text-btn" @click="removeKeywordGroup(index)">删除</button>
+            </div>
+            <div class="exposure-term-box">
+              <span>露出词</span>
+              <div class="exposure-tags">
+                <i v-for="(term, termIndex) in group.exposure_terms" :key="`${index}-${term}`">
+                  {{ term }}
+                  <button v-if="canEditEnterpriseTab('keywords')" @click="removeExposureTerm(group, termIndex)">×</button>
+                </i>
+                <input
+                  placeholder="输入后回车添加"
+                  :disabled="!canEditEnterpriseTab('keywords')"
+                  @keyup.enter="addExposureTerm(group, ($event.target as HTMLInputElement).value); ($event.target as HTMLInputElement).value = ''"
+                />
+              </div>
+            </div>
+          </div>
+          <div v-if="!keywordGroupRows.length" class="mini-empty">暂无监测词组，请先新增一个。</div>
+        </div>
+        <div class="section-save-actions keyword-save-actions">
+          <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测词配置已保存')">保存监测词配置</button>
+        </div>
+      </section>
+      <section v-if="enterpriseDetailTab === 'platforms'" class="schedule-box">
+        <div class="panel-head">
+          <div>
+            <h2 class="title-with-help">
+              购买模型与监测范围
+              <el-tooltip placement="top" effect="light" content="问题来源：企业全称生成4个基础问题；监测关键词每个生成2个行业问题；竞品每个生成2个对比问题；企业别名每个生成1个口碑问题。系统去重后最多取50个问题，再乘以勾选的平台数生成子任务。">
+                <HelpCircle />
+              </el-tooltip>
+            </h2>
+            <p>后续定时任务只提交这里勾选的平台，每家企业可以不同。</p>
+          </div>
+          <div class="section-save-actions">
+            <span>{{ brandForm.monitored_platforms.length }} 个平台</span>
+            <button v-if="canEditEnterpriseTab('platforms')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('平台配置已保存')">保存平台配置</button>
+          </div>
+        </div>
+        <div class="platform-check-grid">
+          <label v-for="platform in supportedPlatforms" :key="platform.code" class="platform-check">
+            <input v-model="brandForm.monitored_platforms" type="checkbox" :value="platform.code" :disabled="!canEditEnterpriseTab('platforms')" />
+            <span>{{ platform.name }}</span>
+          </label>
+        </div>
+      </section>
+      <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">
+        <div class="panel-head">
+          <div><h2>自动监测计划</h2><p>用于后续调度器按企业配置自动提交检测任务。</p></div>
+          <button v-if="canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
+        </div>
+        <div class="schedule-type-grid">
+          <label><input v-model="brandForm.schedule_type" type="radio" value="daily_times" :disabled="!canEditEnterpriseTab('schedule')" /><span>每天</span></label>
+          <label><input v-model="brandForm.schedule_type" type="radio" value="weekly" :disabled="!canEditEnterpriseTab('schedule')" /><span>每周</span></label>
+          <label><input v-model="brandForm.schedule_type" type="radio" value="monthly" :disabled="!canEditEnterpriseTab('schedule')" /><span>每月</span></label>
+        </div>
+        <div class="brand-form-grid">
+          <div class="schedule-time-picker">
+            <div class="schedule-time-title">
+              <span>执行时间</span>
+              <button v-if="canEditEnterpriseTab('schedule')" class="filter-reset-btn" @click="addScheduleTime">新增时间</button>
+            </div>
+            <div class="schedule-time-list">
+              <div v-for="(_, index) in brandForm.schedule_times" :key="`schedule-time-${index}`">
+                <input v-model="brandForm.schedule_times[index]" type="time" step="300" :disabled="!canEditEnterpriseTab('schedule')" />
+                <button v-if="canEditEnterpriseTab('schedule')" class="danger-text-btn" @click="removeScheduleTime(index)">删除</button>
+              </div>
+            </div>
+            <div v-if="!brandForm.schedule_times.length" class="mini-empty compact-empty">暂无执行时间，请点击“新增时间”配置。</div>
+          </div>
+          <label v-if="brandForm.schedule_type === 'weekly'"><span>每周执行日</span><select v-model="brandForm.schedule_weekdays" :disabled="!canEditEnterpriseTab('schedule')" multiple><option :value="1">周一</option><option :value="2">周二</option><option :value="3">周三</option><option :value="4">周四</option><option :value="5">周五</option><option :value="6">周六</option><option :value="7">周日</option></select></label>
+          <label v-if="brandForm.schedule_type === 'monthly'"><span>每月执行日期</span><textarea v-model="brandForm.schedule_month_days_text" :disabled="!canEditEnterpriseTab('schedule')" rows="3" placeholder="一行一个，例如 1、15、28"></textarea></label>
+        </div>
+      </section>
+    </article>
+
+    <section v-if="enterpriseDetailMode && ['competitors', 'files'].includes(enterpriseDetailTab)" class="brand-layout">
+      <article v-if="enterpriseDetailTab === 'competitors'" class="panel competitor-panel">
+        <div class="panel-head">
+          <div><h2>竞品监控库</h2><p>只维护竞品名称，系统提交任务时自动带入竞品用于排名、提及率和对比分析。</p></div>
+        </div>
+        <div class="competitor-tag-editor">
+          <div class="competitor-add-row">
+            <input v-model="competitorNameInput" :disabled="!canEditEnterpriseTab('competitors')" placeholder="输入竞品名称，例如 新榜" @keyup.enter="addCompetitorTag" />
+            <button v-if="canEditEnterpriseTab('competitors')" class="filter-search-btn" @click="addCompetitorTag">新增竞品</button>
+          </div>
+          <div class="competitor-tags">
+            <span v-for="(row, index) in competitorRows" :key="row.id || `new-${index}`">
+              {{ row.name || '未命名竞品' }}
+              <button v-if="canEditEnterpriseTab('competitors')" @click="removeCompetitorRow(row, index)">×</button>
+            </span>
+          </div>
+          <div v-if="!competitorRows.length" class="mini-empty">还没有竞品。建议先录入 3-5 个核心竞品，方便后续自动对比。</div>
+        </div>
+      </article>
+      <article v-if="enterpriseDetailTab === 'files'" class="panel competitor-panel">
+        <div class="panel-head">
+          <div><h2>客户上传文件</h2><p>查看当前企业从客户端上传的 PDF、Word、Markdown 或 TXT 原文件记录。</p></div>
+          <span>{{ knowledgeFiles.length }} 个文件</span>
+        </div>
+        <div class="knowledge-files">
+          <div v-if="loadingKnowledgeFiles" class="mini-empty">文件列表加载中...</div>
+          <div v-for="file in knowledgeFiles" :key="file.id">
+            <b>{{ file.original_name }}</b>
+            <span>{{ file.file_ext.toUpperCase() }} · {{ formatFileSize(file.file_size) }} · 已上传</span>
+          </div>
+          <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">该企业暂未上传文件。</div>
+        </div>
+      </article>
+    </section>
+
+    <el-dialog v-model="enterpriseInfoDialog" width="720px" title="企业详情">
+      <div v-if="enterpriseInfoLoading" class="mini-empty">企业详情加载中...</div>
+      <div v-else class="enterprise-info-dialog">
+        <section>
+          <h3>{{ enterpriseInfoTenant?.name }}</h3>
+          <p>{{ enterpriseInfoTenant ? tenantServicePeriod(enterpriseInfoTenant) : '-' }}</p>
+          <div class="info-grid">
+            <span><small>服务状态</small><b>{{ enterpriseInfoTenant ? tenantServiceLabel(enterpriseInfoTenant) : '-' }}</b></span>
+            <span><small>官网</small><b>{{ enterpriseInfoAsset?.official_url || '-' }}</b></span>
+            <span><small>购买模型</small><b>{{ (enterpriseInfoAsset?.monitored_platforms || []).map(item => platformLabelMap[item] || item).join('、') || '-' }}</b></span>
+          </div>
+        </section>
+        <section>
+          <h4>监测关键词</h4>
+          <div class="info-tags"><span v-for="item in enterpriseInfoAsset?.monitor_keywords || []" :key="item">{{ item }}</span><em v-if="!enterpriseInfoAsset?.monitor_keywords?.length">未配置</em></div>
+        </section>
+        <section>
+          <h4>露出词</h4>
+          <div class="info-tags"><span v-for="item in enterpriseInfoAsset?.aliases || []" :key="item">{{ item }}</span><em v-if="!enterpriseInfoAsset?.aliases?.length">未配置</em></div>
+        </section>
+        <section>
+          <h4>竞品监控</h4>
+          <div class="info-tags"><span v-for="item in enterpriseInfoCompetitors" :key="item.id">{{ item.name }}</span><em v-if="!enterpriseInfoCompetitors.length">未配置</em></div>
+        </section>
+      </div>
+      <template #footer>
+        <button class="plain-btn" @click="enterpriseInfoDialog = false">关闭</button>
+        <button v-if="enterpriseInfoTenant" class="primary-btn" @click="enterpriseInfoDialog = false; openEnterpriseDetail(enterpriseInfoTenant)">进入编辑</button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="tenantDialog" width="520px" title="新增企业">
+      <div class="form-grid password-grid">
+        <label><span>企业名称</span><input v-model="tenantForm.name" placeholder="例如 北京某某科技有限公司" /></label>
+        <label><span>服务开始日期</span><input v-model="tenantForm.service_start_date" type="date" /></label>
+        <label><span>服务结束日期</span><input v-model="tenantForm.service_end_date" type="date" /></label>
+      </div>
+      <template #footer>
+        <button class="plain-btn" @click="tenantDialog = false">取消</button>
+        <button class="primary-btn" :disabled="loadingBrand" @click="submitTenant">确认新增</button>
+      </template>
+    </el-dialog>
+  </section>
+</template>

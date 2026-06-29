@@ -1,4 +1,5 @@
-import { http } from './http'
+import { http, invalidateCache } from './http'
+
 
 export interface BrandAsset {
   id: number
@@ -82,19 +83,23 @@ export async function getBrandAsset(tenantId?: number | null): Promise<BrandAsse
 
 export async function saveBrandAsset(payload: BrandAssetPayload): Promise<BrandAssetResponse> {
   const response = await http.put('/v1/brand/asset', payload)
+  invalidateCache('/v1/brand/asset')
   return response.data.data
 }
 
 export async function createCompetitor(payload: CompetitorPayload): Promise<BrandCompetitor> {
   const response = await http.post('/v1/brand/competitors', payload)
+  invalidateCache('/v1/brand/asset')
   return response.data.data
 }
 
 export async function updateCompetitor(id: number, payload: CompetitorPayload): Promise<BrandCompetitor> {
   const response = await http.put(`/v1/brand/competitors/${id}`, payload)
+  invalidateCache('/v1/brand/asset')
   return response.data.data
 }
 
 export async function deleteCompetitor(id: number, tenantId?: number | null): Promise<void> {
   await http.delete(`/v1/brand/competitors/${id}`, { params: tenantId ? { tenant_id: tenantId } : {} })
+  invalidateCache('/v1/brand/asset')
 }

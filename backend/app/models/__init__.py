@@ -4,6 +4,7 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.models.permission import Menu, Position, PositionMenu, Role, RoleMenu, UserIdentityMenu
 from app.models.system import OperationLog, SystemConfig
+from app.models.menu_config import MenuConfig
 from app.models.monitor import GeoMonitorCallbackEvent, GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.knowledge import KnowledgeFile
 from app.models.ops import OperationLog, SystemConfig
@@ -29,6 +30,7 @@ __all__ = [
     "User",
     "UserIdentity",
     "UserIdentityMenu",
+    "MenuConfig",
     "GeoReport",
     "GeoPlatform",
     "AlertThreshold",

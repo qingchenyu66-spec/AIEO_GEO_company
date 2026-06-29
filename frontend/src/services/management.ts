@@ -1,5 +1,6 @@
-import { http } from './http'
+// import { http } from './http'
 import type { IdentityType, MenuInfo } from './auth'
+import { http, invalidateCache } from './http'
 
 export interface RoleInfo {
   id: number
@@ -61,6 +62,9 @@ export interface OperationLogRecord {
   created_at: string
 }
 
+
+// ... existing code ...
+
 export interface SystemConfigRecord {
   id: number
   config_key: string
@@ -70,6 +74,18 @@ export interface SystemConfigRecord {
   status: string
   remark: string | null
   updated_at: string
+}
+
+export interface MenuConfigRecord {
+  id: number
+  menu_code: string
+  menu_name: string
+  identity_type: 'PLATFORM' | 'CUSTOMER'
+  sort_order: number
+  is_visible: boolean
+  icon: string | null
+  route_path: string | null
+  remark: string | null
 }
 
 export interface PlatformOverview {
@@ -186,6 +202,26 @@ export async function getSystemConfigs(): Promise<SystemConfigRecord[]> {
   return response.data.data
 }
 
+export async function getMenuConfigs(identityType?: string): Promise<MenuConfigRecord[]> {
+  const response = await http.get('/v1/management/menus/config', {
+    params: identityType ? { identity_type: identityType } : undefined
+  })
+  return response.data.data
+}
+
+export async function updateMenuConfig(configId: number, payload: Partial<MenuConfigRecord>): Promise<MenuConfigRecord> {
+  const response = await http.put(`/v1/management/menus/config/${configId}`, payload)
+  return response.data.data
+}
+
+export async function deleteMenuConfig(configId: number): Promise<void> {
+  await http.delete(`/v1/management/menus/config/${configId}`)
+}
+
+export async function batchUpdateMenuConfigs(configs: Array<{ id: number; menu_name?: string; sort_order?: number; is_visible?: boolean }>): Promise<void> {
+  await http.post('/v1/management/menus/config/batch-update', configs)
+}
+
 export async function getPlatformOverview(): Promise<PlatformOverview> {
   const response = await http.get('/v1/management/overview')
   return response.data.data
@@ -193,20 +229,24 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
 
 export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<TenantInfo> {
   const response = await http.post('/v1/management/tenants', payload)
+  invalidateCache('/v1/management/tenants')
   return response.data.data
 }
 
 export async function updateTenant(tenantId: number, payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null; status: boolean }): Promise<TenantInfo> {
   const response = await http.put(`/v1/management/tenants/${tenantId}`, payload)
+  invalidateCache('/v1/management/tenants')
   return response.data.data
 }
 
 export async function deleteTenant(tenantId: number): Promise<void> {
   await http.delete(`/v1/management/tenants/${tenantId}`)
+  invalidateCache('/v1/management/tenants')
 }
 
 export async function restoreTenant(tenantId: number): Promise<TenantInfo> {
   const response = await http.patch(`/v1/management/tenants/${tenantId}/restore`)
+  invalidateCache('/v1/management/tenants')
   return response.data.data
 }
 
@@ -225,26 +265,32 @@ export async function getManagedUsers(params?: ManagedUserQuery): Promise<Manage
 
 export async function createManagedUser(payload: CreateUserPayload): Promise<void> {
   await http.post('/v1/management/users', payload)
+  invalidateCache('/v1/management/users')
 }
 
 export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'>
 
 export async function updateManagedUser(userId: number, payload: UpdateUserPayload): Promise<void> {
   await http.put(`/v1/management/users/${userId}`, payload)
+  invalidateCache('/v1/management/users')
 }
 
 export async function resetManagedUserPassword(userId: number, password: string): Promise<void> {
   await http.patch(`/v1/management/users/${userId}/password`, { password })
+  invalidateCache('/v1/management/users')
 }
 
 export async function setManagedUserStatus(userId: number, enabled: boolean): Promise<void> {
   await http.patch(`/v1/management/users/${userId}/status`, null, { params: { enabled } })
+  invalidateCache('/v1/management/users')
 }
 
 export async function deleteManagedUser(userId: number): Promise<void> {
   await http.delete(`/v1/management/users/${userId}`)
+  invalidateCache('/v1/management/users')
 }
 
 export async function restoreManagedUser(userId: number): Promise<void> {
   await http.patch(`/v1/management/users/${userId}/restore`)
+  invalidateCache('/v1/management/users')
 }

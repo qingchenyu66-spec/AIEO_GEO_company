@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date, datetime, time
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -7,18 +9,46 @@ from app.core.database import get_db
 from app.schemas.common import ApiResponse
 from app.schemas.monitor import MonitorTaskCreateRequest
 from app.services.monitor_service import (
+    get_monitor_subtask,
     get_monitor_task,
     list_monitor_tasks,
     monitor_summary,
-    serialize_subtask,
+    ranking_matrix,
+    sentiment_overview,
+    serialize_subtask_for_display,
     serialize_task,
+    serialize_tasks_for_display,
     submit_monitor_task,
     sync_monitor_task,
 )
+from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
-from app.services.schedule_service import preview_scheduled_tasks, run_due_scheduled_tasks
-
+from app.services.schedule_context import schedule_plan_summary, schedule_runs_for_tasks
 router = APIRouter(prefix="/monitor")
+
+
+def _keyword_groups_for_tenant(db: Session, tenant_id: int | None) -> list[dict]:
+    if tenant_id is None:
+        return []
+    return [
+        keyword_group_to_dict(item)
+        for item in list_keyword_groups(db, tenant_id)
+        if item.status and item.monitor_keyword
+    ]
+
+
+def _serialize_task_subtasks(db: Session, task) -> list[dict]:
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    groups = _keyword_groups_for_tenant(db, task.tenant_id)
+    return [
+        serialize_subtask_for_display(
+            item,
+            monitor_keywords=task.monitor_keywords,
+            asset=asset,
+            keyword_groups=groups,
+        )
+        for item in task.subtasks
+    ]
 
 
 def require_platform(current: CurrentSession) -> None:
@@ -51,7 +81,8 @@ def monitor_tasks(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """查询本地任务列表；这里不请求模力指数远端接口。"""
-    return ApiResponse(data=[serialize_task(task) for task in list_monitor_tasks(db, current)])
+    tasks = list_monitor_tasks(db, current)
+    return ApiResponse(data=serialize_tasks_for_display(db, tasks))
 
 
 @router.get("/summary", response_model=ApiResponse[dict])
@@ -63,6 +94,92 @@ def monitor_dashboard_summary(
     return ApiResponse(data=monitor_summary(db, current))
 
 
+@router.get("/ranking-matrix", response_model=ApiResponse[dict])
+def monitor_ranking_matrix(
+    platform: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    keyword: str | None = None,
+    monitor_group: str | None = None,
+    limit_rows: int = 120,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """Return prompt × snapshot ranking matrix for customer realtime monitor."""
+    start_at = datetime.combine(start_date, time.min) if start_date else None
+    end_at = datetime.combine(end_date, time.max) if end_date else None
+    try:
+        data = ranking_matrix(
+            db,
+            current,
+            platform=platform,
+            start_at=start_at,
+            end_at=end_at,
+            keyword=keyword,
+            monitor_group=monitor_group,
+            limit_rows=limit_rows,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/sentiment-overview", response_model=ApiResponse[dict])
+def monitor_sentiment_overview(
+    platform: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    monitor_group: str | None = None,
+    schedule_window_key: str | None = None,
+    sentiment: str | None = Query(default="all", description="all | negative | positive | neutral"),
+    tenant_id: int | None = None,
+    item_limit: int = Query(default=200, ge=1, le=500),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """Return exposure-prompt sentiment stats and filtered sample list."""
+    start_at = datetime.combine(start_date, time.min) if start_date else None
+    end_at = datetime.combine(end_date, time.max) if end_date else None
+    try:
+        data = sentiment_overview(
+            db,
+            current,
+            platform=platform,
+            start_at=start_at,
+            end_at=end_at,
+            monitor_group=monitor_group,
+            schedule_window_key=schedule_window_key,
+            sentiment_filter=sentiment,
+            tenant_id=tenant_id,
+            item_limit=item_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/subtasks/{subtask_id}", response_model=ApiResponse[dict])
+def monitor_subtask_detail(
+    subtask_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """Query a single subtask with full answer content and references."""
+    try:
+        subtask = get_monitor_subtask(db, subtask_id, current)
+        task = get_monitor_task(db, subtask.task_id, current)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    groups = _keyword_groups_for_tenant(db, task.tenant_id)
+    return ApiResponse(data=serialize_subtask_for_display(
+        subtask,
+        monitor_keywords=task.monitor_keywords,
+        asset=asset,
+        keyword_groups=groups,
+    ))
+
+
 @router.get("/scheduled/preview", response_model=ApiResponse[list[dict]])
 def scheduled_monitor_preview(
     tenant_id: int | None = None,
@@ -71,7 +188,10 @@ def scheduled_monitor_preview(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """预览企业定时监测会提交的问题和模型平台，不调用模力指数接口。"""
-    require_platform(current)
+    if current.identity.identity_type == "CUSTOMER":
+        tenant_id = current.identity.tenant_id
+    else:
+        require_platform(current)
     return ApiResponse(data=preview_scheduled_tasks(db, tenant_id=tenant_id, max_prompts=max_prompts))
 
 
@@ -105,7 +225,12 @@ def monitor_task_detail(
         task = get_monitor_task(db, task_id, current)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ApiResponse(data={"task": serialize_task(task), "subtasks": [serialize_subtask(item) for item in task.subtasks]})
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+    return ApiResponse(data={
+        "task": serialize_task(task, schedule_run=schedule_run, asset=asset),
+        "subtasks": _serialize_task_subtasks(db, task),
+    })
 
 
 @router.post("/tasks/{task_id}/sync", response_model=ApiResponse[dict])
@@ -121,4 +246,4 @@ def monitor_task_sync(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ApiResponse(data={"task": serialize_task(task), "subtasks": [serialize_subtask(item) for item in task.subtasks]})
+    return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task)})

@@ -1,24 +1,22 @@
 <script setup lang="ts">
 import { Users } from '@lucide/vue'
+import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 
-defineProps<{
-  loadingUsers: boolean
-  managementUsers: any[]
-  userFilters: any
-  tenants: any[]
-  loadUserManagement: () => void
-  resetUserFilters: () => void
-  identityDisplayName: (identity: any) => string
-  openEditUser: (user: any) => void
-  openPasswordDialog: (user: any) => void
-  toggleUserStatus: (user: any) => void
-  deleteUser: (user: any) => void
-  restoreUser: (user: any) => void
-}>()
-
-const emit = defineEmits<{
-  createUser: []
-}>()
+const {
+  loadingUsers,
+  managementUsers,
+  userFilters,
+  tenants,
+  loadUserManagement,
+  resetUserFilters,
+  identityDisplayName,
+  openEditUser,
+  openPasswordDialog,
+  toggleUserStatus,
+  deleteUser,
+  restoreUser,
+  goToUserCreate,
+} = usePlatformAdminInject()
 </script>
 
 <template>
@@ -31,7 +29,7 @@ const emit = defineEmits<{
         </div>
         <div class="user-list-actions">
           <span>{{ loadingUsers ? '加载中' : `共 ${managementUsers.length} 人` }}</span>
-          <button class="primary-btn small-btn" @click="emit('createUser')">新增用户</button>
+          <button class="primary-btn small-btn" @click="goToUserCreate">新增用户</button>
         </div>
       </div>
       <div class="user-filter-bar">
@@ -76,7 +74,7 @@ const emit = defineEmits<{
           <span>当前筛选条件下没有账号。可以重置筛选，或新增一个用户。</span>
           <div>
             <button class="filter-reset-btn" @click="resetUserFilters">重置筛选</button>
-            <button class="filter-search-btn" @click="emit('createUser')">新增用户</button>
+            <button class="filter-search-btn" @click="goToUserCreate">新增用户</button>
           </div>
         </div>
         <div v-for="user in managementUsers" :key="user.id" class="managed-user-card" :class="{ deleted: user.deleted }">

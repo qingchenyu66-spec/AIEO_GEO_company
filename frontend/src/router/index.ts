@@ -16,10 +16,24 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (!to.meta.public && !auth.isLoggedIn) return '/login'
-  if (to.path === '/login' && auth.isLoggedIn) return auth.portalPath
-  const requiredIdentity = to.meta.identity
-  if (requiredIdentity && auth.session?.identity.identity_type !== requiredIdentity) return auth.portalPath
+
+  // 未登录访问需要认证的页面 -> 跳转登录
+  if (!to.meta.public && !auth.isLoggedIn) {
+    return '/login'
+  }
+
+  // 已登录访问登录页 -> 跳转到门户
+  if (to.path === '/login' && auth.isLoggedIn) {
+    return auth.portalPath
+  }
+
+  // 检查身份类型是否匹配
+  const requiredIdentity = to.meta.identity as string | undefined
+  if (requiredIdentity && auth.session?.identity?.identity_type !== requiredIdentity) {
+    return auth.portalPath
+  }
+
+  // 允许导航
 })
 
 export default router

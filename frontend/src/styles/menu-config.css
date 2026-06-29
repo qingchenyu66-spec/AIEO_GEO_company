@@ -1,0 +1,151 @@
+/* D:\py代码\GEO优化\frontend\src\styles\menu-config.css */
+
+/* 菜单配置对话框样式 */
+.menu-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 8px 0;
+}
+
+.identity-type-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.identity-type-tabs button {
+  padding: 8px 16px;
+  border: 1px solid #dcdfe6;
+  background: #fff;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.3s;
+}
+
+.identity-type-tabs button.active {
+  background: #409eff;
+  color: #fff;
+  border-color: #409eff;
+}
+
+.identity-type-tabs button:hover:not(.active) {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+/* 菜单配置表格样式 */
+.menu-config-table {
+  overflow-x: auto;
+}
+
+.menu-config-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.menu-config-table th,
+.menu-config-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.menu-config-table th {
+  background: #f5f7fa;
+  font-weight: 600;
+  color: #606266;
+}
+
+.menu-config-table tbody tr:hover {
+  background: #f5f7fa;
+}
+
+.menu-config-table input[type="text"],
+.menu-config-table input[type="number"] {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.3s;
+}
+
+.menu-config-table input:focus {
+  border-color: #409eff;
+}
+
+.menu-config-table select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  outline: none;
+  background: #fff;
+  cursor: pointer;
+}
+
+.menu-config-table select:focus {
+  border-color: #409eff;
+}
+
+.status-disabled {
+  color: #f56c6c;
+  font-weight: 500;
+}
+
+/* 操作按钮样式 */
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.small-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.plain-btn.small-btn {
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  color: #606266;
+}
+
+.plain-btn.small-btn:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.primary-btn.small-btn {
+  background: #409eff;
+  border: 1px solid #409eff;
+  color: #fff;
+}
+
+.primary-btn.small-btn:hover {
+  background: #66b1ff;
+  border-color: #66b1ff;
+}
+
+.primary-btn.small-btn:disabled {
+  background: #a0cfff;
+  border-color: #a0cfff;
+  cursor: not-allowed;
+}
+
+/* 系统配置页面头部操作区 */
+.settings-header-actions {
+  margin-bottom: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.settings-header-actions .primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

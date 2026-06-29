@@ -19,6 +19,22 @@ class MenuInfo(BaseModel):
     can_export: bool = True
 
 
+class MenuConfigUpdateRequest(BaseModel):
+    menu_name: str | None = Field(default=None, min_length=1, max_length=120)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+    is_visible: bool | None = None
+    icon: str | None = Field(default=None, max_length=50)
+    route_path: str | None = Field(default=None, max_length=255)
+    remark: str | None = Field(default=None, max_length=500)
+
+
+class MenuConfigBatchItem(BaseModel):
+    id: int = Field(gt=0)
+    menu_name: str | None = Field(default=None, min_length=1, max_length=120)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+    is_visible: bool | None = None
+
+
 class RoleInfo(BaseModel):
     """角色下拉选项。"""
 

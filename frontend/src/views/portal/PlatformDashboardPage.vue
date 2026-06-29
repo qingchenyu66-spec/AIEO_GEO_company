@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, WalletCards, Zap } from '@lucide/vue'
 import { getPlatformOverview, type PlatformOverview } from '../../services/management'
+import { extractErrorDetail } from '../../utils/requestError'
 
 const props = defineProps<{
   platformLabelMap: Record<string, string>
@@ -69,7 +70,7 @@ async function loadOverview() {
   try {
     overview.value = await getPlatformOverview()
   } catch (error: any) {
-    errorText.value = error?.response?.data?.message || error?.message || '运营总览加载失败'
+    errorText.value = extractErrorDetail(error)
   } finally {
     loading.value = false
   }

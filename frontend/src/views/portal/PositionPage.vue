@@ -1,10 +1,12 @@
 <script setup lang="ts">
-defineProps<{
-  positionRows: any[]
-  openCreatePosition: (type: 'PLATFORM' | 'CUSTOMER') => void
-  editPosition: (position: any) => void
-  removePosition: (position: any) => void
-}>()
+import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
+
+const {
+  positionRows,
+  openCreatePosition,
+  editPosition,
+  removePosition,
+} = usePlatformAdminInject()
 </script>
 
 <template>

@@ -10,7 +10,7 @@ from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.monitor import GeoMonitorScheduleRun
 from app.models.tenant import Tenant
 from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
-from app.services.brand_service import active_keyword_groups
+from app.services.brand_service import _is_industry_monitor_keyword, active_keyword_groups, molizhishu_monitor_terms
 from app.services.monitor_service import serialize_task, submit_monitor_task
 
 
@@ -98,34 +98,47 @@ def build_scheduled_prompts(
     max_prompts: int = 50,
     keyword_group: dict[str, Any] | None = None,
 ) -> list[str]:
-    group_keyword = (keyword_group or {}).get("monitor_keyword")
-    group_terms = (keyword_group or {}).get("exposure_terms") or []
+    """Generate prompts per keyword group: brand groups ask brand questions; industry groups ask 2 industry questions."""
+    group_keyword = str((keyword_group or {}).get("monitor_keyword") or "").strip()
+    group_exposure = _dedupe_text((keyword_group or {}).get("exposure_terms") or [])
     subject = (asset.company_full_name or "").strip() or (asset.brand_name or "").strip()
-    brand_terms = _dedupe_text([asset.brand_name, asset.brand_short_name, asset.company_full_name, *group_terms, *(asset.aliases_json or [])])
-    product_terms = _dedupe_text([group_keyword, *(asset.product_keywords_json or []), *(asset.monitor_keywords_json or [])])
     competitor_names = _dedupe_text([item.name for item in competitors if item.status and not item.deleted])
+    is_industry_group = _is_industry_monitor_keyword(group_keyword, asset) if group_keyword else bool(not subject)
     prompts: list[str] = []
-    if subject:
-        prompts.extend([
-            f"{subject}是做什么的？",
-            f"{subject}这家公司怎么样？",
-            f"{subject}值得推荐吗？",
-            f"{subject}有哪些优势和不足？",
+
+    if is_industry_group:
+        if group_keyword:
+            prompts.append(f"{group_keyword}相关公司推荐有哪些？")
+            if subject:
+                prompts.append(f"{subject}在{group_keyword}领域表现怎么样？")
+    else:
+        if subject:
+            prompts.extend([
+                f"{subject}是做什么的？",
+                f"{subject}这家公司怎么样？",
+                f"{subject}值得推荐吗？",
+                f"{subject}有哪些优势和不足？",
+            ])
+        reputation_terms = _dedupe_text([
+            asset.brand_name,
+            asset.brand_short_name,
+            *group_exposure,
+            *(asset.aliases_json or []),
         ])
-    for term in product_terms[:12]:
-        prompts.append(f"{term}相关公司推荐有哪些？")
-        if subject:
-            prompts.append(f"{subject}在{term}领域表现怎么样？")
-    for competitor in competitor_names[:12]:
-        if subject:
-            prompts.append(f"{subject}和{competitor}对比哪个好？")
-            prompts.append(f"{subject}、{competitor}分别适合什么企业？")
-    for term in brand_terms[:8]:
-        prompts.append(f"{term}的口碑评价怎么样？")
+        for term in reputation_terms:
+            if _is_industry_monitor_keyword(term, asset):
+                continue
+            prompts.append(f"{term}的口碑评价怎么样？")
+        for competitor in competitor_names[:12]:
+            if subject:
+                prompts.append(f"{subject}和{competitor}对比哪个好？")
+                prompts.append(f"{subject}、{competitor}分别适合什么企业？")
+
     return _dedupe_text(prompts)[:max_prompts]
 
 
 def build_scheduled_payload(
+    db: Session,
     asset: BrandAsset,
     competitors: list[BrandCompetitor],
     max_prompts: int = 50,
@@ -137,12 +150,13 @@ def build_scheduled_payload(
         for code in (asset.monitored_platforms_json or [])
         if str(code).strip()
     ]
+    monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
     return MonitorTaskCreateRequest(
         tenant_id=asset.tenant_id,
         prompts=prompts,
         platforms=platforms,
-        monitor_keywords=(keyword_group or {}).get("monitor_keyword") or asset.brand_name,
-        monitor_keyword_aliases=(keyword_group or {}).get("exposure_terms") or asset.aliases_json or [],
+        monitor_keywords=monitor_keyword,
+        monitor_keyword_aliases=aliases,
         region_code=[asset.region_code] if asset.region_code else None,
     )
 
@@ -156,8 +170,28 @@ def preview_scheduled_tasks(db: Session, *, tenant_id: int | None = None, max_pr
     for asset in db.scalars(stmt):
         competitors = list(db.scalars(select(BrandCompetitor).where(BrandCompetitor.tenant_id == asset.tenant_id, BrandCompetitor.deleted.is_(False))))
         keyword_groups = active_keyword_groups(db, asset.tenant_id)
-        per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
-        payloads = [build_scheduled_payload(asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group) for group in keyword_groups]
+        group_count = max(1, len(keyword_groups))
+        per_group_max_prompts = max(1, max_prompts // group_count)
+        platforms = [
+            PlatformConfig(platform=code, mode="search", screenshot=1)
+            for code in (asset.monitored_platforms_json or [])
+            if str(code).strip()
+        ]
+        platform_count = len(platforms)
+        group_previews: list[dict[str, Any]] = []
+        for group in keyword_groups:
+            prompts = build_scheduled_prompts(asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group)
+            group_previews.append({
+                "monitor_keyword": group.get("monitor_keyword"),
+                "exposure_terms": group.get("exposure_terms") or [],
+                "prompt_limit": per_group_max_prompts,
+                "prompt_count": len(prompts),
+                "prompts": prompts,
+                "subtask_count": len(prompts) * platform_count,
+            })
+        total_prompts = sum(item["prompt_count"] for item in group_previews)
+        total_subtasks = sum(item["subtask_count"] for item in group_previews)
+        all_prompts = [prompt for group in group_previews for prompt in group["prompts"]]
         result.append({
             "tenant_id": asset.tenant_id,
             "tenant_name": tenant_map.get(asset.tenant_id) or asset.company_full_name,
@@ -165,10 +199,17 @@ def preview_scheduled_tasks(db: Session, *, tenant_id: int | None = None, max_pr
             "region_code": asset.region_code,
             "schedule_type": asset.schedule_type,
             "schedule_times": [item.strftime("%H:%M") for item in schedule_times_for_asset(asset)],
+            "max_prompts_total": max_prompts,
+            "max_prompts_per_group": per_group_max_prompts,
             "keyword_group_count": len(keyword_groups),
-            "platforms": [item.model_dump() for item in payloads[0].platforms] if payloads else [],
-            "prompt_count": sum(len(payload.prompts) for payload in payloads),
-            "prompts": [prompt for payload in payloads for prompt in payload.prompts],
+            "tasks_per_schedule_window": len(keyword_groups),
+            "platform_count": platform_count,
+            "platforms": [item.model_dump() for item in platforms],
+            "prompt_count": total_prompts,
+            "unique_prompt_count": len(set(all_prompts)),
+            "subtask_count_per_window": total_subtasks,
+            "prompts": all_prompts,
+            "keyword_groups": group_previews,
             "competitor_count": len(competitors),
         })
     return result
@@ -203,7 +244,7 @@ def run_due_scheduled_tasks(
             if db.scalar(select(GeoMonitorScheduleRun).where(GeoMonitorScheduleRun.tenant_id == asset.tenant_id, GeoMonitorScheduleRun.schedule_key == group_key)):
                 results.append({"tenant_id": asset.tenant_id, "schedule_key": group_key, "status": "skipped", "message": "该调度窗口已执行"})
                 continue
-            payload = build_scheduled_payload(asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group)
+            payload = build_scheduled_payload(db, asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group)
             run = GeoMonitorScheduleRun(
                 tenant_id=asset.tenant_id,
                 schedule_key=group_key,

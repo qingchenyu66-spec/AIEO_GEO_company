@@ -262,15 +262,80 @@ def active_keyword_groups(db: Session, tenant_id: int) -> list[dict[str, Any]]:
     return groups or _fallback_keyword_groups(asset)
 
 
-def molizhishu_brand_payload(db: Session, tenant_id: int) -> tuple[str, list[str], list[dict[str, Any]]]:
-    """把企业品牌资产转换为模力指数 monitorKeywords、aliases、competitors。"""
+def _is_industry_monitor_keyword(text: str, asset: BrandAsset) -> bool:
+    """判断词组监测词是否为行业/场景词，而非品牌名。"""
+    keyword = str(text or "").strip()
+    if not keyword:
+        return True
+    anchors = [
+        str(asset.brand_name or "").strip(),
+        str(asset.brand_short_name or "").strip(),
+        str(asset.company_full_name or "").strip(),
+    ]
+    anchors = [item for item in anchors if item]
+    if any(keyword == anchor or keyword in anchor or anchor in keyword for anchor in anchors):
+        return False
+    industry_tokens = ("优化", "监测", "推广", "诊断", "SEO", "AEO", "DSO")
+    return any(token in keyword for token in industry_tokens) and not keyword.endswith("公司")
+
+
+def brand_exposure_terms(asset: BrandAsset, groups: list[dict[str, Any]]) -> list[str]:
+    """收集品牌词组的露出词，排除行业词组里的行业词。"""
+    terms: list[str] = []
+    for group in groups:
+        if not group.get("status", True):
+            continue
+        monitor_keyword = str(group.get("monitor_keyword") or "").strip()
+        if _is_industry_monitor_keyword(monitor_keyword, asset):
+            continue
+        for term in group.get("exposure_terms") or []:
+            text = str(term or "").strip()
+            if text and text not in terms:
+                terms.append(text)
+    return terms
+
+
+def molizhishu_monitor_terms(
+    db: Session,
+    tenant_id: int,
+    *,
+    keyword_group: dict[str, Any] | None = None,
+) -> tuple[str, list[str]]:
+    """生成提交模力指数的 monitorKeywords 与 aliases：主词用简称/品牌名，别名用露出词。"""
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         raise ValueError("当前企业未配置品牌资产，请先维护品牌主词和简称")
     groups = active_keyword_groups(db, tenant_id)
-    first_group = groups[0] if groups else None
-    monitor_keyword = first_group["monitor_keyword"] if first_group else asset.brand_name
-    aliases = _dedupe(first_group["exposure_terms"] if first_group else [asset.company_full_name, asset.brand_short_name, *asset.monitor_keywords_json, *asset.aliases_json])
+    monitor_keyword = (
+        str(asset.brand_short_name or "").strip()
+        or str(asset.brand_name or "").strip()
+        or str(asset.company_full_name or "").strip()
+    )
+    exposure = brand_exposure_terms(asset, groups)
+    if keyword_group and keyword_group.get("status", True):
+        group_keyword = str(keyword_group.get("monitor_keyword") or "").strip()
+        if group_keyword and not _is_industry_monitor_keyword(group_keyword, asset):
+            if not monitor_keyword:
+                monitor_keyword = group_keyword
+            for term in keyword_group.get("exposure_terms") or []:
+                text = str(term or "").strip()
+                if text and text not in exposure:
+                    exposure.append(text)
+    aliases = _dedupe([
+        str(asset.brand_name or "").strip(),
+        str(asset.company_full_name or "").strip(),
+        *exposure,
+        *(asset.aliases_json or []),
+    ])
+    aliases = [item for item in aliases if item and item != monitor_keyword]
+    if not monitor_keyword and aliases:
+        monitor_keyword = aliases[0]
+    return monitor_keyword, aliases
+
+
+def molizhishu_brand_payload(db: Session, tenant_id: int) -> tuple[str, list[str], list[dict[str, Any]]]:
+    """把企业品牌资产转换为模力指数 monitorKeywords、aliases、competitors。"""
+    monitor_keyword, aliases = molizhishu_monitor_terms(db, tenant_id)
     competitors = [
         {"name": item.name, "aliases": item.aliases_json}
         for item in list_competitors(db, tenant_id)

@@ -7,8 +7,21 @@ import {
 const STORAGE_KEY = 'geo-auth-session'
 
 function readSession(): AuthSession | null {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') }
-  catch { return null }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const session = JSON.parse(raw)
+    // 验证 session 完整性
+    if (!session || !session.access_token || !session.identity) {
+      localStorage.removeItem(STORAGE_KEY)
+      return null
+    }
+    return session as AuthSession
+  }
+  catch {
+    localStorage.removeItem(STORAGE_KEY)
+    return null
+  }
 }
 
 export const useAuthStore = defineStore('auth', {

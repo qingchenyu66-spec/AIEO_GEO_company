@@ -11,10 +11,13 @@ from app.models.ops import OperationLog, SystemConfig
 from app.models.permission import Menu, Position, PositionMenu, Role, UserIdentityMenu
 from app.models.tenant import Tenant
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.menu_config import MenuConfig
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
 from app.schemas.permission import (
+    MenuConfigBatchItem,
+    MenuConfigUpdateRequest,
     MenuInfo,
     PasswordResetRequest,
     PositionInfo,
@@ -170,6 +173,32 @@ def operation_log_to_dict(item: OperationLog) -> dict:
     }
 
 
+def write_management_log(
+    db: Session,
+    current: CurrentSession,
+    action_type: str,
+    description: str,
+    *,
+    target_module: str | None = None,
+    target_id: int | None = None,
+    tenant_id: int | None = None,
+    risk_level: str = "正常",
+) -> OperationLog:
+    """写入平台管理操作日志，和业务变更共用同一个数据库事务。"""
+    log = OperationLog(
+        operator_name=current.user.display_name or current.identity.identity_name or current.user.username,
+        action_type=action_type,
+        description=description[:500],
+        risk_level=risk_level,
+        target_module=target_module,
+        target_id=target_id,
+        tenant_id=tenant_id,
+        operator_user_id=current.user.id,
+    )
+    db.add(log)
+    return log
+
+
 def position_code_from_name(identity_type: str, name: str) -> str:
     import hashlib
 
@@ -284,6 +313,7 @@ def management_create_position(
     db.add(position)
     db.flush()
     sync_position_menus(db, position.id, payload.menu_ids, identity_type=payload.identity_type, writable=payload.identity_type == "PLATFORM")
+    write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}", target_module="职位管理", target_id=position.id)
     db.commit()
     db.refresh(position)
     return ApiResponse(data=position_to_dict(db, position))
@@ -320,6 +350,7 @@ def management_update_position(
     position.description = (payload.description or "").strip() or None
     position.status = payload.status
     sync_position_menus(db, position.id, payload.menu_ids, identity_type=payload.identity_type, writable=payload.identity_type == "PLATFORM")
+    write_management_log(db, current, "职位修改", f"修改职位：{position.position_name}", target_module="职位管理", target_id=position.id, risk_level="关注")
     db.commit()
     db.refresh(position)
     return ApiResponse(data=position_to_dict(db, position))
@@ -346,6 +377,7 @@ def management_delete_position(
     position.deleted = True
     position.status = False
     db.query(PositionMenu).filter(PositionMenu.position_id == position_id).delete(synchronize_session=False)
+    write_management_log(db, current, "职位删除", f"删除职位：{position.position_name}", target_module="职位管理", target_id=position.id, risk_level="关注")
     db.commit()
     return ApiResponse(data={"id": position_id, "deleted": True})
 
@@ -594,6 +626,8 @@ def management_create_tenant(
         stop_reason="expired" if payload.service_end_date and payload.service_end_date < date.today() else None,
     )
     db.add(tenant)
+    db.flush()
+    write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant))
@@ -637,6 +671,7 @@ def management_update_tenant(
         if tenant.status:
             tenant.stopped_at = None
             tenant.stopped_by = None
+    write_management_log(db, current, "企业修改", f"修改企业资料：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant))
@@ -677,6 +712,7 @@ def management_stop_tenant(
             if user:
                 user.status = False
 
+    write_management_log(db, current, "企业停服", f"停止企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id, risk_level="关注")
     db.commit()
     return ApiResponse(data={"id": tenant.id, "status": tenant.status})
 
@@ -711,6 +747,7 @@ def management_restore_tenant(
         if user and not user.deleted:
             user.status = True
 
+    write_management_log(db, current, "企业恢复", f"恢复企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant))
@@ -779,6 +816,8 @@ def management_create_user(
     require_user_identity_create_permission(db, current, payload)
     try:
         user = create_managed_user(db, payload, current.user, current.identity)
+        write_management_log(db, current, "用户新增", f"新增用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id)
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -799,6 +838,8 @@ def management_update_user(
     require_user_identity_create_permission(db, current, payload, existing_user_id=user_id)
     try:
         user = update_managed_user(db, user_id, payload, current.user, current.identity)
+        write_management_log(db, current, "用户修改", f"修改用户与权限：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="关注")
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -818,6 +859,8 @@ def management_reset_password(
     require_platform(current)
     try:
         reset_managed_user_password(db, user_id, payload.password, current.user, current.identity)
+        write_management_log(db, current, "密码重置", f"重置用户密码：用户ID {user_id}", target_module="用户管理", target_id=user_id, risk_level="关注")
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -834,6 +877,8 @@ def management_set_user_status(
     require_platform(current)
     try:
         user = set_managed_user_status(db, user_id, enabled, current.user, current.identity)
+        write_management_log(db, current, "用户状态", f"{'启用' if enabled else '禁用'}用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="关注" if not enabled else "正常")
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -849,6 +894,8 @@ def management_delete_user(
     require_platform(current)
     try:
         user = delete_managed_user(db, user_id, current.user, current.identity)
+        write_management_log(db, current, "用户删除", f"删除用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="高危")
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -864,8 +911,110 @@ def management_restore_user(
     require_platform(current)
     try:
         user = restore_managed_user(db, user_id, current.user, current.identity)
+        write_management_log(db, current, "用户恢复", f"恢复用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id)
+        db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ApiResponse(data={"id": user.id, "deleted": user.deleted, "status": user.status})
 
+
+@router.get("/menus/config", response_model=ApiResponse[list[dict]])
+def get_menu_configs(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+    identity_type: str = Query(None, description="身份类型过滤"),
+) -> ApiResponse[list[dict]]:
+    """获取菜单配置列表"""
+    require_platform(current)
+    stmt = select(MenuConfig).where(MenuConfig.deleted.is_(False))
+    if identity_type:
+        stmt = stmt.where(MenuConfig.identity_type == identity_type)
+    stmt = stmt.order_by(MenuConfig.sort_order.asc(), MenuConfig.id.asc())
+    rows = list(db.scalars(stmt))
+    return ApiResponse(data=[{
+        "id": row.id,
+        "menu_code": row.menu_code,
+        "menu_name": row.menu_name,
+        "identity_type": row.identity_type,
+        "sort_order": row.sort_order,
+        "is_visible": row.is_visible,
+        "icon": row.icon,
+        "route_path": row.route_path,
+        "remark": row.remark,
+    } for row in rows])
+
+
+@router.put("/menus/config/{config_id}", response_model=ApiResponse[dict])
+def update_menu_config(
+        config_id: int,
+        payload: MenuConfigUpdateRequest,
+        current: CurrentSession = Depends(get_current_session),
+        db: Session = Depends(get_db),
+):
+    """更新菜单配置（名称、排序、可见性）"""
+    require_platform(current)
+    config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(config, field, value)
+
+    write_management_log(db, current, "菜单配置", f"修改菜单配置：{config.menu_name}", target_module="系统配置", target_id=config.id, risk_level="关注")
+    db.commit()
+
+    return ApiResponse(data={
+        "id": config.id,
+        "menu_code": config.menu_code,
+        "menu_name": config.menu_name,
+        "identity_type": config.identity_type,
+        "sort_order": config.sort_order,
+        "is_visible": config.is_visible,
+        "icon": config.icon,
+        "route_path": config.route_path,
+        "remark": config.remark,
+    })
+
+
+@router.delete("/menus/config/{config_id}")
+def delete_menu_config(
+        config_id: int,
+        current: CurrentSession = Depends(get_current_session),
+        db: Session = Depends(get_db),
+):
+    """停用菜单配置（逻辑删除）"""
+    require_platform(current)
+    config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
+
+    config.deleted = True
+    write_management_log(db, current, "菜单停用", f"停用菜单配置：{config.menu_name}", target_module="系统配置", target_id=config.id, risk_level="关注")
+    db.commit()
+
+    return ApiResponse(data={"message": "菜单已停用"})
+
+
+@router.post("/menus/config/batch-update")
+def batch_update_menu_configs(
+        configs: list[MenuConfigBatchItem],
+        current: CurrentSession = Depends(get_current_session),
+        db: Session = Depends(get_db),
+):
+    """批量更新菜单配置"""
+    require_platform(current)
+    updated_count = 0
+    for item in configs:
+        config = db.scalar(select(MenuConfig).where(MenuConfig.id == item.id, MenuConfig.deleted.is_(False)))
+        if config:
+            update_data = item.model_dump(exclude_unset=True, exclude={"id"})
+            for field, value in update_data.items():
+                setattr(config, field, value)
+            updated_count += 1
+
+    write_management_log(db, current, "菜单批量配置", f"批量更新菜单配置：{updated_count} 项", target_module="系统配置", risk_level="关注")
+    db.commit()
+
+    return ApiResponse(data={"message": f"已更新 {updated_count} 个菜单配置"})

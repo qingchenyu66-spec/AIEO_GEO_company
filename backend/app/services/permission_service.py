@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.menu_config import MenuConfig
 from app.models.permission import Menu, Position, PositionMenu, Role, RoleMenu, UserIdentityMenu
 from app.models.user_identity import UserIdentity
 from app.schemas.permission import MenuInfo
@@ -14,12 +15,19 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
     rows = db.execute(
         select(Menu, UserIdentityMenu)
         .join(UserIdentityMenu, UserIdentityMenu.menu_id == Menu.id)
+        .outerjoin(
+            MenuConfig,
+            (MenuConfig.menu_code == Menu.menu_code)
+            & (MenuConfig.identity_type == Menu.identity_type)
+            & (MenuConfig.deleted.is_(False)),
+        )
         .where(
             UserIdentityMenu.identity_id == identity.id,
             Menu.identity_type == identity.identity_type,
             Menu.status.is_(True),
             Menu.deleted.is_(False),
         )
+        .where((MenuConfig.is_visible.is_(None)) | (MenuConfig.is_visible.is_(True)))
         .order_by(Menu.sort_order.asc(), Menu.id.asc())
     ).all()
     return [

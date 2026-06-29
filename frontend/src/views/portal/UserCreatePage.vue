@@ -1,25 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Building2, HelpCircle, ShieldCheck } from '@lucide/vue'
+import type { IdentityType } from '../../services/auth'
+import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
+import { menuIcon } from './menuIcons'
 
-type IdentityType = 'PLATFORM' | 'CUSTOMER'
+const {
+  userForm,
+  canCreatePlatformUser,
+  canCreateCustomerUser,
+  creatableIdentityTypes,
+  positions,
+  tenants,
+  creatingUser,
+  applyPositionToConfig,
+  permissionGroupsForForm,
+  submitUser,
+} = usePlatformAdminInject()
 
-const props = defineProps<{
-  userForm: any
-  canCreatePlatformUser: boolean
-  canCreateCustomerUser: boolean
-  creatableIdentityTypes: IdentityType[]
-  positions: Record<IdentityType, any[]>
-  tenants: any[]
-  creatingUser: boolean
-  applyPositionToConfig: (type: IdentityType, form: any, positionId: number | null) => void
-  permissionGroupsForForm: (type: IdentityType, form: any) => any[]
-  menuIcon: (menu: any) => any
-  submitUser: () => void
-}>()
-
-const identityTypes = computed(() => props.userForm.identity_types as IdentityType[])
-const positionsFor = (type: IdentityType) => props.positions[type] || []
+const identityTypes = computed(() => userForm.identity_types as IdentityType[])
+const positionsFor = (type: IdentityType) => positions[type] || []
 </script>
 
 <template>
