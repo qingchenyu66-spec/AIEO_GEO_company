@@ -1,7 +1,18 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
-import { getBrandAsset, type BrandAsset, type BrandCompetitor, type BrandKeywordGroup } from '../../../services/brand'
+import {
+  findKeywordGroupByFilter,
+  formatKeywordGroupLabel,
+  getBrandAsset,
+  keywordGroupDisplayName,
+  keywordGroupFilterValue,
+  keywordGroupMonitorKeywords,
+  type BrandAsset,
+  type BrandCompetitor,
+  type BrandKeywordGroup,
+} from '../../../services/brand'
 import {
   getMonitorSubtask,
   getMonitorSummary,
@@ -14,6 +25,8 @@ import {
   type MonitorTaskScheduleGroup,
   type RankingMatrix,
   type RankingMatrixCell,
+  type RankingMatrixCellSnapshot,
+  type RankingMatrixRow,
 } from '../../../services/monitor'
 import {
   monitorModeLabelMap,
@@ -23,54 +36,137 @@ import {
 } from '../portalMaps'
 
 export type MonitorViewMode = 'list' | 'matrix'
+export type RealtimeDatePreset = '7d' | '30d' | 'custom'
 
 function promptBelongsToGroup(prompt: string, group: BrandKeywordGroup) {
   const text = (prompt || '').trim()
-  const keyword = (group.monitor_keyword || '').trim()
-  if (keyword && text.includes(keyword)) return true
-  return (group.exposure_terms || []).some(term => {
-    const token = (term || '').trim()
-    return token && text.includes(token)
-  })
+  for (const keyword of keywordGroupMonitorKeywords(group)) {
+    const token = (keyword || '').trim()
+    if (token && (token === text || text.includes(token))) return true
+  }
+  return false
 }
 
 const WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
-function scheduleSourceLabel(source: MonitorTask['schedule_source']) {
+function scheduleSourceLabel(source: MonitorTask['schedule_source'] | RankingMatrixRow['schedule_source']) {
+  if (!source || source === 'daily_avg') return ''
   if (source === 'run') return ''
-  if (source === 'inferred') return '（按配置时刻推断）'
-  if (source === 'created_at') return '（按创建时间）'
+  if (source === 'inferred') return '（推断）'
+  if (source === 'created_at') return '（创建时间）'
   return ''
 }
 
-function formatMonitorGroupLabel(group: BrandKeywordGroup) {
-  const keyword = (group.monitor_keyword || '').trim()
-  const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
-  if (!exposure.length) return keyword
-  return `${keyword}（露出：${exposure.join('、')}）`
+function matrixCellSnapshots(cell: RankingMatrixCell): RankingMatrixCellSnapshot[] {
+  if (cell.snapshots?.length) return cell.snapshots
+  return [{
+    subtask_id: cell.subtask_id,
+    mention_position: cell.mention_position,
+    raw_mention_position: cell.raw_mention_position,
+    brand_mentioned: cell.brand_mentioned,
+    monitor_keyword: cell.monitor_keyword,
+    prompt_intent: cell.prompt_intent,
+    updated_at: cell.updated_at,
+    status: cell.status,
+    page_screenshot: cell.page_screenshot,
+    sentiment: cell.sentiment,
+  }]
 }
 
-function defaultMatrixDateRange() {
+function matrixCellTitle(cell: RankingMatrixCell | undefined) {
+  if (!cell) return ''
+  if ((cell.rank_sample_count || cell.sample_count || 0) > 1) {
+    return `当日 ${cell.rank_sample_count || cell.sample_count} 次监测均值`
+  }
+  return ''
+}
+
+function formatMonitorGroupLabel(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
+  return formatKeywordGroupLabel(group, index)
+}
+
+function findMonitorGroupByFilter(
+  filterValue: string,
+  groups: BrandKeywordGroup[],
+) {
+  return findKeywordGroupByFilter(filterValue, groups)
+}
+
+function isExposureTermFilter(filterValue: string, groups: BrandKeywordGroup[]) {
+  const text = filterValue.trim()
+  if (!text || findMonitorGroupByFilter(text, groups)) return false
+  return groups.some(group => (group.exposure_terms || []).some(term => (term || '').trim() === text))
+}
+
+function promptMatchesMonitorFilter(
+  prompt: string,
+  filterValue: string,
+  groups: BrandKeywordGroup[],
+) {
+  const text = filterValue.trim()
+  if (!text) return true
+  const group = findMonitorGroupByFilter(text, groups)
+  if (group) return promptBelongsToGroup(prompt, group)
+  if (isExposureTermFilter(text, groups)) return (prompt || '').includes(text)
+  return (prompt || '').toLowerCase().includes(text.toLowerCase())
+}
+
+function taskMatchesMonitorFilter(
+  task: MonitorTask,
+  filterValue: string,
+  groups: BrandKeywordGroup[],
+) {
+  const text = filterValue.trim()
+  if (!text) return true
+  const prompts = task.prompts || []
+  return prompts.some(prompt => promptMatchesMonitorFilter(prompt, text, groups))
+}
+
+function defaultDateRange(days = 7) {
   const end = new Date()
   const start = new Date()
-  start.setDate(start.getDate() - 7)
+  start.setDate(start.getDate() - days)
   return {
     startDate: start.toISOString().slice(0, 10),
     endDate: end.toISOString().slice(0, 10),
   }
 }
 
+function matrixCellRankClass(rank: number | null | undefined) {
+  if (rank === null || rank === undefined) return 'rank-none'
+  if (rank <= 1) return 'rank-top-1'
+  if (rank <= 3) return 'rank-top-3'
+  if (rank <= 6) return 'rank-mid'
+  return 'rank-low'
+}
+
 export function useMonitorRealtime(tenantId: number | null = null) {
+  const route = useRoute()
+  const router = useRouter()
   const monitorTasks = ref<MonitorTask[]>([])
   const monitorDetail = ref<{ task: MonitorTask; subtasks: MonitorSubtask[] } | null>(null)
   const loadingMonitor = ref(false)
   const brandAsset = ref<BrandAsset | null>(null)
   const brandCompetitors = ref<BrandCompetitor[]>([])
   const monitorSummary = ref<MonitorSummary | null>(null)
-  const viewMode = ref<MonitorViewMode>('list')
+  const viewMode = ref<MonitorViewMode>('matrix')
   const rankingMatrix = ref<RankingMatrix | null>(null)
   const loadingMatrix = ref(false)
-  const loadingMatrixDetail = ref(false)
+  const datePreset = ref<RealtimeDatePreset>('7d')
+  const configExpanded = ref(false)
+
+  const detailVisible = ref(false)
+  const loadingDetail = ref(false)
+  const expandedSnapshotId = ref<string | null>(null)
+  const loadingSnapshotId = ref<string | null>(null)
+  const detailSubtask = ref<MonitorSubtask | null>(null)
+  const detailContext = ref<{
+    scheduleLabel: string | null
+    prompt: string
+    platform: string | null
+    cell: RankingMatrixCell | null
+  } | null>(null)
+
   const selectedMatrixCell = ref<{
     taskId: string
     platform: string | null
@@ -79,60 +175,63 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     prompt: string
     cell: RankingMatrixCell
   } | null>(null)
-  const selectedMatrixSubtask = ref<MonitorSubtask | null>(null)
 
-  const defaultDates = defaultMatrixDateRange()
+  const defaultDates = defaultDateRange(7)
   const filters = reactive({
-    platform: 'all',
-    status: 'all',
-    monitorGroup: '',
-  })
-  const matrixFilters = reactive({
     platform: '',
+    monitorGroup: '',
+    exposureTerm: '',
+    exactPrompt: '',
     startDate: defaultDates.startDate,
     endDate: defaultDates.endDate,
-    monitorGroup: '',
+    scheduleWindowKey: '',
+    status: 'all',
   })
 
   const monitorGroupOptions = computed(() => {
     const groups = brandAsset.value?.keyword_groups?.length
       ? brandAsset.value.keyword_groups
-      : (rankingMatrix.value?.keyword_group_options || []).map(item => ({
+      : (rankingMatrix.value?.keyword_group_options || []).map((item, index) => ({
           id: null,
+          name: item.name || item.monitor_keyword,
           monitor_keyword: item.monitor_keyword,
+          monitor_keywords: item.monitor_keywords?.length ? item.monitor_keywords : [item.monitor_keyword],
           exposure_terms: item.exposure_terms,
-          sort_order: 0,
+          sort_order: index,
           status: true,
         }))
     return groups
-      .filter(group => group.status !== false && (group.monitor_keyword || '').trim())
+      .filter(group => group.status !== false && keywordGroupMonitorKeywords(group).length)
       .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
   })
 
-  const monitorResultPlatformOptions = computed(() => {
-    const rows = monitorDetail.value?.subtasks || []
-    return [...new Set(rows.map(item => item.platform).filter(Boolean))]
+  const allExposureTermOptions = computed(() => {
+    const seen = new Set<string>()
+    const terms: string[] = []
+    const add = (value: string | null | undefined) => {
+      const token = (value || '').trim()
+      if (!token || seen.has(token)) return
+      seen.add(token)
+      terms.push(token)
+    }
+    for (const group of monitorGroupOptions.value) {
+      for (const term of group.exposure_terms || []) add(term)
+    }
+    const asset = brandAsset.value
+    if (asset) {
+      add(asset.brand_short_name)
+      add(asset.brand_name)
+      for (const alias of asset.aliases || []) add(alias)
+    }
+    for (const term of rankingMatrix.value?.exposure_term_options || []) add(term)
+    return terms.sort((left, right) => left.localeCompare(right, 'zh-CN'))
   })
 
-  const monitorResultStatusOptions = computed(() => {
-    const rows = monitorDetail.value?.subtasks || []
-    return [...new Set(rows.map(item => item.status).filter(Boolean))]
-  })
+  const activeMonitorFilter = computed(() => (
+    filters.exposureTerm.trim() || filters.monitorGroup.trim()
+  ))
 
-  const filteredMonitorSubtasks = computed(() => {
-    const selectedGroup = filters.monitorGroup.trim()
-    const selectedKeywordGroup = monitorGroupOptions.value.find(
-      group => group.monitor_keyword === selectedGroup,
-    )
-    return (monitorDetail.value?.subtasks || []).filter(item => {
-      const platformMatched = filters.platform === 'all' || item.platform === filters.platform
-      const statusMatched = filters.status === 'all' || item.status === filters.status
-      const groupMatched = !selectedKeywordGroup || promptBelongsToGroup(item.prompt || '', selectedKeywordGroup)
-      return platformMatched && statusMatched && groupMatched
-    })
-  })
-
-  const matrixPlatformOptions = computed(() => {
+  const platformOptions = computed(() => {
     const purchased = brandAsset.value?.monitored_platforms?.length
       ? brandAsset.value.monitored_platforms
       : rankingMatrix.value?.purchased_platforms || []
@@ -158,11 +257,79 @@ export function useMonitorRealtime(tenantId: number | null = null) {
       .map(group => ({
         ...group,
         tasks: [...group.tasks].sort((left, right) => {
-          const leftKey = left.keyword_group || left.monitor_keywords || ''
-          const rightKey = right.keyword_group || right.monitor_keywords || ''
+          const leftKey = matchTaskKeywordGroup(left) || left.monitor_keywords || ''
+          const rightKey = matchTaskKeywordGroup(right) || right.monitor_keywords || ''
           return leftKey.localeCompare(rightKey, 'zh-CN')
         }),
       }))
+  })
+
+  const scheduleRoundOptions = computed(() => {
+    const map = new Map<string, string>()
+    for (const group of groupedMonitorTasks.value) {
+      map.set(group.schedule_window_key, group.schedule_label)
+    }
+    for (const row of rankingMatrix.value?.rows || []) {
+      const key = row.schedule_window_key || row.task_id
+      const label = row.schedule_label || row.snapshot_at || key
+      if (key) map.set(key, label)
+    }
+    return [...map.entries()].map(([schedule_window_key, schedule_label]) => ({
+      schedule_window_key,
+      schedule_label,
+    }))
+  })
+
+  const monitorResultPlatformOptions = computed(() => {
+    const rows = monitorDetail.value?.subtasks || []
+    return [...new Set(rows.map(item => item.platform).filter(Boolean))]
+  })
+
+  const monitorResultStatusOptions = computed(() => {
+    const rows = monitorDetail.value?.subtasks || []
+    return [...new Set(rows.map(item => item.status).filter(Boolean))]
+  })
+
+  const filteredMonitorSubtasks = computed(() => {
+    const filterValue = activeMonitorFilter.value
+    const exactPrompt = filters.exactPrompt.trim()
+    return (monitorDetail.value?.subtasks || []).filter(item => {
+      const platformMatched = !filters.platform || item.platform === filters.platform
+      const statusMatched = filters.status === 'all' || item.status === filters.status
+      const exactMatched = !exactPrompt || (item.prompt || '').trim() === exactPrompt
+      const groupMatched = promptMatchesMonitorFilter(
+        item.prompt || '',
+        filterValue,
+        monitorGroupOptions.value,
+      )
+      return platformMatched && statusMatched && exactMatched && groupMatched
+    })
+  })
+
+  const rankingMatrixView = computed(() => {
+    if (!rankingMatrix.value) return null
+    const exactPrompt = filters.exactPrompt.trim()
+    if (!exactPrompt) return rankingMatrix.value
+    const columns = rankingMatrix.value.columns.filter(col => (col.prompt || '').trim() === exactPrompt)
+    if (!columns.length) return { ...rankingMatrix.value, columns: [], rows: [] }
+    const rows = rankingMatrix.value.rows.filter(row => columns.some(col => row.cells[col.prompt]))
+    return { ...rankingMatrix.value, columns, rows }
+  })
+
+  const filteredGroupedMonitorTasks = computed<MonitorTaskScheduleGroup[]>(() => {
+    const key = filters.scheduleWindowKey.trim()
+    const filterValue = activeMonitorFilter.value
+    return groupedMonitorTasks.value
+      .filter(group => !key || group.schedule_window_key === key)
+      .map(group => ({
+        ...group,
+        tasks: group.tasks.filter(task => taskMatchesMonitorFilter(
+          task,
+          filterValue,
+          monitorGroupOptions.value,
+        )),
+      }))
+      .filter(group => group.tasks.length > 0)
   })
 
   const schedulePlanDisplay = computed(() => {
@@ -208,17 +375,44 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     const known = monitorSummary.value?.platform_stats || []
     const purchasedCodes = brandAsset.value?.monitored_platforms?.length ? brandAsset.value.monitored_platforms : []
     const codes = purchasedCodes.length ? purchasedCodes : known.map(item => item.platform)
-    return codes.map((code, index) => {
+    return codes.map(code => {
       const row = known.find(item => item.platform === code)
       return {
         code,
         name: platformLabelMap[code] || code,
         rate: row?.mention_rate ?? 0,
         total: row?.total ?? 0,
-        status: row?.completed ? '已返回' : index < 5 ? '监测中' : '待接入',
+        completed: row?.completed ?? 0,
+        status: row?.completed ? '已返回' : '待返回',
       }
     })
   })
+
+  const heroMetrics = computed(() => {
+    const latestGroup = groupedMonitorTasks.value[0]
+    const latestTask = latestGroup?.tasks[0]
+    const latestMatrixRow = rankingMatrix.value?.rows[0]
+    const completed = latestTask?.completed_items ?? monitorSummary.value?.completed_count ?? 0
+    const total = latestTask?.total_items ?? monitorSummary.value?.subtask_count ?? 0
+    const pendingPlatforms = platformCoverage.value.filter(item => item.status !== '已返回').length
+    return {
+      brandName: brandAsset.value?.brand_name || rankingMatrix.value?.brand_name || '未配置品牌',
+      companyName: brandAsset.value?.company_full_name || '',
+      latestSchedule: latestGroup?.schedule_label
+        || latestMatrixRow?.schedule_label
+        || latestMatrixRow?.snapshot_at
+        || '暂无轮次',
+      completed,
+      total,
+      avgRank: monitorSummary.value?.avg_rank ?? null,
+      mentionRate: monitorSummary.value?.mention_rate ?? null,
+      pendingPlatforms,
+      taskCount: monitorTasks.value.length,
+      scheduleRoundCount: rankingMatrix.value?.schedule_round_count ?? groupedMonitorTasks.value.length,
+    }
+  })
+
+  const latestMatrixWindowKey = computed(() => rankingMatrix.value?.rows[0]?.schedule_window_key || '')
 
   function formatRank(value: number | null | undefined) {
     if (value === null || value === undefined) return '-'
@@ -241,12 +435,78 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     })
   }
 
+  function formatDateTime(value: string | null | undefined) {
+    if (!value) return '-'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleString('zh-CN')
+  }
+
   function taskPromptCount(task: MonitorTask) {
     return task.prompts?.length || 0
   }
 
   function taskPlatformCount(task: MonitorTask) {
     return task.platforms?.length || 0
+  }
+
+  function keywordGroupLabelFromGroup(group: BrandKeywordGroup | null | undefined) {
+    if (!group) return null
+    return keywordGroupDisplayName(group, group.sort_order ?? 0)
+  }
+
+  function keywordGroupFromScheduleKey(task: MonitorTask) {
+    const key = task.schedule_key || ''
+    if (!key.includes('-kw')) return null
+    const suffix = key.split('-kw').pop() || ''
+    const matched = monitorGroupOptions.value.find(group => {
+      if (group.id != null && String(group.id) === suffix) return true
+      return String(group.sort_order ?? 0) === suffix
+    })
+    return keywordGroupLabelFromGroup(matched)
+  }
+
+  function matchTaskKeywordGroup(task: MonitorTask) {
+    const resolved = (task.keyword_group || '').trim()
+    const brandKeyword = (task.monitor_keywords || '').trim()
+    if (resolved && resolved !== brandKeyword) return resolved
+
+    const fromSchedule = keywordGroupFromScheduleKey(task)
+    if (fromSchedule) return fromSchedule
+
+    const prompts = task.prompts || []
+    if (prompts.length) {
+      const first = prompts[0]
+      for (const group of monitorGroupOptions.value) {
+        if (promptBelongsToGroup(first, group)) {
+          return keywordGroupLabelFromGroup(group)
+        }
+      }
+    }
+
+    return resolved || null
+  }
+
+  function formatTaskTitle(task: MonitorTask) {
+    return matchTaskKeywordGroup(task) || task.monitor_keywords || '未填词组'
+  }
+
+  function taskPromptPreview(task: MonitorTask, max = 40) {
+    const prompt = (task.prompt_preview || task.prompts?.[0] || '').replace(/\s+/g, ' ').trim()
+    if (!prompt) return ''
+    return prompt.length > max ? `${prompt.slice(0, max)}…` : prompt
+  }
+
+  function answerExcerpt(content: string | null | undefined, max = 120) {
+    const text = (content || '').replace(/\s+/g, ' ').trim()
+    if (!text) return ''
+    return text.length > max ? `${text.slice(0, max)}…` : text
+  }
+
+  function sentimentToneClass(sentiment: string | null | undefined) {
+    if (sentiment === '负面') return 'tone-negative'
+    if (sentiment === '正面') return 'tone-positive'
+    return 'tone-neutral'
   }
 
   async function loadBrandAssetData() {
@@ -259,8 +519,109 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     }
   }
 
+  function clearDeepLinkQuery() {
+    const nextQuery = { ...route.query }
+    delete nextQuery.task_id
+    delete nextQuery.subtask_id
+    delete nextQuery.platform
+    delete nextQuery.monitor_prompt
+    delete nextQuery.insights_day
+    delete nextQuery.date_days
+    delete nextQuery.view
+    router.replace({ path: route.path, query: nextQuery }).catch(() => undefined)
+  }
+
+  function applyQueryPlatform() {
+    const platformFromQuery = String(route.query.platform || '').trim()
+    if (platformFromQuery && platformOptions.value.includes(platformFromQuery)) {
+      filters.platform = platformFromQuery
+    }
+  }
+
+  function applyInsightsQuery() {
+    applyQueryPlatform()
+    const prompt = String(route.query.monitor_prompt || '').trim()
+    filters.exactPrompt = prompt
+
+    const day = String(route.query.insights_day || '').trim()
+    const days = String(route.query.date_days || '').trim()
+    if (day) {
+      filters.startDate = day
+      filters.endDate = day
+      datePreset.value = 'custom'
+    } else if (days === '7' || days === '30' || days === '90') {
+      const range = defaultDateRange(Number(days))
+      filters.startDate = range.startDate
+      filters.endDate = range.endDate
+      datePreset.value = days === '7' ? '7d' : days === '90' ? 'custom' : '30d'
+    }
+
+    if (String(route.query.view || '').trim() === 'matrix') {
+      viewMode.value = 'matrix'
+    }
+  }
+
+  async function openDetailDrawer(
+    subtask: MonitorSubtask,
+    context: {
+      scheduleLabel?: string | null
+      prompt?: string
+      platform?: string | null
+      cell?: RankingMatrixCell | null
+    } = {},
+  ) {
+    detailSubtask.value = subtask
+    detailContext.value = {
+      scheduleLabel: context.scheduleLabel ?? subtask.updated_at ?? null,
+      prompt: context.prompt ?? subtask.prompt ?? '',
+      platform: context.platform ?? subtask.platform ?? null,
+      cell: context.cell ?? null,
+    }
+    detailVisible.value = true
+  }
+
+  async function openSubtaskById(taskId: string, subtaskId: string) {
+    if (taskId) {
+      await selectMonitorTask(taskId)
+    }
+    loadingDetail.value = true
+    detailVisible.value = true
+    try {
+      const subtask = await withRetry(() => getMonitorSubtask(subtaskId))
+      selectedMatrixCell.value = {
+        taskId: taskId || subtask.task_id || '',
+        platform: subtask.platform || null,
+        snapshotAt: subtask.updated_at || null,
+        scheduleLabel: subtask.updated_at || null,
+        prompt: subtask.prompt || '',
+        cell: {
+          subtask_id: subtask.subtask_id,
+          mention_position: subtask.mention_position,
+          raw_mention_position: subtask.raw_mention_position,
+          brand_mentioned: subtask.brand_mentioned,
+          prompt_intent: subtask.prompt_intent,
+          status: subtask.status,
+          page_screenshot: subtask.page_screenshot,
+          sentiment: subtask.sentiment,
+          updated_at: subtask.updated_at || null,
+        },
+      }
+      await openDetailDrawer(subtask, {
+        scheduleLabel: formatDateTime(subtask.updated_at),
+        prompt: subtask.prompt,
+        platform: subtask.platform,
+      })
+    } catch (error: unknown) {
+      notifyOperationError(error, '子任务详情加载失败')
+    } finally {
+      loadingDetail.value = false
+    }
+  }
+
   async function loadMonitorTasks() {
     loadingMonitor.value = true
+    const taskIdFromQuery = String(route.query.task_id || '').trim()
+    const subtaskIdFromQuery = String(route.query.subtask_id || '').trim()
     try {
       const [, tasks, summary] = await Promise.all([
         loadBrandAssetData(),
@@ -269,11 +630,17 @@ export function useMonitorRealtime(tenantId: number | null = null) {
       ])
       monitorTasks.value = tasks
       if (summary) monitorSummary.value = summary
-      const firstTaskId = !monitorDetail.value ? monitorTasks.value[0]?.task_id : ''
-      if (firstTaskId) {
-        window.setTimeout(() => {
-          if (!monitorDetail.value) selectMonitorTask(firstTaskId)
-        }, 40)
+      applyInsightsQuery()
+      if (taskIdFromQuery) {
+        await selectMonitorTask(taskIdFromQuery)
+      } else if (!monitorDetail.value && monitorTasks.value[0]?.task_id) {
+        await selectMonitorTask(monitorTasks.value[0].task_id)
+      }
+      if (subtaskIdFromQuery) {
+        viewMode.value = 'matrix'
+        await loadRankingMatrix()
+        await openSubtaskById(taskIdFromQuery || monitorDetail.value?.task.task_id || '', subtaskIdFromQuery)
+        clearDeepLinkQuery()
       }
     } catch (error: unknown) {
       notifyOperationError(error, '检测任务加载失败')
@@ -284,14 +651,15 @@ export function useMonitorRealtime(tenantId: number | null = null) {
 
   async function loadRankingMatrix() {
     loadingMatrix.value = true
-    selectedMatrixCell.value = null
-    selectedMatrixSubtask.value = null
+    if (!detailVisible.value) {
+      selectedMatrixCell.value = null
+    }
     try {
       rankingMatrix.value = await withRetry(() => getRankingMatrix({
-        platform: matrixFilters.platform.trim() || undefined,
-        start_date: matrixFilters.startDate || undefined,
-        end_date: matrixFilters.endDate || undefined,
-        monitor_group: matrixFilters.monitorGroup.trim() || undefined,
+        platform: filters.platform.trim() || undefined,
+        start_date: filters.startDate || undefined,
+        end_date: filters.endDate || undefined,
+        monitor_group: activeMonitorFilter.value || undefined,
       }))
     } catch (error: unknown) {
       notifyOperationError(error, '排名矩阵加载失败')
@@ -328,7 +696,6 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   ) {
     if (!cell) {
       selectedMatrixCell.value = null
-      selectedMatrixSubtask.value = null
       return
     }
     selectedMatrixCell.value = {
@@ -339,28 +706,127 @@ export function useMonitorRealtime(tenantId: number | null = null) {
       prompt,
       cell,
     }
-    selectedMatrixSubtask.value = null
-    loadingMatrixDetail.value = true
+    detailContext.value = {
+      scheduleLabel: scheduleLabel || snapshotAt,
+      prompt,
+      platform: platform || null,
+      cell,
+    }
+    expandedSnapshotId.value = null
+    detailSubtask.value = null
+    loadingSnapshotId.value = null
+    detailVisible.value = true
+  }
+
+  async function toggleMatrixSnapshot(snapshot: RankingMatrixCellSnapshot) {
+    if (!snapshot.subtask_id) return
+    if (expandedSnapshotId.value === snapshot.subtask_id) {
+      expandedSnapshotId.value = null
+      detailSubtask.value = null
+      return
+    }
+    expandedSnapshotId.value = snapshot.subtask_id
+    loadingSnapshotId.value = snapshot.subtask_id
     try {
-      selectedMatrixSubtask.value = await withRetry(() => getMonitorSubtask(cell.subtask_id))
+      detailSubtask.value = await withRetry(() => getMonitorSubtask(snapshot.subtask_id))
     } catch (error: unknown) {
       notifyOperationError(error, '子任务详情加载失败')
+      expandedSnapshotId.value = null
+      detailSubtask.value = null
     } finally {
-      loadingMatrixDetail.value = false
+      loadingSnapshotId.value = null
     }
   }
 
-  function resetMatrixFilters() {
-    const defaults = defaultMatrixDateRange()
-    matrixFilters.startDate = defaults.startDate
-    matrixFilters.endDate = defaults.endDate
-    matrixFilters.monitorGroup = ''
-    matrixFilters.platform = ''
+  async function openListSubtask(subtask: MonitorSubtask) {
+    loadingDetail.value = true
+    detailVisible.value = true
+    try {
+      const full = subtask.answer_content
+        ? subtask
+        : await withRetry(() => getMonitorSubtask(subtask.subtask_id))
+      await openDetailDrawer(full, {
+        scheduleLabel: monitorDetail.value?.task.schedule_label || formatDateTime(subtask.updated_at),
+        prompt: subtask.prompt,
+        platform: subtask.platform,
+      })
+    } catch (error: unknown) {
+      notifyOperationError(error, '子任务详情加载失败')
+    } finally {
+      loadingDetail.value = false
+    }
   }
 
-  function clearMatrixCellSelection() {
+  function closeDetail() {
+    detailVisible.value = false
+    detailSubtask.value = null
+    detailContext.value = null
     selectedMatrixCell.value = null
-    selectedMatrixSubtask.value = null
+    expandedSnapshotId.value = null
+    loadingSnapshotId.value = null
+  }
+
+  function applyDatePreset(preset: RealtimeDatePreset) {
+    datePreset.value = preset
+    if (preset === 'custom') return
+    const range = defaultDateRange(preset === '30d' ? 30 : 7)
+    filters.startDate = range.startDate
+    filters.endDate = range.endDate
+    void loadRankingMatrix()
+  }
+
+  function onCustomDateChange() {
+    datePreset.value = 'custom'
+    void loadRankingMatrix()
+  }
+
+  function resetFilters() {
+    const range = defaultDateRange(7)
+    filters.platform = ''
+    filters.monitorGroup = ''
+    filters.exposureTerm = ''
+    filters.exactPrompt = ''
+    filters.scheduleWindowKey = ''
+    filters.status = 'all'
+    filters.startDate = range.startDate
+    filters.endDate = range.endDate
+    datePreset.value = '7d'
+    void loadRankingMatrix()
+  }
+
+  function refreshCurrentView() {
+    void loadMonitorTasks()
+    if (viewMode.value === 'matrix') {
+      void loadRankingMatrix()
+    }
+  }
+
+  function exportMatrixCsv() {
+    if (!rankingMatrix.value?.rows.length) return
+    const columns = rankingMatrix.value.columns
+    const header = ['日期', '词组', '平台', ...columns.map(col => col.prompt)]
+    const rows = rankingMatrix.value.rows.map(row => [
+      row.schedule_label || row.snapshot_at || '',
+      row.keyword_group || '',
+      row.platform ? (platformLabelMap[row.platform] || row.platform) : '',
+      ...columns.map(col => formatRank(row.cells[col.prompt]?.mention_position)),
+    ])
+    const csv = [header, ...rows]
+      .map(line => line.map(cell => `"${String(cell || '').replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${heroMetrics.value.brandName}-排名矩阵-${filters.endDate}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function isLatestMatrixRow(row: RankingMatrix['rows'][number]) {
+    const key = latestMatrixWindowKey.value
+    if (!key) return false
+    return (row.schedule_window_key || row.task_id) === key
   }
 
   watch(viewMode, mode => {
@@ -369,44 +835,108 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     }
   })
 
-  onMounted(loadMonitorTasks)
+  watch(
+    () => filters.monitorGroup,
+    value => {
+      if (value.trim()) filters.exposureTerm = ''
+    },
+  )
+
+  watch(
+    () => filters.exposureTerm,
+    value => {
+      if (value.trim()) filters.monitorGroup = ''
+    },
+  )
+
+  watch(
+    () => [filters.platform, filters.monitorGroup, filters.exposureTerm],
+    () => {
+      if (viewMode.value === 'matrix') {
+        void loadRankingMatrix()
+      }
+    },
+  )
+
+  const matrixDrawerSnapshots = computed(() => {
+    const cell = detailContext.value?.cell
+    return cell ? matrixCellSnapshots(cell) : []
+  })
+
+  const isMatrixDrawerMode = computed(() => matrixDrawerSnapshots.value.length > 0)
+
+  onMounted(async () => {
+    applyInsightsQuery()
+    await loadMonitorTasks()
+    if (!String(route.query.subtask_id || '').trim()) {
+      await loadRankingMatrix()
+    }
+  })
 
   return {
     monitorTasks,
     monitorDetail,
     loadingMonitor,
     filters,
-    matrixFilters,
+    datePreset,
+    configExpanded,
     brandAsset,
     brandCompetitors,
     monitorGroupOptions,
+    allExposureTermOptions,
+    activeMonitorFilter,
+    platformOptions,
+    scheduleRoundOptions,
     formatMonitorGroupLabel,
+    keywordGroupFilterValue,
     groupedMonitorTasks,
+    filteredGroupedMonitorTasks,
     schedulePlanDisplay,
     scheduleSourceLabel,
     viewMode,
     rankingMatrix,
+    rankingMatrixView,
     loadingMatrix,
-    loadingMatrixDetail,
+    loadingDetail,
+    detailVisible,
+    detailSubtask,
+    detailContext,
     selectedMatrixCell,
-    selectedMatrixSubtask,
+    heroMetrics,
+    platformCoverage,
     loadMonitorTasks,
     loadRankingMatrix,
+    refreshCurrentView,
     selectMonitorTask,
     switchViewMode,
     selectMatrixCell,
-    clearMatrixCellSelection,
-    resetMatrixFilters,
+    toggleMatrixSnapshot,
+    matrixDrawerSnapshots,
+    isMatrixDrawerMode,
+    expandedSnapshotId,
+    loadingSnapshotId,
+    openListSubtask,
+    closeDetail,
+    applyDatePreset,
+    onCustomDateChange,
+    resetFilters,
+    exportMatrixCsv,
     formatRank,
     formatExposureLabel,
+    matrixCellTitle,
     formatTaskTime,
+    formatDateTime,
+    formatTaskTitle,
+    taskPromptPreview,
+    answerExcerpt,
+    sentimentToneClass,
+    matrixCellRankClass,
+    isLatestMatrixRow,
     taskPromptCount,
     taskPlatformCount,
     filteredMonitorSubtasks,
     monitorResultPlatformOptions,
     monitorResultStatusOptions,
-    matrixPlatformOptions,
-    platformCoverage,
     platformLabelMap,
     monitorStatusLabelMap,
     monitorModeLabelMap,

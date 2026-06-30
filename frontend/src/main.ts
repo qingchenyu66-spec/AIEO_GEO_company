@@ -9,6 +9,8 @@ import 'element-plus/es/components/tooltip/style/css'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import './style.css'
+import './styles/customer-workspace.css'
+import './styles/monitor-realtime.css'
 import App from './App.vue'
 import router from './router'
 

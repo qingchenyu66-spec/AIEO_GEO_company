@@ -15,6 +15,7 @@ from app.models.menu_config import MenuConfig
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
+from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.schemas.permission import (
     MenuConfigBatchItem,
     MenuConfigUpdateRequest,
@@ -598,6 +599,7 @@ def management_overview(
             {"name": "调度任务", "status": "正常" if today_schedule_failed == 0 else "异常", "detail": f"今日提交 {today_schedule_submitted} 次，失败 {today_schedule_failed} 次"},
             {"name": "结果同步", "status": "待处理" if running_tasks else "正常", "detail": f"{len(running_tasks)} 个任务未终态"},
         ],
+        "molizhishu_balance": fetch_molizhishu_balance(),
     }
     return ApiResponse(data=data)
 

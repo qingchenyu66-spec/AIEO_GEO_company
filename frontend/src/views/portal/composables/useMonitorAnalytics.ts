@@ -5,23 +5,19 @@ import { getKnowledgeFiles, uploadKnowledgeFile, type KnowledgeFileRecord } from
 import { getOperationLogs, getSystemConfigs, type OperationLogRecord, type SystemConfigRecord, type TenantInfo } from '../../../services/management'
 import { getMonitorSummary, syncMonitorTask, type MonitorSummary } from '../../../services/monitor'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
+import { getPlatformMatrix, type PlatformMatrix } from '../../../services/platforms'
 import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.dashboard',
-  'platform.sentiment',
-  'platform.competitor',
-  'platform.sources',
   'platform.diagnosis',
   'platform.reports',
   'customer.workspace',
-  'customer.sentiment',
-  'customer.sources',
   'customer.diagnosis',
-  'customer.competitor',
   'customer.reports',
   'customer.knowledge',
+  'platform.models',
 ])
 
 const terminalTaskStatuses = new Set(['completed', 'partial_completed', 'failed', 'stopped'])
@@ -75,8 +71,12 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const loadingKnowledgeFiles = ref(false)
   const uploadingKnowledgeFile = ref(false)
   const knowledgeFiles = ref<KnowledgeFileRecord[]>([])
+  const platformMatrix = ref<PlatformMatrix | null>(null)
+  const loadingPlatformMatrix = ref(false)
+  let platformMatrixTimer: number | null = null
 
   const shouldLoadMonitorSummary = computed(() => monitorSummaryMenuCodes.has(activeMenuCode.value))
+  const shouldLoadPlatformMatrix = computed(() => activeMenuCode.value === 'platform.models')
 
   const stats = computed(() => {
     const summary = monitorSummary.value
@@ -150,7 +150,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     const end = sourceEndDate.value ? new Date(`${sourceEndDate.value} 23:59:59`).getTime() : null
     return allSourceRanking.value.filter(source => {
       const platformMatched = selectedSourcePlatform.value === 'all' || (source.platforms || []).includes(selectedSourcePlatform.value)
-      const text = `${source.title || ''} ${(source.keywords || []).join(' ')} ${(source.questions || []).join(' ')}`.toLowerCase()
+      const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
       const startMatched = !start || (sourceTime && sourceTime >= start)
@@ -282,55 +282,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       .slice(0, 6)
   })
 
-  const sentimentWords = computed(() => {
-    const keywordMap = ['产品', '服务', '价格', '交付', '案例', '排名', '推荐', '引用', '口碑', '风险', '优势', '不足', '竞品', '体验', '响应']
-    const text = recentSubtasks.value.map(item => `${item.prompt || ''} ${item.answer_content || ''} ${item.mention_context || ''}`).join(' ')
-    const rows = keywordMap
-      .map(word => ({ word, heat: (text.match(new RegExp(word, 'g')) || []).length }))
-      .filter(item => item.heat > 0)
-      .sort((a, b) => b.heat - a.heat)
-    return rows.slice(0, 16)
-  })
-
-  const competitorCompareRows = computed(() => {
-    const brandName = brandAsset.value?.brand_name || '艾迪亚'
-    const rankingRows = recentSubtasks.value.flatMap(item => [
-      ...((item.competitor_rankings || []) as Array<{ name?: string; brandName?: string; brand?: string; keyword?: string; rank?: number; position?: number; rankNo?: number; mentionPosition?: number }>),
-      ...((item.all_rankings || []) as Array<{ name?: string; brandName?: string; brand?: string; keyword?: string; rank?: number; position?: number; rankNo?: number; mentionPosition?: number }>),
-    ])
-    const brandRows = new Map<string, { name: string; mention: number; rankTotal: number; rankCount: number; source: number }>()
-    const addRank = (name: string, rank: number | null, source = 0) => {
-      const key = name.trim()
-      if (!key) return
-      const row = brandRows.get(key) || { name: key, mention: 0, rankTotal: 0, rankCount: 0, source: 0 }
-      row.mention += 1
-      row.source += source
-      if (rank) {
-        row.rankTotal += rank
-        row.rankCount += 1
-      }
-      brandRows.set(key, row)
-    }
-    recentSubtasks.value.forEach(item => {
-      if (item.mention_position && brandName) addRank(brandName, item.mention_position, item.reference_count || item.reference_list?.length || 0)
-    })
-    rankingRows.forEach(item => {
-      const name = String(item.name || item.brandName || item.brand || item.keyword || '')
-      const rank = Number(item.rank || item.position || item.rankNo || item.mentionPosition || 0) || null
-      addRank(name, rank)
-    })
-    brandCompetitors.value.forEach(item => {
-      if (!brandRows.has(item.name)) brandRows.set(item.name, { name: item.name, mention: 0, rankTotal: 0, rankCount: 0, source: 0 })
-    })
-    return Array.from(brandRows.values()).map(item => ({
-      name: item.name,
-      mention: item.mention,
-      rank: item.rankCount ? Number((item.rankTotal / item.rankCount).toFixed(1)) : null,
-      source: item.source,
-      sentiment: item.name === brandName ? positiveRate.value : null,
-    }))
-  })
-
   const operationLogs = computed(() => operationLogRows.value.map(row => [row.created_at, row.operator_name, row.action_type, row.description, row.risk_level]))
   const systemSettings = computed(() => systemConfigRows.value.map(row => [row.config_name, row.config_value, row.scope, row.status]))
 
@@ -395,6 +346,18 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     }
   }
 
+  async function loadPlatformMatrix() {
+    if (!shouldLoadPlatformMatrix.value) return
+    loadingPlatformMatrix.value = true
+    try {
+      platformMatrix.value = await withRetry(() => getPlatformMatrix())
+    } catch (error: unknown) {
+      notifyError(error, '模型平台服务状态加载失败')
+    } finally {
+      loadingPlatformMatrix.value = false
+    }
+  }
+
   async function loadPlatformSystemData() {
     if (!isPlatform.value) return
     const code = activeMenuCode.value
@@ -445,6 +408,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   watch(activeMenuCode, () => loadMonitorSummary(isDashboardPage.value))
   watch(activeMenuCode, loadKnowledgeFiles)
   watch(activeMenuCode, loadPlatformSystemData)
+  watch(activeMenuCode, loadPlatformMatrix)
   watch(sourcePlatformTabs, tabs => {
     if (!tabs.some(tab => tab.code === selectedSourcePlatform.value)) {
       selectedSourcePlatform.value = 'all'
@@ -460,6 +424,12 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     }, 30000)
     loadKnowledgeFiles()
     loadPlatformSystemData()
+    loadPlatformMatrix()
+    platformMatrixTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && shouldLoadPlatformMatrix.value) {
+        loadPlatformMatrix()
+      }
+    }, 30000)
     operationLogRefreshTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible' && activeMenuCode.value === 'platform.logs') {
         loadPlatformSystemData()
@@ -470,6 +440,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   onUnmounted(() => {
     if (monitorSummaryTimer) window.clearInterval(monitorSummaryTimer)
     if (operationLogRefreshTimer) window.clearInterval(operationLogRefreshTimer)
+    if (platformMatrixTimer) window.clearInterval(platformMatrixTimer)
   })
 
   return {
@@ -493,6 +464,9 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     allSourceRanking,
     recentSubtasks,
     platformCoverage,
+    platformMatrix,
+    loadingPlatformMatrix,
+    loadPlatformMatrix,
     customerPlatformServices,
     purchasedPlatformCount,
     sourcePlatformTabs,
@@ -507,8 +481,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     negativeRate,
     sourceTotalCount,
     recentQuestionGroups,
-    sentimentWords,
-    competitorCompareRows,
     operationLogs,
     systemSettings,
     functionalPage,

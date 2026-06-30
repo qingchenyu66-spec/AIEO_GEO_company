@@ -2,10 +2,12 @@ from pydantic import BaseModel, Field
 
 
 class BrandKeywordGroupSaveRequest(BaseModel):
-    """保存企业监测词组：一个监测关键词对应多个露出词。"""
+    """保存企业监测词组：多个监测关键词绑定多个露出词。"""
 
     id: int | None = None
-    monitor_keyword: str = Field(min_length=1, max_length=150)
+    name: str | None = Field(default=None, max_length=100)
+    monitor_keyword: str | None = Field(default=None, max_length=150)
+    monitor_keywords: list[str] = Field(default_factory=list)
     exposure_terms: list[str] = Field(default_factory=list)
     sort_order: int = 0
     status: bool = True

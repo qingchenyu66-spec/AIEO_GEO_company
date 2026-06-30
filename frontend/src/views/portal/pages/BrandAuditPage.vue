@@ -2,7 +2,9 @@
 import { onMounted } from 'vue'
 import { HelpCircle } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useBrandAudit } from '../composables/useBrandAudit'
+import { keywordGroupMonitorKeywords } from '../../../services/brand'
 
 const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
@@ -41,10 +43,19 @@ const {
   canRestoreTenantService,
   stopTenantActionLabel,
   tenantServicePeriod,
+  editingGroupIndex,
+  keywordGroupDisplayName,
+  startEditGroupName,
+  finishEditGroupName,
+  cancelEditGroupName,
   addKeywordGroup,
   removeKeywordGroup,
-  addExposureTerm,
   removeExposureTerm,
+  commitMonitorKeywordInput,
+  handleMonitorKeywordPaste,
+  removeMonitorKeyword,
+  commitExposureTermInput,
+  handleExposureTermPaste,
   addScheduleTime,
   removeScheduleTime,
   loadEnterpriseList,
@@ -155,29 +166,85 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <div class="panel-head">
           <div>
             <h2>监测词组配置</h2>
-            <p>一个监测关键词绑定多个露出词。监测关键词用于生成问题，露出词用于判断回答里是否有效提及。提交检测时以<strong>品牌简称</strong>为主监控词，<strong>露出词</strong>作为别名传给模力指数。</p>
+            <p>一个词组可配置多个监测关键词，每个关键词绑定多个露出词。<strong>监测关键词即检测问题</strong>，系统不再套用模板生成；<strong>露出词</strong>用于在 AI 推荐列表中匹配品牌排名。提交检测时以品牌简称为监控主词，露出词作为别名传给模力指数。</p>
           </div>
           <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" @click="addKeywordGroup">新增词组</button>
         </div>
         <div class="keyword-group-list">
           <div v-for="(group, index) in keywordGroupRows" :key="group.id || `kw-${index}`" class="keyword-group-card">
-            <div class="keyword-group-main">
-              <label><span>监测关键词</span><input v-model="group.monitor_keyword" :disabled="!canEditEnterpriseTab('keywords')" placeholder="例如 北京艾迪亚控股集团有限公司" /></label>
-              <label><span>状态</span><select v-model="group.status" :disabled="!canEditEnterpriseTab('keywords')"><option :value="true">启用</option><option :value="false">停用</option></select></label>
-              <button v-if="canEditEnterpriseTab('keywords')" class="danger-text-btn" @click="removeKeywordGroup(index)">删除</button>
-            </div>
-            <div class="exposure-term-box">
-              <span>露出词</span>
-              <div class="exposure-tags">
-                <i v-for="(term, termIndex) in group.exposure_terms" :key="`${index}-${term}`">
-                  {{ term }}
-                  <button v-if="canEditEnterpriseTab('keywords')" @click="removeExposureTerm(group, termIndex)">×</button>
-                </i>
+            <div class="keyword-group-toolbar">
+              <div class="keyword-group-title">
                 <input
-                  placeholder="输入后回车添加"
-                  :disabled="!canEditEnterpriseTab('keywords')"
-                  @keyup.enter="addExposureTerm(group, ($event.target as HTMLInputElement).value); ($event.target as HTMLInputElement).value = ''"
+                  v-if="editingGroupIndex === index && canEditEnterpriseTab('keywords')"
+                  :id="`keyword-group-name-${index}`"
+                  class="keyword-group-name-input"
+                  :value="group.name || keywordGroupDisplayName(group, index)"
+                  maxlength="100"
+                  @keydown.enter="finishEditGroupName(group, index, ($event.target as HTMLInputElement).value)"
+                  @keydown.esc.prevent="cancelEditGroupName"
+                  @blur="finishEditGroupName(group, index, ($event.target as HTMLInputElement).value)"
                 />
+                <button
+                  v-else
+                  type="button"
+                  class="keyword-group-name"
+                  :class="{ readonly: !canEditEnterpriseTab('keywords') }"
+                  :disabled="!canEditEnterpriseTab('keywords')"
+                  @click="startEditGroupName(index)"
+                >
+                  {{ keywordGroupDisplayName(group, index) }}
+                </button>
+              </div>
+              <div class="keyword-group-actions">
+                <label class="keyword-group-status">
+                  <span>状态</span>
+                  <select v-model="group.status" :disabled="!canEditEnterpriseTab('keywords')">
+                    <option :value="true">启用</option>
+                    <option :value="false">停用</option>
+                  </select>
+                </label>
+                <button
+                  v-if="canEditEnterpriseTab('keywords')"
+                  type="button"
+                  class="danger-text-btn keyword-group-delete-btn"
+                  @click="removeKeywordGroup(index)"
+                >
+                  删除词组
+                </button>
+              </div>
+            </div>
+            <div class="keyword-group-fields">
+              <div class="keyword-field monitor-keyword-field">
+                <span class="keyword-field-label">监测关键词（{{ keywordGroupMonitorKeywords(group).length }}）</span>
+                <div class="keyword-tag-box">
+                  <i v-for="(term, keywordIndex) in keywordGroupMonitorKeywords(group)" :key="`${index}-kw-${keywordIndex}-${term}`">
+                    {{ term }}
+                    <button v-if="canEditEnterpriseTab('keywords')" type="button" @click="removeMonitorKeyword(group, keywordIndex)">×</button>
+                  </i>
+                  <input
+                    placeholder="输入后回车添加，支持粘贴多行批量添加"
+                    :disabled="!canEditEnterpriseTab('keywords')"
+                    @keyup.enter="commitMonitorKeywordInput(group, $event)"
+                    @blur="commitMonitorKeywordInput(group, $event)"
+                    @paste="handleMonitorKeywordPaste(group, $event)"
+                  />
+                </div>
+              </div>
+              <div class="keyword-field exposure-keyword-field">
+                <span class="keyword-field-label">露出词</span>
+                <div class="keyword-tag-box">
+                  <i v-for="(term, termIndex) in group.exposure_terms" :key="`${index}-${term}`">
+                    {{ term }}
+                    <button v-if="canEditEnterpriseTab('keywords')" type="button" @click="removeExposureTerm(group, termIndex)">×</button>
+                  </i>
+                  <input
+                    placeholder="输入后回车添加，支持粘贴多行批量添加"
+                    :disabled="!canEditEnterpriseTab('keywords')"
+                    @keyup.enter="commitExposureTermInput(group, $event)"
+                    @blur="commitExposureTermInput(group, $event)"
+                    @paste="handleExposureTermPaste(group, $event)"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -192,7 +259,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div>
             <h2 class="title-with-help">
               购买模型与监测范围
-              <el-tooltip placement="top" effect="light" content="问题来源：企业全称生成4个基础问题；监测关键词每个生成2个行业问题；竞品每个生成2个对比问题；企业别名每个生成1个口碑问题。系统去重后最多取50个问题，再乘以勾选的平台数生成子任务。">
+              <el-tooltip placement="top" effect="light" content="每个监测关键词即一次检测问题，再乘以勾选的平台数生成子任务。排名矩阵按露出词在推荐列表中的位置展示。">
                 <HelpCircle />
               </el-tooltip>
             </h2>
@@ -206,7 +273,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <div class="platform-check-grid">
           <label v-for="platform in supportedPlatforms" :key="platform.code" class="platform-check">
             <input v-model="brandForm.monitored_platforms" type="checkbox" :value="platform.code" :disabled="!canEditEnterpriseTab('platforms')" />
-            <span>{{ platform.name }}</span>
+            <PlatformBadge :code="platform.code" size="sm" />
           </label>
         </div>
       </section>

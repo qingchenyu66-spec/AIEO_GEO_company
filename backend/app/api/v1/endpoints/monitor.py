@@ -14,7 +14,7 @@ from app.services.monitor_service import (
     list_monitor_tasks,
     monitor_summary,
     ranking_matrix,
-    sentiment_overview,
+    workspace_brief,
     serialize_subtask_for_display,
     serialize_task,
     serialize_tasks_for_display,
@@ -124,35 +124,14 @@ def monitor_ranking_matrix(
     return ApiResponse(data=data)
 
 
-@router.get("/sentiment-overview", response_model=ApiResponse[dict])
-def monitor_sentiment_overview(
-    platform: str | None = None,
-    start_date: date | None = None,
-    end_date: date | None = None,
-    monitor_group: str | None = None,
-    schedule_window_key: str | None = None,
-    sentiment: str | None = Query(default="all", description="all | negative | positive | neutral"),
-    tenant_id: int | None = None,
-    item_limit: int = Query(default=200, ge=1, le=500),
+@router.get("/workspace-brief", response_model=ApiResponse[dict])
+def monitor_workspace_brief(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """Return exposure-prompt sentiment stats and filtered sample list."""
-    start_at = datetime.combine(start_date, time.min) if start_date else None
-    end_at = datetime.combine(end_date, time.max) if end_date else None
+    """Return customer workspace morning briefing with intent-aware KPIs."""
     try:
-        data = sentiment_overview(
-            db,
-            current,
-            platform=platform,
-            start_at=start_at,
-            end_at=end_at,
-            monitor_group=monitor_group,
-            schedule_window_key=schedule_window_key,
-            sentiment_filter=sentiment,
-            tenant_id=tenant_id,
-            item_limit=item_limit,
-        )
+        data = workspace_brief(db, current)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ApiResponse(data=data)

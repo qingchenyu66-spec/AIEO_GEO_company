@@ -12,8 +12,8 @@ from app.services.brand_service import (
     asset_to_dict,
     competitor_to_dict,
     delete_competitor,
+    editable_keyword_groups,
     get_brand_asset,
-    list_keyword_groups,
     list_competitors,
     resolve_tenant_id,
     save_brand_asset,
@@ -55,7 +55,7 @@ def brand_asset(
     try:
         resolved_tenant_id = resolve_tenant_id(current, tenant_id)
         asset = get_brand_asset(db, resolved_tenant_id)
-        keyword_groups = list_keyword_groups(db, resolved_tenant_id) if asset else []
+        keyword_groups = editable_keyword_groups(db, resolved_tenant_id) if asset else []
         competitors = list_competitors(db, resolved_tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -82,7 +82,7 @@ def upsert_brand_asset(
     ])
     try:
         asset = save_brand_asset(db, payload, current)
-        keyword_groups = list_keyword_groups(db, asset.tenant_id)
+        keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         competitors = list_competitors(db, asset.tenant_id)
     except (ValueError, SQLAlchemyError) as exc:
         db.rollback()

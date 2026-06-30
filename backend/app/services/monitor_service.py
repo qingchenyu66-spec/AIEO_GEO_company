@@ -11,17 +11,25 @@ from app.core.config import settings
 from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
-from app.schemas.monitor import MonitorTaskCreateRequest
+from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
+from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.brand_service import (
     _is_industry_monitor_keyword,
+    active_keyword_groups,
     brand_exposure_terms,
+    collect_exposure_term_options,
     get_brand_asset,
+    keyword_group_display_label,
+    keyword_group_monitor_keywords,
+    keyword_group_primary_keyword,
     keyword_group_to_dict,
+    list_competitors,
     list_keyword_groups,
     molizhishu_brand_payload,
     molizhishu_monitor_terms,
 )
 from app.services.molizhishu_client import MolizhishuClient
+from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
 from app.services.schedule_context import (
     prompt_monitor_intent,
     resolve_task_schedule_context,
@@ -106,15 +114,24 @@ def _source_filter_terms(asset: BrandAsset | None) -> list[str]:
     return list(result)
 
 
+def _is_valid_citation_source(source: dict[str, Any]) -> bool:
+    """判断是否为可纳入统计的 AI 引用来源（排除搜索热榜等噪音）。"""
+    title_site = " ".join(str(source.get(key) or "") for key in ("title", "site")).lower()
+    url = str(source.get("url") or source.get("site") or "").lower()
+    noisy_tokens = ("window._", "search.quark.cn", "by2=news")
+    if not title_site.strip() and not url.strip():
+        return False
+    return not any(token in title_site or token in url for token in noisy_tokens)
+
+
 def _is_relevant_source(source: dict[str, Any], terms: list[str]) -> bool:
     """判断引用来源是否与当前企业相关，过滤搜索页热榜和同名无关公司。"""
+    if not _is_valid_citation_source(source):
+        return False
     if not terms:
         return True
     title_site = " ".join(str(source.get(key) or "") for key in ("title", "site")).lower()
     url = str(source.get("url") or "").lower()
-    noisy_tokens = ("window._", "search.quark.cn", "by2=news")
-    if not title_site or any(token in title_site or token in url for token in noisy_tokens):
-        return False
     domain_terms = [term for term in terms if "." in term]
     company_terms = [term for term in terms if "." not in term]
     if any(term in title_site for term in company_terms):
@@ -144,9 +161,15 @@ def _build_submit_payload(
     competitors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """把本地请求转换为模力指数提交任务请求。"""
+    submittable_codes = filter_submittable_platforms([item.platform for item in payload.platforms])
+    if not submittable_codes:
+        raise ValueError("未配置模力指数支持的监测平台")
+    platform_items = [
+        item for item in payload.platforms if item.platform in submittable_codes
+    ]
     request_body: dict[str, Any] = {
         "prompts": payload.prompts,
-        "platforms": [item.model_dump() for item in payload.platforms],
+        "platforms": [item.model_dump() for item in platform_items],
     }
     final_monitor_keywords = monitor_keywords or payload.monitor_keywords
     final_aliases = monitor_keyword_aliases if monitor_keyword_aliases is not None else payload.monitor_keyword_aliases
@@ -320,13 +343,15 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     tenant_map = {item.id: item.name for item in tenant_rows}
     tenant_ids = [task.tenant_id for task in tasks if task.tenant_id]
     asset_rows = list(db.scalars(select(BrandAsset).where(BrandAsset.tenant_id.in_(tenant_ids), BrandAsset.deleted.is_(False)))) if tenant_ids else []
-    source_terms_by_tenant = {asset.tenant_id: _source_filter_terms(asset) for asset in asset_rows}
     purchased_platforms_by_tenant = {
         asset.tenant_id: set(asset.monitored_platforms_json or [])
         for asset in asset_rows
     }
+    exposure_terms_by_tenant = {
+        asset.tenant_id: brand_exposure_terms(asset, active_keyword_groups(db, asset.tenant_id))
+        for asset in asset_rows
+    }
     subtask_tenant_map = {subtask.id: task.tenant_id for task in tasks for subtask in task.subtasks}
-    subtask_task_map = {subtask.id: task for task in tasks for subtask in task.subtasks}
     subtasks = [subtask for task in tasks for subtask in task.subtasks]
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
     completed_ids = {item.id for item in completed}
@@ -380,20 +405,21 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
 
     source_map: dict[str, dict[str, Any]] = {}
     for item in completed:
-        task = subtask_task_map.get(item.id)
         purchased_platforms = purchased_platforms_by_tenant.get(subtask_tenant_map.get(item.id))
         if purchased_platforms and item.platform not in purchased_platforms:
             continue
         for source in item.reference_list_json or []:
-            terms = source_terms_by_tenant.get(subtask_tenant_map.get(item.id))
-            if not _is_relevant_source(source, terms or []):
+            if not _is_valid_citation_source(source):
                 continue
             url = source.get("url") or source.get("site") or source.get("title")
             if not url:
                 continue
             key = str(url).split("?")[0]
-            task_keywords = _split_keywords(task.monitor_keywords if task else None)
-            matched_keywords = _matched_source_keywords(source, task_keywords) or task_keywords[:3]
+            tenant_id = subtask_tenant_map.get(item.id)
+            exposure_terms = exposure_terms_by_tenant.get(tenant_id, [])
+            matched_exposure = _matched_source_keywords(source, exposure_terms)
+            if not matched_exposure:
+                continue
             row = source_map.setdefault(
                 key,
                 {
@@ -401,7 +427,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
                     "url": url,
                     "count": 0,
                     "platforms": [],
-                    "keywords": [],
+                    "exposure_terms": [],
                     "questions": [],
                     "latest_time": None,
                 },
@@ -409,18 +435,18 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
             row["count"] += 1
             if item.platform and item.platform not in row["platforms"]:
                 row["platforms"].append(item.platform)
-            for keyword in matched_keywords:
-                if keyword not in row["keywords"]:
-                    row["keywords"].append(keyword)
+            for term in matched_exposure:
+                if term not in row["exposure_terms"]:
+                    row["exposure_terms"].append(term)
             if item.prompt and item.prompt not in row["questions"]:
                 row["questions"].append(item.prompt)
             if item.updated_at and (row["latest_time"] is None or item.updated_at.isoformat() > row["latest_time"]):
                 row["latest_time"] = item.updated_at.isoformat()
-    source_stats = sorted(source_map.values(), key=lambda item: item["count"], reverse=True)[:12]
+    source_stats = sorted(source_map.values(), key=lambda item: item["count"], reverse=True)
     for row in source_stats:
         row["platforms"] = row["platforms"][:6]
-        row["keywords"] = row["keywords"][:8]
-        row["questions"] = row["questions"][:5]
+        row["exposure_terms"] = row["exposure_terms"][:8]
+        row["questions"] = row["questions"][:8]
 
     today = datetime.now().date()
     day_labels = []
@@ -537,9 +563,11 @@ def serialize_task(
     *,
     schedule_run: GeoMonitorScheduleRun | None = None,
     asset: BrandAsset | None = None,
+    keyword_group_rows: list[BrandKeywordGroup] | None = None,
 ) -> dict[str, Any]:
     """转换任务为前端友好的字典。"""
     _reconcile_task_progress(task)
+    prompts = list(task.prompts_json or [])
     payload = {
         "task_id": task.task_id,
         "tenant_id": task.tenant_id,
@@ -548,15 +576,22 @@ def serialize_task(
         "total_items": task.total_items,
         "completed_items": task.completed_items,
         "failed_items": task.failed_items,
-        "prompts": task.prompts_json,
+        "prompts": prompts,
         "platforms": task.platforms_json,
         "callback_url": task.callback_url,
         "poll_url": task.poll_url,
         "last_error": task.last_error,
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
+        "prompt_preview": prompts[0] if prompts else None,
     }
     payload.update(resolve_task_schedule_context(task, schedule_run, asset))
+    if keyword_group_rows is not None:
+        payload["keyword_group"] = _resolve_display_keyword_group(
+            task,
+            schedule_run,
+            keyword_group_rows,
+        )
     return payload
 
 
@@ -576,11 +611,16 @@ def serialize_tasks_for_display(
             )
         )
     } if tenant_ids else {}
+    groups_by_tenant = {
+        tenant_id: list_keyword_groups(db, tenant_id)
+        for tenant_id in tenant_ids
+    }
     return [
         serialize_task(
             task,
             schedule_run=runs_map.get(task.task_id),
             asset=assets.get(task.tenant_id),
+            keyword_group_rows=groups_by_tenant.get(task.tenant_id, []),
         )
         for task in tasks
     ]
@@ -590,6 +630,7 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     """转换子任务为前端友好的字典。"""
     return {
         "subtask_id": subtask.subtask_id,
+        "task_id": subtask.task_id,
         "platform": subtask.platform,
         "mode": subtask.mode,
         "prompt": subtask.prompt,
@@ -640,26 +681,131 @@ def _resolve_matrix_tenant_id(current: CurrentSession) -> int | None:
 
 def _prompt_belongs_to_group(
     prompt: str,
-    monitor_keyword: str,
+    monitor_keywords: list[str] | str,
     exposure_terms: list[str] | None = None,
 ) -> bool:
+    del exposure_terms
     text = (prompt or "").strip()
-    keyword = str(monitor_keyword or "").strip()
-    if keyword and keyword in text:
-        return True
-    for term in exposure_terms or []:
-        token = str(term or "").strip()
+    keywords = (
+        monitor_keywords
+        if isinstance(monitor_keywords, list)
+        else [str(monitor_keywords or "").strip()]
+    )
+    for keyword in keywords:
+        token = str(keyword or "").strip()
+        if token and token == text:
+            return True
+    for keyword in keywords:
+        token = str(keyword or "").strip()
         if token and token in text:
             return True
     return False
 
 
+def _group_filter_matches(group: dict[str, Any], filter_text: str) -> bool:
+    text = str(filter_text or "").strip()
+    if not text:
+        return False
+    if text == str(group.get("name") or "").strip():
+        return True
+    return text in keyword_group_monitor_keywords(group)
+
+
+def _keyword_group_option(group: dict[str, Any]) -> dict[str, Any] | None:
+    keywords = keyword_group_monitor_keywords(group)
+    if not keywords:
+        return None
+    return {
+        "monitor_keyword": keywords[0],
+        "name": str(group.get("name") or "").strip() or keywords[0],
+        "monitor_keywords": keywords,
+        "exposure_terms": [
+            str(term or "").strip()
+            for term in (group.get("exposure_terms") or [])
+            if str(term or "").strip()
+        ],
+    }
+
+
+def _filter_subtasks_by_monitor_group(
+    subtasks: list[GeoMonitorSubtask],
+    group_filter: str,
+    keyword_groups: list[dict[str, Any]],
+) -> list[GeoMonitorSubtask]:
+    """Filter subtasks by monitor keyword group or a specific exposure term."""
+    text = str(group_filter or "").strip()
+    if not text:
+        return subtasks
+    selected_group = next(
+        (group for group in keyword_groups if _group_filter_matches(group, text)),
+        None,
+    )
+    if selected_group:
+        return [
+            item for item in subtasks
+            if _prompt_belongs_to_group(
+                item.prompt or "",
+                keyword_group_monitor_keywords(selected_group),
+                selected_group.get("exposure_terms") or [],
+            )
+        ]
+    for group in keyword_groups:
+        for term in group.get("exposure_terms") or []:
+            if str(term or "").strip() == text:
+                return [
+                    item for item in subtasks
+                    if text in (item.prompt or "")
+                ]
+    keyword_text = text.lower()
+    return [
+        item for item in subtasks
+        if keyword_text in (item.prompt or "").lower()
+    ]
+
+
 def _prompt_group_name(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
     for group in groups:
-        keyword = str(group.monitor_keyword or "").strip()
-        if _prompt_belongs_to_group(prompt, keyword, group.exposure_terms_json or []):
-            return keyword or None
+        keywords = keyword_group_monitor_keywords(group)
+        if _prompt_belongs_to_group(prompt, keywords, group.exposure_terms_json or []):
+            return keyword_group_display_label(group) or keyword_group_primary_keyword(group) or None
     return None
+
+
+def _keyword_group_from_schedule_key(
+    schedule_key: str | None,
+    groups: list[BrandKeywordGroup],
+) -> BrandKeywordGroup | None:
+    text = str(schedule_key or "").strip()
+    if "-kw" not in text:
+        return None
+    suffix = text.rsplit("-kw", 1)[1]
+    for group in groups:
+        if str(group.id) == suffix or str(group.sort_order) == suffix:
+            return group
+    return None
+
+
+def _resolve_display_keyword_group(
+    task: GeoMonitorTask,
+    schedule_run: GeoMonitorScheduleRun | None,
+    keyword_group_rows: list[BrandKeywordGroup] | None,
+) -> str | None:
+    rows = keyword_group_rows or []
+    matched = _keyword_group_from_schedule_key(
+        schedule_run.schedule_key if schedule_run else None,
+        rows,
+    )
+    if matched:
+        label = keyword_group_display_label(matched)
+        if label:
+            return label
+    prompts = list(task.prompts_json or [])
+    if prompts:
+        name = _prompt_group_name(str(prompts[0]), rows)
+        if name:
+            return name
+    fallback = str(task.monitor_keywords or "").strip()
+    return fallback or None
 
 
 def _snapshot_minute(value: datetime | None) -> str | None:
@@ -670,15 +816,132 @@ def _snapshot_minute(value: datetime | None) -> str | None:
 
 
 def _matrix_row_key(
-    task_id: str,
+    bucket_key: str,
     platform: str,
     *,
     all_platforms: bool,
-    schedule_window_key: str | None,
     keyword_group: str | None,
 ) -> str:
-    parts = [schedule_window_key or task_id, keyword_group or "", platform if all_platforms else ""]
+    parts = [bucket_key, keyword_group or "", platform if all_platforms else ""]
     return "|".join(part for part in parts if part)
+
+
+def _matrix_day_key(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.date().isoformat()
+
+
+def _matrix_day_label(day_key: str, schedule_round_count: int = 0) -> str:
+    """Format matrix row date; schedule_round_count = max runs averaged in any cell (not prompt count)."""
+    text = str(day_key or "").strip()
+    if not text:
+        return "-"
+    try:
+        label = datetime.fromisoformat(text).strftime("%Y-%m-%d")
+    except ValueError:
+        label = text
+    if schedule_round_count > 1:
+        return f"{label}（{schedule_round_count}次均值）"
+    return label
+
+
+def _dedupe_matrix_cell_samples(
+    samples: list[dict[str, Any]],
+    *,
+    max_samples: int | None = None,
+) -> list[dict[str, Any]]:
+    """Keep one sample per schedule window (latest), optionally capped by daily frequency."""
+    by_window: dict[str, dict[str, Any]] = {}
+    for sample in samples:
+        window_key = str(
+            sample.get("schedule_window_key")
+            or sample.get("task_id")
+            or sample.get("subtask_id")
+            or ""
+        ).strip()
+        if not window_key:
+            continue
+        existing = by_window.get(window_key)
+        sample_at = sample.get("_updated_at") or datetime.min
+        existing_at = existing.get("_updated_at") if existing else datetime.min
+        if existing is None or sample_at >= existing_at:
+            by_window[window_key] = sample
+    ordered = sorted(
+        by_window.values(),
+        key=lambda item: item.get("_updated_at") or datetime.min,
+        reverse=True,
+    )
+    if max_samples and max_samples > 0 and len(ordered) > max_samples:
+        ordered = ordered[:max_samples]
+    return ordered
+
+
+def _matrix_row_schedule_round_count(cells: dict[str, dict[str, Any]]) -> int:
+    """Max schedule rounds represented in a row (per prompt-platform daily average)."""
+    counts = [
+        int(cell.get("rank_sample_count") or cell.get("sample_count") or 0)
+        for cell in cells.values()
+        if cell
+    ]
+    return max(counts) if counts else 0
+
+
+def _average_mention_position(values: list[int | float]) -> float | None:
+    if not values:
+        return None
+    total = sum(float(value) for value in values)
+    return round(total / len(values), 1)
+
+
+def _matrix_cell_snapshot(sample: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "subtask_id": sample.get("subtask_id"),
+        "task_id": sample.get("task_id"),
+        "mention_position": sample.get("mention_position"),
+        "raw_mention_position": sample.get("raw_mention_position"),
+        "brand_mentioned": sample.get("brand_mentioned"),
+        "monitor_keyword": sample.get("monitor_keyword"),
+        "prompt_intent": sample.get("prompt_intent"),
+        "schedule_window_key": sample.get("schedule_window_key"),
+        "schedule_label": sample.get("schedule_label"),
+        "updated_at": sample.get("updated_at"),
+        "status": sample.get("status"),
+        "page_screenshot": sample.get("page_screenshot"),
+        "sentiment": sample.get("sentiment"),
+    }
+
+
+def _finalize_matrix_cell(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    ranks = [
+        float(sample["mention_position"])
+        for sample in samples
+        if sample.get("mention_position") is not None
+    ]
+    latest = max(
+        samples,
+        key=lambda sample: sample.get("_updated_at") or datetime.min,
+    )
+    avg_rank = _average_mention_position(ranks)
+    snapshots = sorted(
+        [_matrix_cell_snapshot(sample) for sample in samples],
+        key=lambda item: schedule_window_sort_key(item.get("schedule_window_key")),
+    )
+    return {
+        "subtask_id": latest["subtask_id"],
+        "mention_position": avg_rank,
+        "raw_mention_position": latest.get("raw_mention_position"),
+        "brand_mentioned": any(sample.get("brand_mentioned") for sample in samples),
+        "monitor_keyword": latest.get("monitor_keyword"),
+        "prompt_intent": latest.get("prompt_intent"),
+        "status": latest.get("status"),
+        "page_screenshot": latest.get("page_screenshot"),
+        "sentiment": latest.get("sentiment"),
+        "updated_at": latest.get("updated_at"),
+        "sample_count": len(samples),
+        "rank_sample_count": len(ranks),
+        "snapshots": snapshots,
+    }
 
 
 def _strip_html_for_match(text: str | None) -> str:
@@ -689,7 +952,7 @@ def _strip_html_for_match(text: str | None) -> str:
 
 
 def _brand_match_terms(asset: BrandAsset | None, keyword_groups: list[dict[str, Any]] | None = None) -> list[str]:
-    """Collect brand/company terms: 简称/品牌名/公司名 + 露出词，排除行业监测词。"""
+    """Collect brand/company terms for legacy exposure/sentiment views."""
     if asset is None:
         return []
     anchors = [
@@ -714,15 +977,86 @@ def _brand_match_terms(asset: BrandAsset | None, keyword_groups: list[dict[str, 
     return [term for term in terms if not _is_industry_monitor_keyword(term, asset)]
 
 
+def _ranking_match_terms(asset: BrandAsset | None, keyword_groups: list[dict[str, Any]] | None = None) -> list[str]:
+    """露出词：用于在推荐排名列表中匹配品牌位置。"""
+    if asset is None:
+        return []
+    groups = keyword_groups or []
+    active_groups = [group for group in groups if group.get("status", True)]
+    terms = brand_exposure_terms(asset, active_groups)
+    if terms:
+        return terms
+    return [
+        str(value or "").strip()
+        for value in (asset.aliases_json or [])
+        if str(value or "").strip()
+    ]
+
+
+def _brand_term_match_fragments(term: str) -> list[str]:
+    """Extract matchable fragments from long company/brand terms."""
+    text = str(term or "").strip()
+    if not text:
+        return []
+    fragments: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        token = value.strip()
+        if len(token) >= 2 and token not in seen:
+            seen.add(token)
+            fragments.append(token)
+
+    add(text)
+    stripped = re.sub(
+        r"(?:控股)?(?:集团)?(?:股份)?(?:有限)?(?:科技)?公司|集团有限公司|股份有限公司|科技有限公司|有限公司",
+        "",
+        text,
+    ).strip()
+    if stripped:
+        add(stripped)
+        if len(stripped) > 4:
+            add(stripped[-4:])
+            add(stripped[-3:])
+            add(stripped[-2:])
+        for prefix in (
+            "北京", "上海", "广州", "深圳", "杭州", "成都", "南京", "武汉", "西安", "苏州",
+        ):
+            if stripped.startswith(prefix) and len(stripped) > len(prefix) + 1:
+                add(stripped[len(prefix):])
+    for match in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        add(match)
+    return fragments
+
+
 def _brand_appears_in_text(text: str | None, brand_terms: list[str]) -> bool:
     normalized = (text or "").lower()
     if not normalized:
         return False
     for term in brand_terms:
-        token = term.strip().lower()
-        if len(token) >= 2 and token in normalized:
-            return True
+        for fragment in _brand_term_match_fragments(term):
+            token = fragment.lower()
+            if len(token) >= 2 and token in normalized:
+                return True
     return False
+
+
+def _subtask_brand_text(subtask: GeoMonitorSubtask) -> str:
+    answer_text = _strip_html_for_match(subtask.answer_content)
+    mention_text = _strip_html_for_match(subtask.mention_context)
+    return " ".join(part for part in (answer_text, mention_text) if part).strip()
+
+
+def _subtask_answer_plaintext(subtask: GeoMonitorSubtask) -> str:
+    """Keep line breaks for list/category rank parsing."""
+    parts: list[str] = []
+    for field in (subtask.answer_content, subtask.mention_context):
+        if not field:
+            continue
+        cleaned = re.sub(r"<[^>]+>", "\n", str(field))
+        cleaned = re.sub(r"\r", "\n", cleaned)
+        parts.append(cleaned)
+    return "\n".join(parts).strip()
 
 
 def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
@@ -735,18 +1069,60 @@ def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
             continue
         if text in normalized or normalized in text:
             return True
+        for fragment in _brand_term_match_fragments(term):
+            token = fragment.lower()
+            if len(token) >= 2 and (token in normalized or normalized in token):
+                return True
     return False
 
 
-def _ranking_entry_value(entry: dict[str, Any]) -> int | float | None:
-    for key in ("rank", "position", "rankNo", "mentionPosition"):
-        value = entry.get(key)
-        if value is not None:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                continue
+def _find_brand_in_rankings(
+    subtask: GeoMonitorSubtask,
+    brand_terms: list[str],
+    asset: BrandAsset | None,
+) -> tuple[int | float | None, bool]:
+    """Match exposure terms in structured or parsed answer rankings (category-local rank)."""
+
+    def match_name(name: str) -> bool:
+        return _name_matches_brand(name, brand_terms)
+
+    def skip_name(name: str) -> bool:
+        return asset is not None and _is_industry_monitor_keyword(name, asset)
+
+    text = _subtask_answer_plaintext(subtask)
+    for entries in (
+        normalize_structured_rankings(subtask.all_rankings_json or []),
+        parse_answer_rankings(text),
+    ):
+        if not entries:
+            continue
+        rank, matched = find_best_brand_rank(entries, match_name, skip_name=skip_name)
+        if rank is not None:
+            return rank, True
+        if matched:
+            return None, True
+    return None, False
+
+
+def _appearance_order_rank(text: str, brand_terms: list[str]) -> int | None:
+    """When answer has no category/numbered list, rank by first short-line appearance order."""
+    order = 0
+    for raw_line in text.splitlines():
+        line = re.sub(r"<[^>]+>", " ", raw_line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line or len(line) > 120:
+            continue
+        if _is_category_header_line(line):
+            continue
+        order += 1
+        if _brand_appears_in_text(line, brand_terms):
+            return order
     return None
+
+
+def _is_category_header_line(line: str) -> bool:
+    from app.services.ranking_parser import _is_category_header
+    return _is_category_header(line)
 
 
 def _resolve_brand_rank(
@@ -756,34 +1132,33 @@ def _resolve_brand_rank(
     asset: BrandAsset | None = None,
 ) -> tuple[int | float | None, bool]:
     """Return brand list rank for ranking prompts; exposure prompts only report mention."""
-    answer_text = _strip_html_for_match(subtask.answer_content)
-    has_brand_in_answer = _brand_appears_in_text(answer_text, brand_terms)
+    combined_text = _subtask_brand_text(subtask)
+    has_brand_in_text = _brand_appears_in_text(combined_text, brand_terms)
     if prompt_monitor_intent(subtask.prompt) != "ranking":
-        return None, has_brand_in_answer
+        return None, has_brand_in_text
 
     monitor_keyword = str(monitor_keywords or "").strip()
     is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
 
-    for entry in subtask.all_rankings_json or []:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("name") or entry.get("brandName") or entry.get("brand") or entry.get("keyword") or "").strip()
-        if not name or not _name_matches_brand(name, brand_terms):
-            continue
-        if asset is not None and _is_industry_monitor_keyword(name, asset):
-            continue
-        rank = _ranking_entry_value(entry)
-        if rank is not None and has_brand_in_answer:
-            return rank, True
+    rank_from_list, in_ranking_list = _find_brand_in_rankings(subtask, brand_terms, asset)
+    if rank_from_list is not None:
+        return rank_from_list, True
+    if in_ranking_list:
+        return None, True
 
     if is_industry_task:
-        return None, has_brand_in_answer
+        return None, has_brand_in_text
 
-    if subtask.mention_position is not None and has_brand_in_answer:
-        if monitor_keyword and _name_matches_brand(monitor_keyword, brand_terms):
-            return subtask.mention_position, True
+    # Fallback: plain appearance order in answer when no list/category rank was parsed.
+    if has_brand_in_text:
+        appearance_rank = _appearance_order_rank(_subtask_answer_plaintext(subtask), brand_terms)
+        if appearance_rank is not None:
+            return appearance_rank, True
 
-    return None, has_brand_in_answer
+    if subtask.mention_position is not None:
+        return subtask.mention_position, True
+
+    return None, has_brand_in_text
 
 
 def _matrix_cell_rank(
@@ -792,13 +1167,14 @@ def _matrix_cell_rank(
     asset: BrandAsset | None,
     keyword_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    brand_terms = _brand_match_terms(asset, keyword_groups)
-    brand_rank, brand_mentioned = _resolve_brand_rank(subtask, monitor_keywords, brand_terms, asset)
+    ranking_terms = _ranking_match_terms(asset, keyword_groups)
+    brand_rank, brand_mentioned = _resolve_brand_rank(subtask, monitor_keywords, ranking_terms, asset)
     return {
         "mention_position": brand_rank,
         "raw_mention_position": subtask.mention_position,
         "brand_mentioned": brand_mentioned,
         "monitor_keyword": monitor_keywords,
+        "ranking_terms": ranking_terms,
         "prompt_intent": prompt_monitor_intent(subtask.prompt),
     }
 
@@ -834,7 +1210,7 @@ def ranking_matrix(
     monitor_group: str | None = None,
     limit_rows: int = 120,
 ) -> dict[str, Any]:
-    """Build prompt × snapshot ranking matrix for realtime monitor view."""
+    """Build prompt × daily-average ranking matrix for realtime monitor view."""
     tenant_id = _resolve_matrix_tenant_id(current)
     if tenant_id is None:
         raise ValueError("排名矩阵仅支持客户侧查看，请使用企业账号登录")
@@ -851,8 +1227,9 @@ def ranking_matrix(
         keyword_group_to_dict(item)
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
-    ]
+    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
     purchased_platforms = list(asset.monitored_platforms_json or []) if asset else []
+    daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
     selected_platform = None if all_platforms else platform_filter
@@ -894,25 +1271,7 @@ def ranking_matrix(
     subtasks = list(db.scalars(stmt.limit(5000)))
     group_filter = (monitor_group or keyword or "").strip()
     if group_filter:
-        selected_group = next(
-            (group for group in keyword_groups if str(group.get("monitor_keyword") or "").strip() == group_filter),
-            None,
-        )
-        if selected_group:
-            subtasks = [
-                item for item in subtasks
-                if _prompt_belongs_to_group(
-                    item.prompt or "",
-                    str(selected_group.get("monitor_keyword") or ""),
-                    selected_group.get("exposure_terms") or [],
-                )
-            ]
-        else:
-            keyword_text = group_filter.lower()
-            subtasks = [
-                item for item in subtasks
-                if keyword_text in (item.prompt or "").lower()
-            ]
+        subtasks = _filter_subtasks_by_monitor_group(subtasks, group_filter, keyword_groups)
 
     if not all_platforms and subtasks:
         selected_platform = subtasks[0].platform
@@ -930,45 +1289,50 @@ def ranking_matrix(
             continue
         if prompt_monitor_intent(prompt) != "ranking":
             continue
+        day_key = _matrix_day_key(item.updated_at)
+        if not day_key:
+            continue
         schedule_ctx = resolve_task_schedule_context(
             item.task,
             schedule_runs_map.get(task_id),
             asset,
         )
+        keyword_group = schedule_ctx.get("keyword_group")
         prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
         row_key = _matrix_row_key(
-            task_id,
+            day_key,
             item.platform,
             all_platforms=all_platforms,
-            schedule_window_key=schedule_ctx.get("schedule_window_key"),
-            keyword_group=schedule_ctx.get("keyword_group"),
+            keyword_group=keyword_group,
         )
         bucket = task_rows.setdefault(row_key, {
+            "day_key": day_key,
             "task_id": task_id,
             "platform": item.platform if all_platforms else None,
+            "keyword_group": keyword_group,
             "latest_at": None,
-            "cells": {},
-            **schedule_ctx,
+            "cell_samples": {},
         })
         if item.updated_at and (
             bucket["latest_at"] is None or item.updated_at > bucket["latest_at"]
         ):
             bucket["latest_at"] = item.updated_at
+            bucket["task_id"] = task_id
         monitor_keywords = item.task.monitor_keywords if item.task else None
         rank_payload = _matrix_cell_rank(item, monitor_keywords, asset, keyword_groups)
         cell = {
             "subtask_id": item.subtask_id,
+            "task_id": task_id,
+            "schedule_window_key": schedule_ctx.get("schedule_window_key"),
+            "schedule_label": schedule_ctx.get("schedule_label"),
             "status": item.status,
             "page_screenshot": item.page_screenshot,
             "sentiment": item.sentiment,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
             **rank_payload,
+            "_updated_at": item.updated_at,
         }
-        existing = bucket["cells"].get(prompt)
-        if existing is None or (item.updated_at and (
-            not existing.get("_updated_at") or item.updated_at > existing["_updated_at"]
-        )):
-            bucket["cells"][prompt] = {**cell, "_updated_at": item.updated_at}
+        bucket["cell_samples"].setdefault(prompt, []).append(cell)
 
     columns = [
         {"prompt": prompt, "group_name": prompt_set[prompt]}
@@ -984,7 +1348,7 @@ def ranking_matrix(
     sorted_tasks = sorted(
         task_rows.values(),
         key=lambda row: (
-            schedule_window_sort_key(row.get("schedule_window_key")),
+            row.get("day_key") or "",
             row.get("keyword_group") or "",
             row.get("platform") or "",
         ),
@@ -992,38 +1356,29 @@ def ranking_matrix(
     )[:limit_rows]
     rows = []
     for bucket in sorted_tasks:
-        cells = bucket["cells"]
+        day_key = bucket.get("day_key") or ""
+        cells = {
+            prompt: _finalize_matrix_cell(
+                _dedupe_matrix_cell_samples(samples, max_samples=daily_sample_cap)
+            )
+            for prompt, samples in (bucket.get("cell_samples") or {}).items()
+        }
+        round_count = _matrix_row_schedule_round_count(cells)
         rows.append({
             "task_id": bucket["task_id"],
             "platform": bucket.get("platform"),
-            "schedule_key": bucket.get("schedule_key"),
-            "schedule_window_key": bucket.get("schedule_window_key"),
-            "schedule_label": bucket.get("schedule_label"),
-            "schedule_source": bucket.get("schedule_source"),
+            "day_key": day_key,
+            "schedule_key": None,
+            "schedule_window_key": day_key,
+            "schedule_label": _matrix_day_label(day_key, round_count),
+            "schedule_source": "daily_avg",
             "keyword_group": bucket.get("keyword_group"),
-            "snapshot_at": bucket.get("schedule_label"),
-            "cells": {
-                prompt: {
-                    "subtask_id": payload["subtask_id"],
-                    "mention_position": payload["mention_position"],
-                    "raw_mention_position": payload["raw_mention_position"],
-                    "brand_mentioned": payload["brand_mentioned"],
-                    "monitor_keyword": payload["monitor_keyword"],
-                    "prompt_intent": payload.get("prompt_intent"),
-                    "status": payload["status"],
-                    "page_screenshot": payload["page_screenshot"],
-                    "sentiment": payload["sentiment"],
-                    "updated_at": payload["updated_at"],
-                }
-                for prompt, payload in cells.items()
-            },
+            "snapshot_at": day_key,
+            "sample_count": round_count,
+            "cells": cells,
         })
 
-    schedule_round_count = len({
-        row.get("schedule_window_key")
-        for row in rows
-        if row.get("schedule_window_key")
-    })
+    schedule_round_count = len({row.get("day_key") for row in rows if row.get("day_key")})
 
     return {
         "platform": selected_platform,
@@ -1038,17 +1393,11 @@ def ranking_matrix(
         "schedule_plan": schedule_plan_summary(asset),
         "prompt_groups": prompt_groups,
         "keyword_group_options": [
-            {
-                "monitor_keyword": str(group.get("monitor_keyword") or "").strip(),
-                "exposure_terms": [
-                    str(term or "").strip()
-                    for term in (group.get("exposure_terms") or [])
-                    if str(term or "").strip()
-                ],
-            }
+            option
             for group in keyword_groups
-            if str(group.get("monitor_keyword") or "").strip()
+            if (option := _keyword_group_option(group))
         ],
+        "exposure_term_options": collect_exposure_term_options(keyword_groups, asset=asset),
         "purchased_platforms": purchased_platforms,
     }
 
@@ -1085,48 +1434,141 @@ def _answer_excerpt(content: str | None, limit: int = 120) -> str:
     return f"{text[:limit]}…"
 
 
-def _resolve_sentiment_tenant_id(current: CurrentSession, tenant_id: int | None) -> int | None:
-    if current.identity.identity_type == "CUSTOMER":
-        return current.identity.tenant_id
-    return tenant_id
+def _top3_rate_from_ranking_rows(ranking_rows: list[dict[str, Any]]) -> float:
+    ranking_total = len(ranking_rows)
+    if not ranking_total:
+        return 0.0
+    top3 = sum(
+        1
+        for row in ranking_rows
+        if row.get("brand_rank") is not None and float(row["brand_rank"]) <= 3
+    )
+    return round(top3 / ranking_total * 100, 1)
 
 
-def sentiment_overview(
-    db: Session,
-    current: CurrentSession,
-    *,
-    platform: str | None = None,
-    start_at: datetime | None = None,
-    end_at: datetime | None = None,
-    monitor_group: str | None = None,
-    schedule_window_key: str | None = None,
-    sentiment_filter: str | None = None,
-    tenant_id: int | None = None,
-    item_limit: int = 200,
+def _round_metrics_from_rows(
+    ranking_rows: list[dict[str, Any]],
+    exposure_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Aggregate exposure-prompt sentiment stats and sample list for sentiment monitor page."""
-    resolved_tenant_id = _resolve_sentiment_tenant_id(current, tenant_id)
-    if resolved_tenant_id is None:
-        raise ValueError("请使用企业账号登录，或指定 tenant_id")
+    ranking_total = len(ranking_rows)
+    ranking_mentioned = sum(1 for row in ranking_rows if row.get("brand_mentioned"))
+    rank_values = [float(row["brand_rank"]) for row in ranking_rows if row.get("brand_rank") is not None]
+    exposure_recognized = [row for row in exposure_rows if row.get("sentiment") in ("正面", "中性", "负面")]
+    negative_count = sum(1 for row in exposure_rows if row.get("sentiment") == "负面")
+    return {
+        "ranking_sample_count": ranking_total,
+        "brand_mention_rate": round(ranking_mentioned / ranking_total * 100, 1) if ranking_total else 0.0,
+        "avg_brand_rank": round(sum(rank_values) / len(rank_values), 1) if rank_values else None,
+        "top3_rate": _top3_rate_from_ranking_rows(ranking_rows),
+        "exposure_sample_count": len(exposure_rows),
+        "negative_count": negative_count,
+        "negative_rate": round(negative_count / len(exposure_recognized) * 100, 1) if exposure_recognized else 0.0,
+    }
 
+
+def _platform_stats_from_ranking_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    bucket: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        code = str(row.get("platform") or "").strip()
+        if not code:
+            continue
+        pb = bucket.setdefault(
+            code,
+            {"total": 0, "mentioned": 0, "rank_total": 0.0, "rank_count": 0},
+        )
+        pb["total"] += 1
+        if row.get("brand_mentioned"):
+            pb["mentioned"] += 1
+        if row.get("brand_rank") is not None:
+            pb["rank_total"] += float(row["brand_rank"])
+            pb["rank_count"] += 1
+    return bucket
+
+
+def _platform_highlight_entry(
+    code: str,
+    stats: dict[str, Any] | None,
+    previous_stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if stats is None or stats.get("total", 0) == 0:
+        return {
+            "platform": code,
+            "mention_rate": 0.0,
+            "avg_rank": None,
+            "sample_count": 0,
+            "mention_rate_delta": None,
+            "avg_rank_delta": None,
+        }
+    total = stats["total"] or 1
+    mention_rate = round(stats["mentioned"] / total * 100, 1)
+    avg_rank = round(stats["rank_total"] / stats["rank_count"], 1) if stats["rank_count"] else None
+    mention_rate_delta = None
+    avg_rank_delta = None
+    if previous_stats and previous_stats.get("total", 0) > 0:
+        prev_total = previous_stats["total"]
+        prev_mention_rate = round(previous_stats["mentioned"] / prev_total * 100, 1)
+        mention_rate_delta = round(mention_rate - prev_mention_rate, 1)
+        prev_avg_rank = (
+            round(previous_stats["rank_total"] / previous_stats["rank_count"], 1)
+            if previous_stats["rank_count"]
+            else None
+        )
+        if avg_rank is not None and prev_avg_rank is not None:
+            avg_rank_delta = round(avg_rank - prev_avg_rank, 1)
+    return {
+        "platform": code,
+        "mention_rate": mention_rate,
+        "avg_rank": avg_rank,
+        "sample_count": stats["total"],
+        "mention_rate_delta": mention_rate_delta,
+        "avg_rank_delta": avg_rank_delta,
+    }
+
+
+def _build_workspace_kpi_trends(
+    daily_ranking: dict[str, list[dict[str, Any]]],
+    daily_exposure: dict[str, list[dict[str, Any]]],
+    range_start: datetime,
+    range_end: datetime,
+) -> list[dict[str, Any]]:
+    points: list[dict[str, Any]] = []
+    cursor = range_start.date()
+    end = range_end.date()
+    while cursor <= end:
+        day_key = cursor.isoformat()
+        metrics = _round_metrics_from_rows(
+            daily_ranking.get(day_key, []),
+            daily_exposure.get(day_key, []),
+        )
+        points.append({
+            "label": cursor.strftime("%m-%d"),
+            "mention_rate": metrics["brand_mention_rate"],
+            "avg_brand_rank": metrics["avg_brand_rank"],
+            "top3_rate": metrics["top3_rate"],
+            "negative_count": metrics["negative_count"],
+        })
+        cursor += timedelta(days=1)
+    return points
+
+
+def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
+    """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources."""
+    if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
+        raise ValueError("运营工作台简报仅支持客户企业账号")
+
+    tenant_id = current.identity.tenant_id
     now = datetime.now()
-    range_start = start_at or (now - timedelta(days=7))
-    range_end = end_at or now
-    if range_start > range_end:
-        range_start, range_end = range_end, range_start
+    range_start = now - timedelta(days=7)
 
-    asset = get_brand_asset(db, resolved_tenant_id)
-    keyword_group_rows = list_keyword_groups(db, resolved_tenant_id)
+    asset = get_brand_asset(db, tenant_id)
+    keyword_group_rows = list_keyword_groups(db, tenant_id)
     keyword_groups = [
         keyword_group_to_dict(item)
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
-    ]
+    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
     purchased_platforms = list(asset.monitored_platforms_json or []) if asset else []
-    platform_filter = str(platform or "").strip()
-    all_platforms = not platform_filter or platform_filter.lower() == "all"
-    selected_platform = None if all_platforms else platform_filter
-    schedule_filter = str(schedule_window_key or "").strip() or None
+    purchased_set = set(purchased_platforms)
 
     stmt = (
         select(GeoMonitorSubtask)
@@ -1135,6 +1577,8 @@ def sentiment_overview(
             joinedload(GeoMonitorSubtask.task).load_only(
                 GeoMonitorTask.monitor_keywords,
                 GeoMonitorTask.created_at,
+                GeoMonitorTask.total_items,
+                GeoMonitorTask.completed_items,
             ),
             load_only(
                 GeoMonitorSubtask.subtask_id,
@@ -1143,6 +1587,8 @@ def sentiment_overview(
                 GeoMonitorSubtask.prompt,
                 GeoMonitorSubtask.status,
                 GeoMonitorSubtask.answer_content,
+                GeoMonitorSubtask.mention_context,
+                GeoMonitorSubtask.reference_list_json,
                 GeoMonitorSubtask.mention_position,
                 GeoMonitorSubtask.all_rankings_json,
                 GeoMonitorSubtask.sentiment,
@@ -1151,191 +1597,263 @@ def sentiment_overview(
         )
         .where(
             GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.tenant_id == resolved_tenant_id,
+            GeoMonitorTask.tenant_id == tenant_id,
             GeoMonitorSubtask.updated_at >= range_start,
-            GeoMonitorSubtask.updated_at <= range_end,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
     )
-    if selected_platform:
-        stmt = stmt.where(GeoMonitorSubtask.platform == selected_platform)
+    subtasks = list(db.scalars(stmt.limit(3000)))
+    if purchased_set:
+        subtasks = [item for item in subtasks if item.platform in purchased_set]
 
-    subtasks = list(db.scalars(stmt.limit(5000)))
-    group_filter = str(monitor_group or "").strip()
-    selected_group = None
-    if group_filter:
-        selected_group = next(
-            (
-                group for group in keyword_groups
-                if str(group.get("monitor_keyword") or "").strip() == group_filter
-            ),
-            None,
-        )
-        if selected_group:
-            subtasks = [
-                item for item in subtasks
-                if _prompt_belongs_to_group(
-                    item.prompt or "",
-                    str(selected_group.get("monitor_keyword") or ""),
-                    selected_group.get("exposure_terms") or [],
-                )
-            ]
-        else:
-            keyword_text = group_filter.lower()
-            subtasks = [item for item in subtasks if keyword_text in (item.prompt or "").lower()]
-
-    exposure_subtasks = [
-        item for item in subtasks
-        if prompt_monitor_intent(item.prompt) == "exposure" and item.task is not None
-    ]
-
-    task_ids = list({item.task_id for item in exposure_subtasks if item.task_id})
+    task_ids = list({item.task_id for item in subtasks if item.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
-    brand_terms = _brand_match_terms(asset, keyword_groups)
 
-    sentiment_counts = {"正面": 0, "中性": 0, "负面": 0, "未知": 0}
-    platform_bucket: dict[str, dict[str, Any]] = {}
-    trend_bucket: dict[str, dict[str, int]] = {}
-    schedule_option_map: dict[str, str] = {}
-    serialized_items: list[dict[str, Any]] = []
+    schedule_buckets: dict[str, dict[str, Any]] = {}
+    window_ranking: dict[str, list[dict[str, Any]]] = {}
+    window_exposure: dict[str, list[dict[str, Any]]] = {}
+    ranking_rows: list[dict[str, Any]] = []
+    exposure_rows: list[dict[str, Any]] = []
+    daily_ranking: dict[str, list[dict[str, Any]]] = {}
+    daily_exposure: dict[str, list[dict[str, Any]]] = {}
+    source_map: dict[str, dict[str, Any]] = {}
+    snapshot_candidates: list[dict[str, Any]] = []
 
-    for item in exposure_subtasks:
+    for item in subtasks:
+        if item.task is None:
+            continue
+        intent = prompt_monitor_intent(item.prompt)
         schedule_ctx = resolve_task_schedule_context(
             item.task,
             schedule_runs_map.get(item.task_id or ""),
             asset,
         )
-        window_key = schedule_ctx.get("schedule_window_key")
-        schedule_label = schedule_ctx.get("schedule_label")
-        if window_key and schedule_label:
-            schedule_option_map.setdefault(str(window_key), str(schedule_label))
-        if schedule_filter and str(window_key or "") != schedule_filter:
-            continue
-
-        label = _normalize_sentiment_label(item.sentiment)
-        sentiment_counts[label] += 1
-
-        platform_key = item.platform or "unknown"
-        bucket = platform_bucket.setdefault(
-            platform_key,
-            {"platform": platform_key, "sample_count": 0, "counts": {"正面": 0, "中性": 0, "负面": 0, "未知": 0}},
+        window_key = str(schedule_ctx.get("schedule_window_key") or item.task_id or "")
+        bucket = schedule_buckets.setdefault(
+            window_key,
+            {
+                "schedule_window_key": window_key,
+                "schedule_label": schedule_ctx.get("schedule_label"),
+                "completed_subtasks": 0,
+                "total_subtasks": 0,
+            },
         )
-        bucket["sample_count"] += 1
-        bucket["counts"][label] += 1
+        bucket["total_subtasks"] += 1
+        bucket["completed_subtasks"] += 1
 
-        if item.updated_at:
-            day_label = item.updated_at.strftime("%m-%d")
-            day_row = trend_bucket.setdefault(day_label, {"positive": 0, "neutral": 0, "negative": 0, "unknown": 0})
-            if label == "正面":
-                day_row["positive"] += 1
-            elif label == "负面":
-                day_row["negative"] += 1
-            elif label == "中性":
-                day_row["neutral"] += 1
-            else:
-                day_row["unknown"] += 1
-
-        _, brand_mentioned = _resolve_brand_rank(
+        monitor_keywords = item.task.monitor_keywords
+        brand_rank, brand_mentioned = _resolve_brand_rank(
             item,
-            item.task.monitor_keywords if item.task else None,
-            brand_terms,
+            monitor_keywords,
+            _ranking_match_terms(asset, keyword_groups),
             asset,
         )
-        keyword_group = _prompt_group_name(item.prompt or "", keyword_group_rows) or (
-            item.task.monitor_keywords if item.task else None
-        )
-        serialized_items.append({
+        keyword_group = _prompt_group_name(item.prompt or "", keyword_group_rows) or monitor_keywords
+        sentiment_label = _normalize_sentiment_label(item.sentiment)
+
+        row_payload = {
             "subtask_id": item.subtask_id,
+            "task_id": item.task_id,
             "platform": item.platform,
             "prompt": item.prompt,
             "keyword_group": keyword_group,
-            "schedule_label": schedule_label,
+            "schedule_label": schedule_ctx.get("schedule_label"),
             "schedule_window_key": window_key,
-            "schedule_source": schedule_ctx.get("schedule_source"),
-            "sentiment": label,
-            "sentiment_raw": item.sentiment,
+            "prompt_intent": intent,
+            "brand_rank": brand_rank,
             "brand_mentioned": brand_mentioned,
-            "prompt_intent": "exposure",
-            "answer_excerpt": _answer_excerpt(item.answer_content),
+            "sentiment": sentiment_label,
+            "answer_excerpt": _answer_excerpt(item.answer_content, 100),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-        })
+        }
+        snapshot_candidates.append(row_payload)
 
-    recognized = sentiment_counts["正面"] + sentiment_counts["中性"] + sentiment_counts["负面"]
-    positive_rate = round(sentiment_counts["正面"] / recognized * 100, 1) if recognized else 0.0
-    negative_rate = round(sentiment_counts["负面"] / recognized * 100, 1) if recognized else 0.0
-    neutral_rate = round(sentiment_counts["中性"] / recognized * 100, 1) if recognized else 0.0
+        if intent == "ranking":
+            ranking_rows.append(row_payload)
+            window_ranking.setdefault(window_key, []).append(row_payload)
+            if item.updated_at:
+                day_key = item.updated_at.date().isoformat()
+                daily_ranking.setdefault(day_key, []).append(row_payload)
 
-    platform_stats = []
-    for bucket in platform_bucket.values():
-        counts = bucket["counts"]
-        total = counts["正面"] + counts["中性"] + counts["负面"]
-        platform_stats.append({
-            "platform": bucket["platform"],
-            "sample_count": bucket["sample_count"],
-            "positive_rate": round(counts["正面"] / total * 100, 1) if total else 0.0,
-            "negative_rate": round(counts["负面"] / total * 100, 1) if total else 0.0,
-            "neutral_rate": round(counts["中性"] / total * 100, 1) if total else 0.0,
-            "negative_count": counts["负面"],
-        })
-    platform_stats.sort(key=lambda row: (row["negative_rate"], row["negative_count"]), reverse=True)
+        else:
+            exposure_rows.append(row_payload)
+            window_exposure.setdefault(window_key, []).append(row_payload)
+            if item.updated_at:
+                day_key = item.updated_at.date().isoformat()
+                daily_exposure.setdefault(day_key, []).append(row_payload)
 
-    sorted_day_keys = sorted(
-        trend_bucket.keys(),
-        key=lambda label: datetime.strptime(f"2000-{label}", "%Y-%m-%d"),
-    )
-    sentiment_trend = [
-        {"label": label, **trend_bucket[label]}
-        for label in sorted_day_keys[-14:]
-    ]
+        for source in item.reference_list_json or []:
+            if not _is_valid_citation_source(source):
+                continue
+            url = source.get("url") or source.get("site") or source.get("title")
+            if not url:
+                continue
+            key = str(url).split("?")[0]
+            src = source_map.setdefault(
+                key,
+                {
+                    "title": source.get("title") or source.get("site") or key,
+                    "url": key,
+                    "count": 0,
+                    "platforms": [],
+                },
+            )
+            src["count"] += 1
+            if item.platform and item.platform not in src["platforms"]:
+                src["platforms"].append(item.platform)
 
-    schedule_options = [
-        {"schedule_window_key": key, "schedule_label": label}
-        for key, label in sorted(
-            schedule_option_map.items(),
-            key=lambda pair: schedule_window_sort_key(pair[0]),
-            reverse=True,
+    latest_key = None
+    previous_key = None
+    latest_schedule = None
+    previous_schedule = None
+    round_comparison: dict[str, Any] = {
+        "has_previous": False,
+        "latest_schedule_label": None,
+        "previous_schedule_label": None,
+        "avg_brand_rank_delta": None,
+        "mention_rate_delta": None,
+        "top3_rate_delta": None,
+        "negative_count_delta": None,
+    }
+    if schedule_buckets:
+        sorted_windows = sorted(schedule_buckets.keys(), key=schedule_window_sort_key)
+        latest_key = sorted_windows[-1]
+        latest_schedule = schedule_buckets[latest_key]
+        latest_metrics = _round_metrics_from_rows(
+            window_ranking.get(latest_key, []),
+            window_exposure.get(latest_key, []),
         )
-    ]
+        round_comparison["latest_schedule_label"] = latest_schedule.get("schedule_label")
+        if len(sorted_windows) >= 2:
+            previous_key = sorted_windows[-2]
+            previous_schedule = schedule_buckets[previous_key]
+            previous_metrics = _round_metrics_from_rows(
+                window_ranking.get(previous_key, []),
+                window_exposure.get(previous_key, []),
+            )
+            round_comparison["has_previous"] = True
+            round_comparison["previous_schedule_label"] = previous_schedule.get("schedule_label")
+            if latest_metrics["avg_brand_rank"] is not None and previous_metrics["avg_brand_rank"] is not None:
+                round_comparison["avg_brand_rank_delta"] = round(
+                    latest_metrics["avg_brand_rank"] - previous_metrics["avg_brand_rank"],
+                    1,
+                )
+            round_comparison["mention_rate_delta"] = round(
+                latest_metrics["brand_mention_rate"] - previous_metrics["brand_mention_rate"],
+                1,
+            )
+            round_comparison["top3_rate_delta"] = round(
+                latest_metrics["top3_rate"] - previous_metrics["top3_rate"],
+                1,
+            )
+            round_comparison["negative_count_delta"] = (
+                latest_metrics["negative_count"] - previous_metrics["negative_count"]
+            )
 
-    tab = str(sentiment_filter or "all").strip().lower()
-    filtered_items = serialized_items
-    if tab in ("negative", "负面"):
-        filtered_items = [item for item in serialized_items if item["sentiment"] == "负面"]
-    elif tab in ("positive", "正面"):
-        filtered_items = [item for item in serialized_items if item["sentiment"] == "正面"]
-    elif tab in ("neutral", "中性"):
-        filtered_items = [item for item in serialized_items if item["sentiment"] == "中性"]
+    ranking_total = len(ranking_rows)
+    ranking_mentioned = sum(1 for row in ranking_rows if row.get("brand_mentioned"))
+    rank_values = [float(row["brand_rank"]) for row in ranking_rows if row.get("brand_rank") is not None]
+    competitor_count = len(list_competitors(db, tenant_id))
+
+    brand_mention_rate = round(ranking_mentioned / ranking_total * 100, 1) if ranking_total else 0.0
+    avg_brand_rank = round(sum(rank_values) / len(rank_values), 1) if rank_values else None
+    top3_rate = _top3_rate_from_ranking_rows(ranking_rows)
+
+    exposure_recognized = [row for row in exposure_rows if row.get("sentiment") in ("正面", "中性", "负面")]
+    negative_count = sum(1 for row in exposure_rows if row.get("sentiment") == "负面")
+    negative_rate = round(negative_count / len(exposure_recognized) * 100, 1) if exposure_recognized else 0.0
+
+    latest_platform_stats = _platform_stats_from_ranking_rows(
+        window_ranking.get(latest_key, []) if latest_key else ranking_rows
+    )
+    previous_platform_stats = _platform_stats_from_ranking_rows(
+        window_ranking.get(previous_key, []) if previous_key else []
+    )
+    platform_highlights = [
+        _platform_highlight_entry(
+            code,
+            latest_platform_stats.get(code),
+            previous_platform_stats.get(code) if round_comparison.get("has_previous") else None,
+        )
+        for code in purchased_platforms
+    ]
+    kpi_trends = _build_workspace_kpi_trends(daily_ranking, daily_exposure, range_start, now)
+
+    top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
+    for row in top_sources:
+        row["platforms"] = row["platforms"][:4]
+
+    recent_snapshots = snapshot_candidates[:6]
+
+    alerts: list[dict[str, str]] = []
+    if not subtasks:
+        alerts.append({
+            "level": "info",
+            "message": "近 7 日暂无已完成检测结果，请等待定时监测任务返回。",
+        })
+    elif negative_count > 0:
+        alerts.append({
+            "level": "warn",
+            "message": f"近 7 日口碑类问题中有 {negative_count} 条负面样本，建议查看实时检测详情。",
+        })
+    if round_comparison.get("has_previous"):
+        rank_delta = round_comparison.get("avg_brand_rank_delta")
+        if rank_delta is not None and rank_delta > 0.5:
+            alerts.append({
+                "level": "warn",
+                "message": f"较上一轮「{round_comparison.get('previous_schedule_label') or '上一调度'}」，平均品牌排名下滑 {rank_delta} 位。",
+            })
+        mention_delta = round_comparison.get("mention_rate_delta")
+        if mention_delta is not None and mention_delta < -5:
+            alerts.append({
+                "level": "warn",
+                "message": f"较上一轮，推荐类露出率下降 {abs(mention_delta):.1f}%。",
+            })
+        neg_delta = round_comparison.get("negative_count_delta")
+        if neg_delta is not None and neg_delta > 0:
+            alerts.append({
+                "level": "warn",
+                "message": f"较上一轮，负面样本增加 {neg_delta} 条。",
+            })
+    for highlight in platform_highlights:
+        if highlight["sample_count"] == 0 and highlight["platform"] in purchased_set:
+            alerts.append({
+                "level": "info",
+                "message": f"平台 {highlight['platform']} 近 7 日暂无推荐类返回，请确认监测配置。",
+            })
+
+    plan = schedule_plan_summary(asset)
+    schedule_times = plan.get("schedule_times") or []
+    next_schedule_hint = f"每日 {('、'.join(schedule_times))}" if schedule_times else plan.get("schedule_type_label")
 
     return {
-        "tenant_id": resolved_tenant_id,
+        "tenant_id": tenant_id,
         "brand_name": asset.brand_name if asset else None,
+        "company_name": asset.company_full_name if asset else None,
         "start_at": range_start.isoformat(),
-        "end_at": range_end.isoformat(),
-        "sample_count": len(exposure_subtasks),
-        "recognized_count": recognized,
-        "unknown_count": sentiment_counts["未知"],
-        "negative_count": sentiment_counts["负面"],
-        "sentiment_counts": sentiment_counts,
-        "positive_rate": positive_rate,
-        "negative_rate": negative_rate,
-        "neutral_rate": neutral_rate,
-        "platform_stats": platform_stats,
-        "sentiment_trend": sentiment_trend,
-        "schedule_options": schedule_options,
-        "keyword_group_options": [
-            {
-                "monitor_keyword": str(group.get("monitor_keyword") or "").strip(),
-                "exposure_terms": [
-                    str(term or "").strip()
-                    for term in (group.get("exposure_terms") or [])
-                    if str(term or "").strip()
-                ],
-            }
-            for group in keyword_groups
-            if str(group.get("monitor_keyword") or "").strip()
-        ],
+        "end_at": now.isoformat(),
+        "latest_schedule": latest_schedule,
+        "previous_schedule": previous_schedule,
+        "round_comparison": round_comparison,
+        "kpi_trends": kpi_trends,
+        "next_schedule_hint": next_schedule_hint,
+        "schedule_plan": plan,
+        "kpis": {
+            "ranking_sample_count": ranking_total,
+            "brand_mention_rate": brand_mention_rate,
+            "avg_brand_rank": avg_brand_rank,
+            "top3_rate": top3_rate,
+            "exposure_sample_count": len(exposure_rows),
+            "negative_count": negative_count,
+            "negative_rate": negative_rate,
+            "source_count": sum(row["count"] for row in source_map.values()),
+            "keyword_group_count": len(keyword_groups),
+            "competitor_count": competitor_count,
+        },
         "purchased_platforms": purchased_platforms,
-        "schedule_plan": schedule_plan_summary(asset),
-        "items": filtered_items[: max(1, min(item_limit, 500))],
+        "platform_highlights": platform_highlights,
+        "top_sources": top_sources,
+        "recent_snapshots": recent_snapshots,
+        "alerts": alerts,
     }

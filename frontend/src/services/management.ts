@@ -88,6 +88,14 @@ export interface MenuConfigRecord {
   remark: string | null
 }
 
+export interface MolizhishuBalance {
+  available: boolean
+  current_balance: number | null
+  current_balance_text: string | null
+  fetched_at: string
+  error: string | null
+}
+
 export interface PlatformOverview {
   kpis: {
     today_tasks: number
@@ -132,6 +140,7 @@ export interface PlatformOverview {
   todo_items: Array<{ type: string; title: string; count: number; level: string }>
   operation_logs: OperationLogRecord[]
   system_health: Array<{ name: string; status: string; detail: string }>
+  molizhishu_balance?: MolizhishuBalance
 }
 
 export interface CreateUserPayload {

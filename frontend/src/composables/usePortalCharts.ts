@@ -1,6 +1,7 @@
 import { nextTick, onUnmounted, ref, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
 import { platformLabelMap } from '../views/portal/portalMaps'
+import type { BrandInsightsTrends } from '../services/analytics'
 
 export type PortalChartRefs = {
   trend?: Ref<HTMLDivElement | null>
@@ -9,6 +10,8 @@ export type PortalChartRefs = {
   sentimentTrend?: Ref<HTMLDivElement | null>
   diagnosis?: Ref<HTMLDivElement | null>
   competitor?: Ref<HTMLDivElement | null>
+  competitorRank?: Ref<HTMLDivElement | null>
+  mentionTrend?: Ref<HTMLDivElement | null>
   sourceStructure?: Ref<HTMLDivElement | null>
   sourceTrend?: Ref<HTMLDivElement | null>
 }
@@ -16,17 +19,23 @@ export type PortalChartRefs = {
 export type PortalChartData = {
   chartTrend: Array<{ label: string; value: number }>
   sentimentTrendRows?: Array<{ label: string; positive: number; neutral: number; negative: number }>
+  mentionTrendSeries?: BrandInsightsTrends
   platformRanking: Array<{ platform: string; mention_rate: number }>
   sentimentPieRows: Array<{ name: string; value: number }>
   positiveRate: number
   diagnosisScore: number
-  competitorCompareRows: Array<{ name: string; mention: number }>
+  competitorCompareRows: Array<{ name: string; mention: number; mention_count?: number; rank?: number | null; is_brand?: boolean }>
+  competitorRankRows?: Array<{ name: string; rank: number; is_brand?: boolean }>
   sourceStructureRows: Array<{
     platform: string
     categories: Array<{ type: string; value: number }>
   }>
   sourceTrendRows: Array<{ label: string; value: number }>
   sourceCategoryLabels: Record<string, string>
+  chartClickHandlers?: {
+    mentionTrend?: (payload: { label: string; seriesName?: string }) => void
+    sentimentTrend?: (payload: { label: string }) => void
+  }
 }
 
 type EchartsRuntime = {
@@ -197,28 +206,76 @@ export function usePortalCharts(refs: PortalChartRefs) {
           tooltip: { trigger: 'axis' },
           legend: { top: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: '#58708f', fontSize: 11 } },
           xAxis: { type: 'category', data: rows.map(item => item.label), axisLabel: { color: '#6a7f9a', fontSize: 11 } },
-          yAxis: { type: 'value', show: false },
+          yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%', color: '#8aa0ba', fontSize: 11 }, splitLine: { lineStyle: { color: '#eef2f7' } } },
           series: [
             { name: '正面', type: 'line', smooth: true, symbolSize: 6, data: rows.map(item => item.positive) },
             { name: '中性', type: 'line', smooth: true, symbolSize: 6, data: rows.map(item => item.neutral) },
             { name: '负面', type: 'line', smooth: true, symbolSize: 6, data: rows.map(item => item.negative) },
           ],
         })
+        trendMini.off('click')
+        if (data.chartClickHandlers?.sentimentTrend) {
+          trendMini.on('click', (params: { dataIndex?: number }) => {
+            const index = params.dataIndex ?? 0
+            data.chartClickHandlers?.sentimentTrend?.({ label: rows[index]?.label || '' })
+          })
+        }
       } else {
-        trendMini.setOption({
-          color: ['#40d4c6'],
-          grid: { left: 20, right: 12, top: 18, bottom: 20 },
-          tooltip: { trigger: 'axis' },
-          xAxis: { type: 'category', data: data.chartTrend.map(item => item.label), show: false },
-          yAxis: { type: 'value', show: false },
-          series: [{
+        trendMini.clear()
+      }
+    }
+
+    const mentionTrendChart = getChart(refs.mentionTrend?.value ?? null)
+    if (mentionTrendChart) {
+      const trend = data.mentionTrendSeries
+      if (trend?.labels?.length && trend.series?.length) {
+        const palette = ['#36cfc9', '#5b8ff9', '#f6bd16', '#9270ca', '#ff9845']
+        mentionTrendChart.setOption({
+          color: palette,
+          grid: { left: 42, right: 18, top: 36, bottom: 28 },
+          tooltip: { trigger: 'axis', valueFormatter: (value: number) => `${value}%` },
+          legend: { top: 0, itemWidth: 12, itemHeight: 4, textStyle: { color: '#58708f', fontSize: 11 } },
+          xAxis: {
+            type: 'category',
+            data: trend.labels,
+            boundaryGap: false,
+            axisLabel: { color: '#6a7f9a', fontSize: 11 },
+            axisTick: { show: false },
+          },
+          yAxis: {
+            type: 'value',
+            max: 100,
+            axisLabel: { formatter: '{value}%', color: '#8aa0ba', fontSize: 11 },
+            splitLine: { lineStyle: { color: '#eef2f7' } },
+          },
+          series: trend.series.map(item => ({
+            name: item.name,
             type: 'line',
             smooth: true,
-            symbolSize: 7,
-            areaStyle: { color: 'rgba(64,212,198,.16)' },
-            data: data.chartTrend.map(item => item.value),
-          }],
+            symbolSize: 6,
+            data: item.values,
+            lineStyle: { width: item.is_brand ? 3 : 2 },
+            areaStyle: item.is_brand ? {
+              color: new graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: 'rgba(54,207,201,.18)' },
+                { offset: 1, color: 'rgba(54,207,201,0)' },
+              ]),
+            } : undefined,
+          })),
         })
+        mentionTrendChart.off('click')
+        if (data.chartClickHandlers?.mentionTrend) {
+          mentionTrendChart.on('click', (params: { dataIndex?: number; seriesIndex?: number }) => {
+            const index = params.dataIndex ?? 0
+            const seriesIndex = params.seriesIndex ?? 0
+            data.chartClickHandlers?.mentionTrend?.({
+              label: trend.labels[index] || '',
+              seriesName: trend.series[seriesIndex]?.name,
+            })
+          })
+        }
+      } else {
+        mentionTrendChart.clear()
       }
     }
 
@@ -240,22 +297,80 @@ export function usePortalCharts(refs: PortalChartRefs) {
 
     const compareChart = getChart(refs.competitor?.value ?? null)
     if (compareChart) {
+      const rows = data.competitorCompareRows
+      if (!rows.length) {
+        compareChart.clear()
+      } else {
       compareChart.setOption({
         color: ['#36cfc9'],
-        grid: { left: 90, right: 30, top: 20, bottom: 20 },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-        xAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#e8eff7' } } },
-        yAxis: { type: 'category', data: data.competitorCompareRows.map(item => item.name), axisTick: { show: false } },
+        grid: { left: 90, right: 36, top: 20, bottom: 20 },
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: (params: unknown) => {
+            const list = params as Array<{ dataIndex: number }>
+            const index = list?.[0]?.dataIndex ?? 0
+            const row = rows[index]
+            if (!row) return ''
+            return `${row.name}<br/>提及率：${row.mention}%<br/>平均排名：${row.rank ?? '—'}<br/>提及次数：${row.mention_count ?? 0}`
+          },
+        },
+        xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' }, splitLine: { lineStyle: { color: '#e8eff7' } } },
+        yAxis: { type: 'category', data: rows.map(item => item.name), axisTick: { show: false } },
         series: [{
           type: 'bar',
-          data: data.competitorCompareRows.map(item => item.mention),
-          label: { show: true, position: 'right' },
+          data: rows.map(item => item.mention),
+          label: { show: true, position: 'right', formatter: '{c}%' },
           itemStyle: {
             borderRadius: [0, 8, 8, 0],
-            color: new graphic.LinearGradient(0, 0, 1, 0, [
-              { offset: 0, color: '#2f74ff' },
-              { offset: 1, color: '#49d8b7' },
-            ]),
+            color: (params: { dataIndex: number }) => {
+              const row = rows[params.dataIndex]
+              return row?.is_brand
+                ? new graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#2f74ff' }, { offset: 1, color: '#49d8b7' }])
+                : new graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#8aa0ba' }, { offset: 1, color: '#c5d4e4' }])
+            },
+          },
+        }],
+      })
+      }
+    }
+
+    const rankCompareChart = getChart(refs.competitorRank?.value ?? null)
+    if (rankCompareChart && data.competitorRankRows?.length) {
+      const rows = data.competitorRankRows
+      rankCompareChart.setOption({
+        grid: { left: 90, right: 36, top: 20, bottom: 20 },
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: (params: unknown) => {
+            const list = params as Array<{ dataIndex: number }>
+            const index = list?.[0]?.dataIndex ?? 0
+            const row = rows[index]
+            if (!row) return ''
+            return `${row.name}<br/>平均排名：#${row.rank}`
+          },
+        },
+        xAxis: {
+          type: 'value',
+          min: 0,
+          inverse: false,
+          axisLabel: { formatter: '#{value}' },
+          splitLine: { lineStyle: { color: '#e8eff7' } },
+        },
+        yAxis: { type: 'category', data: rows.map(item => item.name), axisTick: { show: false } },
+        series: [{
+          type: 'bar',
+          data: rows.map(item => item.rank),
+          label: { show: true, position: 'right', formatter: '#{c}' },
+          itemStyle: {
+            borderRadius: [0, 8, 8, 0],
+            color: (params: { dataIndex: number }) => {
+              const row = rows[params.dataIndex]
+              return row?.is_brand
+                ? new graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#2f74ff' }, { offset: 1, color: '#49d8b7' }])
+                : new graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#94a3b8' }, { offset: 1, color: '#cbd5e1' }])
+            },
           },
         }],
       })

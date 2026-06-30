@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     molizhishu_callback_url: str = ""
     molizhishu_timeout_seconds: float = 30.0
 
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_timeout_seconds: float = 60.0
+    deepseek_sentiment_keyword_enabled: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

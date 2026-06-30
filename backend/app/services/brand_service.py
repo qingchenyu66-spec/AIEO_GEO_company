@@ -2,11 +2,12 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
-from app.schemas.brand import BrandAssetSaveRequest, CompetitorSaveRequest
+from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
 
 
 def resolve_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int:
@@ -44,6 +45,68 @@ def list_keyword_groups(db: Session, tenant_id: int) -> list[BrandKeywordGroup]:
     )
 
 
+def default_keyword_group_name(index: int = 0, *, group_id: int | None = None) -> str:
+    if group_id:
+        return f"词组 {group_id}"
+    return f"词组 {index + 1}"
+
+
+def keyword_group_name(group: BrandKeywordGroup | dict[str, Any] | None, index: int = 0) -> str:
+    if group is None:
+        return default_keyword_group_name(index)
+    if isinstance(group, BrandKeywordGroup):
+        text = str(group.name or "").strip()
+        if text:
+            return text
+        if group.id:
+            return default_keyword_group_name(index, group_id=group.id)
+        return default_keyword_group_name(group.sort_order if group.sort_order is not None else index)
+    text = str(group.get("name") or "").strip()
+    if text:
+        return text
+    group_id = group.get("id")
+    if group_id:
+        return default_keyword_group_name(index, group_id=int(group_id))
+    sort_order = group.get("sort_order")
+    if sort_order is not None:
+        return default_keyword_group_name(int(sort_order))
+    return default_keyword_group_name(index)
+
+
+def keyword_group_monitor_keywords(group: BrandKeywordGroup | dict[str, Any] | None) -> list[str]:
+    """Return deduplicated monitor keywords for a keyword group."""
+    if group is None:
+        return []
+    if isinstance(group, BrandKeywordGroup):
+        raw = list(group.monitor_keywords_json or [])
+        if not raw:
+            primary = str(group.monitor_keyword or "").strip()
+            return [primary] if primary else []
+        return _dedupe([str(item or "").strip() for item in raw if str(item or "").strip()])
+    raw = list(group.get("monitor_keywords") or [])
+    if not raw:
+        primary = str(group.get("monitor_keyword") or "").strip()
+        return [primary] if primary else []
+    return _dedupe([str(item or "").strip() for item in raw if str(item or "").strip()])
+
+
+def keyword_group_primary_keyword(group: BrandKeywordGroup | dict[str, Any] | None) -> str:
+    keywords = keyword_group_monitor_keywords(group)
+    return keywords[0] if keywords else ""
+
+
+def keyword_group_display_label(group: BrandKeywordGroup | dict[str, Any] | None) -> str:
+    name = keyword_group_name(group)
+    if name:
+        return name
+    keywords = keyword_group_monitor_keywords(group)
+    if not keywords:
+        return ""
+    if len(keywords) == 1:
+        return keywords[0]
+    return f"{keywords[0]}等{len(keywords)}词"
+
+
 def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
     """旧数据没有词组表时，用旧字段临时拼出一组可用关系。"""
     monitor_keywords = _dedupe([asset.company_full_name, asset.brand_name, asset.brand_short_name, *(asset.monitor_keywords_json or [])])
@@ -53,7 +116,9 @@ def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
         result.append({
             "id": None,
             "tenant_id": asset.tenant_id,
+            "name": default_keyword_group_name(index),
             "monitor_keyword": keyword,
+            "monitor_keywords": [keyword],
             "exposure_terms": aliases if index == 0 else [keyword],
             "sort_order": index,
             "status": True,
@@ -63,14 +128,55 @@ def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
 
 def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
     """序列化监测词组。"""
+    monitor_keywords = keyword_group_monitor_keywords(group)
+    primary = monitor_keywords[0] if monitor_keywords else str(group.monitor_keyword or "").strip()
     return {
         "id": group.id,
         "tenant_id": group.tenant_id,
-        "monitor_keyword": group.monitor_keyword,
+        "name": keyword_group_name(group),
+        "monitor_keyword": primary,
+        "monitor_keywords": monitor_keywords,
         "exposure_terms": group.exposure_terms_json or [],
         "sort_order": group.sort_order,
         "status": group.status,
     }
+
+
+def ensure_keyword_group_payload(group: BrandKeywordGroup | dict[str, Any], index: int = 0) -> dict[str, Any]:
+    """统一输出词组结构，确保 monitor_keywords 始终完整返回。"""
+    if isinstance(group, BrandKeywordGroup):
+        return keyword_group_to_dict(group)
+    monitor_keywords = keyword_group_monitor_keywords(group)
+    primary = monitor_keywords[0] if monitor_keywords else str(group.get("monitor_keyword") or "").strip()
+    return {
+        "id": group.get("id"),
+        "tenant_id": group.get("tenant_id"),
+        "name": keyword_group_name(group, index),
+        "monitor_keyword": primary,
+        "monitor_keywords": monitor_keywords,
+        "exposure_terms": list(group.get("exposure_terms") or []),
+        "sort_order": group.get("sort_order", index),
+        "status": group.get("status", True),
+    }
+
+
+def editable_keyword_groups(db: Session, tenant_id: int) -> list[BrandKeywordGroup | dict[str, Any]]:
+    """企业管理页读取全部词组（含停用），无词组表数据时回退旧字段。"""
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        return []
+    rows = list_keyword_groups(db, tenant_id)
+    if rows:
+        return list(rows)
+    return _fallback_keyword_groups(asset)
+
+
+def _normalize_group_monitor_keywords(item: BrandKeywordGroupSaveRequest) -> list[str]:
+    keywords = _dedupe([str(value or "").strip() for value in (item.monitor_keywords or []) if str(value or "").strip()])
+    legacy = str(item.monitor_keyword or "").strip()
+    if legacy and legacy not in keywords:
+        keywords.insert(0, legacy)
+    return keywords
 
 
 def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveRequest) -> None:
@@ -80,25 +186,33 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
     source_groups = payload.keyword_groups
     if not source_groups:
         source_groups = [
-            type("_Group", (), {"id": None, "monitor_keyword": keyword, "exposure_terms": [keyword], "sort_order": index, "status": True})()
+            type("_Group", (), {"id": None, "monitor_keyword": keyword, "monitor_keywords": [keyword], "exposure_terms": [keyword], "sort_order": index, "status": True})()
             for index, keyword in enumerate(_dedupe([payload.company_full_name, payload.brand_name, *payload.monitor_keywords]))
         ]
     for index, item in enumerate(source_groups):
-        keyword = item.monitor_keyword.strip()
-        if not keyword:
+        keywords = _normalize_group_monitor_keywords(item)
+        if not keywords:
             continue
+        primary = keywords[0]
+        group_name = str(item.name or "").strip() or default_keyword_group_name(index)
         group = existing.get(item.id) if item.id else None
         if group is None:
             group = BrandKeywordGroup(
                 tenant_id=asset.tenant_id,
                 brand_asset_id=asset.id,
-                monitor_keyword=keyword,
-                exposure_terms_json=[],
+                name=group_name,
+                monitor_keyword=primary,
+                monitor_keywords_json=list(keywords),
+                exposure_terms_json=_dedupe(item.exposure_terms or keywords),
             )
             db.add(group)
         group.brand_asset_id = asset.id
-        group.monitor_keyword = keyword
-        group.exposure_terms_json = _dedupe(item.exposure_terms or [keyword])
+        group.name = group_name
+        group.monitor_keyword = primary
+        group.monitor_keywords_json = list(keywords)
+        flag_modified(group, "monitor_keywords_json")
+        group.exposure_terms_json = _dedupe(item.exposure_terms or keywords)
+        flag_modified(group, "exposure_terms_json")
         group.sort_order = item.sort_order if item.sort_order is not None else index
         group.status = item.status
         group.deleted = False
@@ -210,10 +324,16 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
     db.commit()
 
 
-def asset_to_dict(asset: BrandAsset | None, keyword_groups: list[BrandKeywordGroup] | None = None) -> dict[str, Any] | None:
+def asset_to_dict(
+    asset: BrandAsset | None,
+    keyword_groups: list[BrandKeywordGroup | dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     """序列化品牌资产。"""
     if asset is None:
         return None
+    normalized_groups: list[dict[str, Any]] = []
+    for index, item in enumerate(keyword_groups or []):
+        normalized_groups.append(ensure_keyword_group_payload(item, index))
     return {
         "id": asset.id,
         "tenant_id": asset.tenant_id,
@@ -224,7 +344,7 @@ def asset_to_dict(asset: BrandAsset | None, keyword_groups: list[BrandKeywordGro
         "aliases": asset.aliases_json,
         "product_keywords": asset.product_keywords_json,
         "monitored_platforms": asset.monitored_platforms_json,
-        "keyword_groups": [keyword_group_to_dict(item) for item in (keyword_groups or [])],
+        "keyword_groups": normalized_groups,
         "region_code": asset.region_code,
         "official_url": asset.official_url,
         "description": asset.description,
@@ -257,9 +377,38 @@ def active_keyword_groups(db: Session, tenant_id: int) -> list[dict[str, Any]]:
     groups = [
         keyword_group_to_dict(item)
         for item in list_keyword_groups(db, tenant_id)
-        if item.status and item.monitor_keyword
+        if item.status and keyword_group_monitor_keywords(item)
     ]
     return groups or _fallback_keyword_groups(asset)
+
+
+def collect_exposure_term_options(
+    keyword_groups: list[dict[str, Any]] | None = None,
+    *,
+    asset: BrandAsset | None = None,
+) -> list[str]:
+    """Collect deduplicated exposure terms for filter dropdowns."""
+    seen: set[str] = set()
+    terms: list[str] = []
+    for group in keyword_groups or []:
+        if not group.get("status", True):
+            continue
+        for term in group.get("exposure_terms") or []:
+            text = str(term or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                terms.append(text)
+    if asset is not None:
+        for raw in (
+            asset.brand_short_name,
+            asset.brand_name,
+            *(asset.aliases_json or []),
+        ):
+            text = str(raw or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                terms.append(text)
+    return sorted(terms, key=lambda item: item.casefold())
 
 
 def _is_industry_monitor_keyword(text: str, asset: BrandAsset) -> bool:
@@ -285,8 +434,8 @@ def brand_exposure_terms(asset: BrandAsset, groups: list[dict[str, Any]]) -> lis
     for group in groups:
         if not group.get("status", True):
             continue
-        monitor_keyword = str(group.get("monitor_keyword") or "").strip()
-        if _is_industry_monitor_keyword(monitor_keyword, asset):
+        keywords = keyword_group_monitor_keywords(group)
+        if keywords and all(_is_industry_monitor_keyword(keyword, asset) for keyword in keywords):
             continue
         for term in group.get("exposure_terms") or []:
             text = str(term or "").strip()
@@ -313,14 +462,14 @@ def molizhishu_monitor_terms(
     )
     exposure = brand_exposure_terms(asset, groups)
     if keyword_group and keyword_group.get("status", True):
-        group_keyword = str(keyword_group.get("monitor_keyword") or "").strip()
-        if group_keyword and not _is_industry_monitor_keyword(group_keyword, asset):
-            if not monitor_keyword:
-                monitor_keyword = group_keyword
-            for term in keyword_group.get("exposure_terms") or []:
-                text = str(term or "").strip()
-                if text and text not in exposure:
-                    exposure.append(text)
+        for group_keyword in keyword_group_monitor_keywords(keyword_group):
+            if group_keyword and not _is_industry_monitor_keyword(group_keyword, asset):
+                if not monitor_keyword:
+                    monitor_keyword = group_keyword
+        for term in keyword_group.get("exposure_terms") or []:
+            text = str(term or "").strip()
+            if text and text not in exposure:
+                exposure.append(text)
     aliases = _dedupe([
         str(asset.brand_name or "").strip(),
         str(asset.company_full_name or "").strip(),

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
-import { BookOpen, HelpCircle, Link2 } from '@lucide/vue'
+import { BookOpen } from '@lucide/vue'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
-import { sourceCategoryLabels } from '../composables/useMonitorAnalytics'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
-import { formatDateTime, formatFileSize } from '../portalUtils'
+import { formatFileSize } from '../portalUtils'
+import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
+import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
 
@@ -15,22 +16,15 @@ const {
   brandAsset,
   brandCompetitors,
   functionalPage,
-  sourceStructureRows,
-  sourceRanking,
-  sourceTrendRows,
-  contentPreferenceRows,
-  sourcePlatformTabs,
-  selectedSourcePlatform,
-  sourceKeywordFilter,
-  sourceStartDate,
-  sourceEndDate,
-  resetSourceFilters,
   negativeRate,
   sourceTotalCount,
+  sourceRanking,
   diagnosisScore,
   platformCoverage,
+  platformMatrix,
+  loadingPlatformMatrix,
+  loadPlatformMatrix,
   platformRanking,
-  competitorCompareRows,
   operationLogs,
   systemSettings,
   loadPlatformSystemData,
@@ -42,15 +36,9 @@ const {
 } = analytics
 
 const diagnosisChartRef = ref<HTMLDivElement | null>(null)
-const competitorChartRef = ref<HTMLDivElement | null>(null)
-const sourceStructureChartRef = ref<HTMLDivElement | null>(null)
-const sourceTrendChartRef = ref<HTMLDivElement | null>(null)
 
 const { renderCharts } = usePortalCharts({
   diagnosis: diagnosisChartRef,
-  competitor: competitorChartRef,
-  sourceStructure: sourceStructureChartRef,
-  sourceTrend: sourceTrendChartRef,
 })
 
 const chartData = computed(() => ({
@@ -59,10 +47,10 @@ const chartData = computed(() => ({
   sentimentPieRows: [],
   positiveRate: 0,
   diagnosisScore: diagnosisScore.value,
-  competitorCompareRows: competitorCompareRows.value,
-  sourceStructureRows: sourceStructureRows.value,
-  sourceTrendRows: sourceTrendRows.value,
-  sourceCategoryLabels,
+  competitorCompareRows: [],
+  sourceStructureRows: [],
+  sourceTrendRows: [],
+  sourceCategoryLabels: {},
 }))
 
 async function refreshCharts() {
@@ -72,13 +60,6 @@ async function refreshCharts() {
 watch([
   platformRanking,
   diagnosisScore,
-  competitorCompareRows,
-  sourceStructureRows,
-  sourceTrendRows,
-  selectedSourcePlatform,
-  sourceKeywordFilter,
-  sourceStartDate,
-  sourceEndDate,
 ], refreshCharts, { deep: true })
 
 onMounted(() => {
@@ -96,96 +77,10 @@ onUnmounted(() => {
     <section class="feature-grid">
       <article class="panel feature-primary">
         <div class="panel-head">
-          <h2>{{ functionalPage.mode === 'diagnosis' ? '品牌健康分' : functionalPage.mode === 'report' ? '报告预览' : functionalPage.mode === 'knowledge' ? '文章文件上传' : functionalPage.mode === 'sources' ? '信源明细' : '业务明细' }}</h2>
+          <h2>{{ functionalPage.mode === 'diagnosis' ? '品牌健康分' : functionalPage.mode === 'report' ? '报告预览' : functionalPage.mode === 'knowledge' ? '文章文件上传' : '业务明细' }}</h2>
         </div>
 
-        <div v-if="functionalPage.mode === 'sources'" class="source-table-workbench">
-          <div class="source-tip">
-            <HelpCircle />
-            <span>AI 大模型结果存在动态变化，不同时间、不同平台的信源结果会有差异；本页展示已同步的真实检测结果。</span>
-          </div>
-          <div class="source-analytics-grid">
-            <section class="source-analysis-card source-structure-card">
-              <div class="panel-head"><h2>信源结构对比</h2><span>不同模型引用来源占比</span></div>
-              <div v-if="sourceStructureRows.length" ref="sourceStructureChartRef" class="echart-box source-structure-echart"></div>
-              <div v-else class="mini-empty chart-empty">暂无信源结构数据。</div>
-            </section>
-            <section class="source-analysis-card">
-              <div class="panel-head"><h2>高频信源排行</h2><span>近30天引用次数</span></div>
-              <div v-if="sourceRanking.length" class="source-top-list">
-                <div v-for="(source, index) in sourceRanking.slice(0, 5)" :key="source.url">
-                  <i>{{ index + 1 }}</i>
-                  <b>{{ source.title }}</b>
-                  <strong>{{ source.count }}</strong>
-                </div>
-              </div>
-              <div v-else class="mini-empty">暂无高频信源。</div>
-            </section>
-            <section class="source-analysis-card">
-              <div class="panel-head"><h2>信源引用趋势</h2><span>近7日新增引用</span></div>
-              <div v-if="sourceTrendRows.some(item => item.value > 0)" ref="sourceTrendChartRef" class="echart-box source-trend-echart"></div>
-              <div v-else class="mini-empty chart-empty">暂无信源趋势数据。</div>
-            </section>
-            <section class="source-analysis-card">
-              <div class="panel-head"><h2>内容类型偏好</h2><span>按引用占比</span></div>
-              <div class="content-preference-list">
-                <div v-for="item in contentPreferenceRows" :key="item.name">
-                  <span>{{ item.name }}</span>
-                  <i><b :style="{ width: `${item.percent}%` }"></b></i>
-                  <em>{{ item.percent }}%</em>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div v-if="sourcePlatformTabs.length > 1" class="source-platform-cards">
-            <button
-              v-for="tab in sourcePlatformTabs"
-              :key="tab.code"
-              :class="{ active: selectedSourcePlatform === tab.code }"
-              @click="selectedSourcePlatform = tab.code"
-            >
-              <Link2 />
-              <b>{{ tab.name }}</b>
-              <span>{{ tab.count }} 次引用</span>
-            </button>
-          </div>
-          <div class="source-query-bar">
-            <input v-model="sourceKeywordFilter" placeholder="输入来源 / 监控词 / 问题关键词搜索" />
-            <input v-model="sourceStartDate" type="date" />
-            <span>→</span>
-            <input v-model="sourceEndDate" type="date" />
-            <button class="filter-search-btn">查询</button>
-            <button class="filter-reset-btn" @click="resetSourceFilters">重置</button>
-          </div>
-          <div v-if="sourceRanking.length" class="source-data-table">
-            <div class="source-data-head">
-              <span>序号</span><span>信源 / 关联问题</span><span>被引用平台</span><span>监控词</span><span>最近检测时间</span><span>引用次数</span><span>操作</span>
-            </div>
-            <div v-for="(source, index) in sourceRanking" :key="source.url" class="source-data-row">
-              <span>{{ index + 1 }}</span>
-              <div>
-                <b>{{ source.title }}</b>
-                <small>{{ (source.questions || []).slice(0, 2).join('；') || '暂无关联问题' }}</small>
-              </div>
-              <div class="source-table-tags">
-                <i v-for="platform in (source.platforms || [])" :key="`${source.url}-${platform}`">{{ platformLabelMap[platform] || platform }}</i>
-              </div>
-              <div class="source-table-tags muted-tags">
-                <i v-for="keyword in (source.keywords || []).slice(0, 4)" :key="`${source.url}-${keyword}`">{{ keyword }}</i>
-              </div>
-              <span>{{ formatDateTime(source.latest_time) }}</span>
-              <strong>{{ source.count }}</strong>
-              <div class="source-actions">
-                <a :href="source.url" target="_blank">快照凭证</a>
-                <a :href="source.url" target="_blank">转到平台</a>
-              </div>
-            </div>
-          </div>
-          <div v-else class="mini-empty">暂无符合条件的信源。</div>
-        </div>
-
-        <div v-else-if="functionalPage.mode === 'diagnosis'" class="diagnosis-workbench">
+        <div v-if="functionalPage.mode === 'diagnosis'" class="diagnosis-workbench">
           <div v-if="diagnosisScore" ref="diagnosisChartRef" class="echart-box diagnosis-echart"></div>
           <div v-else class="mini-empty chart-empty">暂无可诊断的真实结果。</div>
           <div class="diagnosis-bars">
@@ -202,13 +97,12 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-else-if="functionalPage.mode === 'platforms'" class="platform-orbit-card">
-          <div class="orbit-center">AI<br />平台矩阵</div>
-          <div v-for="(item, index) in platformCoverage.slice(0, 6)" :key="item.code" class="orbit-platform-card" :class="`orbit-pos-${index}`">
-            <b>{{ item.name }}</b>
-            <span>{{ item.status }} · {{ item.rate }}%</span>
-          </div>
-        </div>
+        <PlatformMatrixPanel
+          v-else-if="functionalPage.mode === 'platforms'"
+          :matrix="platformMatrix"
+          :loading="loadingPlatformMatrix"
+          @refresh="loadPlatformMatrix()"
+        />
 
         <div v-else-if="functionalPage.mode === 'report'" class="report-preview">
           <h3>{{ brandAsset?.brand_name || '艾迪亚' }} GEO 监测诊断报告</h3>
@@ -218,16 +112,6 @@ onUnmounted(() => {
             <template v-for="item in platformRanking.slice(0, 4)" :key="item.platform">
               <b>{{ platformLabelMap[item.platform] || item.platform }}</b><b>{{ item.mention_rate }}%</b><b>{{ item.avg_rank || '-' }}</b><b>补充可引用内容</b>
             </template>
-          </div>
-        </div>
-
-        <div v-else-if="functionalPage.mode === 'competitor'" class="competitor-compare-panel">
-          <div v-if="competitorCompareRows.some(row => row.mention > 0)" ref="competitorChartRef" class="echart-box competitor-echart"></div>
-          <div v-else class="mini-empty chart-empty">暂无真实竞品排名结果，定时监测完成后展示对比图。</div>
-          <div class="gap-cards">
-            <div><span>TOP 竞品</span><b>{{ competitorCompareRows[1]?.name || '暂无' }}</b></div>
-            <div><span>竞品数量</span><b>{{ brandCompetitors.length }} 个</b></div>
-            <div><span>依据来源</span><b>企业竞品库与模力返回排名</b></div>
           </div>
         </div>
 

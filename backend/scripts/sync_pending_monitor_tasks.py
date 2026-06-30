@@ -23,7 +23,7 @@ from app.services.monitor_service import TERMINAL_STATUSES, serialize_task, sync
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync pending GEO monitor tasks from Molizhishu.")
-    parser.add_argument("--limit", type=int, default=20, help="Maximum tasks to sync in one run.")
+    parser.add_argument("--limit", type=int, default=50, help="Maximum tasks to sync in one run.")
     parser.add_argument("--task-id", default=None, help="Only sync one task.")
     parser.add_argument("--terminal-grace-hours", type=int, default=24, help="Also recheck recent partial/failed/stopped tasks within this many hours.")
     return parser.parse_args()

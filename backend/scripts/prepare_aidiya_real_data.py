@@ -50,11 +50,11 @@ PROMPTS = [
 ]
 
 PLATFORMS = [
-    PlatformConfig(platform="doubao_mobile", mode="search", screenshot=1),
-    PlatformConfig(platform="deepseek_mobile", mode="search", screenshot=1),
-    PlatformConfig(platform="yuanbao", mode="search", screenshot=1),
-    PlatformConfig(platform="kimi", mode="search", screenshot=1),
-    PlatformConfig(platform="baiduai", mode="search", screenshot=1),
+    PlatformConfig(platform="doubao_mobile", mode="standard", screenshot=1),
+    PlatformConfig(platform="deepseek_mobile", mode="standard", screenshot=1),
+    PlatformConfig(platform="yuanbao", mode="standard", screenshot=1),
+    PlatformConfig(platform="kimi", mode="standard", screenshot=1),
+    PlatformConfig(platform="baiduai", mode="standard", screenshot=1),
 ]
 
 

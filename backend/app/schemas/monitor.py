@@ -11,7 +11,7 @@ class PlatformConfig(BaseModel):
     """提交给模力指数的平台配置。"""
 
     platform: str = Field(min_length=2, max_length=50)
-    mode: MonitorMode = "search"
+    mode: MonitorMode = "standard"
     screenshot: ScreenshotMode = 1
 
 

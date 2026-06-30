@@ -26,6 +26,13 @@ class MolizhishuClient:
         self.token = settings.molizhishu_token.strip()
         self.timeout = settings.molizhishu_timeout_seconds
 
+    @property
+    def api_root(self) -> str:
+        marker = "/api/business/monitor"
+        if marker in self.base_url:
+            return self.base_url.split(marker, 1)[0].rstrip("/")
+        return self.base_url.rsplit("/api", 1)[0].rstrip("/")
+
     def _headers(self) -> dict[str, str]:
         if not self.token:
             raise MolizhishuApiError("未配置 MOLIZHISHU_TOKEN，无法调用模力指数接口")
@@ -35,8 +42,17 @@ class MolizhishuClient:
             "Content-Type": "application/json",
         }
 
-    def _request(self, method: str, path: str, *, json_body: dict[str, Any] | None = None, source: str) -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        source: str,
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
+        root = (base_url or self.base_url).rstrip("/")
+        url = path if path.startswith("http") else f"{root}{path if path.startswith('/') else f'/{path}'}"
         started = time.perf_counter()
         http_status: int | None = None
         payload: dict[str, Any] | None = None
@@ -78,3 +94,12 @@ class MolizhishuClient:
 
     def get_task_result(self, task_id: str) -> dict[str, Any]:
         return self._request("GET", f"/task/result/{task_id}", source="local-api:manual-sync:result")
+
+    def get_account_balance(self) -> dict[str, Any]:
+        """Query current Molizhishu account balance."""
+        return self._request(
+            "GET",
+            "/api/reconciliation/balance",
+            source="local-api:molizhishu-balance",
+            base_url=self.api_root,
+        )

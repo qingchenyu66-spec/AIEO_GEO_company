@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onMounted, provide, ref, watch } from '
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
+import { useWorkspaceFullscreen } from '../composables/useWorkspaceFullscreen'
 import type { MenuInfo } from '../services/auth'
 import { getTenants } from '../services/management'
 import {
@@ -13,7 +14,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, WorkspaceFullscreenKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -35,7 +36,8 @@ const UserCreatePage = defineAsyncComponent(() => import('./portal/UserCreatePag
 const UserListPage = defineAsyncComponent(() => import('./portal/UserListPage.vue'))
 const BrandAuditPage = defineAsyncComponent(() => import('./portal/pages/BrandAuditPage.vue'))
 const MonitorRealtimePage = defineAsyncComponent(() => import('./portal/pages/MonitorRealtimePage.vue'))
-const SentimentMonitorPage = defineAsyncComponent(() => import('./portal/pages/SentimentMonitorPage.vue'))
+const CompetitorAnalysisPage = defineAsyncComponent(() => import('./portal/pages/CompetitorAnalysisPage.vue'))
+const SourceAnalysisPage = defineAsyncComponent(() => import('./portal/pages/SourceAnalysisPage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
 
@@ -50,13 +52,30 @@ const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => auth.allowedMenus
   .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code))
-  .map(menu => menu.menu_code.endsWith('.sources') ? { ...menu, menu_name: '信源分析' } : menu))
+  .map(menu => {
+    if (menu.menu_code.endsWith('.sources')) return { ...menu, menu_name: '信源分析' }
+    if (menu.menu_code.endsWith('.competitor')) return { ...menu, menu_name: '品牌洞察' }
+    return menu
+  }))
 const userManagementMenu = computed(() => menus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
-const isSentimentMonitorPage = computed(() => ['customer.sentiment', 'platform.sentiment'].includes(activeMenuCode.value))
+const isCompetitorPage = computed(() => ['customer.competitor', 'platform.competitor'].includes(activeMenuCode.value))
+const isSourcePage = computed(() => ['customer.sources', 'platform.sources'].includes(activeMenuCode.value))
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
+const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
+
+const workspaceFullscreen = useWorkspaceFullscreen()
+provide(WorkspaceFullscreenKey, workspaceFullscreen)
+
+const portalFullscreen = computed(() => isCustomerWorkspacePage.value && workspaceFullscreen.isFullscreen.value)
+
+watch(activeMenuCode, code => {
+  if (code !== 'customer.workspace') {
+    void workspaceFullscreen.exit()
+  }
+})
 
 const brandAsset = ref<BrandAsset | null>(null)
 const brandCompetitors = ref<BrandCompetitor[]>([])
@@ -215,6 +234,8 @@ onMounted(() => {
     :identity-count="auth.session?.identities.length || 0"
     :identities="auth.session?.identities || []"
     :current-identity-id="auth.session?.identity?.id"
+    :immersive="isCustomerWorkspacePage"
+    :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
     @toggle-user-submenu="toggleUserSubmenu"
     @select-menu="selectMenu"
@@ -230,7 +251,8 @@ onMounted(() => {
 
     <BrandAuditPage v-else-if="isBrandAssetPage" ref="brandAuditRef" @brand-updated="onBrandUpdated" />
     <MonitorRealtimePage v-else-if="isRealtimeMonitorPage" />
-    <SentimentMonitorPage v-else-if="isSentimentMonitorPage" />
+    <CompetitorAnalysisPage v-else-if="isCompetitorPage" />
+    <SourceAnalysisPage v-else-if="isSourcePage" />
 
     <template v-else>
       <template v-if="isDashboardPage">

@@ -18,11 +18,6 @@ SCHEDULE_TYPE_LABELS = {
     "monthly": "每月指定日",
 }
 
-RANKING_PROMPT_MARKERS = (
-    "相关公司推荐有哪些",
-    "推荐有哪些",
-)
-
 NON_RANKING_PROMPT_MARKERS = (
     "是做什么的",
     "这家公司怎么样",
@@ -36,15 +31,13 @@ NON_RANKING_PROMPT_MARKERS = (
 
 
 def prompt_monitor_intent(prompt: str | None) -> str:
-    """Classify monitor prompt: ranking list questions vs brand exposure questions."""
+    """Classify monitor prompt: monitor keywords are ranking questions; legacy templates stay exposure."""
     text = (prompt or "").strip()
     if not text:
         return "exposure"
     if any(marker in text for marker in NON_RANKING_PROMPT_MARKERS):
         return "exposure"
-    if any(marker in text for marker in RANKING_PROMPT_MARKERS):
-        return "ranking"
-    return "exposure"
+    return "ranking"
 
 
 def extract_schedule_window_key(schedule_key: str | None) -> str | None:

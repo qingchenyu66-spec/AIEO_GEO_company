@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, WalletCards, Zap } from '@lucide/vue'
-import { getPlatformOverview, type PlatformOverview } from '../../services/management'
+import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
+import { getMolizhishuBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
 
 const props = defineProps<{
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>()
 
 const overview = ref<PlatformOverview | null>(null)
+const molizhishuBalance = ref<MolizhishuBalance | null>(null)
 const loading = ref(false)
 const errorText = ref('')
 
@@ -56,7 +58,12 @@ const customerDataRows = computed(() => {
 
 const quotaRows = computed(() => {
   const quota = overview.value?.quota_overview
+  const balance = molizhishuBalance.value ?? overview.value?.molizhishu_balance
+  const balanceValue = balance?.available
+    ? `¥ ${balance.current_balance_text ?? balance.current_balance ?? '--'}`
+    : (balance?.error ? '查询失败' : '--')
   return [
+    { label: '模力账户余额', value: balanceValue, highlight: true, note: balance?.fetched_at ? `更新于 ${balance.fetched_at}` : undefined },
     { label: '累计消耗', value: quota?.used_amount ?? 0 },
     { label: '今日消耗', value: quota?.today_amount ?? 0 },
     { label: '预计月消耗', value: quota?.estimated_month_amount ?? 0 },
@@ -68,7 +75,12 @@ async function loadOverview() {
   loading.value = true
   errorText.value = ''
   try {
-    overview.value = await getPlatformOverview()
+    const [overviewData, balanceData] = await Promise.all([
+      getPlatformOverview(),
+      getMolizhishuBalance().catch(() => null),
+    ])
+    overview.value = overviewData
+    molizhishuBalance.value = balanceData ?? overviewData.molizhishu_balance ?? null
   } catch (error: any) {
     errorText.value = extractErrorDetail(error)
   } finally {
@@ -183,13 +195,15 @@ onMounted(loadOverview)
       </article>
 
       <article class="panel">
-        <div class="panel-head"><div><h2>费用额度</h2><p>接口消耗、预计月消耗与单条均价</p></div><WalletCards /></div>
+        <div class="panel-head"><div><h2>费用额度</h2><p>模力账户余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
         <div class="ops-quota-grid">
-          <div v-for="row in quotaRows" :key="row.label">
+          <div v-for="row in quotaRows" :key="row.label" :class="{ 'is-highlight': row.highlight }">
             <span>{{ row.label }}</span>
             <b>{{ row.value }}</b>
+            <small v-if="row.note">{{ row.note }}</small>
           </div>
         </div>
+        <p v-if="(molizhishuBalance ?? overview?.molizhishu_balance)?.error" class="ops-balance-error">{{ (molizhishuBalance ?? overview?.molizhishu_balance)?.error }}</p>
       </article>
 
       <article class="panel">

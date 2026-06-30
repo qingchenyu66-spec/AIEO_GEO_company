@@ -10,8 +10,10 @@ from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.monitor import GeoMonitorScheduleRun
 from app.models.tenant import Tenant
 from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
-from app.services.brand_service import _is_industry_monitor_keyword, active_keyword_groups, molizhishu_monitor_terms
+from app.services.brand_service import active_keyword_groups, keyword_group_monitor_keywords, molizhishu_monitor_terms
+from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
+from app.services.platform_matrix_service import prepare_daily_platform_matrix_before_submit
 
 
 DEFAULT_DAILY_WINDOW_START = time(hour=9, minute=30)
@@ -98,43 +100,9 @@ def build_scheduled_prompts(
     max_prompts: int = 50,
     keyword_group: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Generate prompts per keyword group: brand groups ask brand questions; industry groups ask 2 industry questions."""
-    group_keyword = str((keyword_group or {}).get("monitor_keyword") or "").strip()
-    group_exposure = _dedupe_text((keyword_group or {}).get("exposure_terms") or [])
-    subject = (asset.company_full_name or "").strip() or (asset.brand_name or "").strip()
-    competitor_names = _dedupe_text([item.name for item in competitors if item.status and not item.deleted])
-    is_industry_group = _is_industry_monitor_keyword(group_keyword, asset) if group_keyword else bool(not subject)
-    prompts: list[str] = []
-
-    if is_industry_group:
-        if group_keyword:
-            prompts.append(f"{group_keyword}相关公司推荐有哪些？")
-            if subject:
-                prompts.append(f"{subject}在{group_keyword}领域表现怎么样？")
-    else:
-        if subject:
-            prompts.extend([
-                f"{subject}是做什么的？",
-                f"{subject}这家公司怎么样？",
-                f"{subject}值得推荐吗？",
-                f"{subject}有哪些优势和不足？",
-            ])
-        reputation_terms = _dedupe_text([
-            asset.brand_name,
-            asset.brand_short_name,
-            *group_exposure,
-            *(asset.aliases_json or []),
-        ])
-        for term in reputation_terms:
-            if _is_industry_monitor_keyword(term, asset):
-                continue
-            prompts.append(f"{term}的口碑评价怎么样？")
-        for competitor in competitor_names[:12]:
-            if subject:
-                prompts.append(f"{subject}和{competitor}对比哪个好？")
-                prompts.append(f"{subject}、{competitor}分别适合什么企业？")
-
-    return _dedupe_text(prompts)[:max_prompts]
+    """检测问题直接使用词组内的监测关键词，不再套用模板生成。"""
+    del asset, competitors
+    return _dedupe_text(keyword_group_monitor_keywords(keyword_group))[:max_prompts]
 
 
 def build_scheduled_payload(
@@ -146,9 +114,8 @@ def build_scheduled_payload(
 ) -> MonitorTaskCreateRequest:
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
     platforms = [
-        PlatformConfig(platform=code, mode="search", screenshot=1)
-        for code in (asset.monitored_platforms_json or [])
-        if str(code).strip()
+        PlatformConfig(platform=code, mode="standard", screenshot=1)
+        for code in filter_submittable_platforms(asset.monitored_platforms_json)
     ]
     monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
     return MonitorTaskCreateRequest(
@@ -173,9 +140,8 @@ def preview_scheduled_tasks(db: Session, *, tenant_id: int | None = None, max_pr
         group_count = max(1, len(keyword_groups))
         per_group_max_prompts = max(1, max_prompts // group_count)
         platforms = [
-            PlatformConfig(platform=code, mode="search", screenshot=1)
-            for code in (asset.monitored_platforms_json or [])
-            if str(code).strip()
+            PlatformConfig(platform=code, mode="standard", screenshot=1)
+            for code in filter_submittable_platforms(asset.monitored_platforms_json)
         ]
         platform_count = len(platforms)
         group_previews: list[dict[str, Any]] = []
@@ -260,6 +226,11 @@ def run_due_scheduled_tasks(
                     raise ValueError("企业未配置可生成检测问题的监测词或竞品")
                 if not payload.platforms:
                     raise ValueError("企业未配置已购买或允许监测的模型平台")
+                prepare_daily_platform_matrix_before_submit(
+                    db,
+                    tenant_id=asset.tenant_id,
+                    schedule_key=group_key,
+                )
                 task = submit_monitor_task(db, payload, current)
                 run.task_id = task.task_id
                 run.status = "submitted"

@@ -1,4 +1,4 @@
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
@@ -8,7 +8,7 @@ import {
   type TenantInfo,
 } from '../../../services/management'
 import {
-  createCompetitor, deleteCompetitor, getBrandAsset, saveBrandAsset, updateCompetitor,
+  createCompetitor, deleteCompetitor, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, updateCompetitor,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup,
 } from '../../../services/brand'
 import { getKnowledgeFiles, type KnowledgeFileRecord } from '../../../services/knowledge'
@@ -125,6 +125,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     saving?: boolean
   }>>([])
   const keywordGroupRows = ref<BrandKeywordGroup[]>([])
+  const editingGroupIndex = ref<number | null>(null)
   const competitorNameInput = ref('')
   const loadingBrand = ref(false)
   const brandForm = reactive({
@@ -246,11 +247,15 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   function makeKeywordGroup(monitorKeyword = '', exposureTerms: string[] = []): BrandKeywordGroup {
+    const keywords = monitorKeyword.trim() ? [monitorKeyword.trim()] : []
+    const index = keywordGroupRows.value.length
     return {
       id: null,
-      monitor_keyword: monitorKeyword,
-      exposure_terms: exposureTerms.length ? exposureTerms : (monitorKeyword ? [monitorKeyword] : []),
-      sort_order: keywordGroupRows.value.length,
+      name: defaultKeywordGroupName(index),
+      monitor_keyword: keywords[0] || '',
+      monitor_keywords: keywords,
+      exposure_terms: exposureTerms.length ? exposureTerms : keywords,
+      sort_order: index,
       status: true,
     }
   }
@@ -258,25 +263,50 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function normalizeKeywordGroups(asset: BrandAsset | null, tenantName = '') {
     const groups = asset?.keyword_groups?.length ? asset.keyword_groups : []
     if (groups.length) {
-      keywordGroupRows.value = groups.map((group, index) => ({
-        id: group.id || null,
-        tenant_id: group.tenant_id,
-        monitor_keyword: group.monitor_keyword,
-        exposure_terms: [...(group.exposure_terms || [])],
-        sort_order: group.sort_order ?? index,
-        status: group.status,
-      }))
+      keywordGroupRows.value = groups.map((group, index) => {
+        const monitorKeywords = keywordGroupMonitorKeywords(group)
+        return {
+          id: group.id || null,
+          tenant_id: group.tenant_id,
+          name: (group.name || '').trim() || defaultKeywordGroupName(index),
+          monitor_keyword: monitorKeywords[0] || '',
+          monitor_keywords: [...monitorKeywords],
+          exposure_terms: [...(group.exposure_terms || [])],
+          sort_order: group.sort_order ?? index,
+          status: group.status,
+        }
+      })
       return
     }
     const aliases = asset?.aliases?.length ? asset.aliases : []
     const keywords = [...new Set([asset?.company_full_name || tenantName, ...(asset?.monitor_keywords || []), ...(asset?.product_keywords || [])].filter(Boolean))]
     keywordGroupRows.value = keywords.map((keyword, index) => ({
       id: null,
+      name: defaultKeywordGroupName(index),
       monitor_keyword: keyword,
+      monitor_keywords: [keyword],
       exposure_terms: index === 0 && aliases.length ? aliases : [keyword],
       sort_order: index,
       status: true,
     }))
+  }
+
+  async function startEditGroupName(index: number) {
+    if (!canEditEnterpriseTab('keywords')) return
+    editingGroupIndex.value = index
+    await nextTick()
+    const input = document.getElementById(`keyword-group-name-${index}`) as HTMLInputElement | null
+    input?.focus()
+    input?.select()
+  }
+
+  function finishEditGroupName(group: BrandKeywordGroup, index: number, value: string) {
+    group.name = value.trim() || defaultKeywordGroupName(index)
+    editingGroupIndex.value = null
+  }
+
+  function cancelEditGroupName() {
+    editingGroupIndex.value = null
   }
 
   function addKeywordGroup() {
@@ -296,8 +326,74 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
+  function addExposureTermsFromText(group: BrandKeywordGroup, text: string) {
+    splitKeywordInput(text).forEach(term => addExposureTerm(group, term))
+  }
+
+  function commitExposureTermInput(group: BrandKeywordGroup, event: Event) {
+    const input = event.target as HTMLInputElement
+    addExposureTermsFromText(group, input.value)
+    input.value = ''
+  }
+
+  function handleExposureTermPaste(group: BrandKeywordGroup, event: ClipboardEvent) {
+    const text = event.clipboardData?.getData('text') || ''
+    const terms = splitKeywordInput(text)
+    if (terms.length <= 1) return
+    event.preventDefault()
+    addExposureTermsFromText(group, text)
+    const input = event.target as HTMLInputElement
+    input.value = ''
+  }
+
   function removeExposureTerm(group: BrandKeywordGroup, index: number) {
     group.exposure_terms.splice(index, 1)
+  }
+
+  function syncGroupPrimaryKeyword(group: BrandKeywordGroup) {
+    const keywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+    group.monitor_keywords = keywords
+    group.monitor_keyword = keywords[0] || ''
+  }
+
+  function splitKeywordInput(text: string) {
+    return text.split(/[\n\r、,，;；\t]+/).map(item => item.trim()).filter(Boolean)
+  }
+
+  function addMonitorKeyword(group: BrandKeywordGroup, term: string) {
+    const text = term.trim()
+    if (!text) return
+    if (!group.monitor_keywords) group.monitor_keywords = []
+    if (!group.monitor_keywords.some(item => item.toLowerCase() === text.toLowerCase())) {
+      group.monitor_keywords.push(text)
+    }
+    syncGroupPrimaryKeyword(group)
+  }
+
+  function addMonitorKeywordsFromText(group: BrandKeywordGroup, text: string) {
+    splitKeywordInput(text).forEach(term => addMonitorKeyword(group, term))
+  }
+
+  function commitMonitorKeywordInput(group: BrandKeywordGroup, event: Event) {
+    const input = event.target as HTMLInputElement
+    addMonitorKeywordsFromText(group, input.value)
+    input.value = ''
+  }
+
+  function handleMonitorKeywordPaste(group: BrandKeywordGroup, event: ClipboardEvent) {
+    const text = event.clipboardData?.getData('text') || ''
+    const terms = splitKeywordInput(text)
+    if (terms.length <= 1) return
+    event.preventDefault()
+    addMonitorKeywordsFromText(group, text)
+    const input = event.target as HTMLInputElement
+    input.value = ''
+  }
+
+  function removeMonitorKeyword(group: BrandKeywordGroup, index: number) {
+    if (!group.monitor_keywords) return
+    group.monitor_keywords.splice(index, 1)
+    syncGroupPrimaryKeyword(group)
   }
 
   function normalizeTimeValue(value: string) {
@@ -462,14 +558,19 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       return
     }
     const keywordGroups = keywordGroupRows.value
-      .map((group, index) => ({
-        id: group.id || null,
-        monitor_keyword: group.monitor_keyword.trim(),
-        exposure_terms: group.exposure_terms.map(item => item.trim()).filter(Boolean),
-        sort_order: index,
-        status: group.status,
-      }))
-      .filter(group => group.monitor_keyword)
+      .map((group, index) => {
+        const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+        return {
+          id: group.id || null,
+          name: (group.name || '').trim() || defaultKeywordGroupName(index),
+          monitor_keyword: monitorKeywords[0] || '',
+          monitor_keywords: monitorKeywords,
+          exposure_terms: group.exposure_terms.map(item => item.trim()).filter(Boolean),
+          sort_order: index,
+          status: group.status,
+        }
+      })
+      .filter(group => group.monitor_keywords.length)
     if (!keywordGroups.length) {
       ElMessage.warning('请至少配置一个监测词组')
       return
@@ -487,12 +588,12 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         const tenantIndex = tenants.value.findIndex(item => item.id === tenant.id)
         if (tenantIndex >= 0) tenants.value.splice(tenantIndex, 1, tenant)
       }
-      const response = await saveBrandAsset({
+      await saveBrandAsset({
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
         brand_name: brandForm.company_full_name.trim(),
         brand_short_name: null,
-        monitor_keywords: keywordGroups.map(group => group.monitor_keyword),
+        monitor_keywords: keywordGroups.flatMap(group => group.monitor_keywords),
         aliases: [...new Set(keywordGroups.flatMap(group => group.exposure_terms))],
         product_keywords: [],
         monitored_platforms: brandForm.monitored_platforms,
@@ -506,12 +607,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         schedule_weekdays: brandForm.schedule_weekdays,
         schedule_month_days: numberList(brandForm.schedule_month_days_text, 1, 31),
       })
-      brandAsset.value = response.asset
-      brandCompetitors.value = response.competitors
-      fillBrandForm(response.asset, response.tenant_id)
-      fillCompetitorRows(response.competitors)
+      await loadBrandAssetData()
       ElMessage.success(successText)
-      notifyBrandUpdated()
     } catch (error: unknown) {
       notifyError(error, '品牌资产保存失败')
     } finally {
@@ -719,10 +816,22 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     canRestoreTenantService,
     stopTenantActionLabel,
     tenantServicePeriod,
+    editingGroupIndex,
+    keywordGroupDisplayName,
+    startEditGroupName,
+    finishEditGroupName,
+    cancelEditGroupName,
     addKeywordGroup,
     removeKeywordGroup,
     addExposureTerm,
     removeExposureTerm,
+    addMonitorKeyword,
+    addMonitorKeywordsFromText,
+    commitMonitorKeywordInput,
+    handleMonitorKeywordPaste,
+    removeMonitorKeyword,
+    commitExposureTermInput,
+    handleExposureTermPaste,
     addScheduleTime,
     removeScheduleTime,
     loadBrandAssetData,

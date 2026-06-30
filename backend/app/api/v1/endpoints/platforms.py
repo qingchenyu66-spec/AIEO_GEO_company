@@ -8,6 +8,13 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.models.platform import AlertThreshold, GeoPlatform
 from app.schemas.common import ApiResponse
+from app.services.molizhishu_balance_service import fetch_molizhishu_balance
+from app.services.molizhishu_platforms import (
+    get_platform_catalog_meta,
+    get_supported_platform_catalog,
+    refresh_platform_catalog,
+)
+from app.services.platform_matrix_service import build_platform_matrix
 
 router = APIRouter(prefix="/platforms")
 alert_router = APIRouter(prefix="/alerts")
@@ -47,6 +54,46 @@ def list_platforms(
         }
         for r in rows
     ])
+
+
+@router.get("/matrix", response_model=ApiResponse[dict])
+def platform_matrix(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """平台运营端：支持平台目录 + 当日服务可用性探测结果。"""
+    try:
+        data = build_platform_matrix(db, current)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/molizhishu-balance", response_model=ApiResponse[dict])
+def molizhishu_balance(
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """查询模力指数账户当前余额。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
+    return ApiResponse(data=fetch_molizhishu_balance())
+
+
+@router.get("/supported", response_model=ApiResponse[dict])
+def supported_platforms(
+    refresh: bool = False,
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """从模力指数官方文档同步的支持平台目录。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
+    if refresh:
+        refresh_platform_catalog(force=True)
+    catalog = get_supported_platform_catalog()
+    return ApiResponse(data={
+        **get_platform_catalog_meta(),
+        "platforms": catalog,
+    })
 
 
 @router.put("/{platform_id}", response_model=ApiResponse[dict])

@@ -25,10 +25,47 @@ export interface BrandAsset {
 export interface BrandKeywordGroup {
   id: number | null
   tenant_id?: number
+  name?: string
   monitor_keyword: string
+  monitor_keywords?: string[]
   exposure_terms: string[]
   sort_order: number
   status: boolean
+}
+
+export function defaultKeywordGroupName(index: number) {
+  return `词组 ${index + 1}`
+}
+
+export function keywordGroupDisplayName(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
+  return (group.name || '').trim() || defaultKeywordGroupName(index)
+}
+
+export function keywordGroupFilterValue(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
+  return keywordGroupDisplayName(group, index)
+}
+
+export function keywordGroupMonitorKeywords(group: BrandKeywordGroup): string[] {
+  const fromList = [...new Set((group.monitor_keywords || []).map(item => item.trim()).filter(Boolean))]
+  if (fromList.length) return fromList
+  const primary = (group.monitor_keyword || '').trim()
+  return primary ? [primary] : []
+}
+
+export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.sort_order ?? 0): string {
+  const title = keywordGroupDisplayName(group, index)
+  const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
+  if (!exposure.length) return title
+  return `${title}（露出：${exposure.join('、')}）`
+}
+
+export function findKeywordGroupByFilter(filterValue: string, groups: BrandKeywordGroup[]): BrandKeywordGroup | null {
+  const text = filterValue.trim()
+  if (!text) return null
+  return groups.find((group, index) => (
+    keywordGroupDisplayName(group, index) === text
+    || keywordGroupMonitorKeywords(group).includes(text)
+  )) || null
 }
 
 export interface BrandCompetitor {

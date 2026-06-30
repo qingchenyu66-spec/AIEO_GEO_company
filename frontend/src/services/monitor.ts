@@ -37,6 +37,7 @@ export interface MonitorTask {
   schedule_run_status?: string | null
   schedule_source?: 'run' | 'inferred' | 'created_at' | null
   keyword_group?: string | null
+  prompt_preview?: string | null
 }
 
 export interface MonitorSchedulePlan {
@@ -50,6 +51,7 @@ export interface MonitorSchedulePlan {
 
 export interface MonitorSubtask {
   subtask_id: string
+  task_id?: string
   platform: string
   mode: string
   prompt: string
@@ -104,7 +106,7 @@ export interface MonitorSummary {
     url: string
     count: number
     platforms?: string[]
-    keywords?: string[]
+    exposure_terms?: string[]
     questions?: string[]
     latest_time?: string | null
   }>
@@ -147,6 +149,22 @@ export interface RankingMatrixColumn {
   group_name: string | null
 }
 
+export interface RankingMatrixCellSnapshot {
+  subtask_id: string
+  task_id?: string | null
+  mention_position: number | null
+  raw_mention_position?: number | null
+  brand_mentioned?: boolean
+  monitor_keyword?: string | null
+  prompt_intent?: 'ranking' | 'exposure'
+  schedule_window_key?: string | null
+  schedule_label?: string | null
+  updated_at: string | null
+  status: string
+  page_screenshot: string | null
+  sentiment: string | null
+}
+
 export interface RankingMatrixCell {
   subtask_id: string
   mention_position: number | null
@@ -158,22 +176,29 @@ export interface RankingMatrixCell {
   page_screenshot: string | null
   sentiment: string | null
   updated_at: string | null
+  sample_count?: number
+  rank_sample_count?: number
+  snapshots?: RankingMatrixCellSnapshot[]
 }
 
 export interface RankingMatrixRow {
   task_id: string
   platform?: string | null
+  day_key?: string | null
   schedule_key?: string | null
   schedule_window_key?: string | null
   schedule_label?: string | null
-  schedule_source?: 'run' | 'inferred' | 'created_at' | null
+  schedule_source?: 'run' | 'inferred' | 'created_at' | 'daily_avg' | null
   keyword_group?: string | null
   snapshot_at: string | null
+  sample_count?: number
   cells: Record<string, RankingMatrixCell>
 }
 
 export interface RankingMatrixKeywordGroupOption {
   monitor_keyword: string
+  name?: string
+  monitor_keywords?: string[]
   exposure_terms: string[]
 }
 
@@ -190,6 +215,7 @@ export interface RankingMatrix {
   schedule_plan?: MonitorSchedulePlan
   prompt_groups: Array<{ name: string; prompts: string[] }>
   keyword_group_options?: RankingMatrixKeywordGroupOption[]
+  exposure_term_options?: string[]
   purchased_platforms: string[]
 }
 
@@ -208,75 +234,99 @@ export interface RankingMatrixQuery {
   limit_rows?: number
 }
 
-export interface SentimentOverviewItem {
+export interface WorkspaceBriefSchedule {
+  schedule_window_key: string
+  schedule_label: string | null
+  completed_subtasks: number
+  total_subtasks: number
+}
+
+export interface WorkspaceBriefKpis {
+  ranking_sample_count: number
+  brand_mention_rate: number
+  avg_brand_rank: number | null
+  top3_rate: number
+  exposure_sample_count: number
+  negative_count: number
+  negative_rate: number
+  source_count: number
+  keyword_group_count: number
+  competitor_count: number
+}
+
+export interface WorkspaceRoundComparison {
+  has_previous: boolean
+  latest_schedule_label: string | null
+  previous_schedule_label: string | null
+  avg_brand_rank_delta: number | null
+  mention_rate_delta: number | null
+  top3_rate_delta: number | null
+  negative_count_delta: number | null
+}
+
+export interface WorkspacePlatformHighlight {
+  platform: string
+  mention_rate: number
+  avg_rank: number | null
+  sample_count: number
+  mention_rate_delta?: number | null
+  avg_rank_delta?: number | null
+}
+
+export interface WorkspaceKpiTrendPoint {
+  label: string
+  mention_rate: number
+  avg_brand_rank: number | null
+  top3_rate: number
+  negative_count: number
+}
+
+export interface WorkspaceSnapshot {
   subtask_id: string
+  task_id: string | null
   platform: string
   prompt: string
   keyword_group: string | null
   schedule_label: string | null
   schedule_window_key: string | null
-  schedule_source?: 'run' | 'inferred' | 'created_at' | null
-  sentiment: string
-  sentiment_raw: string | null
+  prompt_intent: 'ranking' | 'exposure'
+  brand_rank: number | null
   brand_mentioned: boolean
-  prompt_intent: 'exposure'
+  sentiment: string
   answer_excerpt: string
   updated_at: string | null
 }
 
-export interface SentimentPlatformStat {
-  platform: string
-  sample_count: number
-  positive_rate: number
-  negative_rate: number
-  neutral_rate: number
-  negative_count: number
+export interface WorkspaceTopSource {
+  title: string
+  url: string
+  count: number
+  platforms: string[]
 }
 
-export interface SentimentTrendPoint {
-  label: string
-  positive: number
-  neutral: number
-  negative: number
-  unknown?: number
+export interface WorkspaceAlert {
+  level: 'warn' | 'info'
+  message: string
 }
 
-export interface SentimentScheduleOption {
-  schedule_window_key: string
-  schedule_label: string
-}
-
-export interface SentimentOverview {
+export interface WorkspaceBrief {
   tenant_id: number
   brand_name: string | null
+  company_name: string | null
   start_at: string
   end_at: string
-  sample_count: number
-  recognized_count: number
-  unknown_count: number
-  negative_count: number
-  sentiment_counts: Record<string, number>
-  positive_rate: number
-  negative_rate: number
-  neutral_rate: number
-  platform_stats: SentimentPlatformStat[]
-  sentiment_trend: SentimentTrendPoint[]
-  schedule_options: SentimentScheduleOption[]
-  keyword_group_options: RankingMatrixKeywordGroupOption[]
-  purchased_platforms: string[]
+  latest_schedule: WorkspaceBriefSchedule | null
+  previous_schedule?: WorkspaceBriefSchedule | null
+  round_comparison?: WorkspaceRoundComparison
+  kpi_trends?: WorkspaceKpiTrendPoint[]
+  next_schedule_hint: string | null
   schedule_plan?: MonitorSchedulePlan
-  items: SentimentOverviewItem[]
-}
-
-export interface SentimentOverviewQuery {
-  platform?: string
-  start_date?: string
-  end_date?: string
-  monitor_group?: string
-  schedule_window_key?: string
-  sentiment?: 'all' | 'negative' | 'positive' | 'neutral'
-  tenant_id?: number
-  item_limit?: number
+  kpis: WorkspaceBriefKpis
+  purchased_platforms: string[]
+  platform_highlights: WorkspacePlatformHighlight[]
+  top_sources: WorkspaceTopSource[]
+  recent_snapshots: WorkspaceSnapshot[]
+  alerts: WorkspaceAlert[]
 }
 
 export async function createMonitorTask(payload: MonitorTaskCreatePayload): Promise<MonitorTask> {
@@ -299,8 +349,8 @@ export async function getRankingMatrix(params?: RankingMatrixQuery): Promise<Ran
   return response.data.data
 }
 
-export async function getSentimentOverview(params?: SentimentOverviewQuery): Promise<SentimentOverview> {
-  const response = await http.get('/v1/monitor/sentiment-overview', { params })
+export async function getWorkspaceBrief(): Promise<WorkspaceBrief> {
+  const response = await http.get('/v1/monitor/workspace-brief')
   return response.data.data
 }
 

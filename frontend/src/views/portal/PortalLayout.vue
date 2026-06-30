@@ -28,6 +28,8 @@ defineProps<{
   identities: Array<{ id: number; identity_type: string; position_name?: string | null; identity_name?: string | null }>
   currentIdentityId?: number
   menuIcon: (menu: MenuInfo) => Component
+  immersive?: boolean
+  fullscreen?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,8 +42,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="app-shell portal-shell">
-    <aside class="sidebar">
+  <div class="app-shell portal-shell" :class="{ 'portal-fullscreen': fullscreen }">
+    <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
         <div class="brand-mark">G</div>
         <div><strong>GEO Monitor</strong><span>{{ isPlatform ? '平台运营端' : '客户企业端' }}</span></div>
@@ -105,7 +107,7 @@ const emit = defineEmits<{
       </nav>
     </aside>
     <section class="workspace">
-      <header class="topbar">
+      <header v-if="!fullscreen" class="topbar">
         <div class="crumb">GEO Monitor / {{ pageTitle }}</div>
         <div class="top-actions">
           <el-dropdown v-if="identityCount > 1" trigger="click" @command="(id: number) => emit('switchIdentity', id)">
@@ -137,8 +139,8 @@ const emit = defineEmits<{
           </button>
         </div>
       </header>
-      <main class="content portal-content">
-        <div class="page-head">
+      <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
+        <div v-if="!immersive" class="page-head">
           <div><h1>{{ pageTitle }}</h1><p>{{ pageSubtitle }}</p></div>
           <span class="live-status"><i></i> 数据服务正常</span>
         </div>

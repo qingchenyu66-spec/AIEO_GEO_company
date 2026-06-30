@@ -4,7 +4,7 @@ export const USER_CREATE_CUSTOMER_MENU = 'platform.users.create.customer'
 export const USER_LIST_MENU = 'platform.users.list'
 export const POSITION_MENU = 'platform.positions'
 
-export const hiddenCustomerMenus = ['customer.batch', 'customer.geo']
+export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
 export const hiddenEnterprisePermissionMenus = [
   'platform.audit.list',
   'platform.audit.profile',

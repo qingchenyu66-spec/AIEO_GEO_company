@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -43,8 +43,22 @@ class BrandKeywordGroup(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="词组ID")
     tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False, comment="所属企业ID")
     brand_asset_id: Mapped[int] = mapped_column(ForeignKey("geo_brand_asset.id"), index=True, nullable=False, comment="品牌资产ID")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="词组", comment="词组名称")
     monitor_keyword: Mapped[str] = mapped_column(String(150), nullable=False, comment="监测关键词")
-    exposure_terms_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="露出词JSON")
+    monitor_keywords_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="监测关键词列表JSON",
+    )
+    exposure_terms_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="露出词JSON",
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序")
     status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False, comment="逻辑删除")

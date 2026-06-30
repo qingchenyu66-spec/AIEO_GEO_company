@@ -1,0 +1,228 @@
+"""Parse brand ranks from AI answers: category-local rank first, else appearance order."""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Callable
+
+CIRCLE_NUM_MAP = {
+    "①": 1, "②": 2, "③": 3, "④": 4, "⑤": 5,
+    "⑥": 6, "⑦": 7, "⑧": 8, "⑨": 9, "⑩": 10,
+    "⑪": 11, "⑫": 12,
+}
+
+CHINESE_NUM_MAP = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+
+LIST_ITEM_RE = re.compile(
+    r"^\s*(?:"
+    r"(\d+)\s*[\.、．\)）]|"
+    r"[（(](\d+)[)）]|"
+    r"([①②③④⑤⑥⑦⑧⑨⑩⑪⑫])"
+    r")\s*(.+)$"
+)
+
+BULLET_ITEM_RE = re.compile(r"^[-*•·▪]\s*(.+)$")
+
+PROSE_RANK_RE = re.compile(
+    r"第([一二三四五六七八九十\d]+)[个位名项]?[，,：:\s]+([^，,。；;\n]{2,50})"
+)
+
+
+def _clean_item_name(text: str) -> str:
+    value = re.sub(r"\*\*", "", text or "")
+    value = re.sub(r"\[\[[^\]]+\]\]", "", value)
+    value = re.sub(r"\[[^\]]+\]\([^)]+\)", "", value)
+    value = re.sub(r"^[「『\"'“]+|[」』\"'”]+$", "", value.strip())
+    value = re.sub(r"[（(].*?[)）]$", "", value.strip())
+    value = re.sub(r"[：:，,;；\.。]+$", "", value.strip())
+    return value.strip()
+
+
+def _parse_rank_token(token: str | None) -> int | None:
+    text = str(token or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if text in CIRCLE_NUM_MAP:
+        return CIRCLE_NUM_MAP[text]
+    if len(text) == 1 and text in CHINESE_NUM_MAP:
+        return CHINESE_NUM_MAP[text]
+    if text.startswith("十") and len(text) == 2 and text[1] in CHINESE_NUM_MAP:
+        return 10 + CHINESE_NUM_MAP[text[1]]
+    return None
+
+
+def _is_category_header(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or len(stripped) > 80:
+        return False
+    if LIST_ITEM_RE.match(stripped) or BULLET_ITEM_RE.match(stripped):
+        return False
+    if stripped.startswith("#"):
+        return True
+    if re.match(r"^\*\*.+\*\*$", stripped):
+        return True
+    if re.match(r"^【.+】$", stripped):
+        return True
+    if re.match(r"^(?:分类|类别|类型|场景)[一二三四五六七八九十\d]+[：:]", stripped):
+        return True
+    if re.match(r"^[一二三四五六七八九十百]+[、.．]\s*\S", stripped):
+        content = re.sub(r"^[一二三四五六七八九十百]+[、.．]\s*", "", stripped)
+        return len(content) <= 40 and not content.endswith("。")
+    return False
+
+
+def _strip_category_prefix(text: str) -> str:
+    return re.sub(r"^[一二三四五六七八九十百]+[、.．]\s*", "", text.strip()).strip()
+
+
+def _extract_category_name(line: str) -> str:
+    stripped = line.strip()
+    for pattern in (
+        r"^#{1,4}\s*(.+)$",
+        r"^\*\*(.+?)\*\*$",
+        r"^【(.+?)】$",
+        r"^[一二三四五六七八九十百]+[、.．]\s*(.+)$",
+        r"^(?:分类|类别|类型|场景)[一二三四五六七八九十\d]+[：:]\s*(.+)$",
+    ):
+        match = re.match(pattern, stripped)
+        if match:
+            return _strip_category_prefix(_clean_item_name(match.group(1)))
+    return _strip_category_prefix(_clean_item_name(stripped))
+
+
+def ranking_entry_category(entry: dict[str, Any]) -> str | None:
+    for key in ("category", "group", "type", "section", "categoryName", "category_name"):
+        value = entry.get(key)
+        if value:
+            return str(value).strip()
+    return None
+
+
+def ranking_entry_name(entry: dict[str, Any]) -> str:
+    return str(
+        entry.get("name")
+        or entry.get("brandName")
+        or entry.get("brand")
+        or entry.get("keyword")
+        or "",
+    ).strip()
+
+
+def ranking_entry_explicit_rank(entry: dict[str, Any]) -> int | float | None:
+    for key in ("rank", "position", "rankNo", "mentionPosition"):
+        value = entry.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[str, Any]]:
+    """Normalize API ranking JSON; fill missing ranks by appearance order within each category."""
+    results: list[dict[str, Any]] = []
+    appearance_counters: dict[str | None, int] = {}
+    for raw in raw_entries or []:
+        if not isinstance(raw, dict):
+            continue
+        name = ranking_entry_name(raw)
+        if not name:
+            continue
+        category = ranking_entry_category(raw)
+        rank_value = ranking_entry_explicit_rank(raw)
+        if rank_value is None:
+            appearance_counters[category] = appearance_counters.get(category, 0) + 1
+            rank_value = appearance_counters[category]
+        else:
+            appearance_counters[category] = max(appearance_counters.get(category, 0), int(rank_value))
+        results.append({"name": name, "rank": rank_value, "category": category})
+    return results
+
+
+def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
+    """Extract ranked list items from answer text, grouped by category when present."""
+    if not text:
+        return []
+
+    normalized = re.sub(r"<[^>]+>", "\n", text)
+    normalized = re.sub(r"\r", "\n", normalized)
+
+    results: list[dict[str, Any]] = []
+    current_category: str | None = None
+    appearance_counters: dict[str | None, int] = {}
+
+    def append_item(name: str, rank: int | None) -> None:
+        cleaned = _clean_item_name(name)
+        if not cleaned:
+            return
+        category = current_category
+        if rank is None:
+            appearance_counters[category] = appearance_counters.get(category, 0) + 1
+            rank = appearance_counters[category]
+        else:
+            appearance_counters[category] = max(appearance_counters.get(category, 0), rank)
+        results.append({"name": cleaned, "rank": rank, "category": category})
+
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_category_header(line):
+            current_category = _extract_category_name(line)
+            appearance_counters.setdefault(current_category, 0)
+            continue
+
+        match = LIST_ITEM_RE.match(line)
+        if match:
+            rank = _parse_rank_token(match.group(1) or match.group(2) or match.group(3))
+            append_item(match.group(4), rank)
+            continue
+
+        bullet = BULLET_ITEM_RE.match(line)
+        if bullet:
+            append_item(bullet.group(1), None)
+            continue
+
+    if not results:
+        for match in PROSE_RANK_RE.finditer(normalized):
+            rank = _parse_rank_token(match.group(1))
+            append_item(match.group(2), rank)
+
+    return results
+
+
+def find_best_brand_rank(
+    entries: list[dict[str, Any]],
+    match_name: Callable[[str], bool],
+    *,
+    skip_name: Callable[[str], bool] | None = None,
+) -> tuple[int | float | None, bool]:
+    """Return best (smallest) rank among matched entries; True if any name matched."""
+    best_rank: int | float | None = None
+    matched = False
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name or not match_name(name):
+            continue
+        if skip_name and skip_name(name):
+            continue
+        matched = True
+        rank = entry.get("rank")
+        if rank is None:
+            continue
+        try:
+            numeric = float(rank)
+        except (TypeError, ValueError):
+            continue
+        if best_rank is None or numeric < best_rank:
+            best_rank = numeric
+    if best_rank is not None:
+        return best_rank, True
+    return None, matched

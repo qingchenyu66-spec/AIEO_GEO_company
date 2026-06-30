@@ -1,360 +1,576 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { ChevronDown, ChevronRight, Download, Info, RefreshCw } from '@lucide/vue'
+import { ElDrawer } from 'element-plus'
+import 'element-plus/es/components/drawer/style/css'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
+import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../services/monitor'
 import { useMonitorRealtime } from '../composables/useMonitorRealtime'
 
 const {
-  monitorTasks,
   monitorDetail,
   loadingMonitor,
+  loadingMatrix,
+  loadingDetail,
   filters,
-  matrixFilters,
+  datePreset,
   brandAsset,
   brandCompetitors,
   viewMode,
   rankingMatrix,
-  loadingMatrix,
-  loadingMatrixDetail,
+  rankingMatrixView,
+  detailVisible,
+  detailSubtask,
+  detailContext,
   selectedMatrixCell,
-  selectedMatrixSubtask,
-  loadMonitorTasks,
-  loadRankingMatrix,
+  heroMetrics,
+  platformCoverage,
+  platformOptions,
+  scheduleRoundOptions,
+  monitorGroupOptions,
+  allExposureTermOptions,
+  activeMonitorFilter,
+  filteredGroupedMonitorTasks,
+  schedulePlanDisplay,
+  scheduleSourceLabel,
+  refreshCurrentView,
   selectMonitorTask,
   switchViewMode,
   selectMatrixCell,
-  clearMatrixCellSelection,
-  resetMatrixFilters,
+  toggleMatrixSnapshot,
+  matrixDrawerSnapshots,
+  isMatrixDrawerMode,
+  expandedSnapshotId,
+  loadingSnapshotId,
+  openListSubtask,
+  closeDetail,
+  applyDatePreset,
+  onCustomDateChange,
+  resetFilters,
+  exportMatrixCsv,
   formatRank,
   formatExposureLabel,
-  formatTaskTime,
+  formatMonitorGroupLabel,
+  keywordGroupFilterValue,
+  formatTaskTitle,
+  taskPromptPreview,
+  answerExcerpt,
+  sentimentToneClass,
+  matrixCellRankClass,
+  matrixCellTitle,
+  isLatestMatrixRow,
   taskPromptCount,
   taskPlatformCount,
   filteredMonitorSubtasks,
   monitorResultPlatformOptions,
   monitorResultStatusOptions,
-  matrixPlatformOptions,
-  platformCoverage,
-  monitorGroupOptions,
-  formatMonitorGroupLabel,
-  groupedMonitorTasks,
-  schedulePlanDisplay,
-  scheduleSourceLabel,
   platformLabelMap,
   monitorStatusLabelMap,
-  monitorModeLabelMap,
   sentimentLabelMap,
+  formatDateTime,
 } = useMonitorRealtime()
 
-const matrixDetailVisible = computed({
-  get: () => selectedMatrixCell.value !== null,
-  set: (open: boolean) => {
-    if (!open) clearMatrixCellSelection()
-  },
+const isLoading = computed(() => loadingMonitor.value || loadingMatrix.value)
+
+const drawerAvgRank = computed(() => {
+  const cell = detailContext.value?.cell
+  if ((cell?.prompt_intent ?? detailSubtask.value?.prompt_intent) !== 'ranking') return null
+  if ((cell?.rank_sample_count || cell?.sample_count || 0) > 1) {
+    return formatRank(cell?.mention_position)
+  }
+  return null
 })
+
+const drawerRank = computed(() => {
+  const subtask = detailSubtask.value
+  if (subtask?.prompt_intent === 'ranking') {
+    return formatRank(subtask.mention_position)
+  }
+  const cell = detailContext.value?.cell
+  if (cell?.prompt_intent === 'ranking') {
+    return formatRank(cell.mention_position)
+  }
+  return null
+})
+
+const drawerExposure = computed(() => {
+  const subtask = detailSubtask.value
+  const cell = detailContext.value?.cell
+  if ((subtask?.prompt_intent ?? cell?.prompt_intent) !== 'ranking') {
+    return formatExposureLabel(subtask?.brand_mentioned ?? cell?.brand_mentioned)
+  }
+  return null
+})
+
+const showRankNote = computed(() => {
+  const subtask = detailSubtask.value
+  if (!subtask) return false
+  const intent = subtask.prompt_intent ?? detailContext.value?.cell?.prompt_intent
+  const raw = subtask.raw_mention_position
+  const rank = subtask.mention_position
+  return intent === 'ranking' && raw != null && raw !== rank
+})
+
+function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorSubtask | null) {
+  if (!subtask || subtask.subtask_id !== snapshot.subtask_id) return false
+  const intent = subtask.prompt_intent ?? snapshot.prompt_intent
+  const raw = subtask.raw_mention_position ?? snapshot.raw_mention_position
+  const rank = subtask.mention_position ?? snapshot.mention_position
+  return intent === 'ranking' && raw != null && raw !== rank
+}
 </script>
 
 <template>
-  <section class="monitor-page">
-    <article class="panel monitor-submit-panel">
-      <div class="panel-head">
-        <div><h2>定时监测结果</h2><p>系统按平台端配置自动检测，客户侧只查看结果、快照和趋势，不开放手动提交。</p></div>
-        <span>平台自动巡检</span>
+  <section class="monitor-page realtime-monitor-page">
+    <header class="realtime-sticky-bar">
+      <div class="realtime-sticky-inner">
+        <div class="realtime-date-presets">
+          <button type="button" :class="{ active: datePreset === '7d' }" @click="applyDatePreset('7d')">近 7 天</button>
+          <button type="button" :class="{ active: datePreset === '30d' }" @click="applyDatePreset('30d')">近 30 天</button>
+          <button type="button" :class="{ active: datePreset === 'custom' }" @click="datePreset = 'custom'">自定义</button>
+        </div>
+        <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
+          <input v-model="filters.startDate" type="date" @change="onCustomDateChange">
+          <span>至</span>
+          <input v-model="filters.endDate" type="date" @change="onCustomDateChange">
+        </div>
+        <div class="realtime-sticky-filters">
+          <select v-model="filters.platform">
+            <option value="">全部平台</option>
+            <option v-for="platform in platformOptions" :key="platform" :value="platform">
+              {{ platformLabelMap[platform] || platform }}
+            </option>
+          </select>
+          <select v-model="filters.monitorGroup">
+            <option value="">全部词组</option>
+            <option
+              v-for="(group, groupIndex) in monitorGroupOptions"
+              :key="`group-${group.id ?? group.sort_order}-${group.name || group.monitor_keyword}`"
+              :value="keywordGroupFilterValue(group, groupIndex)"
+            >
+              {{ formatMonitorGroupLabel(group, groupIndex) }}
+            </option>
+          </select>
+          <select v-model="filters.exposureTerm" title="按露出词筛选">
+            <option value="">全部露出词</option>
+            <option v-for="term in allExposureTermOptions" :key="`exposure-${term}`" :value="term">
+              {{ term }}
+            </option>
+          </select>
+          <select v-if="viewMode === 'list'" v-model="filters.scheduleWindowKey">
+            <option value="">全部轮次</option>
+            <option
+              v-for="item in scheduleRoundOptions"
+              :key="item.schedule_window_key"
+              :value="item.schedule_window_key"
+            >
+              {{ item.schedule_label }}
+            </option>
+          </select>
+        </div>
+        <div class="realtime-view-toggle">
+          <button type="button" :class="{ active: viewMode === 'matrix' }" @click="switchViewMode('matrix')">排名矩阵</button>
+          <button type="button" :class="{ active: viewMode === 'list' }" @click="switchViewMode('list')">逐条列表</button>
+        </div>
+        <div class="realtime-sticky-actions">
+          <span v-if="isLoading" class="realtime-loading-dot">更新中</span>
+          <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
+          <button type="button" class="filter-reset-btn tiny-btn" :disabled="isLoading" @click="refreshCurrentView">
+            <RefreshCw />
+            刷新
+          </button>
+          <button
+            type="button"
+            class="primary-btn small-btn"
+            :disabled="!rankingMatrixView?.rows.length"
+            @click="exportMatrixCsv"
+          >
+            <Download />
+            导出矩阵
+          </button>
+        </div>
       </div>
-      <div class="monitor-brand-card">
+    </header>
+
+    <article class="realtime-hero">
+      <div class="realtime-hero-top">
         <div>
-          <span>当前监测企业</span>
-          <b>{{ brandAsset?.company_full_name || '未配置品牌资产' }}</b>
-          <small>主品牌：{{ brandAsset?.brand_name || '-' }} · 简称：{{ brandAsset?.brand_short_name || '-' }}</small>
-        </div>
-        <div>
-          <span>自动带入</span>
-          <b>{{ brandCompetitors.length }} 个竞品</b>
-          <small>{{ brandCompetitors.slice(0, 4).map(item => item.name).join(' / ') || '请先维护竞品库' }}</small>
+          <span class="realtime-hero-eyebrow">Realtime Monitor</span>
+          <h2>{{ heroMetrics.brandName }}</h2>
+          <p class="realtime-hero-note">
+            <Info />
+            数字为<strong>露出词</strong>在 AI 推荐列表中的排名（分类列表按分类内序号，无序号按出现顺序），越小越靠前
+          </p>
         </div>
       </div>
-      <div class="monitor-schedule-grid">
-        <div>
-          <b>{{ schedulePlanDisplay?.typeLabel || '监测计划' }}</b>
-          <span>按企业配置的监测频率执行</span>
+      <div v-if="isLoading && !rankingMatrix && !monitorDetail" class="realtime-hero-skeleton">
+        <div /><div /><div /><div />
+      </div>
+      <div v-else class="realtime-hero-metrics">
+        <div class="realtime-hero-metric">
+          <span>{{ viewMode === 'matrix' ? '最近日期' : '最新轮次' }}</span>
+          <b>{{ heroMetrics.latestSchedule }}</b>
+          <em v-if="viewMode === 'matrix'">{{ heroMetrics.scheduleRoundCount }} 天有均值</em>
+          <em v-else>{{ heroMetrics.scheduleRoundCount }} 个调度轮次</em>
         </div>
-        <div v-for="time in schedulePlanDisplay?.times || []" :key="time">
-          <b>{{ time }}</b>
-          <span>计划检测时刻</span>
+        <div class="realtime-hero-metric">
+          <span>子任务完成</span>
+          <b>{{ heroMetrics.completed }}/{{ heroMetrics.total || '—' }}</b>
+          <em>{{ heroMetrics.taskCount }} 个词组任务</em>
         </div>
-        <div v-if="!(schedulePlanDisplay?.times || []).length">
-          <b>待配置</b>
-          <span>尚未设置具体检测时刻</span>
+        <div class="realtime-hero-metric">
+          <span>平均排名</span>
+          <b>{{ heroMetrics.avgRank != null ? formatRank(heroMetrics.avgRank) : '—' }}</b>
+          <em v-if="heroMetrics.mentionRate != null">露出率 {{ heroMetrics.mentionRate }}%</em>
         </div>
-        <div><b>平台范围</b><span>{{ platformCoverage.map(item => item.name).join(' / ') || '-' }}</span></div>
+        <div class="realtime-hero-metric" :class="{ 'is-warn': heroMetrics.pendingPlatforms > 0 }">
+          <span>待返回平台</span>
+          <b>{{ heroMetrics.pendingPlatforms }}</b>
+          <em>已购 {{ platformCoverage.length }} 个</em>
+        </div>
       </div>
     </article>
 
-    <div class="monitor-view-tabs">
-      <button type="button" :class="{ active: viewMode === 'list' }" @click="switchViewMode('list')">列表视图</button>
-      <button type="button" :class="{ active: viewMode === 'matrix' }" @click="switchViewMode('matrix')">排名矩阵</button>
-    </div>
-
-    <section v-if="viewMode === 'matrix'" class="panel ranking-matrix-panel">
-      <div class="panel-head">
-        <div>
-          <h2>排名矩阵</h2>
-          <p>每行对应一次<strong>调度轮次</strong>（按企业配置时刻，如 14:30）下的检测结果；列为监测问题。单元格数字为<strong>品牌在 AI 推荐列表中的排名</strong>（越小越靠前，「-」表示未提及）。</p>
+    <details class="panel realtime-config-panel">
+      <summary>
+        监测计划与平台范围
+        <ChevronDown />
+      </summary>
+      <div class="realtime-config-body">
+        <div class="realtime-config-grid">
+          <div class="realtime-config-card">
+            <span>监测企业</span>
+            <b>{{ brandAsset?.company_full_name || heroMetrics.companyName || '未配置' }}</b>
+            <small>主品牌 {{ brandAsset?.brand_name || heroMetrics.brandName }}</small>
+          </div>
+          <div class="realtime-config-card">
+            <span>监测计划</span>
+            <b>{{ schedulePlanDisplay?.typeLabel || '监测计划' }}</b>
+            <small>{{ (schedulePlanDisplay?.times || []).join('、') || '待配置具体时刻' }}</small>
+          </div>
+          <div class="realtime-config-card">
+            <span>竞品监测</span>
+            <b>{{ brandCompetitors.length }} 个竞品</b>
+            <small>{{ brandCompetitors.slice(0, 4).map(item => item.name).join('、') || '暂无' }}</small>
+          </div>
+          <div class="realtime-config-card">
+            <span>平台范围</span>
+            <div class="realtime-platform-chips">
+              <span
+                v-for="item in platformCoverage"
+                :key="item.code"
+                class="realtime-platform-chip"
+                :class="item.status === '已返回' ? 'is-active' : 'is-pending'"
+              >
+                {{ item.name }}
+              </span>
+            </div>
+          </div>
         </div>
-        <button class="filter-search-btn" :disabled="loadingMatrix" @click="loadRankingMatrix">刷新矩阵</button>
+      </div>
+    </details>
+
+    <section v-if="viewMode === 'matrix'" class="realtime-matrix-panel">
+      <div class="realtime-matrix-head">
+        <div>
+          <h3>排名矩阵</h3>
+          <p>行 = 每日均值排名 · 列 = 监测关键词 · 排名按露出词匹配 · 同一天多次监测取平均</p>
+        </div>
       </div>
 
-      <div class="ranking-matrix-filters">
-        <label>
-          <span>平台</span>
-          <select v-model="matrixFilters.platform">
-            <option value="">全部平台</option>
-            <option v-for="platform in matrixPlatformOptions" :key="platform" :value="platform">{{ platformLabelMap[platform] || platform }}</option>
-          </select>
-        </label>
-        <label>
-          <span>开始日期</span>
-          <input v-model="matrixFilters.startDate" type="date" />
-        </label>
-        <label>
-          <span>结束日期</span>
-          <input v-model="matrixFilters.endDate" type="date" />
-        </label>
-        <label class="monitor-filter-keyword">
-          <span>监测词组</span>
-          <select v-model="matrixFilters.monitorGroup">
-            <option value="">全部词组</option>
-            <option v-for="group in monitorGroupOptions" :key="group.monitor_keyword" :value="group.monitor_keyword">
-              {{ formatMonitorGroupLabel(group) }}
-            </option>
-          </select>
-        </label>
-        <button type="button" :disabled="loadingMatrix" @click="loadRankingMatrix">查询</button>
-        <button type="button" @click="resetMatrixFilters">重置</button>
+      <div v-if="rankingMatrix" class="realtime-matrix-meta">
+        <span class="realtime-meta-platform">
+          平台
+          <b v-if="rankingMatrix.all_platforms">全部</b>
+          <PlatformBadge v-else-if="rankingMatrix.platform" :code="rankingMatrix.platform" size="xs" />
+          <b v-else>-</b>
+        </span>
+        <span>监测天数 <b>{{ rankingMatrixView?.schedule_round_count ?? rankingMatrixView?.rows.length }}</b></span>
+        <span>监测问题 <b>{{ rankingMatrixView?.columns.length }}</b></span>
       </div>
 
-      <div v-if="rankingMatrix" class="ranking-matrix-meta">
-        <span>平台 <b>{{ rankingMatrix.all_platforms ? '全部' : (platformLabelMap[rankingMatrix.platform || ''] || rankingMatrix.platform || '-') }}</b></span>
-        <span>品牌 <b>{{ rankingMatrix.brand_name || '-' }}</b></span>
-        <span>调度轮次 <b>{{ rankingMatrix.schedule_round_count ?? '-' }}</b></span>
-        <span>词组任务 <b>{{ rankingMatrix.task_count ?? rankingMatrix.rows.length }}</b></span>
-        <span>监测问题 <b>{{ rankingMatrix.columns.length }}</b></span>
+      <div class="realtime-matrix-legend">
+        <span><i class="legend-top-1" />#1</span>
+        <span><i class="legend-top-3" />#2–3</span>
+        <span><i class="legend-mid" />#4–6</span>
+        <span><i class="legend-none" />未提及</span>
       </div>
 
       <div v-if="loadingMatrix" class="mini-empty">排名矩阵加载中…</div>
-      <div v-else-if="rankingMatrix && rankingMatrix.columns.length && rankingMatrix.rows.length" class="ranking-matrix-scroll">
-        <table class="ranking-matrix-table">
+      <div v-else-if="rankingMatrixView?.columns.length && rankingMatrixView.rows.length" class="realtime-matrix-scroll">
+        <table class="realtime-matrix-table">
           <thead>
             <tr>
-              <th class="ranking-matrix-time-col">调度轮次</th>
-              <th v-for="column in rankingMatrix.columns" :key="column.prompt" class="ranking-matrix-prompt-col" :title="column.prompt">
+              <th class="realtime-matrix-time-col">日期</th>
+              <th
+                v-for="column in rankingMatrixView!.columns"
+                :key="column.prompt"
+                class="realtime-matrix-prompt-col"
+                :title="column.prompt"
+              >
                 <small v-if="column.group_name">{{ column.group_name }}</small>
                 <span>{{ column.prompt }}</span>
               </th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in rankingMatrix.rows" :key="`${row.schedule_window_key || row.task_id}-${row.keyword_group || ''}-${row.platform || ''}`">
-              <th class="ranking-matrix-time-col">
+            <tr
+              v-for="row in rankingMatrixView.rows"
+              :key="`${row.schedule_window_key || row.task_id}-${row.keyword_group || ''}-${row.platform || ''}`"
+              :class="{ 'realtime-matrix-row-latest': isLatestMatrixRow(row) }"
+            >
+              <th class="realtime-matrix-time-col">
                 <span>{{ row.schedule_label || row.snapshot_at || '-' }}{{ scheduleSourceLabel(row.schedule_source) }}</span>
-                <small v-if="row.keyword_group && !matrixFilters.monitorGroup">{{ row.keyword_group }}</small>
-                <small v-if="rankingMatrix.all_platforms && row.platform">{{ platformLabelMap[row.platform] || row.platform }}</small>
+                <small v-if="row.keyword_group && !activeMonitorFilter">{{ row.keyword_group }}</small>
+                <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
+                  <PlatformBadge :code="row.platform" size="xs" />
+                </small>
               </th>
               <td
-                v-for="column in rankingMatrix.columns"
-                :key="`${row.schedule_window_key || row.task_id}-${row.keyword_group || ''}-${row.platform || ''}-${column.prompt}`"
-                class="ranking-matrix-cell"
-                :class="{
-                  'has-rank': row.cells[column.prompt]?.mention_position != null,
-                  active: selectedMatrixCell?.taskId === row.task_id
-                    && selectedMatrixCell?.prompt === column.prompt
-                    && (selectedMatrixCell?.platform || '') === (row.platform || ''),
-                }"
+                v-for="column in rankingMatrixView!.columns"
+                :key="`${row.schedule_window_key || row.task_id}-${column.prompt}`"
+                class="realtime-matrix-cell"
+                :class="[
+                  matrixCellRankClass(row.cells[column.prompt]?.mention_position),
+                  {
+                    'is-active': selectedMatrixCell?.taskId === row.task_id
+                      && selectedMatrixCell?.prompt === column.prompt
+                      && (selectedMatrixCell?.platform || '') === (row.platform || ''),
+                  },
+                ]"
+                :title="matrixCellTitle(row.cells[column.prompt])"
                 @click="selectMatrixCell(row.task_id, row.platform, row.snapshot_at, row.schedule_label, column.prompt, row.cells[column.prompt])"
               >
                 {{ formatRank(row.cells[column.prompt]?.mention_position) }}
+                <small
+                  v-if="(row.cells[column.prompt]?.rank_sample_count || 0) > 1"
+                  class="realtime-matrix-cell-note"
+                >均</small>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div v-else-if="rankingMatrix" class="mini-empty">当前筛选条件下暂无排名数据，请调整平台或日期范围。</div>
+      <div v-else class="mini-empty">当前筛选条件下暂无排名数据，请调整日期或平台。</div>
     </section>
 
-    <section v-else class="monitor-layout">
-      <article class="panel monitor-task-list">
-        <div class="panel-head"><h2>检测记录</h2><span>{{ monitorTasks.length }} 个词组任务</span></div>
-        <div v-for="group in groupedMonitorTasks" :key="group.schedule_window_key" class="monitor-schedule-group">
-          <div class="monitor-schedule-group-head">
+    <section v-else class="realtime-list-layout">
+      <article class="realtime-task-panel">
+        <div class="panel-head compact">
+          <h2>检测记录</h2>
+          <span>{{ filteredGroupedMonitorTasks.reduce((sum, g) => sum + g.tasks.length, 0) }} 个词组任务</span>
+        </div>
+        <div v-for="group in filteredGroupedMonitorTasks" :key="group.schedule_window_key" class="realtime-schedule-group">
+          <div class="realtime-schedule-group-head">
             <b>{{ group.schedule_label }}</b>
-            <span>{{ group.tasks.length }} 个词组任务</span>
+            <span>{{ group.tasks.length }} 个词组</span>
           </div>
           <button
             v-for="task in group.tasks"
             :key="task.task_id"
-            class="monitor-task-item"
+            type="button"
+            class="realtime-task-item"
             :class="{ active: monitorDetail?.task.task_id === task.task_id }"
             @click="selectMonitorTask(task.task_id)"
           >
-            <b>{{ task.keyword_group || task.monitor_keywords || '未填词组' }}</b>
-            <small>{{ monitorStatusLabelMap[task.status] || task.status }} · {{ task.completed_items }}/{{ task.total_items }} 子任务{{ scheduleSourceLabel(task.schedule_source) }}</small>
-            <em>{{ taskPromptCount(task) }} 问 × {{ taskPlatformCount(task) }} 平台 · {{ task.platforms.map(item => platformLabelMap[item.platform] || item.platform).join('、') }}</em>
+            <b>{{ formatTaskTitle(task) }}</b>
+            <span v-if="taskPromptPreview(task)" class="task-prompt-preview">{{ taskPromptPreview(task) }}</span>
+            <small>{{ monitorStatusLabelMap[task.status] || task.status }} · {{ task.completed_items }}/{{ task.total_items }}{{ scheduleSourceLabel(task.schedule_source) }} · {{ taskPromptCount(task) }} 问 × {{ taskPlatformCount(task) }} 平台</small>
           </button>
         </div>
-        <div v-if="!loadingMonitor && !monitorTasks.length" class="mini-empty">暂无检测批次，等待定时任务运行后会出现在这里。</div>
+        <div v-if="!loadingMonitor && !filteredGroupedMonitorTasks.length" class="mini-empty">暂无检测批次，等待定时任务返回。</div>
       </article>
 
-      <article class="panel monitor-result-panel">
-        <div class="panel-head">
-          <div><h2>批次详情</h2><p>{{ monitorDetail ? '查看本次提交的问题、平台与检测结果' : '从左侧选择一次检测批次' }}</p></div>
-          <button class="filter-search-btn" :disabled="loadingMonitor" @click="loadMonitorTasks">刷新列表</button>
-        </div>
-        <template v-if="monitorDetail">
-          <details class="monitor-task-prompts" open>
-            <summary>
-              <span>本次检测问题（{{ taskPromptCount(monitorDetail.task) }} 问 × {{ taskPlatformCount(monitorDetail.task) }} 平台 = {{ monitorDetail.task.total_items || monitorDetail.subtasks.length }} 子任务）</span>
-              <em>调度轮次：{{ monitorDetail.task.schedule_label || formatTaskTime(monitorDetail.task.created_at) }}{{ scheduleSourceLabel(monitorDetail.task.schedule_source) }} · 词组：{{ monitorDetail.task.keyword_group || monitorDetail.task.monitor_keywords || '-' }}</em>
-            </summary>
-            <ol>
-              <li v-for="prompt in monitorDetail.task.prompts" :key="prompt">{{ prompt }}</li>
-            </ol>
-          </details>
-          <div class="monitor-result-filters">
-            <label>
-              <span>平台</span>
-              <select v-model="filters.platform">
-                <option value="all">全部平台</option>
-                <option v-for="platform in monitorResultPlatformOptions" :key="platform" :value="platform">{{ platformLabelMap[platform] || platform }}</option>
-              </select>
-            </label>
-            <label>
-              <span>状态</span>
-              <select v-model="filters.status">
-                <option value="all">全部状态</option>
-                <option v-for="status in monitorResultStatusOptions" :key="status" :value="status">{{ monitorStatusLabelMap[status] || status }}</option>
-              </select>
-            </label>
-            <label class="monitor-filter-keyword">
-              <span>监测词组</span>
-              <select v-model="filters.monitorGroup">
-                <option value="">全部词组</option>
-                <option v-for="group in monitorGroupOptions" :key="`list-${group.monitor_keyword}`" :value="group.monitor_keyword">
-                  {{ formatMonitorGroupLabel(group) }}
-                </option>
-              </select>
-            </label>
-            <button type="button" @click="filters.platform = 'all'; filters.status = 'all'; filters.monitorGroup = ''">重置</button>
-            <em>{{ filteredMonitorSubtasks.length }} / {{ monitorDetail.subtasks.length }} 条</em>
+      <article class="realtime-result-panel">
+        <div class="panel-head compact">
+          <div>
+            <h2>本轮检测</h2>
+            <p>{{ monitorDetail ? '点击卡片查看完整 AI 回答' : '从左侧选择词组任务' }}</p>
           </div>
-          <div class="monitor-summary">
+        </div>
+
+        <template v-if="monitorDetail">
+          <div class="realtime-result-summary">
+            <span>轮次 <b>{{ monitorDetail.task.schedule_label || '—' }}</b></span>
             <span>状态 <b>{{ monitorStatusLabelMap[monitorDetail.task.status] || monitorDetail.task.status }}</b></span>
             <span>完成 <b>{{ monitorDetail.task.completed_items }}/{{ monitorDetail.task.total_items }}</b></span>
-            <span>失败 <b>{{ monitorDetail.task.failed_items }}</b></span>
-            <span v-if="monitorDetail.task.last_error">错误 <b>{{ monitorDetail.task.last_error }}</b></span>
+            <span v-if="monitorDetail.task.failed_items">失败 <b>{{ monitorDetail.task.failed_items }}</b></span>
           </div>
-          <div v-for="subtask in filteredMonitorSubtasks" :key="subtask.subtask_id" class="monitor-subtask-card">
-            <div class="subtask-head">
-              <div><b>{{ platformLabelMap[subtask.platform || ''] || subtask.platform || '-' }} / {{ monitorModeLabelMap[subtask.mode || ''] || subtask.mode || '-' }}</b><small>{{ subtask.prompt }}</small></div>
-              <span>{{ monitorStatusLabelMap[subtask.status || ''] || subtask.status || '-' }}</span>
-            </div>
-            <div class="subtask-metrics">
-              <span v-if="subtask.prompt_intent === 'ranking'">品牌排名：{{ formatRank(subtask.mention_position) }}</span>
-              <span v-else>品牌露出：{{ formatExposureLabel(subtask.brand_mentioned) }}</span>
-              <span v-if="subtask.prompt_intent === 'ranking' && subtask.raw_mention_position != null && subtask.raw_mention_position !== subtask.mention_position">
-                模力原始排名：{{ formatRank(subtask.raw_mention_position) }}
+
+          <div class="realtime-sticky-filters" style="margin-bottom: 14px;">
+            <select v-model="filters.status">
+              <option value="all">全部状态</option>
+              <option v-for="status in monitorResultStatusOptions" :key="status" :value="status">
+                {{ monitorStatusLabelMap[status] || status }}
+              </option>
+            </select>
+            <select v-model="filters.platform">
+              <option value="">全部平台</option>
+              <option v-for="platform in monitorResultPlatformOptions" :key="platform" :value="platform">
+                {{ platformLabelMap[platform] || platform }}
+              </option>
+            </select>
+            <em style="align-self: center; font-style: normal; color: #8aa0ba; font-size: 12px;">
+              {{ filteredMonitorSubtasks.length }} / {{ monitorDetail.subtasks.length }} 条
+            </em>
+          </div>
+
+          <button
+            v-for="subtask in filteredMonitorSubtasks"
+            :key="subtask.subtask_id"
+            type="button"
+            class="realtime-subtask-card"
+            :class="sentimentToneClass(subtask.sentiment)"
+            @click="openListSubtask(subtask)"
+          >
+            <div class="realtime-subtask-head">
+              <PlatformBadge :code="subtask.platform" size="xs" class="realtime-platform-badge" />
+              <span
+                v-if="subtask.prompt_intent === 'ranking'"
+                class="realtime-rank-badge"
+                :class="{ 'is-none': subtask.mention_position == null }"
+              >
+                排名 {{ formatRank(subtask.mention_position) }}
               </span>
-              <span>情感：{{ sentimentLabelMap[subtask.sentiment || ''] || '暂无' }}</span>
-              <span>费用：{{ subtask.amount ?? '待返回' }}</span>
-              <a v-if="subtask.page_screenshot" :href="subtask.page_screenshot" target="_blank">打开快照</a>
-              <span v-else class="muted-metric">快照：未返回</span>
+              <span v-else class="realtime-rank-badge" :class="{ 'is-none': !subtask.brand_mentioned }">
+                {{ formatExposureLabel(subtask.brand_mentioned) }}
+              </span>
+              <span class="realtime-sentiment-pill" :class="sentimentToneClass(subtask.sentiment)">
+                {{ sentimentLabelMap[subtask.sentiment || ''] || subtask.sentiment || '暂无' }}
+              </span>
             </div>
-            <p v-if="subtask.prompt_intent === 'ranking' && subtask.raw_mention_position != null && subtask.raw_mention_position !== subtask.mention_position" class="mention-context ranking-matrix-rank-note">
-              回答正文中未出现本公司品牌/露出词，已忽略模力返回的原始排名 {{ formatRank(subtask.raw_mention_position) }}。
-            </p>
-            <p v-if="subtask.mention_context" class="mention-context">{{ subtask.mention_context }}</p>
-            <pre v-if="subtask.answer_content" class="answer-preview">{{ subtask.answer_content }}</pre>
-            <div v-if="subtask.reference_list.length" class="source-list">
-              <b>信源列表</b>
-              <a v-for="source in subtask.reference_list.slice(0, 6)" :key="`${subtask.subtask_id}-${source.index}-${source.url}`" :href="source.url" target="_blank">{{ source.title || source.site || source.url }}</a>
+            <h4>{{ subtask.prompt }}</h4>
+            <p>{{ answerExcerpt(subtask.answer_content) || '暂无回答摘要' }}</p>
+            <div class="realtime-subtask-foot">
+              <span>{{ monitorStatusLabelMap[subtask.status || ''] || subtask.status }}</span>
+              <span>查看详情 <ChevronRight /></span>
             </div>
-            <p v-if="subtask.error_message" class="danger-copy">{{ subtask.error_message }}</p>
-          </div>
-          <div v-if="!filteredMonitorSubtasks.length" class="mini-empty">没有匹配当前筛选条件的检测结果。</div>
+          </button>
+          <div v-if="!filteredMonitorSubtasks.length" class="mini-empty">没有匹配当前筛选的结果。</div>
         </template>
-        <div v-else class="mini-empty">选择左侧检测批次后，可先查看本次提交的问题列表，再浏览各平台检测结果。</div>
+        <div v-else class="mini-empty">选择左侧词组任务后，可浏览各平台检测结果。</div>
       </article>
     </section>
 
-    <el-dialog v-model="matrixDetailVisible" width="860px" class="ranking-matrix-detail-dialog" align-center destroy-on-close>
+    <ElDrawer
+      v-model="detailVisible"
+      size="480px"
+      destroy-on-close
+      class="realtime-detail-drawer"
+      @closed="closeDetail"
+    >
       <template #header>
-        <div class="ranking-matrix-dialog-head">
-          <h3>单元格详情</h3>
-          <p v-if="selectedMatrixCell">{{ selectedMatrixCell.scheduleLabel || selectedMatrixCell.snapshotAt }} · {{ selectedMatrixCell.prompt }}</p>
+        <div class="realtime-drawer-head">
+          <h3>{{ detailContext?.prompt || detailSubtask?.prompt || '检测详情' }}</h3>
+          <p>
+            {{ detailContext?.scheduleLabel || '—' }}
+            · <PlatformBadge
+              v-if="detailContext?.platform || detailSubtask?.platform"
+              :code="detailContext?.platform || detailSubtask?.platform || ''"
+              size="xs"
+            />
+            <template v-else>—</template>
+          </p>
         </div>
       </template>
 
-      <div v-if="loadingMatrixDetail" class="mini-empty">子任务详情加载中…</div>
-      <template v-else-if="selectedMatrixSubtask && selectedMatrixCell">
-        <div class="subtask-head">
-          <div>
-            <b>{{ platformLabelMap[selectedMatrixSubtask.platform || ''] || selectedMatrixSubtask.platform || '-' }} / {{ monitorModeLabelMap[selectedMatrixSubtask.mode || ''] || selectedMatrixSubtask.mode || '-' }}</b>
-            <small>{{ selectedMatrixSubtask.prompt }}</small>
-          </div>
-          <span>{{ monitorStatusLabelMap[selectedMatrixSubtask.status || ''] || selectedMatrixSubtask.status || '-' }}</span>
-        </div>
-        <div class="subtask-metrics">
-          <span v-if="(selectedMatrixSubtask.prompt_intent ?? selectedMatrixCell.cell.prompt_intent) === 'ranking'">
-            品牌排名：{{ formatRank(selectedMatrixSubtask.mention_position ?? selectedMatrixCell.cell.mention_position) }}
+      <div v-if="loadingDetail && !isMatrixDrawerMode" class="mini-empty">加载详情…</div>
+      <template v-else-if="isMatrixDrawerMode">
+        <div class="realtime-drawer-snapshots-head">
+          <b>当日监测快照</b>
+          <span>
+            {{ matrixDrawerSnapshots.length }} 轮
+            <template v-if="drawerAvgRank"> · 均值 {{ drawerAvgRank }}</template>
           </span>
-          <span v-else>
-            品牌露出：{{ formatExposureLabel(selectedMatrixSubtask.brand_mentioned ?? selectedMatrixCell.cell.brand_mentioned) }}
-          </span>
-          <span v-if="(selectedMatrixSubtask.prompt_intent ?? selectedMatrixCell.cell.prompt_intent) === 'ranking' && (selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) != null && (selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) !== (selectedMatrixSubtask.mention_position ?? selectedMatrixCell.cell.mention_position)">
-            原始提及排名：{{ formatRank(selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) }}
-          </span>
-          <span v-if="selectedMatrixCell.cell.monitor_keyword">监控词：{{ selectedMatrixCell.cell.monitor_keyword }}</span>
-          <span>情感：{{ sentimentLabelMap[selectedMatrixSubtask.sentiment || ''] || '暂无' }}</span>
-          <span>费用：{{ selectedMatrixSubtask.amount ?? '待返回' }}</span>
-          <a v-if="selectedMatrixSubtask.page_screenshot" :href="selectedMatrixSubtask.page_screenshot" target="_blank">打开快照</a>
-          <span v-else class="muted-metric">快照：未返回</span>
         </div>
-        <p
-          v-if="(selectedMatrixSubtask.prompt_intent ?? selectedMatrixCell.cell.prompt_intent) === 'ranking' && (selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) != null && (selectedMatrixSubtask.mention_position ?? selectedMatrixCell.cell.mention_position) == null"
-          class="mention-context ranking-matrix-rank-note"
-        >
-          说明：本次检测监控词为「{{ selectedMatrixCell.cell.monitor_keyword || '未知' }}」。模力指数原始提及排名为 {{ formatRank(selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) }}，但该排名对应的是监控词本身（如行业词），并非本公司在推荐列表中的品牌排名，已忽略。
-        </p>
-        <p
-          v-else-if="(selectedMatrixSubtask.prompt_intent ?? selectedMatrixCell.cell.prompt_intent) === 'ranking' && (selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) != null && (selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) !== (selectedMatrixSubtask.mention_position ?? selectedMatrixCell.cell.mention_position)"
-          class="mention-context ranking-matrix-rank-note"
-        >
-          说明：模力指数原始提及排名为 {{ formatRank(selectedMatrixSubtask.raw_mention_position ?? selectedMatrixCell.cell.raw_mention_position) }}，与品牌实际排名 {{ formatRank(selectedMatrixSubtask.mention_position ?? selectedMatrixCell.cell.mention_position) }} 不一致，已按回答正文中的品牌露出重新计算。
-        </p>
-        <p v-if="selectedMatrixSubtask.mention_context" class="mention-context">{{ selectedMatrixSubtask.mention_context }}</p>
-        <pre v-if="selectedMatrixSubtask.answer_content" class="answer-preview">{{ selectedMatrixSubtask.answer_content }}</pre>
-        <div v-if="selectedMatrixSubtask.reference_list.length" class="source-list">
-          <b>信源列表</b>
-          <a v-for="source in selectedMatrixSubtask.reference_list.slice(0, 8)" :key="`${selectedMatrixSubtask.subtask_id}-${source.index}-${source.url}`" :href="source.url" target="_blank">{{ source.title || source.site || source.url }}</a>
+        <p class="realtime-drawer-list-hint">点击某一轮展开查看回答与快照，再次点击可收起。</p>
+        <div class="realtime-drawer-accordion">
+          <article
+            v-for="(snapshot, index) in matrixDrawerSnapshots"
+            :key="snapshot.subtask_id"
+            class="realtime-drawer-accordion-item"
+            :class="{ 'is-expanded': expandedSnapshotId === snapshot.subtask_id }"
+          >
+            <button
+              type="button"
+              class="realtime-drawer-accordion-trigger"
+              @click="toggleMatrixSnapshot(snapshot)"
+            >
+              <span class="realtime-drawer-snapshot-round">第 {{ index + 1 }} 轮</span>
+              <span class="realtime-drawer-accordion-main">
+                <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}</strong>
+                <small>
+                  排名 {{ formatRank(snapshot.mention_position) }}
+                  · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
+                  <template v-if="snapshot.page_screenshot"> · 含快照</template>
+                </small>
+              </span>
+              <ChevronDown class="realtime-drawer-accordion-chevron" />
+            </button>
+            <div
+              v-if="expandedSnapshotId === snapshot.subtask_id"
+              class="realtime-drawer-accordion-body"
+            >
+              <div v-if="loadingSnapshotId === snapshot.subtask_id" class="mini-empty compact-empty">加载中…</div>
+              <template v-else-if="detailSubtask?.subtask_id === snapshot.subtask_id">
+                <div class="realtime-drawer-metrics compact">
+                  <span>排名 {{ formatRank(detailSubtask.mention_position) }}</span>
+                  <span>情感 {{ sentimentLabelMap[detailSubtask.sentiment || ''] || '暂无' }}</span>
+                  <span>状态 {{ monitorStatusLabelMap[detailSubtask.status || ''] || '—' }}</span>
+                  <a
+                    v-if="detailSubtask.page_screenshot || snapshot.page_screenshot"
+                    :href="(detailSubtask.page_screenshot || snapshot.page_screenshot)!"
+                    target="_blank"
+                  >打开快照</a>
+                </div>
+                <p v-if="snapshotRankNote(snapshot, detailSubtask)" class="realtime-drawer-note">
+                  回答正文中未出现品牌露出词，矩阵展示「-」；原始检测排名仅供参考，已按正文重新计算。
+                </p>
+                <pre v-if="detailSubtask.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
+                <p v-else-if="detailSubtask.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
+                <div v-if="detailSubtask.reference_list?.length" class="realtime-drawer-sources">
+                  <b>引用信源</b>
+                  <a
+                    v-for="source in detailSubtask.reference_list.slice(0, 8)"
+                    :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
+                    :href="source.url"
+                    target="_blank"
+                  >{{ source.title || source.site || source.url }}</a>
+                </div>
+                <p v-if="detailSubtask.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
+              </template>
+            </div>
+          </article>
         </div>
-        <p v-if="selectedMatrixSubtask.error_message" class="danger-copy">{{ selectedMatrixSubtask.error_message }}</p>
       </template>
-      <template v-else-if="selectedMatrixCell">
-        <div class="subtask-metrics">
-          <span>品牌排名：{{ formatRank(selectedMatrixCell.cell.mention_position) }}</span>
-          <span v-if="selectedMatrixCell.cell.raw_mention_position != null && selectedMatrixCell.cell.raw_mention_position !== selectedMatrixCell.cell.mention_position">
-            原始提及排名：{{ formatRank(selectedMatrixCell.cell.raw_mention_position) }}
-          </span>
-          <span v-if="selectedMatrixCell.cell.monitor_keyword">监控词：{{ selectedMatrixCell.cell.monitor_keyword }}</span>
-          <span>情感：{{ sentimentLabelMap[selectedMatrixCell.cell.sentiment || ''] || '暂无' }}</span>
-          <span>状态：{{ monitorStatusLabelMap[selectedMatrixCell.cell.status] || selectedMatrixCell.cell.status }}</span>
-          <a v-if="selectedMatrixCell.cell.page_screenshot" :href="selectedMatrixCell.cell.page_screenshot" target="_blank">打开快照</a>
-          <span v-else class="muted-metric">快照：未返回</span>
+      <template v-else-if="detailSubtask || detailContext">
+        <div class="realtime-drawer-metrics">
+          <span v-if="drawerRank != null">品牌排名 {{ drawerRank }}</span>
+          <span v-if="drawerExposure != null">品牌露出 {{ drawerExposure }}</span>
+          <span>情感 {{ sentimentLabelMap[detailSubtask?.sentiment || detailContext?.cell?.sentiment || ''] || '暂无' }}</span>
+          <span>状态 {{ monitorStatusLabelMap[detailSubtask?.status || detailContext?.cell?.status || ''] || '—' }}</span>
+          <a v-if="detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot" :href="(detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot)!" target="_blank">打开快照</a>
         </div>
-        <p
-          v-if="selectedMatrixCell.cell.raw_mention_position != null && selectedMatrixCell.cell.raw_mention_position !== selectedMatrixCell.cell.mention_position"
-          class="mention-context ranking-matrix-rank-note"
-        >
-          品牌在 AI 回答中未实际出现，矩阵不展示原始排名 {{ formatRank(selectedMatrixCell.cell.raw_mention_position) }}。
+
+        <p v-if="showRankNote" class="realtime-drawer-note">
+          回答正文中未出现品牌露出词，矩阵展示「-」；原始检测排名仅供参考，已按正文重新计算。
         </p>
+
+        <pre v-if="detailSubtask?.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
+        <p v-else-if="detailSubtask?.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
+
+        <div v-if="detailSubtask?.reference_list?.length" class="realtime-drawer-sources">
+          <b>引用信源</b>
+          <a
+            v-for="source in detailSubtask.reference_list.slice(0, 8)"
+            :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
+            :href="source.url"
+            target="_blank"
+          >{{ source.title || source.site || source.url }}</a>
+        </div>
+
+        <p v-if="detailSubtask?.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
       </template>
-    </el-dialog>
+    </ElDrawer>
   </section>
 </template>
