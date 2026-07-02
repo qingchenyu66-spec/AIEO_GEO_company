@@ -93,7 +93,7 @@ npm run dev
 ```powershell
 cd backend
 $env:PYTHONPATH="d:\py代码\GEO优化\backend"   # 按实际路径调整
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 **前端**：
@@ -108,10 +108,10 @@ npm run dev
 | 服务 | 地址 |
 |------|------|
 | 前端 | http://127.0.0.1:5173 |
-| API 文档 | http://127.0.0.1:8000/docs |
-| 健康检查 | http://127.0.0.1:8000/api/v1/health |
+| API 文档 | http://127.0.0.1:8001/docs |
+| 健康检查 | http://127.0.0.1:8001/api/v1/health |
 
-前端通过 Vite 代理将 `/api` 转发到 `http://127.0.0.1:8000`。
+前端通过 Vite 代理将 `/api` 转发到 `http://127.0.0.1:8001`。
 
 ## 演示账号
 
@@ -180,7 +180,7 @@ npm run build
 ## 常见问题
 
 **登录 502 / 网络错误**  
-确认后端已在 `8000` 端口运行，且 `/api/v1/health` 返回 `database: ready`。
+确认后端已在 `8001` 端口运行，且 `/api/v1/health` 返回 `database: ready`。
 
 **监测无数据**  
 检查 `MOLIZHISHU_TOKEN`、企业品牌资产是否已审核配置、是否已执行调度脚本或手动触发监测。

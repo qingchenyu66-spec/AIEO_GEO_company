@@ -1,8 +1,9 @@
 param(
-    [ValidateSet("submit", "sync", "beat", "all")]
+    [ValidateSet("submit", "sync", "default", "beat", "all")]
     [string]$Role = "all",
     [int]$SubmitConcurrency = 4,
-    [int]$SyncConcurrency = 8
+    [int]$SyncConcurrency = 8,
+    [int]$DefaultConcurrency = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +57,16 @@ try {
                 "--loglevel=info"
             )
         }
+        "default" {
+            Start-CeleryWindow "GEO Celery Default Worker" @(
+                "-A", "app.celery_app", "worker",
+                "-Q", "default",
+                "-n", "default@localhost",
+                "-c", "$DefaultConcurrency",
+                "--pool=solo",
+                "--loglevel=info"
+            )
+        }
         "beat" {
             Start-CeleryWindow "GEO Celery Beat" @(
                 "-A", "app.celery_app", "beat",
@@ -81,12 +92,21 @@ try {
                 "--loglevel=info"
             )
             Start-Sleep -Seconds 1
+            Start-CeleryWindow "GEO Celery Default Worker" @(
+                "-A", "app.celery_app", "worker",
+                "-Q", "default",
+                "-n", "default@localhost",
+                "-c", "$DefaultConcurrency",
+                "--pool=solo",
+                "--loglevel=info"
+            )
+            Start-Sleep -Seconds 1
             Start-CeleryWindow "GEO Celery Beat" @(
                 "-A", "app.celery_app", "beat",
                 "--loglevel=info"
             )
             Write-Host ""
-            Write-Host "Celery workers and beat started in separate windows."
+            Write-Host "Celery workers (submit/sync/default) and beat started in separate windows."
             Write-Host "Linux production should drop --pool=solo and run prefork workers."
         }
     }

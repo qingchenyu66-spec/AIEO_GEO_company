@@ -82,11 +82,16 @@ export interface SystemConfigRecord {
   config_key: string
   config_name: string
   config_value: string
+  category?: string
   scope: string
+  value_type?: 'str' | 'int' | 'float' | 'bool'
+  secret?: boolean
   status: string
   remark: string | null
   updated_at: string
 }
+
+export type SystemConfigCategory = 'secrets' | 'schedule' | 'cache_queue' | 'menu'
 
 export interface MenuConfigRecord {
   id: number
@@ -106,6 +111,12 @@ export interface MolizhishuBalance {
   current_balance_text: string | null
   fetched_at: string
   error: string | null
+}
+
+export interface DeepseekBalance extends MolizhishuBalance {
+  currency?: string | null
+  is_available?: boolean | null
+  display_value?: string | null
 }
 
 export interface PlatformOverview {
@@ -153,6 +164,7 @@ export interface PlatformOverview {
   operation_logs: OperationLogRecord[]
   system_health: Array<{ name: string; status: string; detail: string }>
   molizhishu_balance?: MolizhishuBalance
+  deepseek_balance?: DeepseekBalance
 }
 
 export interface CreateUserPayload {
@@ -222,8 +234,9 @@ export async function getOperationLogs(): Promise<OperationLogRecord[]> {
   return response.data.data
 }
 
-export async function getSystemConfigs(): Promise<SystemConfigRecord[]> {
-  const response = await http.get('/v1/management/system-configs')
+export async function getSystemConfigs(category?: SystemConfigCategory): Promise<SystemConfigRecord[]> {
+  const params = category && category !== 'menu' ? { category } : {}
+  const response = await http.get('/v1/management/system-configs', { params })
   return response.data.data
 }
 

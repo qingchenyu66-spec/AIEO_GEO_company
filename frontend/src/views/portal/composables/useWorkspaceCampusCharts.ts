@@ -1,4 +1,4 @@
-﻿import { nextTick, onUnmounted, ref, watch, type Ref } from 'vue'
+import { nextTick, onUnmounted, ref, watch, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
 
 export type WorkspaceCampusChartData = {
@@ -302,7 +302,7 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
         campusGaugeOption(
           data.healthScore ?? 0,
           data.healthScore != null ? `${data.healthScore}` : '-',
-          ['#0f766e', '#14b8a6'],
+          ['#67e8f9', '#38bdf8'],
         ),
         true,
       )

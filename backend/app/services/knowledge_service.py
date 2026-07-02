@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -96,4 +97,30 @@ def knowledge_file_to_dict(record: KnowledgeFile) -> dict:
         "file_size": record.file_size,
         "status": record.status,
         "created_at": record.created_at.isoformat(),
+    }
+
+
+def read_knowledge_file_text(db: Session, current: CurrentSession, file_id: int) -> dict[str, Any]:
+    """读取知识库原文件全文，用于前端预览。"""
+    from app.services.knowledge_text_extractor import KnowledgeTextExtractError, extract_knowledge_text
+
+    record = db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.id == file_id, KnowledgeFile.deleted.is_(False))
+    )
+    if record is None:
+        raise ValueError("文件不存在")
+    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id != record.tenant_id:
+        raise ValueError("无权查看该文件")
+    file_path = STORAGE_ROOT / record.storage_path
+    if not file_path.exists():
+        raise ValueError("文件不存在于存储目录")
+    try:
+        text = extract_knowledge_text(file_path, record.file_ext)
+    except KnowledgeTextExtractError as exc:
+        raise ValueError(str(exc)) from exc
+    return {
+        "file_id": record.id,
+        "original_name": record.original_name,
+        "char_count": len(text),
+        "text": text,
     }

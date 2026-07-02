@@ -167,6 +167,12 @@ export interface MolizhishuBalance {
   error: string | null
 }
 
+export interface DeepseekBalance extends MolizhishuBalance {
+  currency?: string | null
+  is_available?: boolean | null
+  display_value?: string | null
+}
+
 export interface PlatformMatrixItem {
   code: string
   name: string
@@ -207,6 +213,11 @@ export async function getMolizhishuBalance(): Promise<MolizhishuBalance> {
   return response.data.data
 }
 
+export async function getDeepseekBalance(): Promise<DeepseekBalance> {
+  const response = await http.get('/v1/platforms/deepseek-balance')
+  return response.data.data
+}
+
 export async function getPlatformMatrix(force = false): Promise<PlatformMatrix> {
   if (!force && platformMatrixCache && Date.now() - platformMatrixCache.at < PLATFORM_CACHE_TTL) {
     return platformMatrixCache.data
@@ -232,8 +243,8 @@ export async function updatePlatform(id: number, data: UpdatePlatformPayload): P
   return response.data.data
 }
 
-export async function getAlertThresholds(): Promise<AlertThreshold[]> {
-  const response = await http.get('/v1/alerts/thresholds')
+export async function getAlertThresholds(scope: 'business' | 'technical' | 'all' = 'business'): Promise<AlertThreshold[]> {
+  const response = await http.get('/v1/alerts/thresholds', { params: { scope } })
   return response.data.data
 }
 

@@ -153,6 +153,7 @@ function actionOptions(type: 'PLATFORM' | 'CUSTOMER', menuCode: string) {
       <button class="primary-btn" @click="loadMenuConfigs">刷新</button>
     </div>
     <div v-if="loadingMenuConfigs" class="mini-empty">加载中...</div>
+    <div v-else-if="!menuConfigs.length" class="mini-empty">暂无菜单配置，请点「刷新」重试。</div>
     <div v-else class="menu-config-table">
       <table>
         <thead>

@@ -10,7 +10,11 @@ from app.core.database import get_db
 from app.core.celery_queue_monitor import format_celery_monitor_zh, get_queue_monitor_snapshot
 from app.core.platform_order import sort_platform_items
 from app.core.redis_client import get_json_cache, redis_health, set_json_cache
-from app.models.ops import OperationLog, SystemConfig
+from app.services.system_config_service import (
+    list_system_configs,
+    update_system_config as persist_system_config,
+)
+from app.models.ops import OperationLog
 from app.models.permission import Menu, Position, PositionMenu, Role, UserIdentityMenu
 from app.models.tenant import Tenant
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
@@ -18,6 +22,7 @@ from app.models.menu_config import MenuConfig
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
+from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.schemas.permission import (
     MenuConfigBatchItem,
@@ -446,24 +451,14 @@ def management_celery_monitor(
 
 @router.get("/system-configs", response_model=ApiResponse[list[dict]])
 def management_system_configs(
+    category: str | None = Query(default=None, description="secrets / schedule / cache_queue"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    rows = db.scalars(select(SystemConfig).order_by(SystemConfig.id.asc()))
-    return ApiResponse(data=[
-        {
-            "id": item.id,
-            "config_key": item.config_key,
-            "config_name": item.description or item.config_key,
-            "config_value": item.config_value,
-            "scope": item.scope,
-            "status": "启用" if item.status else "停用",
-            "remark": item.description,
-            "updated_at": item.updated_at.isoformat(sep=" ", timespec="minutes"),
-        }
-        for item in rows
-    ])
+    if category and category not in {"secrets", "schedule", "cache_queue"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的配置分类")
+    return ApiResponse(data=list_system_configs(db, category=category))
 
 
 @router.put("/system-configs/{config_id}", response_model=ApiResponse[dict])
@@ -474,31 +469,25 @@ def management_update_system_config(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    config = db.scalar(select(SystemConfig).where(SystemConfig.id == config_id))
-    if config is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置项不存在")
     new_value = payload.get("config_value")
     if new_value is None or not str(new_value).strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="配置值不能为空")
-    config.config_value = str(new_value).strip()
-    config.updated_by = current.user.display_name or current.identity.identity_name or current.user.username
+    updated_by = current.user.display_name or current.identity.identity_name or current.user.username
+    try:
+        data = persist_system_config(db, config_id, str(new_value), updated_by=updated_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     write_management_log(
         db,
         current,
         "系统配置",
-        f"更新配置 {config.config_key}",
+        f"更新配置 {data['config_key']}",
         target_module="系统配置",
-        target_id=config.id,
+        target_id=config_id,
         risk_level="关注",
     )
     db.commit()
-    db.refresh(config)
-    return ApiResponse(data={
-        "id": config.id,
-        "config_key": config.config_key,
-        "config_value": config.config_value,
-        "updated_at": config.updated_at.isoformat(sep=" ", timespec="minutes"),
-    })
+    return ApiResponse(data=data)
 
 
 @router.get("/overview", response_model=ApiResponse[dict])
@@ -699,6 +688,7 @@ def management_overview(
         ],
         "celery_queues": queue_snapshot,
         "molizhishu_balance": fetch_molizhishu_balance(),
+        "deepseek_balance": fetch_deepseek_balance(),
     }
     set_json_cache(cache_key, data, ttl_seconds=30)
     return ApiResponse(data=data)

@@ -1,6 +1,6 @@
 """平台管理与预警阈值API。"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,14 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.models.platform import AlertThreshold, GeoPlatform
 from app.schemas.common import ApiResponse
-from app.core.celery_queue_monitor import business_metric_label, format_celery_monitor_zh, get_queue_monitor_snapshot, is_business_metric_type
+from app.core.celery_queue_monitor import (
+    format_celery_monitor_zh,
+    get_queue_monitor_snapshot,
+    invalidate_queue_threshold_cache,
+    is_business_metric_type,
+    metric_label,
+)
+from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.services.molizhishu_platforms import (
     get_platform_catalog_meta,
@@ -80,6 +87,16 @@ def molizhishu_balance(
     return ApiResponse(data=fetch_molizhishu_balance())
 
 
+@router.get("/deepseek-balance", response_model=ApiResponse[dict])
+def deepseek_balance(
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """查询 DeepSeek API 账户当前余额。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
+    return ApiResponse(data=fetch_deepseek_balance())
+
+
 @router.get("/supported", response_model=ApiResponse[dict])
 def supported_platforms(
     refresh: bool = False,
@@ -131,10 +148,11 @@ def update_platform(
 @alert_router.get("/thresholds", response_model=ApiResponse[list[dict]])
 def list_thresholds(
     tenant_id: int | None = None,
+    scope: str = Query("business", pattern="^(business|technical|all)$"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
-    """预警阈值配置列表。运营看全部，客户看自己企业的。"""
+    """预警阈值配置列表。scope=business|technical|all。"""
     require_platform(current)
     stmt = select(AlertThreshold).where(AlertThreshold.deleted.is_(False))
     if tenant_id is not None:
@@ -142,13 +160,16 @@ def list_thresholds(
     else:
         stmt = stmt.where(AlertThreshold.tenant_id.is_(None))
     rows = list(db.scalars(stmt.order_by(AlertThreshold.id.asc())))
-    business_rows = [r for r in rows if is_business_metric_type(r.metric_type)]
+    if scope == "business":
+        rows = [r for r in rows if is_business_metric_type(r.metric_type)]
+    elif scope == "technical":
+        rows = [r for r in rows if not is_business_metric_type(r.metric_type)]
     return ApiResponse(data=[
         {
             "id": r.id,
             "tenant_id": r.tenant_id,
             "metric_type": r.metric_type,
-            "metric_label": business_metric_label(r.metric_type),
+            "metric_label": metric_label(r.metric_type),
             "threshold_name": r.threshold_name,
             "warning_value": r.warning_value,
             "critical_value": r.critical_value,
@@ -157,7 +178,7 @@ def list_thresholds(
             "updated_by": r.updated_by,
             "updated_at": r.updated_at.isoformat(),
         }
-        for r in business_rows
+        for r in rows
     ])
 
 
@@ -194,6 +215,8 @@ def update_threshold(
     threshold.updated_by = current.user.display_name or current.identity.identity_name
     db.commit()
     db.refresh(threshold)
+    if str(threshold.metric_type or "").startswith("celery_"):
+        invalidate_queue_threshold_cache()
     return ApiResponse(data={
         "id": threshold.id,
         "threshold_name": threshold.threshold_name,

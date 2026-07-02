@@ -5,7 +5,6 @@ import {
   BookOpen,
   BrainCircuit,
   CheckCircle2,
-  Database,
   FileText,
   Layers3,
   RefreshCw,
@@ -14,6 +13,7 @@ import {
   Upload,
 } from '@lucide/vue'
 import { useKnowledgeBase } from '../composables/useKnowledgeBase'
+import { useKnowledgePreview } from '../composables/useKnowledgePreview'
 import '../../../styles/knowledge-base.css'
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -57,6 +57,15 @@ const {
   extLabel,
   normalizeExt,
 } = useKnowledgeBase()
+
+const {
+  previewMode,
+  previewSections,
+  fullText,
+  fullTextLoading,
+  fullTextError,
+  loadFullText,
+} = useKnowledgePreview(selectedFile)
 
 const coverageScore = computed(() => {
   if (!files.value.length) return 0
@@ -282,48 +291,74 @@ function fileIconClass(ext: string) {
             </div>
           </div>
 
-          <section v-else-if="selectedFile.parse_result" class="kb-parse-panel">
-            <header class="kb-parse-panel-head">
-              <Sparkles />
-              <div>
-                <strong>知识资产预览</strong>
-                <span>已提炼为可用于品牌诊断、引用分析和报告输出的结构化素材</span>
+          <section v-else-if="selectedFile.parse_result || previewSections.length" class="kb-parse-panel">
+            <div class="kb-preview-toolbar">
+              <div class="kb-preview-tabs">
+                <button type="button" :class="{ active: previewMode === 'structured' }" @click="previewMode = 'structured'">
+                  结构化预览
+                  <em>{{ previewSections.length }}</em>
+                </button>
+                <button type="button" :class="{ active: previewMode === 'fulltext' }" @click="previewMode = 'fulltext'">
+                  全文阅读
+                  <em v-if="fullText">{{ fullText.length }}</em>
+                </button>
               </div>
-            </header>
-
-            <div class="kb-preview-grid">
-              <article class="kb-preview-card is-summary">
-                <span>内容摘要</span>
-                <p>{{ selectedFile.parse_result.summary || '暂无摘要' }}</p>
-              </article>
-              <article class="kb-preview-card">
-                <span>主题归类</span>
-                <div v-if="selectedFile.parse_result.topics?.length" class="kb-chip-row">
-                  <em v-for="topic in selectedFile.parse_result.topics" :key="topic" class="kb-chip is-topic">{{ topic }}</em>
-                </div>
-                <p v-else>暂无主题标签</p>
-              </article>
-              <article class="kb-preview-card">
-                <span>关键词资产</span>
-                <div v-if="selectedFile.parse_result.keywords?.length" class="kb-chip-row">
-                  <em v-for="keyword in selectedFile.parse_result.keywords" :key="keyword" class="kb-chip">{{ keyword }}</em>
-                </div>
-                <p v-else>暂无关键词</p>
-              </article>
+              <button
+                type="button"
+                class="filter-reset-btn tiny-btn"
+                :disabled="fullTextLoading"
+                @click="selectedFile && loadFullText(selectedFile.id)"
+              >
+                <RefreshCw />
+                刷新全文
+              </button>
             </div>
 
-            <div v-if="selectedFile.parse_result.geo_points?.length" class="kb-geo-card">
-              <div class="kb-geo-card-head">
-                <Database />
-                <strong>GEO 引用要点</strong>
-              </div>
-              <ul class="kb-geo-points">
-                <li v-for="point in selectedFile.parse_result.geo_points" :key="point">{{ point }}</li>
-              </ul>
+            <div v-if="previewMode === 'structured'" class="kb-dynamic-preview">
+              <article
+                v-for="(section, index) in previewSections"
+                :key="`${section.title}-${index}`"
+                class="kb-preview-block"
+                :class="{
+                  'is-wide': section.type === 'text',
+                  'is-cards': section.type === 'cards',
+                }"
+              >
+                <header class="kb-preview-block-head">
+                  <h4>{{ section.title }}</h4>
+                </header>
+
+                <p v-if="section.type === 'text'" class="kb-preview-text">{{ section.content }}</p>
+
+                <ul v-else-if="section.type === 'list'" class="kb-preview-list">
+                  <li v-for="(item, itemIndex) in section.items" :key="`${section.title}-${itemIndex}`">{{ item }}</li>
+                </ul>
+
+                <div v-else class="kb-preview-cards">
+                  <article
+                    v-for="(card, cardIndex) in section.cards"
+                    :key="`${section.title}-card-${cardIndex}`"
+                    class="kb-preview-card-item"
+                  >
+                    <strong v-if="card.title">{{ card.title }}</strong>
+                    <p>{{ card.content }}</p>
+                  </article>
+                </div>
+              </article>
+              <div v-if="!previewSections.length" class="kb-preview-empty">暂无可展示的结构化内容，请切换到全文阅读查看原文件。</div>
             </div>
 
-            <p v-if="selectedFile.parse_result.truncated" class="kb-parse-footnote">
-              正文较长，本次预览基于前 {{ selectedFile.parse_result.extracted_chars }} 字生成。
+            <div v-else class="kb-fulltext-panel">
+              <div v-if="fullTextLoading" class="kb-fulltext-state">全文加载中...</div>
+              <div v-else-if="fullTextError" class="kb-fulltext-state is-error">
+                {{ fullTextError }}
+              </div>
+              <pre v-else-if="fullText" class="kb-fulltext-body">{{ fullText }}</pre>
+              <div v-else class="kb-fulltext-state">暂无全文内容。</div>
+            </div>
+
+            <p v-if="selectedFile.parse_result?.truncated" class="kb-parse-footnote">
+              正文较长，结构化预览基于前 {{ selectedFile.parse_result?.extracted_chars }} 字生成；全文阅读展示完整提取结果。
             </p>
           </section>
 

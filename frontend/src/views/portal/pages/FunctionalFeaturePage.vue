@@ -31,6 +31,27 @@ const {
   recentSubtasks,
 } = analytics
 
+type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'menu'
+
+const settingsCategory = ref<SettingsCategory>('secrets')
+
+const settingsTabs: Array<{ key: SettingsCategory; title: string; desc: string }> = [
+  { key: 'secrets', title: '接口密钥', desc: '模力指数、DeepSeek 等敏感配置，保存后立即生效' },
+  { key: 'schedule', title: '调度策略', desc: '监测容差、模力限速、Celery 扫描与同步参数' },
+  { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
+  { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
+]
+
+const filteredConfigRows = computed(() => {
+  if (settingsCategory.value === 'menu') return []
+  return systemConfigRows.value.filter(row => (row.category || row.scope) === settingsCategory.value)
+})
+
+function switchSettingsCategory(key: SettingsCategory) {
+  settingsCategory.value = key
+  cancelEditConfig()
+}
+
 const primaryPanelTitle = computed(() => {
   const mode = functionalPage.value.mode
   if (mode === 'diagnosis') return '品牌健康分'
@@ -45,13 +66,23 @@ const editingConfigId = ref<number | null>(null)
 const editingConfigValue = ref('')
 const savingConfig = ref(false)
 
+function isSecretConfigRow(row: { config_key: string; secret?: boolean }) {
+  return row.secret || isSecretConfigKey(row.config_key)
+}
+
+function configValuePlaceholder(row: { value_type?: string }) {
+  if (row.value_type === 'bool') return 'true/false 或 启用/停用'
+  if (row.value_type === 'int' || row.value_type === 'float') return '请输入数字'
+  return '请输入配置值'
+}
+
 function isSecretConfigKey(key: string) {
   return /key|token|secret|password/i.test(key)
 }
 
-function maskedConfigValue(value: string, key: string) {
+function maskedConfigValue(value: string, key: string, secret?: boolean) {
   if (!value) return '-'
-  if (!isSecretConfigKey(key)) return value
+  if (!secret && !isSecretConfigKey(key)) return value
   if (value.length <= 8) return '****'
   return `${value.slice(0, 4)}****${value.slice(-4)}`
 }
@@ -66,7 +97,7 @@ function cancelEditConfig() {
   editingConfigValue.value = ''
 }
 
-async function saveConfigRow(row: { id: number; config_key: string }) {
+async function saveConfigRow(row: { id: number; config_key: string; category?: string; scope?: string }) {
   if (!editingConfigValue.value.trim()) {
     ElMessage.warning('配置值不能为空')
     return
@@ -74,7 +105,10 @@ async function saveConfigRow(row: { id: number; config_key: string }) {
   savingConfig.value = true
   try {
     await updateSystemConfig(row.id, editingConfigValue.value.trim())
-    ElMessage.success('配置已更新')
+    ElMessage.success('配置已更新并立即生效')
+    if ((row.category || row.scope) === 'cache_queue') {
+      ElMessage.info('Redis / Celery 连接变更后，建议重启 Worker 与 API 以确保队列完全生效')
+    }
     cancelEditConfig()
     await loadPlatformSystemData()
   } catch (error: unknown) {
@@ -176,36 +210,59 @@ onUnmounted(() => {
 
         <div v-else-if="functionalPage.mode === 'settings'" class="ops-table settings-table">
           <div class="settings-header-actions">
-            <button class="primary-btn small-btn" @click="emit('open-menu-config')">菜单配置管理</button>
+            <button class="primary-btn small-btn" @click="loadPlatformSystemData">刷新配置</button>
           </div>
           <div class="settings-summary-grid">
-            <article><b>接口密钥</b><span>模力指数、AI 增强服务等敏感配置统一脱敏展示</span></article>
-            <article><b>调度策略</b><span>定时监测、同步频率、队列阈值等运行参数</span></article>
-            <article><b>缓存与队列</b><span>Redis、Celery、任务锁和进度缓存状态</span></article>
-            <article><b>菜单权限</b><span>平台运营端与客户企业端菜单可见性配置</span></article>
+            <article
+              v-for="tab in settingsTabs"
+              :key="tab.key"
+              :class="{ 'is-active': settingsCategory === tab.key }"
+              role="button"
+              tabindex="0"
+              @click="switchSettingsCategory(tab.key)"
+              @keyup.enter="switchSettingsCategory(tab.key)"
+            >
+              <b>{{ tab.title }}</b>
+              <span>{{ tab.desc }}</span>
+            </article>
           </div>
-          <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
-          <div v-for="row in systemConfigRows" :key="row.id" class="ops-row settings-config-row">
-            <b>{{ row.config_key }}</b>
-            <span v-if="editingConfigId !== row.id">{{ maskedConfigValue(row.config_value, row.config_key) }}</span>
-            <input v-else v-model="editingConfigValue" class="settings-config-input" type="text" />
-            <em>{{ row.remark || row.scope || '平台运行配置' }}</em>
-            <i>{{ row.status || '启用' }}</i>
-            <span class="settings-config-actions">
-              <button
-                v-if="editingConfigId !== row.id"
-                type="button"
-                class="filter-reset-btn tiny-btn"
-                @click="startEditConfig(row)"
-              >
-                编辑
-              </button>
-              <template v-else>
-                <button type="button" class="primary-btn small-btn" :disabled="savingConfig" @click="saveConfigRow(row)">保存</button>
-                <button type="button" class="filter-reset-btn tiny-btn" @click="cancelEditConfig">取消</button>
-              </template>
-            </span>
+
+          <div v-if="settingsCategory === 'menu'" class="settings-menu-panel">
+            <p>菜单权限通过「菜单配置管理」维护，调整后立即作用于平台运营端与客户企业端导航。</p>
+            <button class="primary-btn small-btn" @click="emit('open-menu-config')">打开菜单配置管理</button>
           </div>
+
+          <template v-else>
+            <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
+            <div v-for="row in filteredConfigRows" :key="row.id" class="ops-row settings-config-row">
+              <b>{{ row.config_name || row.config_key }}</b>
+              <span v-if="editingConfigId !== row.id">{{ maskedConfigValue(row.config_value, row.config_key, row.secret) }}</span>
+              <input
+                v-else
+                v-model="editingConfigValue"
+                class="settings-config-input"
+                :type="isSecretConfigRow(row) ? 'password' : 'text'"
+                :placeholder="configValuePlaceholder(row)"
+              />
+              <em>{{ row.remark || '平台运行配置' }}</em>
+              <i>{{ row.status || '启用' }}</i>
+              <span class="settings-config-actions">
+                <button
+                  v-if="editingConfigId !== row.id"
+                  type="button"
+                  class="filter-reset-btn tiny-btn"
+                  @click="startEditConfig(row)"
+                >
+                  编辑
+                </button>
+                <template v-else>
+                  <button type="button" class="primary-btn small-btn" :disabled="savingConfig" @click="saveConfigRow(row)">保存</button>
+                  <button type="button" class="filter-reset-btn tiny-btn" @click="cancelEditConfig">取消</button>
+                </template>
+              </span>
+            </div>
+            <div v-if="!filteredConfigRows.length" class="mini-empty">该分类暂无配置项。</div>
+          </template>
         </div>
 
         <div v-else class="feature-table">

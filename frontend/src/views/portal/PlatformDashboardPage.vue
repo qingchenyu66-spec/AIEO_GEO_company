@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
-import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, WalletCards, Zap } from '@lucide/vue'
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, Sparkles, WalletCards, Zap } from '@lucide/vue'
 import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
-import { getMolizhishuBalance } from '../../services/platforms'
+import { getDeepseekBalance, getMolizhishuBalance, type DeepseekBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
 import { sortPlatformRows } from './platformOrder'
 
@@ -15,6 +15,7 @@ const props = defineProps<{
 
 const overview = ref<PlatformOverview | null>(null)
 const molizhishuBalance = ref<MolizhishuBalance | null>(null)
+const deepseekBalance = ref<DeepseekBalance | null>(null)
 const loading = ref(false)
 const errorText = ref('')
 const taskCompletionChartRef = ref<HTMLDivElement | null>(null)
@@ -30,13 +31,38 @@ function cleanDashboardLog(value: string | null | undefined, fallback = '历史�
   return text
 }
 
+function formatBalanceValue(
+  balance: (MolizhishuBalance & { display_value?: string | null; currency?: string | null }) | null | undefined,
+  currencyFallback = '¥',
+) {
+  if (!balance) return '--'
+  if (balance.available) {
+    if (balance.display_value) return balance.display_value
+    const text = balance.current_balance_text ?? balance.current_balance
+    if (text == null) return '--'
+    const symbol = balance.currency === 'USD' ? '$' : balance.currency === 'CNY' ? '¥' : currencyFallback
+    return `${symbol} ${text}`
+  }
+  return balance.error ? '查询失败' : '--'
+}
+
+function balanceNote(balance: (MolizhishuBalance & { is_available?: boolean | null }) | null | undefined) {
+  if (!balance) return undefined
+  const parts: string[] = []
+  if (balance.fetched_at) parts.push(`更新于 ${balance.fetched_at}`)
+  if (balance.is_available === false) parts.push('余额不足')
+  return parts.join(' · ') || undefined
+}
+
 const kpiCards = computed(() => {
   const kpis = overview.value?.kpis
+  const deepseek = deepseekBalance.value ?? overview.value?.deepseek_balance
   return [
     { label: '今日任务', value: String(kpis?.today_tasks ?? 0), note: `已完成 ${kpis?.today_completed_tasks ?? 0}`, icon: Clock3, tone: 'blue' },
     { label: '异常任务', value: String(kpis?.today_failed_tasks ?? 0), note: '失败 / 停止 / 待复核', icon: AlertTriangle, tone: (kpis?.today_failed_tasks ?? 0) > 0 ? 'red' : 'green' },
     { label: '服务中企业', value: String(kpis?.active_tenants ?? 0), note: '当前正常服务客户', icon: Building2, tone: 'green' },
     { label: '今日消耗', value: String(kpis?.today_cost ?? 0), note: '模力接口扣费', icon: WalletCards, tone: 'cyan' },
+    { label: 'DeepSeek 余额', value: formatBalanceValue(deepseek), note: deepseek?.available ? '报告 / 知识库 / 情绪词' : (deepseek?.error || '未配置 API Key'), icon: Sparkles, tone: deepseek?.available ? 'purple' : 'amber' },
     { label: '即将到期', value: String(kpis?.expiring_tenants ?? 0), note: '30 天内到期', icon: FileBarChart, tone: (kpis?.expiring_tenants ?? 0) > 0 ? 'amber' : 'green' },
     { label: '接口成功率', value: `${kpis?.api_success_rate ?? 0}%`, note: '今日调度提交', icon: Gauge, tone: 'purple' },
   ]
@@ -81,11 +107,10 @@ const customerDataRows = computed(() => {
 const quotaRows = computed(() => {
   const quota = overview.value?.quota_overview
   const balance = molizhishuBalance.value ?? overview.value?.molizhishu_balance
-  const balanceValue = balance?.available
-    ? `¥ ${balance.current_balance_text ?? balance.current_balance ?? '--'}`
-    : (balance?.error ? '查询失败' : '--')
+  const deepseek = deepseekBalance.value ?? overview.value?.deepseek_balance
   return [
-    { label: '模力账户余额', value: balanceValue, highlight: true, note: balance?.fetched_at ? `更新于 ${balance.fetched_at}` : undefined },
+    { label: '模力账户余额', value: formatBalanceValue(balance), highlight: true, note: balanceNote(balance) },
+    { label: 'DeepSeek 账户余额', value: formatBalanceValue(deepseek), highlight: true, note: balanceNote(deepseek) },
     { label: '累计消耗', value: quota?.used_amount ?? 0 },
     { label: '今日消耗', value: quota?.today_amount ?? 0 },
     { label: '预计月消耗', value: quota?.estimated_month_amount ?? 0 },
@@ -97,12 +122,14 @@ async function loadOverview() {
   loading.value = true
   errorText.value = ''
   try {
-    const [overviewData, balanceData] = await Promise.all([
+    const [overviewData, balanceData, deepseekData] = await Promise.all([
       getPlatformOverview(),
       getMolizhishuBalance().catch(() => null),
+      getDeepseekBalance().catch(() => null),
     ])
     overview.value = overviewData
     molizhishuBalance.value = balanceData ?? overviewData.molizhishu_balance ?? null
+    deepseekBalance.value = deepseekData ?? overviewData.deepseek_balance ?? null
   } catch (error: any) {
     errorText.value = extractErrorDetail(error)
   } finally {
@@ -262,7 +289,7 @@ onUnmounted(() => {
       </article>
 
       <article class="panel">
-        <div class="panel-head"><div><h2>费用额度</h2><p>模力账户余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
+        <div class="panel-head"><div><h2>费用额度</h2><p>模力与 DeepSeek 账户余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
         <div class="ops-quota-grid">
           <div v-for="row in quotaRows" :key="row.label" :class="{ 'is-highlight': row.highlight }">
             <span>{{ row.label }}</span>
@@ -271,6 +298,7 @@ onUnmounted(() => {
           </div>
         </div>
         <p v-if="(molizhishuBalance ?? overview?.molizhishu_balance)?.error" class="ops-balance-error">{{ (molizhishuBalance ?? overview?.molizhishu_balance)?.error }}</p>
+        <p v-if="(deepseekBalance ?? overview?.deepseek_balance)?.error" class="ops-balance-error">{{ (deepseekBalance ?? overview?.deepseek_balance)?.error }}</p>
       </article>
 
       <article class="panel">

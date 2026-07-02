@@ -1,4 +1,4 @@
-import { reactive, ref, type ComputedRef } from 'vue'
+import { reactive, ref, watch, type ComputedRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { notifyOperationError } from '../../../utils/requestError'
 import { withRetry } from '../../../composables/useRetry'
@@ -48,6 +48,10 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
       loadingMenuConfigs.value = false
     }
   }
+
+  watch(selectedMenuIdentityType, () => {
+    if (menuConfigDialog.value) void loadMenuConfigs()
+  })
 
   function startEditMenuConfig(config: MenuConfigRecord) {
     editingMenuConfig.value = config

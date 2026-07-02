@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,6 +37,17 @@ BUSINESS_METRIC_LABELS: dict[str, str] = {
     "task_failure_rate": "任务失败率",
     "molizhishu_balance": "模力账户余额",
 }
+
+TECHNICAL_METRIC_LABELS: dict[str, str] = {
+    "celery_queue_submit": "提交队列积压",
+    "celery_queue_sync": "同步队列积压",
+}
+
+QUEUE_METRIC_BY_NAME = {"submit": "celery_queue_submit", "sync": "celery_queue_sync"}
+
+_THRESHOLD_CACHE: dict[str, int] = {}
+_THRESHOLD_CACHE_EXPIRES_AT = 0.0
+_THRESHOLD_CACHE_TTL_SECONDS = 30
 
 TECHNICAL_METRIC_PREFIXES = ("celery_",)
 
@@ -311,6 +323,47 @@ def business_metric_label(metric_type: str) -> str:
     return BUSINESS_METRIC_LABELS.get(metric_type, metric_type)
 
 
+def metric_label(metric_type: str) -> str:
+    return BUSINESS_METRIC_LABELS.get(metric_type) or TECHNICAL_METRIC_LABELS.get(metric_type, metric_type)
+
+
+def invalidate_queue_threshold_cache() -> None:
+    global _THRESHOLD_CACHE_EXPIRES_AT
+    _THRESHOLD_CACHE.clear()
+    _THRESHOLD_CACHE_EXPIRES_AT = 0.0
+
+
+def _refresh_queue_threshold_cache() -> None:
+    global _THRESHOLD_CACHE_EXPIRES_AT
+    now = time.time()
+    if now < _THRESHOLD_CACHE_EXPIRES_AT:
+        return
+    _THRESHOLD_CACHE.clear()
+    try:
+        from sqlalchemy import select
+
+        from app.core.database import SessionLocal
+        from app.models.platform import AlertThreshold
+
+        with SessionLocal() as db:
+            rows = db.scalars(
+                select(AlertThreshold).where(
+                    AlertThreshold.deleted.is_(False),
+                    AlertThreshold.tenant_id.is_(None),
+                    AlertThreshold.enabled.is_(True),
+                    AlertThreshold.metric_type.in_(tuple(QUEUE_METRIC_BY_NAME.values())),
+                )
+            ).all()
+            for row in rows:
+                warning = int(str(row.warning_value or "0"))
+                critical = int(str(row.critical_value or "0"))
+                _THRESHOLD_CACHE[f"{row.metric_type}:warning"] = warning
+                _THRESHOLD_CACHE[f"{row.metric_type}:critical"] = critical
+    except Exception:
+        logger.exception("Failed to load queue thresholds from database")
+    _THRESHOLD_CACHE_EXPIRES_AT = now + _THRESHOLD_CACHE_TTL_SECONDS
+
+
 def collect_queue_stats() -> dict[str, Any]:
     """Collect queue backlog and worker runtime stats."""
     queues: dict[str, dict[str, int]] = {}
@@ -338,6 +391,12 @@ def collect_queue_stats() -> dict[str, Any]:
 
 
 def _threshold(queue_name: str, level: str) -> int:
+    _refresh_queue_threshold_cache()
+    metric_type = QUEUE_METRIC_BY_NAME.get(queue_name)
+    if metric_type:
+        cached = _THRESHOLD_CACHE.get(f"{metric_type}:{level}")
+        if cached is not None:
+            return cached
     if queue_name == "submit":
         return settings.celery_queue_submit_warning if level == "warning" else settings.celery_queue_submit_critical
     return settings.celery_queue_sync_warning if level == "warning" else settings.celery_queue_sync_critical

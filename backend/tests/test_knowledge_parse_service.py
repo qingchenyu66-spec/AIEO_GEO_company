@@ -68,10 +68,10 @@ def test_parse_knowledge_file_success(
     client.parse_knowledge_document.return_value = {
         "source": "deepseek",
         "model": "deepseek-chat",
-        "summary": "资料介绍了艾迪亚电梯媒体品牌。",
-        "keywords": ["电梯媒体", "品牌"],
-        "topics": ["品牌介绍"],
-        "geo_points": ["覆盖全国主要城市"],
+        "sections": [
+            {"title": "品牌介绍", "type": "text", "content": "资料介绍了艾迪亚电梯媒体品牌。"},
+            {"title": "核心关键词", "type": "list", "items": ["电梯媒体", "品牌"]},
+        ],
     }
 
     with patch("app.services.knowledge_parse_service.STORAGE_ROOT", tmp_path):
@@ -82,7 +82,7 @@ def test_parse_knowledge_file_success(
 
     assert result.parse_status == "parsed"
     assert result.parse_result_json is not None
-    assert result.parse_result_json["summary"].startswith("资料介绍")
+    assert result.parse_result_json["sections"][0]["title"] == "品牌介绍"
     assert result.parse_result_json["extracted_chars"] > 0
 
 

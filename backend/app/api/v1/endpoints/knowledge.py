@@ -10,6 +10,7 @@ from app.services.knowledge_parse_service import schedule_knowledge_parse, seria
 from app.services.knowledge_service import (
     delete_knowledge_file,
     list_knowledge_files,
+    read_knowledge_file_text,
     save_knowledge_file,
 )
 
@@ -49,6 +50,20 @@ async def upload_knowledge_file(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ApiResponse(data=serialize_knowledge_file(record))
+
+
+@router.get("/files/{file_id}/content", response_model=ApiResponse[dict])
+def knowledge_file_content(
+    file_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """读取知识库原文件全文，供前端完整预览。"""
+    try:
+        data = read_knowledge_file_text(db, current, file_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
 
 
 @router.post("/files/{file_id}/parse", response_model=ApiResponse[dict])

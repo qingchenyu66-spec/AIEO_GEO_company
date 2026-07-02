@@ -2,6 +2,13 @@ import { http } from './http'
 
 export type KnowledgeParseStatus = 'none' | 'parsing' | 'parsed' | 'failed'
 
+export interface KnowledgeParseSection {
+  title: string
+  type: 'text' | 'list' | 'cards'
+  content?: string
+  items?: string[]
+}
+
 export interface KnowledgeParseResult {
   source?: string
   model?: string
@@ -9,8 +16,16 @@ export interface KnowledgeParseResult {
   keywords?: string[]
   topics?: string[]
   geo_points?: string[]
+  sections?: KnowledgeParseSection[]
   extracted_chars?: number
   truncated?: boolean
+}
+
+export interface KnowledgeFileContent {
+  file_id: number
+  original_name: string
+  char_count: number
+  text: string
 }
 
 export interface KnowledgeFileRecord {
@@ -40,6 +55,11 @@ export async function uploadKnowledgeFile(file: File, tenantId?: number | null):
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 30000,
   })
+  return response.data.data
+}
+
+export async function getKnowledgeFileContent(fileId: number): Promise<KnowledgeFileContent> {
+  const response = await http.get(`/v1/knowledge/files/${fileId}/content`)
   return response.data.data
 }
 

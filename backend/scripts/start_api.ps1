@@ -1,6 +1,6 @@
 # 启动 GEO 后端 API（清理占用端口后单实例运行）
 param(
-    [int]$Port = 8000
+    [int]$Port = 8001
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +18,15 @@ Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
         if ($_ -and $_ -ne 0) {
             Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
         }
+    }
+# uvicorn --reload 父进程退出后，Windows 上可能残留 spawn_main 子进程仍占用端口
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.CommandLine -match 'uvicorn app\.main:app' -or
+        $_.CommandLine -match 'multiprocessing\.spawn import spawn_main'
+    } |
+    ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
 Start-Sleep -Seconds 1
 

@@ -49,6 +49,25 @@ class DeepseekClient:
             "Content-Type": "application/json",
         }
 
+    def get_account_balance(self) -> dict[str, Any]:
+        """Query DeepSeek prepaid balance via GET /user/balance."""
+        url = f"{self.base_url}/user/balance"
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(url, headers={**self._headers(), "Accept": "application/json"})
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:800]
+            raise DeepseekApiError(f"DeepSeek HTTP 错误：{exc.response.status_code} {detail}") from exc
+        except httpx.HTTPError as exc:
+            raise DeepseekApiError(f"DeepSeek 网络错误：{exc}") from exc
+        except ValueError as exc:
+            raise DeepseekApiError("DeepSeek 余额响应不是合法 JSON") from exc
+        if not isinstance(payload, dict):
+            raise DeepseekApiError("DeepSeek 余额响应格式错误")
+        return payload
+
     def chat_completion(
         self,
         *,
@@ -315,11 +334,11 @@ class DeepseekClient:
         document_text: str,
         truncated: bool,
     ) -> dict[str, Any]:
-        """Extract GEO-oriented summary and keywords from enterprise knowledge text."""
+        """Extract structured preview sections from enterprise knowledge text."""
         system_prompt = (
             "你是 GEO 企业知识库分析助手。请阅读企业上传的资料文本，"
-            "提炼可用于品牌监测、报告撰写和 AI 引用追溯的结构化要点。"
-            "不得编造资料中不存在的信息。只输出 JSON，不要解释。"
+            "按资料实际结构提炼可预览的内容块。标题必须来自资料本身（如章节名、业务名、产品名），"
+            "禁止编造资料中不存在的信息，禁止输出固定占位标题。只输出 JSON，不要解释。"
         )
         truncate_note = "（正文已截断，仅基于前段内容分析）" if truncated else ""
         user_prompt = (
@@ -330,11 +349,13 @@ class DeepseekClient:
             f"{document_text}\n\n"
             "请输出 JSON：\n"
             "{\n"
-            '  "summary": "120-220字摘要，说明资料核心内容",\n'
-            '  "keywords": ["5-12个关键词或短语"],\n'
-            '  "topics": ["2-5个主题标签，如产品说明/品牌故事/FAQ"],\n'
-            '  "geo_points": ["3-6条可在 GEO 监测或报告中引用的要点，每条15-40字"]\n'
-            "}"
+            '  "sections": [\n'
+            '    {"title": "从资料提炼的小节标题", "type": "text", "content": "该小节完整段落"},\n'
+            '    {"title": "从资料提炼的小节标题", "type": "list", "items": ["条目1", "条目2"]},\n'
+            '    {"title": "从资料提炼的小节标题", "type": "cards", "items": [{"title":"子标题","content":"说明"}]}\n'
+            "  ]\n"
+            "}\n"
+            "要求：sections 至少 2 项；title 必须贴合资料语义；type 只能是 text/list/cards。"
         )
         content = self.chat_completion(
             messages=[
@@ -342,29 +363,53 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=1600,
+            max_tokens=3200,
             source="knowledge-parse",
         )
         payload = self._parse_json_payload(content)
         if not isinstance(payload, dict):
             raise DeepseekApiError("DeepSeek 知识库 JSON 格式错误")
 
-        def _list(key: str, *, limit: int) -> list[str]:
-            raw = payload.get(key)
-            if not isinstance(raw, list):
-                return []
-            items = [str(item).strip() for item in raw if str(item).strip()]
-            return items[:limit]
-
-        summary = str(payload.get("summary") or "").strip()
-        if not summary:
-            raise DeepseekApiError("DeepSeek 未返回摘要")
+        sections = self._normalize_knowledge_sections(payload.get("sections"))
+        if not sections:
+            raise DeepseekApiError("DeepSeek 未返回可预览的内容块")
 
         return {
             "source": "deepseek",
             "model": self.model,
-            "summary": summary,
-            "keywords": _list("keywords", limit=12),
-            "topics": _list("topics", limit=5),
-            "geo_points": _list("geo_points", limit=6),
+            "sections": sections,
         }
+
+    @staticmethod
+    def _normalize_knowledge_sections(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        sections: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            section_type = str(item.get("type") or "text").strip().lower()
+            if not title:
+                continue
+            if section_type == "list":
+                items = [str(v).strip() for v in (item.get("items") or []) if str(v).strip()]
+                if items:
+                    sections.append({"title": title, "type": "list", "items": items})
+                continue
+            if section_type == "cards":
+                cards: list[dict[str, str]] = []
+                for card in item.get("items") or []:
+                    if not isinstance(card, dict):
+                        continue
+                    card_title = str(card.get("title") or "").strip()
+                    card_content = str(card.get("content") or "").strip()
+                    if card_title or card_content:
+                        cards.append({"title": card_title, "content": card_content})
+                if cards:
+                    sections.append({"title": title, "type": "cards", "items": cards})
+                continue
+            content_text = str(item.get("content") or "").strip()
+            if content_text:
+                sections.append({"title": title, "type": "text", "content": content_text})
+        return sections[:12]
