@@ -5,6 +5,7 @@ import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getMonitorSummary, type MonitorSummary } from '../../../services/monitor'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
+import { sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
 
 export type SourceCategory = 'official' | 'media' | 'qa' | 'social' | 'encyclopedia'
@@ -74,7 +75,7 @@ export function useSourceAnalysis(options?: {
       }))
   ))
 
-  const platformRanking = computed(() => monitorSummary.value?.platform_stats || [])
+  const platformRanking = computed(() => sortPlatformRows(monitorSummary.value?.platform_stats || []))
 
   const filteredSources = computed(() => {
     const keyword = keywordFilter.value.trim().toLowerCase()
@@ -109,12 +110,11 @@ export function useSourceAnalysis(options?: {
     allSources.value.forEach(source => {
       ;(source.platforms || []).forEach(platform => counts.set(platform, (counts.get(platform) || 0) + source.count))
     })
-    return [
+    return sortPlatformTabs([
       { code: 'all', name: '全部平台', count: allSources.value.reduce((sum, source) => sum + source.count, 0) },
       ...Array.from(counts.entries())
-        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count }))
-        .sort((a, b) => b.count - a.count),
-    ]
+        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count })),
+    ])
   })
 
   const categoryStats = computed(() => {

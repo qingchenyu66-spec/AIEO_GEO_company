@@ -3,6 +3,12 @@ param(
     [string]$Action = "install"
 )
 
+# Legacy Windows Task Scheduler installer.
+# Production scheduling should use Celery instead:
+#   cd backend
+#   pip install -r requirements.txt
+#   powershell -File scripts/start_celery.ps1 -Role all
+
 $ErrorActionPreference = "Stop"
 
 function Invoke-SchTasks {
@@ -55,12 +61,14 @@ function Install-MonitorTasks {
     Remove-MonitorTask $SyncTaskName
 
     # Submit due schedules every 10 minutes between 09:00 and 21:00.
+    # NOTE: schtasks /DU creates a one-time trigger that expires after install day.
+    # Prefer Celery Beat for production: scripts/start_celery.ps1
     Invoke-SchTasks /Create `
         /TN $SubmitTaskName `
         /TR "wscript.exe `"$SubmitVbs`"" `
-        /SC MINUTE `
-        /MO 10 `
+        /SC DAILY `
         /ST 09:00 `
+        /RI 10 `
         /DU 12:00 `
         /RL LIMITED `
         /F | Out-Null
@@ -70,6 +78,7 @@ function Install-MonitorTasks {
         /TR "wscript.exe `"$SyncVbs`"" `
         /SC MINUTE `
         /MO 5 `
+        /ST 00:00 `
         /RL LIMITED `
         /F | Out-Null
 

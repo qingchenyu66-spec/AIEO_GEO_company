@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { HelpCircle } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
@@ -10,8 +11,24 @@ const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
 }>()
 
+const router = useRouter()
+const route = useRoute()
+
+function navigateToReportCenter(reportId: number, tenantId: number) {
+  void router.push({
+    path: route.path,
+    query: {
+      ...route.query,
+      menu: 'platform.reports',
+      reportId: String(reportId),
+      tenantId: String(tenantId),
+    },
+  })
+}
+
 const {
   platformLabelMap,
+  formatPlatformLabels,
   supportedPlatforms,
   regionOptions,
   enterpriseDetailMode,
@@ -69,10 +86,19 @@ const {
   addCompetitorTag,
   removeCompetitorRow,
   formatFileSize,
-  demoAction,
   resetDetailMode,
+  reportDialog,
+  reportDialogTenant,
+  reportGenerating,
+  reportType,
+  reportTitle,
+  reportTypeOptions,
+  canGenerateEnterpriseReport,
+  openReportDialog,
+  submitEnterpriseReport,
 } = useBrandAudit({
   onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
+  navigateToReportCenter,
 })
 
 onMounted(loadEnterpriseList)
@@ -124,7 +150,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div class="enterprise-actions">
             <button class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
             <button class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
-            <button class="filter-reset-btn" @click="openEnterpriseDetail(tenant); demoAction('已打开企业诊断配置')">诊断</button>
+            <button v-if="canGenerateEnterpriseReport" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
             <button v-if="canStopTenantService(tenant)" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
             <button v-else-if="canRestoreTenantService(tenant)" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
           </div>
@@ -351,7 +377,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div class="info-grid">
             <span><small>服务状态</small><b>{{ enterpriseInfoTenant ? tenantServiceLabel(enterpriseInfoTenant) : '-' }}</b></span>
             <span><small>官网</small><b>{{ enterpriseInfoAsset?.official_url || '-' }}</b></span>
-            <span><small>购买模型</small><b>{{ (enterpriseInfoAsset?.monitored_platforms || []).map(item => platformLabelMap[item] || item).join('、') || '-' }}</b></span>
+            <span><small>购买模型</small><b>{{ formatPlatformLabels(enterpriseInfoAsset?.monitored_platforms || [], platformLabelMap) || '-' }}</b></span>
           </div>
         </section>
         <section>
@@ -370,6 +396,28 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       <template #footer>
         <button class="plain-btn" @click="enterpriseInfoDialog = false">关闭</button>
         <button v-if="enterpriseInfoTenant" class="primary-btn" @click="enterpriseInfoDialog = false; openEnterpriseDetail(enterpriseInfoTenant)">进入编辑</button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="reportDialog" width="520px" title="生成报告">
+      <p v-if="reportDialogTenant" class="report-dialog-hint">为「{{ reportDialogTenant.name }}」生成监测报告，生成后可编辑并发布，客户仅可查看已发布报告。</p>
+      <div class="form-grid password-grid">
+        <label class="form-field-full">
+          <span>报告类型</span>
+          <select v-model="reportType">
+            <option v-for="option in reportTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+        <label class="form-field-full">
+          <span>报告标题（可选）</span>
+          <input v-model="reportTitle" placeholder="留空则按类型自动生成标题" />
+        </label>
+      </div>
+      <template #footer>
+        <button class="plain-btn" @click="reportDialog = false">取消</button>
+        <button class="primary-btn" :disabled="reportGenerating" @click="submitEnterpriseReport">
+          {{ reportGenerating ? '生成中…' : '生成报告' }}
+        </button>
       </template>
     </el-dialog>
 

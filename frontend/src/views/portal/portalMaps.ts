@@ -5,6 +5,15 @@ export {
   platformAccentColor,
 } from './platformMeta'
 
+export {
+  comparePlatformCodes,
+  platformMarketRank,
+  sortPlatformCodes,
+  sortPlatformRows,
+  sortPlatformTabs,
+  formatPlatformLabels,
+} from './platformOrder'
+
 export const monitorModeLabelMap: Record<string, string> = {
   search: '搜索检测',
   chat: '问答检测',

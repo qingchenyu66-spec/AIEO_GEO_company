@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
+from app.core.redis_client import get_json_cache, set_json_cache
 from app.schemas.common import ApiResponse
 from app.schemas.monitor import MonitorTaskCreateRequest
 from app.services.monitor_service import (
@@ -91,7 +92,14 @@ def monitor_dashboard_summary(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Read aggregated real monitoring data for customer and platform dashboards."""
-    return ApiResponse(data=monitor_summary(db, current))
+    tenant_key = current.identity.tenant_id or "platform"
+    cache_key = f"monitor:summary:v1:{current.identity.identity_type}:{tenant_key}"
+    cached = get_json_cache(cache_key)
+    if cached is not None:
+        return ApiResponse(data=cached)
+    data = monitor_summary(db, current)
+    set_json_cache(cache_key, data, ttl_seconds=20)
+    return ApiResponse(data=data)
 
 
 @router.get("/ranking-matrix", response_model=ApiResponse[dict])
@@ -101,6 +109,9 @@ def monitor_ranking_matrix(
     end_date: date | None = None,
     keyword: str | None = None,
     monitor_group: str | None = None,
+    keyword_group: str | None = None,
+    monitor_keyword: str | None = None,
+    exposure_term: str | None = None,
     limit_rows: int = 120,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
@@ -117,6 +128,9 @@ def monitor_ranking_matrix(
             end_at=end_at,
             keyword=keyword,
             monitor_group=monitor_group,
+            keyword_group=keyword_group,
+            monitor_keyword=monitor_keyword,
+            exposure_term=exposure_term,
             limit_rows=limit_rows,
         )
     except ValueError as exc:

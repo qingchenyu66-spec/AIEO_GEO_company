@@ -11,6 +11,7 @@ from app.models.permission import Position
 from app.schemas.auth import IdentityInfo, IdentitySelectRequest, IdentitySwitchRequest, LoginRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import authenticate, create_access_token, create_identity_ticket
+from app.services.menu_permission_service import ensure_identity_menus_from_position
 from app.services.permission_service import get_identity_menus
 
 router = APIRouter(prefix="/auth")
@@ -35,6 +36,8 @@ def identity_info(identity: UserIdentity, db: Session) -> dict:
 
 def session_payload(db: Session, user: User, identity: UserIdentity, identities: list[UserIdentity]) -> dict:
     # 菜单权限随会话返回，前端只渲染数据库授权菜单，不再写死平台/客户菜单。
+    if ensure_identity_menus_from_position(db, identity):
+        db.commit()
     menus = [item.model_dump() for item in get_identity_menus(db, identity)]
     return {
         "access_token": create_access_token(user, identity),
@@ -85,6 +88,8 @@ def select_identity(payload: IdentitySelectRequest, db: Session = Depends(get_db
 @router.get("/me", response_model=ApiResponse[dict])
 def me(current: CurrentSession = Depends(get_current_session), db: Session = Depends(get_db)) -> ApiResponse[dict]:
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
+    if ensure_identity_menus_from_position(db, current.identity):
+        db.commit()
     return ApiResponse(data={
         "user": {"id": current.user.id, "username": current.user.username, "display_name": current.user.display_name},
         "identity": identity_info(current.identity, db),

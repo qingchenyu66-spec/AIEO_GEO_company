@@ -11,7 +11,6 @@ function readSession(): AuthSession | null {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const session = JSON.parse(raw)
-    // 验证 session 完整性
     if (!session || !session.access_token || !session.identity) {
       localStorage.removeItem(STORAGE_KEY)
       return null

@@ -28,8 +28,9 @@ const {
   platformOptions,
   scheduleRoundOptions,
   monitorGroupOptions,
-  allExposureTermOptions,
-  activeMonitorFilter,
+  monitorKeywordOptions,
+  exposureTermOptions,
+  filterScope,
   filteredGroupedMonitorTasks,
   schedulePlanDisplay,
   scheduleSourceLabel,
@@ -50,8 +51,9 @@ const {
   exportMatrixCsv,
   formatRank,
   formatExposureLabel,
-  formatMonitorGroupLabel,
-  keywordGroupFilterValue,
+  formatKeywordGroupDetailHint,
+  keywordGroupSelectValue,
+  keywordGroupDisplayName,
   formatTaskTitle,
   taskPromptPreview,
   answerExcerpt,
@@ -141,19 +143,30 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
               {{ platformLabelMap[platform] || platform }}
             </option>
           </select>
-          <select v-model="filters.monitorGroup">
+          <select v-model="filters.keywordGroup" class="monitor-group-select" title="按监测词组筛选">
             <option value="">全部词组</option>
             <option
               v-for="(group, groupIndex) in monitorGroupOptions"
               :key="`group-${group.id ?? group.sort_order}-${group.name || group.monitor_keyword}`"
-              :value="keywordGroupFilterValue(group, groupIndex)"
+              :value="keywordGroupSelectValue(group, groupIndex)"
+              :title="formatKeywordGroupDetailHint(group)"
             >
-              {{ formatMonitorGroupLabel(group, groupIndex) }}
+              {{ keywordGroupDisplayName(group, groupIndex) }}
             </option>
           </select>
-          <select v-model="filters.exposureTerm" title="按露出词筛选">
+          <select v-model="filters.monitorKeyword" class="monitor-keyword-select" title="按监测问题筛选">
+            <option value="">全部监控词</option>
+            <option
+              v-for="keyword in monitorKeywordOptions"
+              :key="`monitor-kw-${keyword}`"
+              :value="keyword"
+            >
+              {{ keyword }}
+            </option>
+          </select>
+          <select v-model="filters.exposureTerm" class="monitor-exposure-select" title="按露出词筛选">
             <option value="">全部露出词</option>
-            <option v-for="term in allExposureTermOptions" :key="`exposure-${term}`" :value="term">
+            <option v-for="term in exposureTermOptions" :key="`exposure-${term}`" :value="term">
               {{ term }}
             </option>
           </select>
@@ -321,7 +334,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
             >
               <th class="realtime-matrix-time-col">
                 <span>{{ row.schedule_label || row.snapshot_at || '-' }}{{ scheduleSourceLabel(row.schedule_source) }}</span>
-                <small v-if="row.keyword_group && !activeMonitorFilter">{{ row.keyword_group }}</small>
+                <small v-if="row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
                 <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
                   <PlatformBadge :code="row.platform" size="xs" />
                 </small>

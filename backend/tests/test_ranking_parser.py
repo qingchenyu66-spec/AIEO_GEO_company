@@ -40,6 +40,18 @@ def test_structured_rankings_fill_missing_rank_within_category():
     assert entries[1]["rank"] == 2
 
 
+def test_parse_circled_number_list_marker():
+    text = "① 艾迪亚控股集团有限公司\n② 分众传媒"
+    entries = parse_answer_rankings(text)
+    assert entries[0]["rank"] == 1
+    assert "艾迪亚" in entries[0]["name"]
+
+
+def test_structured_rankings_accept_circled_rank_token():
+    entries = normalize_structured_rankings([{"name": "品牌A", "rank": "①"}])
+    assert entries[0]["rank"] == 1
+
+
 def test_find_best_brand_rank_across_categories():
     entries = [
         {"name": "艾迪亚", "rank": 2, "category": "电梯"},

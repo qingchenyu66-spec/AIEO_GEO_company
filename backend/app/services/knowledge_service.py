@@ -72,6 +72,20 @@ async def save_knowledge_file(
     return record
 
 
+def delete_knowledge_file(db: Session, current: CurrentSession, file_id: int) -> None:
+    """逻辑删除知识库文件；客户只能删除本企业文件。"""
+    record = db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.id == file_id, KnowledgeFile.deleted.is_(False))
+    )
+    if record is None:
+        raise ValueError("文件不存在")
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id != record.tenant_id:
+            raise ValueError("无权删除该文件")
+    record.deleted = True
+    db.commit()
+
+
 def knowledge_file_to_dict(record: KnowledgeFile) -> dict:
     """序列化知识库文件，前端只展示业务需要的字段。"""
     return {

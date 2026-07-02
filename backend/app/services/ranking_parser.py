@@ -45,15 +45,35 @@ def _parse_rank_token(token: str | None) -> int | None:
     text = str(token or "").strip()
     if not text:
         return None
-    if text.isdigit():
-        return int(text)
     if text in CIRCLE_NUM_MAP:
         return CIRCLE_NUM_MAP[text]
+    if text.isdigit():
+        try:
+            return int(text)
+        except ValueError:
+            return None
     if len(text) == 1 and text in CHINESE_NUM_MAP:
         return CHINESE_NUM_MAP[text]
     if text.startswith("十") and len(text) == 2 and text[1] in CHINESE_NUM_MAP:
         return 10 + CHINESE_NUM_MAP[text[1]]
     return None
+
+
+def _coerce_rank_number(value: Any) -> int | float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    parsed = _parse_rank_token(text)
+    if parsed is not None:
+        return parsed
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_category_header(line: str) -> bool:
@@ -118,10 +138,9 @@ def ranking_entry_explicit_rank(entry: dict[str, Any]) -> int | float | None:
         value = entry.get(key)
         if value is None:
             continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
+        coerced = _coerce_rank_number(value)
+        if coerced is not None:
+            return coerced
     return None
 
 
@@ -141,7 +160,9 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
             appearance_counters[category] = appearance_counters.get(category, 0) + 1
             rank_value = appearance_counters[category]
         else:
-            appearance_counters[category] = max(appearance_counters.get(category, 0), int(rank_value))
+            numeric = _coerce_rank_number(rank_value)
+            if numeric is not None:
+                appearance_counters[category] = max(appearance_counters.get(category, 0), int(numeric))
         results.append({"name": name, "rank": rank_value, "category": category})
     return results
 

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -38,6 +38,10 @@ const BrandAuditPage = defineAsyncComponent(() => import('./portal/pages/BrandAu
 const MonitorRealtimePage = defineAsyncComponent(() => import('./portal/pages/MonitorRealtimePage.vue'))
 const CompetitorAnalysisPage = defineAsyncComponent(() => import('./portal/pages/CompetitorAnalysisPage.vue'))
 const SourceAnalysisPage = defineAsyncComponent(() => import('./portal/pages/SourceAnalysisPage.vue'))
+const ReportCenterPage = defineAsyncComponent(() => import('./portal/pages/ReportCenterPage.vue'))
+const LeadDiagnosisPage = defineAsyncComponent(() => import('./portal/pages/LeadDiagnosisPage.vue'))
+const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
+const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
 
@@ -51,17 +55,16 @@ const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') |
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => auth.allowedMenus
-  .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code))
-  .map(menu => {
-    if (menu.menu_code.endsWith('.sources')) return { ...menu, menu_name: '信源分析' }
-    if (menu.menu_code.endsWith('.competitor')) return { ...menu, menu_name: '品牌洞察' }
-    return menu
-  }))
+  .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code)))
 const userManagementMenu = computed(() => menus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
 const isCompetitorPage = computed(() => ['customer.competitor', 'platform.competitor'].includes(activeMenuCode.value))
 const isSourcePage = computed(() => ['customer.sources', 'platform.sources'].includes(activeMenuCode.value))
+const isReportCenterPage = computed(() => ['customer.reports', 'platform.reports'].includes(activeMenuCode.value))
+const isLeadDiagnosisPage = computed(() => activeMenuCode.value === 'platform.lead_diagnosis')
+const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
+const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
@@ -124,6 +127,7 @@ const pageSubtitle = computed(() => {
   if (isUserCreatePage.value) return '创建账号、分配身份、绑定所属企业，并配置可访问菜单'
   if (isUserListPage.value) return '按公司、姓名、身份和状态筛选账号，支持编辑、禁用、重置密码和恢复'
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
+  if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 
@@ -253,6 +257,10 @@ onMounted(() => {
     <MonitorRealtimePage v-else-if="isRealtimeMonitorPage" />
     <CompetitorAnalysisPage v-else-if="isCompetitorPage" />
     <SourceAnalysisPage v-else-if="isSourcePage" />
+    <ReportCenterPage v-else-if="isReportCenterPage" :is-platform="isPlatform" />
+    <LeadDiagnosisPage v-else-if="isLeadDiagnosisPage" />
+    <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
+    <KnowledgeBasePage v-else-if="isKnowledgePage" />
 
     <template v-else>
       <template v-if="isDashboardPage">

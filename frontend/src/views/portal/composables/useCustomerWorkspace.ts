@@ -1,8 +1,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BarChart3, Database, Search } from '@lucide/vue'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
+import { useAuthStore } from '../../../stores/auth'
 import {
   getWorkspaceBrief,
   type WorkspaceAlert,
@@ -10,31 +10,11 @@ import {
   type WorkspacePlatformHighlight,
   type WorkspaceSnapshot,
 } from '../../../services/monitor'
-import { platformLabelMap, platformAccentColor, supportedPlatforms } from '../portalMaps'
+import { platformLabelMap, platformAccentColor, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
+import { sortPlatformRows } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
 
 export type WorkspaceHeroTone = 'empty' | 'calm' | 'warn'
-
-export const workspaceQuickLinks = [
-  {
-    code: 'customer.competitor',
-    title: '品牌洞察',
-    note: '提及率 · 排名 · 情绪趋势',
-    icon: BarChart3,
-  },
-  {
-    code: 'customer.realtime',
-    title: '实时检测',
-    note: '调度轮次 · 排名矩阵 · 子任务详情',
-    icon: Search,
-  },
-  {
-    code: 'customer.sources',
-    title: '信源分析',
-    note: '含露出词引用 · 监测问题溯源',
-    icon: Database,
-  },
-] as const
 
 function formatRank(value: number | null | undefined) {
   if (value === null || value === undefined) return '-'
@@ -123,16 +103,22 @@ function resolveStatusSummary(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
 
 function resolvePrimaryAction(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') return null
-  if (data.alerts.some(alert => alert.level === 'warn' && /负面|舆情/.test(alert.message))) {
-    return { menu: 'customer.realtime', label: '查看实时检测' }
+  if (tone === 'warn' || data.alerts.some(alert => alert.level === 'warn')) {
+    if (data.alerts.some(alert => alert.level === 'warn' && /竞品/.test(alert.message))) {
+      return { menu: 'customer.competitor', label: '查看需关注项' }
+    }
+    return { menu: 'customer.realtime', label: '查看需关注项' }
   }
-  if (data.alerts.some(alert => alert.level === 'warn' && /排名|露出/.test(alert.message))) {
-    return { menu: 'customer.realtime', label: '查看实时检测' }
+  if (data.kpis.competitor_count > 0) {
+    return { menu: 'customer.competitor', label: '查看竞品对比' }
   }
-  if (tone === 'warn') {
-    return { menu: 'customer.realtime', label: '查看检测详情' }
-  }
-  return null
+  return { menu: 'customer.realtime', label: '查看实时检测' }
+}
+
+function alertTargetMenu(alert: WorkspaceAlert) {
+  if (/竞品/.test(alert.message)) return 'customer.competitor'
+  if (/信源|引用/.test(alert.message)) return 'customer.sources'
+  return 'customer.realtime'
 }
 
 function formatPlatformDelta(value: number | null | undefined, unit: string, betterWhenLower = false) {
@@ -154,13 +140,7 @@ function platformDeltaClass(value: number | null | undefined, betterWhenLower = 
 }
 
 function sortPlatformHighlights(rows: WorkspacePlatformHighlight[]) {
-  return [...rows].sort((a, b) => {
-    if (a.sample_count === 0 && b.sample_count === 0) return 0
-    if (a.sample_count === 0) return 1
-    if (b.sample_count === 0) return -1
-    if (b.mention_rate !== a.mention_rate) return b.mention_rate - a.mention_rate
-    return (a.avg_rank ?? 999) - (b.avg_rank ?? 999)
-  })
+  return sortPlatformRows(rows)
 }
 
 function platformLeaderRank(row: WorkspacePlatformHighlight, sorted: WorkspacePlatformHighlight[]) {
@@ -174,12 +154,83 @@ function kpiTrendValues(brief: WorkspaceBrief | null, key: 'mention_rate' | 'avg
   return (brief?.kpi_trends || []).map(point => point[key] ?? null)
 }
 
+function greetingLabel() {
+  const hour = new Date().getHours()
+  if (hour < 12) return '早上好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
+}
+
+function computeHealthScore(data: WorkspaceBrief) {
+  const visibility = computeVisibilityScore(data)
+  const rankScore = computeRankScore(data) ?? 50
+  return Math.round(visibility * 0.6 + rankScore * 0.4)
+}
+
+function computeVisibilityScore(data: WorkspaceBrief) {
+  const mention = data.kpis.brand_mention_rate
+  const top3 = data.kpis.top3_rate ?? 0
+  return Math.round(mention * 0.6 + top3 * 0.4)
+}
+
+function computeRankScore(data: WorkspaceBrief) {
+  const avgRank = data.kpis.avg_brand_rank
+  if (avgRank == null) return null
+  return Math.round(Math.max(0, Math.min(100, 100 - (avgRank - 1) * 20)))
+}
+
+function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
+  if (tone === 'empty') {
+    return data.next_schedule_hint
+      ? `近 7 日暂无已完成检测，下次计划 ${data.next_schedule_hint}`
+      : '近 7 日暂无已完成检测，请等待定时监测任务返回'
+  }
+  const rc = data.round_comparison
+  if (rc?.has_previous) {
+    const parts: string[] = []
+    if (rc.mention_rate_delta != null && Math.abs(rc.mention_rate_delta) >= 0.05) {
+      parts.push(`露出率${rc.mention_rate_delta > 0 ? '上升' : '下降'} ${Math.abs(rc.mention_rate_delta).toFixed(1)}%`)
+    }
+    if (rc.avg_brand_rank_delta != null && Math.abs(rc.avg_brand_rank_delta) >= 0.05) {
+      parts.push(`均排名${rc.avg_brand_rank_delta < 0 ? '前移' : '后移'} ${Math.abs(rc.avg_brand_rank_delta).toFixed(1)} 位`)
+    }
+    if (parts.length) {
+      return `较上一轮${rc.previous_schedule_label ? `「${rc.previous_schedule_label}」` : ''}，${parts.join('，')}`
+    }
+  }
+  const leader = data.platform_highlights
+    .filter(row => row.sample_count > 0)
+    .sort((a, b) => b.mention_rate - a.mention_rate)[0]
+  if (leader && tone === 'warn') {
+    const label = platformLabelMap[leader.platform] || leader.platform
+    return `${label} 等平台的露出或排名需关注，建议查看实时监测详情`
+  }
+  if (tone === 'warn') {
+    const firstWarn = data.alerts.find(alert => alert.level === 'warn')
+    if (firstWarn) return firstWarn.message
+  }
+  const latest = data.latest_schedule?.schedule_label
+  return latest
+    ? `${latest} 数据已更新，推荐露出与排名表现整体稳定`
+    : '近 7 日推荐类监测表现整体稳定'
+}
+
+function gaugeDashOffset(score: number, circumference = 176) {
+  const clamped = Math.max(0, Math.min(100, score))
+  return circumference - (circumference * clamped) / 100
+}
+
 export function useCustomerWorkspace() {
   const router = useRouter()
   const route = useRoute()
+  const auth = useAuthStore()
   const brief = ref<WorkspaceBrief | null>(null)
   const loading = ref(false)
   const alertsExpanded = ref(false)
+
+  const realtimeMenuName = computed(() => (
+    auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
+  ))
 
   const heroTone = computed(() => resolveHeroTone(brief.value))
   const statusBadge = computed(() => {
@@ -193,9 +244,15 @@ export function useCustomerWorkspace() {
   const statusSummary = computed(() => (
     brief.value ? resolveStatusSummary(brief.value, heroTone.value) : ''
   ))
-  const primaryAction = computed(() => (
-    brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
-  ))
+  const primaryAction = computed(() => {
+    const action = brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
+    if (!action) return null
+    const menuName = auth.allowedMenus.find(menu => menu.menu_code === action.menu)?.menu_name
+    return {
+      ...action,
+      label: menuName ? `查看${menuName}` : action.label,
+    }
+  })
   const warnAlerts = computed(() => brief.value?.alerts.filter(alert => alert.level === 'warn') || [])
   const infoAlerts = computed(() => brief.value?.alerts.filter(alert => alert.level === 'info') || [])
   const visibleAlerts = computed(() => {
@@ -247,6 +304,164 @@ export function useCustomerWorkspace() {
 
   const showUnpurchasedDeck = computed(() => unpurchasedPlatforms.value.length > 0)
 
+  const healthScore = computed(() => (brief.value ? computeHealthScore(brief.value) : null))
+
+  const workspaceHeadline = computed(() => (
+    brief.value ? resolveWorkspaceHeadline(brief.value, heroTone.value) : ''
+  ))
+
+  const visibilityScore = computed(() => (
+    brief.value ? computeVisibilityScore(brief.value) : null
+  ))
+
+  const rankScore = computed(() => (
+    brief.value ? computeRankScore(brief.value) : null
+  ))
+
+  const dimensionBars = computed(() => {
+    const data = brief.value
+    if (!data) return []
+    const bars = [
+      {
+        key: 'visibility',
+        label: '可见度',
+        value: visibilityScore.value ?? 0,
+        hint: `露出 ${data.kpis.brand_mention_rate}%`,
+      },
+      {
+        key: 'rank',
+        label: '排名',
+        value: rankScore.value ?? 0,
+        hint: data.kpis.avg_brand_rank != null ? `均排名 ${data.kpis.avg_brand_rank}` : '暂无排名样本',
+      },
+    ]
+    if (data.kpis.competitor_count > 0) {
+      bars.push({
+        key: 'competitor',
+        label: '较竞品',
+        value: 100,
+        hint: `已配置 ${data.kpis.competitor_count} 个 · 进入竞品页查看`,
+      })
+    }
+    return bars
+  })
+
+  const miniKpis = computed(() => {
+    const data = brief.value
+    if (!data) return []
+    const rc = data.round_comparison
+    return [
+      {
+        key: 'mention',
+        label: '推荐类露出率',
+        value: data.kpis.brand_mention_rate,
+        unit: '%',
+        decimals: 1,
+        delta: rc?.has_previous ? rc.mention_rate_delta : null,
+        lowerIsBetter: false,
+      },
+      {
+        key: 'rank',
+        label: '平均推荐排名',
+        value: data.kpis.avg_brand_rank,
+        unit: '',
+        decimals: 1,
+        delta: rc?.has_previous ? rc.avg_brand_rank_delta : null,
+        lowerIsBetter: true,
+        deltaKind: 'rank' as const,
+      },
+      {
+        key: 'top3',
+        label: 'Top3 占比',
+        value: data.kpis.top3_rate ?? 0,
+        unit: '%',
+        decimals: 1,
+        delta: rc?.has_previous ? rc.top3_rate_delta : null,
+        lowerIsBetter: false,
+      },
+    ]
+  })
+
+  const intentStats = computed(() => {
+    const ranking = brief.value?.kpis.ranking_sample_count ?? 0
+    const exposure = brief.value?.kpis.exposure_sample_count ?? 0
+    const total = ranking + exposure || 1
+    return {
+      total: ranking + exposure,
+      ranking,
+      exposure,
+      other: 0,
+      rankingPct: Math.round(ranking / total * 100),
+      exposurePct: Math.round(exposure / total * 100),
+    }
+  })
+
+  const mentionDonut = computed(() => {
+    const rate = brief.value?.kpis.brand_mention_rate ?? 0
+    const mentioned = Math.max(0, Math.min(100, rate))
+    return { mentioned, notMentioned: Math.round((100 - mentioned) * 10) / 10 }
+  })
+
+  const intentDonutSegments = computed(() => {
+    const { rankingPct, exposurePct, total } = intentStats.value
+    if (!total) return { ranking: 0, exposure: 0, circumference: 301.6 }
+    const circumference = 2 * Math.PI * 48
+    const rankingLen = (rankingPct / 100) * circumference
+    const exposureLen = (exposurePct / 100) * circumference
+    return { ranking: rankingLen, exposure: exposureLen, circumference }
+  })
+
+  const mentionDonutSegments = computed(() => {
+    const circumference = 2 * Math.PI * 48
+    const mentionedLen = (mentionDonut.value.mentioned / 100) * circumference
+    return { mentioned: mentionedLen, notMentioned: circumference - mentionedLen, circumference }
+  })
+
+  const trendBars = computed(() => {
+    const points = brief.value?.kpi_trends || []
+    if (!points.length) return [] as Array<{ label: string; height: number; value: number }>
+    const max = Math.max(...points.map(point => point.mention_rate), 1)
+    return points.map(point => ({
+      label: point.label,
+      height: Math.max(4, (point.mention_rate / max) * 100),
+      value: point.mention_rate,
+    }))
+  })
+
+  const platformRankList = computed(() => {
+    const active = platformHighlightsSorted.value.filter(row => row.sample_count > 0)
+    const sorted = [...active].sort((a, b) => b.mention_rate - a.mention_rate)
+    const empty = platformHighlightsSorted.value.filter(row => row.sample_count === 0)
+    return [...sorted, ...empty]
+  })
+
+  const todoItems = computed(() => {
+    const data = brief.value
+    if (!data) return []
+    return [
+      {
+        key: 'empty-platform',
+        label: '平台待返回',
+        count: platformMatrixSummary.value.emptyCount,
+        tone: platformMatrixSummary.value.emptyCount > 0 ? 'warn' as const : '',
+        menu: 'customer.realtime',
+      },
+      {
+        key: 'competitor',
+        label: '竞品对比',
+        count: data.kpis.competitor_count,
+        tone: '',
+        menu: 'customer.competitor',
+      },
+    ]
+  })
+
+  const showTodoStrip = computed(() => (
+    todoItems.value.some(item => item.count > 0)
+  ))
+
+  const latestSnapshot = computed(() => brief.value?.recent_snapshots?.[0] ?? null)
+
   async function loadBrief() {
     loading.value = true
     try {
@@ -288,7 +503,8 @@ export function useCustomerWorkspace() {
     loadBrief,
     navigateToMenu,
     openSnapshot,
-    workspaceQuickLinks,
+    alertTargetMenu,
+    realtimeMenuName,
     formatDateTime,
     formatRank,
     formatExposureLabel,
@@ -308,5 +524,23 @@ export function useCustomerWorkspace() {
     snapshotIntentClass,
     snapshotIntentLabel,
     platformLabelMap,
+    formatPlatformLabels,
+    greetingLabel,
+    healthScore,
+    workspaceHeadline,
+    visibilityScore,
+    rankScore,
+    dimensionBars,
+    miniKpis,
+    intentStats,
+    mentionDonut,
+    intentDonutSegments,
+    mentionDonutSegments,
+    trendBars,
+    platformRankList,
+    todoItems,
+    showTodoStrip,
+    latestSnapshot,
+    gaugeDashOffset,
   }
 }

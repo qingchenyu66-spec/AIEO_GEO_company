@@ -12,7 +12,8 @@ import {
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup,
 } from '../../../services/brand'
 import { getKnowledgeFiles, type KnowledgeFileRecord } from '../../../services/knowledge'
-import { platformLabelMap, supportedPlatforms } from '../portalMaps'
+import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
+import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { regionOptions } from '../regionOptions'
 
 export type EnterpriseTab = 'profile' | 'keywords' | 'platforms' | 'schedule' | 'competitors' | 'files'
@@ -29,6 +30,7 @@ export const enterprisePermissionCodeMap = {
 
 export type UseBrandAuditOptions = {
   onBrandUpdated?: (asset: BrandAsset | null, competitors: BrandCompetitor[]) => void
+  navigateToReportCenter?: (reportId: number, tenantId: number) => void
 }
 
 function errorMessage(error: unknown) {
@@ -80,7 +82,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
 
   function canViewEnterpriseTab(tab: EnterpriseTab) {
     const grant = menuGrant(enterprisePermissionCodeMap[tab])
-    return Boolean(grant)
+    return Boolean(grant && (grant.can_export || grant.can_update || grant.can_create || grant.can_delete))
   }
 
   function canEditEnterpriseTab(tab: EnterpriseTab) {
@@ -779,9 +781,48 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterpriseDetailMode.value = false
   }
 
+  const reportDialog = ref(false)
+  const reportDialogTenant = ref<TenantInfo | null>(null)
+  const reportGenerating = ref(false)
+  const reportType = ref<ReportType>('diagnosis')
+  const reportTitle = ref('')
+
+  function openReportDialog(tenant: TenantInfo) {
+    reportDialogTenant.value = tenant
+    reportType.value = 'diagnosis'
+    reportTitle.value = ''
+    reportDialog.value = true
+  }
+
+  const canGenerateEnterpriseReport = computed(() => Boolean(menuGrant('platform.reports')?.can_create))
+
+  async function submitEnterpriseReport() {
+    if (!canGenerateEnterpriseReport.value) {
+      ElMessage.warning('当前账号无权生成报告')
+      return
+    }
+    if (!reportDialogTenant.value) return
+    reportGenerating.value = true
+    try {
+      const created = await withRetry(() => createReport({
+        tenant_id: reportDialogTenant.value!.id,
+        report_type: reportType.value,
+        report_title: reportTitle.value.trim() || undefined,
+      }))
+      ElMessage.success('报告已生成，请编辑确认后发布')
+      reportDialog.value = false
+      options.navigateToReportCenter?.(created.id, created.tenant_id)
+    } catch (error: unknown) {
+      notifyError(error, '报告生成失败')
+    } finally {
+      reportGenerating.value = false
+    }
+  }
+
   return {
     platformLabelMap,
     supportedPlatforms,
+    formatPlatformLabels,
     regionOptions,
     tenants,
     enterpriseDetailMode,
@@ -849,5 +890,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     formatFileSize,
     demoAction,
     resetDetailMode,
+    reportDialog,
+    reportDialogTenant,
+    reportGenerating,
+    reportType,
+    reportTitle,
+    reportTypeOptions: REPORT_TYPE_OPTIONS,
+    canGenerateEnterpriseReport,
+    openReportDialog,
+    submitEnterpriseReport,
   }
 }

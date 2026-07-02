@@ -20,6 +20,7 @@ PLATFORM_MENUS = [
     ("platform.users.create.customer", "新增客户企业端用户", "/platform/users/create/customer", "Building2", 312,
      False),
     ("platform.diagnosis", "品牌诊断", "/platform/diagnosis", "ClipboardCheck", 39, True),
+    ("platform.reports", "报告中心", "/platform/reports", "FileBarChart", 38, True),
     ("platform.plans", "套餐额度", "/platform/plans", "SlidersHorizontal", 40, True),
     ("platform.admins", "管理员账号", "/platform/admins", "UserCog", 50, True),
     ("platform.models", "模型平台", "/platform/models", "Database", 60, True),
@@ -161,7 +162,7 @@ def seed_brand_assets(db, tenant: Tenant) -> None:
     asset.monitor_keywords_json = ["AIEO", "艾亿欧", "GEO优化", "AI平台推广监测"]
     asset.aliases_json = ["北京艾亿欧科技有限公司", "艾亿欧科技"]
     asset.product_keywords_json = ["品牌诊断", "实时检测", "报告交付", "竞品分析"]
-    asset.monitored_platforms_json = ["doubao_mobile", "deepseek_mobile", "yuanbao", "kimi", "baiduai"]
+    asset.monitored_platforms_json = ["doubao", "doubao_mobile", "baiduai", "deepseek", "deepseek_mobile", "weibo_zhisou", "yuanbao", "qianwen", "quark", "kimi"]
     asset.official_url = "https://www.aieo.cn"
     asset.description = "演示企业品牌资产，用于自动提交 GEO 检测任务。"
     asset.schedule_type = "daily_times"
@@ -202,6 +203,8 @@ def seed_menu_configs(db) -> None:
         ("platform.users.list", "用户列表", "PLATFORM", 32, True, "Users", "/platform/users/list", "查看用户列表"),
         ("platform.diagnosis", "品牌诊断", "PLATFORM", 39, True, "ClipboardCheck", "/platform/diagnosis",
          "AI 生成诊断报告"),
+        ("platform.reports", "报告中心", "PLATFORM", 38, True, "FileBarChart", "/platform/reports",
+         "运营端生成、预览并导出客户报告"),
         ("platform.plans", "套餐额度", "PLATFORM", 40, True, "SlidersHorizontal", "/platform/plans", "套餐管理"),
         ("platform.admins", "管理员账号", "PLATFORM", 50, True, "UserCog", "/platform/admins", "管理员管理"),
         ("platform.models", "模型平台", "PLATFORM", 60, True, "Database", "/platform/models", "模型配置"),
@@ -289,6 +292,21 @@ def main() -> None:
         for identity in db.scalars(
                 select(UserIdentity).where(UserIdentity.identity_type == "CUSTOMER", UserIdentity.deleted.is_(False))):
             grant_identity_menus(db, identity, customer_menus, writable=False)
+        for identity in db.scalars(
+                select(UserIdentity).where(UserIdentity.identity_type == "CUSTOMER", UserIdentity.deleted.is_(False))):
+            report_menu = db.scalar(select(Menu).where(Menu.menu_code == "customer.reports", Menu.deleted.is_(False)))
+            if report_menu is None:
+                continue
+            perm = db.scalar(
+                select(UserIdentityMenu).where(
+                    UserIdentityMenu.identity_id == identity.id,
+                    UserIdentityMenu.menu_id == report_menu.id,
+                )
+            )
+            if perm is not None:
+                perm.can_create = False
+                perm.can_update = False
+                perm.can_export = True
 
         seed_brand_assets(db, tenant)
 

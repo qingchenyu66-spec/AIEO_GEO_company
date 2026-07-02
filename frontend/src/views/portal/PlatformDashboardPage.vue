@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Data
 import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
 import { getMolizhishuBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
+import { sortPlatformRows } from './platformOrder'
 
 const props = defineProps<{
   platformLabelMap: Record<string, string>
@@ -15,6 +16,8 @@ const overview = ref<PlatformOverview | null>(null)
 const molizhishuBalance = ref<MolizhishuBalance | null>(null)
 const loading = ref(false)
 const errorText = ref('')
+
+const platformStats = computed(() => sortPlatformRows(overview.value?.platform_stats || []))
 
 const kpiCards = computed(() => {
   const kpis = overview.value?.kpis
@@ -184,13 +187,13 @@ onMounted(loadOverview)
       <article class="panel">
         <div class="panel-head"><div><h2>模型平台运行情况</h2><p>按平台统计任务量、成功率和费用</p></div><Activity /></div>
         <div class="ops-platform-list">
-          <div v-for="item in overview?.platform_stats || []" :key="item.platform">
+          <div v-for="item in platformStats" :key="item.platform">
             <b>{{ props.platformLabelMap[item.platform] || item.platform }}</b>
             <span>已返回 {{ item.completed }} 条 · 成功率 {{ item.success_rate }}%</span>
             <i><em :style="{ width: `${Math.min(100, item.success_rate)}%` }"></em></i>
             <small>失败 {{ item.failed }} · 费用 {{ item.cost }}</small>
           </div>
-          <div v-if="!overview?.platform_stats?.length" class="mini-empty">暂无平台运行数据。</div>
+          <div v-if="!platformStats.length" class="mini-empty">暂无平台运行数据。</div>
         </div>
       </article>
 

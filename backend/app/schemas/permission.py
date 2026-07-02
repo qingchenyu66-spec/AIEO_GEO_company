@@ -19,6 +19,17 @@ class MenuInfo(BaseModel):
     can_export: bool = True
 
 
+class MenuGrantItem(BaseModel):
+    """职位/身份的单项菜单动作权限。"""
+
+    menu_id: int
+    menu_code: str | None = None
+    can_create: bool = False
+    can_update: bool = False
+    can_delete: bool = False
+    can_export: bool = False
+
+
 class MenuConfigUpdateRequest(BaseModel):
     menu_name: str | None = Field(default=None, min_length=1, max_length=120)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
@@ -53,6 +64,7 @@ class PositionInfo(BaseModel):
     role_code: str
     description: str | None = None
     menu_ids: list[int] = Field(default_factory=list)
+    menu_grants: list[MenuGrantItem] = Field(default_factory=list)
 
 
 class PositionSaveRequest(BaseModel):
@@ -61,6 +73,7 @@ class PositionSaveRequest(BaseModel):
     role_code: str = Field(min_length=2, max_length=50)
     description: str | None = Field(default=None, max_length=255)
     menu_ids: list[int] = Field(default_factory=list)
+    menu_grants: list[MenuGrantItem] = Field(default_factory=list)
     status: bool = True
 
 

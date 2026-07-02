@@ -4,11 +4,14 @@ import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
   findKeywordGroupByFilter,
+  findKeywordGroupBySelectValue,
   formatKeywordGroupLabel,
+  formatKeywordGroupDetailHint,
   getBrandAsset,
   keywordGroupDisplayName,
   keywordGroupFilterValue,
   keywordGroupMonitorKeywords,
+  keywordGroupSelectValue,
   type BrandAsset,
   type BrandCompetitor,
   type BrandKeywordGroup,
@@ -34,6 +37,7 @@ import {
   platformLabelMap,
   sentimentLabelMap,
 } from '../portalMaps'
+import { sortPlatformCodes } from '../platformOrder'
 
 export type MonitorViewMode = 'list' | 'matrix'
 export type RealtimeDatePreset = '7d' | '30d' | 'custom'
@@ -89,37 +93,37 @@ function findMonitorGroupByFilter(
   filterValue: string,
   groups: BrandKeywordGroup[],
 ) {
-  return findKeywordGroupByFilter(filterValue, groups)
+  return findKeywordGroupBySelectValue(filterValue, groups) || findKeywordGroupByFilter(filterValue, groups)
 }
 
-function isExposureTermFilter(filterValue: string, groups: BrandKeywordGroup[]) {
-  const text = filterValue.trim()
-  if (!text || findMonitorGroupByFilter(text, groups)) return false
-  return groups.some(group => (group.exposure_terms || []).some(term => (term || '').trim() === text))
-}
-
-function promptMatchesMonitorFilter(
+function promptMatchesScopeFilters(
   prompt: string,
-  filterValue: string,
   groups: BrandKeywordGroup[],
+  scope: { keywordGroup: string; monitorKeyword: string; exposureTerm: string },
 ) {
-  const text = filterValue.trim()
-  if (!text) return true
-  const group = findMonitorGroupByFilter(text, groups)
-  if (group) return promptBelongsToGroup(prompt, group)
-  if (isExposureTermFilter(text, groups)) return (prompt || '').includes(text)
-  return (prompt || '').toLowerCase().includes(text.toLowerCase())
+  const groupFilter = scope.keywordGroup.trim()
+  const monitorFilter = scope.monitorKeyword.trim()
+  const exposureFilter = scope.exposureTerm.trim()
+  if (groupFilter) {
+    const group = findMonitorGroupByFilter(groupFilter, groups)
+    if (!group || !promptBelongsToGroup(prompt, group)) return false
+  }
+  if (monitorFilter) {
+    const text = (prompt || '').trim()
+    if (text !== monitorFilter && !text.toLowerCase().includes(monitorFilter.toLowerCase())) return false
+  }
+  if (exposureFilter && !(prompt || '').includes(exposureFilter)) return false
+  return true
 }
 
-function taskMatchesMonitorFilter(
+function taskMatchesScopeFilters(
   task: MonitorTask,
-  filterValue: string,
   groups: BrandKeywordGroup[],
+  scope: { keywordGroup: string; monitorKeyword: string; exposureTerm: string },
 ) {
-  const text = filterValue.trim()
-  if (!text) return true
+  if (!scope.keywordGroup.trim() && !scope.monitorKeyword.trim() && !scope.exposureTerm.trim()) return true
   const prompts = task.prompts || []
-  return prompts.some(prompt => promptMatchesMonitorFilter(prompt, text, groups))
+  return prompts.some(prompt => promptMatchesScopeFilters(prompt, groups, scope))
 }
 
 function defaultDateRange(days = 7) {
@@ -179,7 +183,8 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   const defaultDates = defaultDateRange(7)
   const filters = reactive({
     platform: '',
-    monitorGroup: '',
+    keywordGroup: '',
+    monitorKeyword: '',
     exposureTerm: '',
     exactPrompt: '',
     startDate: defaultDates.startDate,
@@ -189,23 +194,76 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   })
 
   const monitorGroupOptions = computed(() => {
-    const groups = brandAsset.value?.keyword_groups?.length
-      ? brandAsset.value.keyword_groups
-      : (rankingMatrix.value?.keyword_group_options || []).map((item, index) => ({
+    const normalizeGroup = (group: BrandKeywordGroup, index: number): BrandKeywordGroup | null => {
+      if (group.status === false) return null
+      const keywords = keywordGroupMonitorKeywords(group)
+      if (!keywords.length) return null
+      return {
+        ...group,
+        monitor_keyword: keywords[0],
+        monitor_keywords: keywords,
+        sort_order: group.sort_order ?? index,
+      }
+    }
+
+    const signature = (group: BrandKeywordGroup) => keywordGroupMonitorKeywords(group).join('\u0001')
+
+    const fromAsset = (brandAsset.value?.keyword_groups || [])
+      .map((group, index) => normalizeGroup(group, index))
+      .filter((group): group is BrandKeywordGroup => group !== null)
+
+    if (fromAsset.length) {
+      return fromAsset.sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+    }
+
+    const merged = new Map<string, BrandKeywordGroup>()
+    for (const [index, item] of (rankingMatrix.value?.keyword_group_options || []).entries()) {
+      const group = normalizeGroup(
+        {
           id: null,
           name: item.name || item.monitor_keyword,
           monitor_keyword: item.monitor_keyword,
           monitor_keywords: item.monitor_keywords?.length ? item.monitor_keywords : [item.monitor_keyword],
-          exposure_terms: item.exposure_terms,
+          exposure_terms: item.exposure_terms || [],
           sort_order: index,
           status: true,
-        }))
-    return groups
-      .filter(group => group.status !== false && keywordGroupMonitorKeywords(group).length)
-      .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+        },
+        index,
+      )
+      if (!group) continue
+      const key = signature(group)
+      if (!merged.has(key)) merged.set(key, group)
+    }
+
+    return [...merged.values()].sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
   })
 
-  const allExposureTermOptions = computed(() => {
+  const selectedKeywordGroup = computed(() => {
+    const value = filters.keywordGroup.trim()
+    if (!value) return null
+    return findMonitorGroupByFilter(value, monitorGroupOptions.value)
+  })
+
+  const monitorKeywordOptions = computed(() => {
+    const seen = new Set<string>()
+    const keywords: string[] = []
+    const add = (value: string | null | undefined) => {
+      const token = (value || '').trim()
+      if (!token || seen.has(token)) return
+      seen.add(token)
+      keywords.push(token)
+    }
+    const scopedGroups = selectedKeywordGroup.value
+      ? [selectedKeywordGroup.value]
+      : monitorGroupOptions.value
+    for (const group of scopedGroups) {
+      for (const keyword of keywordGroupMonitorKeywords(group)) add(keyword)
+    }
+    for (const column of rankingMatrix.value?.columns || []) add(column.prompt)
+    return keywords.sort((left, right) => left.localeCompare(right, 'zh-CN'))
+  })
+
+  const exposureTermOptions = computed(() => {
     const seen = new Set<string>()
     const terms: string[] = []
     const add = (value: string | null | undefined) => {
@@ -214,28 +272,35 @@ export function useMonitorRealtime(tenantId: number | null = null) {
       seen.add(token)
       terms.push(token)
     }
-    for (const group of monitorGroupOptions.value) {
+    const scopedGroups = selectedKeywordGroup.value
+      ? [selectedKeywordGroup.value]
+      : monitorGroupOptions.value
+    for (const group of scopedGroups) {
       for (const term of group.exposure_terms || []) add(term)
     }
-    const asset = brandAsset.value
-    if (asset) {
-      add(asset.brand_short_name)
-      add(asset.brand_name)
-      for (const alias of asset.aliases || []) add(alias)
+    if (!selectedKeywordGroup.value) {
+      const asset = brandAsset.value
+      if (asset) {
+        add(asset.brand_short_name)
+        add(asset.brand_name)
+        for (const alias of asset.aliases || []) add(alias)
+      }
+      for (const term of rankingMatrix.value?.exposure_term_options || []) add(term)
     }
-    for (const term of rankingMatrix.value?.exposure_term_options || []) add(term)
     return terms.sort((left, right) => left.localeCompare(right, 'zh-CN'))
   })
 
-  const activeMonitorFilter = computed(() => (
-    filters.exposureTerm.trim() || filters.monitorGroup.trim()
-  ))
+  const filterScope = computed(() => ({
+    keywordGroup: filters.keywordGroup.trim(),
+    monitorKeyword: filters.monitorKeyword.trim(),
+    exposureTerm: filters.exposureTerm.trim(),
+  }))
 
   const platformOptions = computed(() => {
     const purchased = brandAsset.value?.monitored_platforms?.length
       ? brandAsset.value.monitored_platforms
       : rankingMatrix.value?.purchased_platforms || []
-    return purchased.filter(Boolean)
+    return sortPlatformCodes(purchased.filter(Boolean))
   })
 
   const groupedMonitorTasks = computed<MonitorTaskScheduleGroup[]>(() => {
@@ -291,18 +356,17 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   })
 
   const filteredMonitorSubtasks = computed(() => {
-    const filterValue = activeMonitorFilter.value
     const exactPrompt = filters.exactPrompt.trim()
     return (monitorDetail.value?.subtasks || []).filter(item => {
       const platformMatched = !filters.platform || item.platform === filters.platform
       const statusMatched = filters.status === 'all' || item.status === filters.status
       const exactMatched = !exactPrompt || (item.prompt || '').trim() === exactPrompt
-      const groupMatched = promptMatchesMonitorFilter(
+      const scopeMatched = promptMatchesScopeFilters(
         item.prompt || '',
-        filterValue,
         monitorGroupOptions.value,
+        filterScope.value,
       )
-      return platformMatched && statusMatched && exactMatched && groupMatched
+      return platformMatched && statusMatched && exactMatched && scopeMatched
     })
   })
 
@@ -318,15 +382,14 @@ export function useMonitorRealtime(tenantId: number | null = null) {
 
   const filteredGroupedMonitorTasks = computed<MonitorTaskScheduleGroup[]>(() => {
     const key = filters.scheduleWindowKey.trim()
-    const filterValue = activeMonitorFilter.value
     return groupedMonitorTasks.value
       .filter(group => !key || group.schedule_window_key === key)
       .map(group => ({
         ...group,
-        tasks: group.tasks.filter(task => taskMatchesMonitorFilter(
+        tasks: group.tasks.filter(task => taskMatchesScopeFilters(
           task,
-          filterValue,
           monitorGroupOptions.value,
+          filterScope.value,
         )),
       }))
       .filter(group => group.tasks.length > 0)
@@ -374,7 +437,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   const platformCoverage = computed(() => {
     const known = monitorSummary.value?.platform_stats || []
     const purchasedCodes = brandAsset.value?.monitored_platforms?.length ? brandAsset.value.monitored_platforms : []
-    const codes = purchasedCodes.length ? purchasedCodes : known.map(item => item.platform)
+    const codes = sortPlatformCodes(purchasedCodes.length ? purchasedCodes : known.map(item => item.platform))
     return codes.map(code => {
       const row = known.find(item => item.platform === code)
       return {
@@ -659,7 +722,9 @@ export function useMonitorRealtime(tenantId: number | null = null) {
         platform: filters.platform.trim() || undefined,
         start_date: filters.startDate || undefined,
         end_date: filters.endDate || undefined,
-        monitor_group: activeMonitorFilter.value || undefined,
+        keyword_group: filters.keywordGroup.trim() || undefined,
+        monitor_keyword: filters.monitorKeyword.trim() || undefined,
+        exposure_term: filters.exposureTerm.trim() || undefined,
       }))
     } catch (error: unknown) {
       notifyOperationError(error, '排名矩阵加载失败')
@@ -783,7 +848,8 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   function resetFilters() {
     const range = defaultDateRange(7)
     filters.platform = ''
-    filters.monitorGroup = ''
+    filters.keywordGroup = ''
+    filters.monitorKeyword = ''
     filters.exposureTerm = ''
     filters.exactPrompt = ''
     filters.scheduleWindowKey = ''
@@ -836,21 +902,19 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   })
 
   watch(
-    () => filters.monitorGroup,
-    value => {
-      if (value.trim()) filters.exposureTerm = ''
+    () => filters.keywordGroup,
+    () => {
+      if (filters.monitorKeyword && !monitorKeywordOptions.value.includes(filters.monitorKeyword)) {
+        filters.monitorKeyword = ''
+      }
+      if (filters.exposureTerm && !exposureTermOptions.value.includes(filters.exposureTerm)) {
+        filters.exposureTerm = ''
+      }
     },
   )
 
   watch(
-    () => filters.exposureTerm,
-    value => {
-      if (value.trim()) filters.monitorGroup = ''
-    },
-  )
-
-  watch(
-    () => [filters.platform, filters.monitorGroup, filters.exposureTerm],
+    () => [filters.platform, filters.keywordGroup, filters.monitorKeyword, filters.exposureTerm],
     () => {
       if (viewMode.value === 'matrix') {
         void loadRankingMatrix()
@@ -883,11 +947,15 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     brandAsset,
     brandCompetitors,
     monitorGroupOptions,
-    allExposureTermOptions,
-    activeMonitorFilter,
+    monitorKeywordOptions,
+    exposureTermOptions,
+    filterScope,
     platformOptions,
     scheduleRoundOptions,
     formatMonitorGroupLabel,
+    formatKeywordGroupDetailHint,
+    keywordGroupSelectValue,
+    keywordGroupDisplayName,
     keywordGroupFilterValue,
     groupedMonitorTasks,
     filteredGroupedMonitorTasks,

@@ -231,6 +231,9 @@ export interface RankingMatrixQuery {
   end_date?: string
   keyword?: string
   monitor_group?: string
+  keyword_group?: string
+  monitor_keyword?: string
+  exposure_term?: string
   limit_rows?: number
 }
 

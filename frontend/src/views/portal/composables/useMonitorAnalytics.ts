@@ -1,13 +1,14 @@
 import { computed, onMounted, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
-import { getKnowledgeFiles, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { getOperationLogs, getSystemConfigs, type OperationLogRecord, type SystemConfigRecord, type TenantInfo } from '../../../services/management'
 import { getMonitorSummary, syncMonitorTask, type MonitorSummary } from '../../../services/monitor'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import { getPlatformMatrix, type PlatformMatrix } from '../../../services/platforms'
+import { useAuthStore } from '../../../stores/auth'
 import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
+import { sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.dashboard',
@@ -16,7 +17,6 @@ export const monitorSummaryMenuCodes = new Set([
   'customer.workspace',
   'customer.diagnosis',
   'customer.reports',
-  'customer.knowledge',
   'platform.models',
 ])
 
@@ -52,6 +52,7 @@ type MonitorAnalyticsOptions = {
 
 export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const { activeMenuCode, isPlatform, isDashboardPage, brandAsset, brandCompetitors, tenants, notifyError, errorMessage } = options
+  const auth = useAuthStore()
 
   const monitorSummary = ref<MonitorSummary | null>(null)
   const loadingSummary = ref(false)
@@ -68,9 +69,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const systemConfigRows = ref<SystemConfigRecord[]>([])
   let operationLogRefreshTimer: number | null = null
 
-  const loadingKnowledgeFiles = ref(false)
-  const uploadingKnowledgeFile = ref(false)
-  const knowledgeFiles = ref<KnowledgeFileRecord[]>([])
   const platformMatrix = ref<PlatformMatrix | null>(null)
   const loadingPlatformMatrix = ref(false)
   let platformMatrixTimer: number | null = null
@@ -101,14 +99,14 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     return rows.filter(item => item.value > 0)
   })
 
-  const platformRanking = computed(() => monitorSummary.value?.platform_stats || [])
+  const platformRanking = computed(() => sortPlatformRows(monitorSummary.value?.platform_stats || []))
   const allSourceRanking = computed(() => monitorSummary.value?.source_stats || [])
   const recentSubtasks = computed(() => monitorSummary.value?.recent_subtasks || [])
 
   const platformCoverage = computed(() => {
     const known = monitorSummary.value?.platform_stats || []
     const purchasedCodes = brandAsset.value?.monitored_platforms?.length ? brandAsset.value.monitored_platforms : []
-    const codes = purchasedCodes.length ? purchasedCodes : known.map(item => item.platform)
+    const codes = sortPlatformCodes(purchasedCodes.length ? purchasedCodes : known.map(item => item.platform))
     return codes.map((code, index) => {
       const row = known.find(item => item.platform === code)
       return {
@@ -136,12 +134,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     allSourceRanking.value.forEach(source => {
       ;(source.platforms || []).forEach(platform => counts.set(platform, (counts.get(platform) || 0) + source.count))
     })
-    return [
+    return sortPlatformTabs([
       { code: 'all', name: '全部信源', count: allSourceRanking.value.reduce((sum, source) => sum + source.count, 0) },
       ...Array.from(counts.entries())
-        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count }))
-        .sort((a, b) => b.count - a.count),
-    ]
+        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count })),
+    ])
   })
 
   const sourceRanking = computed(() => {
@@ -233,9 +230,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const sourceTotalCount = computed(() => sourceRanking.value.reduce((sum, item) => sum + item.count, 0))
 
   const recentQuestionGroups = computed(() => {
-    const expectedPlatforms = brandAsset.value?.monitored_platforms?.length
-      ? brandAsset.value.monitored_platforms
-      : platformRanking.value.map(item => item.platform)
+    const expectedPlatforms = sortPlatformCodes(
+      brandAsset.value?.monitored_platforms?.length
+        ? brandAsset.value.monitored_platforms
+        : platformRanking.value.map(item => item.platform),
+    )
     const groups = new Map<string, {
       prompt: string
       tenant_name?: string | null
@@ -285,12 +284,16 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const operationLogs = computed(() => operationLogRows.value.map(row => [row.created_at, row.operator_name, row.action_type, row.description, row.risk_level]))
   const systemSettings = computed(() => systemConfigRows.value.map(row => [row.config_name, row.config_value, row.scope, row.status]))
 
-  const functionalPage = computed(() => buildFunctionalPage(
-    activeMenuCode.value,
-    monitorSummary.value,
-    sourceTotalCount.value,
-    sourceRanking.value.length,
-  ))
+  const functionalPage = computed(() => {
+    const menuName = auth.allowedMenus.find(item => item.menu_code === activeMenuCode.value)?.menu_name
+    return buildFunctionalPage(
+      activeMenuCode.value,
+      monitorSummary.value,
+      sourceTotalCount.value,
+      sourceRanking.value.length,
+      menuName,
+    )
+  })
 
   const sentimentPieRows = computed(() => {
     const counts = monitorSummary.value?.sentiment_counts || {}
@@ -369,35 +372,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     }
   }
 
-  async function loadKnowledgeFiles() {
-    if (activeMenuCode.value !== 'customer.knowledge') return
-    loadingKnowledgeFiles.value = true
-    try {
-      knowledgeFiles.value = await withRetry(() => getKnowledgeFiles(null))
-    } catch (error: unknown) {
-      notifyError(error, '知识库文件加载失败')
-    } finally {
-      loadingKnowledgeFiles.value = false
-    }
-  }
-
-  async function handleKnowledgeUpload(event: Event) {
-    const input = event.target as HTMLInputElement
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    uploadingKnowledgeFile.value = true
-    try {
-      await uploadKnowledgeFile(file, null)
-      ElMessage.success('文件已上传')
-      await loadKnowledgeFiles()
-    } catch (error: unknown) {
-      notifyError(error, '文件上传失败')
-    } finally {
-      uploadingKnowledgeFile.value = false
-    }
-  }
-
   function resetSourceFilters() {
     sourceKeywordFilter.value = ''
     sourceStartDate.value = ''
@@ -406,7 +380,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   }
 
   watch(activeMenuCode, () => loadMonitorSummary(isDashboardPage.value))
-  watch(activeMenuCode, loadKnowledgeFiles)
   watch(activeMenuCode, loadPlatformSystemData)
   watch(activeMenuCode, loadPlatformMatrix)
   watch(sourcePlatformTabs, tabs => {
@@ -422,7 +395,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
         loadMonitorSummary(true)
       }
     }, 30000)
-    loadKnowledgeFiles()
     loadPlatformSystemData()
     loadPlatformMatrix()
     platformMatrixTimer = window.setInterval(() => {
@@ -455,9 +427,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     sourceEndDate,
     operationLogRows,
     systemConfigRows,
-    loadingKnowledgeFiles,
-    uploadingKnowledgeFile,
-    knowledgeFiles,
     stats,
     chartTrend,
     platformRanking,
@@ -488,8 +457,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     diagnosisScore,
     loadMonitorSummary,
     loadPlatformSystemData,
-    loadKnowledgeFiles,
-    handleKnowledgeUpload,
     resetSourceFilters,
   }
 }

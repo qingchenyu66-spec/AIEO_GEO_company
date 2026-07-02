@@ -2,6 +2,7 @@ import { reactive, ref, type ComputedRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { notifyOperationError } from '../../../utils/requestError'
 import { withRetry } from '../../../composables/useRetry'
+import { useAuthStore } from '../../../stores/auth'
 import type { IdentityType } from '../../../services/auth'
 import { getMenuConfigs, updateMenuConfig, type MenuConfigRecord } from '../../../services/management'
 import { managementErrorMessage } from '../managementErrorMessage'
@@ -12,6 +13,7 @@ type MenuConfigOptions = {
 
 export function useMenuConfigDialog(options: MenuConfigOptions) {
   const { isPlatform } = options
+  const auth = useAuthStore()
 
   const menuConfigDialog = ref(false)
   const menuConfigs = ref<MenuConfigRecord[]>([])
@@ -76,6 +78,11 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
       ElMessage.success('菜单配置已更新')
       cancelEditMenuConfig()
       await loadMenuConfigs()
+      try {
+        await auth.refreshSession()
+      } catch {
+        ElMessage.info('配置已保存，若侧边栏未更新请重新登录或刷新页面')
+      }
     } catch (error: unknown) {
       notifyError(error, '菜单配置保存失败')
     } finally {

@@ -41,7 +41,32 @@ export function keywordGroupDisplayName(group: BrandKeywordGroup, index = group.
   return (group.name || '').trim() || defaultKeywordGroupName(index)
 }
 
+export function keywordGroupSelectValue(group: BrandKeywordGroup, index = group.sort_order ?? 0): string {
+  if (group.id != null) return `id:${group.id}`
+  return `idx:${index}`
+}
+
+export function findKeywordGroupBySelectValue(value: string, groups: BrandKeywordGroup[]): BrandKeywordGroup | null {
+  const text = value.trim()
+  if (!text) return null
+  if (text.startsWith('id:')) {
+    const id = text.slice(3)
+    return groups.find(group => group.id != null && String(group.id) === id) || null
+  }
+  if (text.startsWith('idx:')) {
+    const idx = Number(text.slice(4))
+    if (!Number.isFinite(idx)) return null
+    const sorted = [...groups].sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+    return sorted[idx] || null
+  }
+  return findKeywordGroupByFilter(text, groups)
+}
+
 export function keywordGroupFilterValue(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
+  const custom = (group.name || '').trim()
+  if (custom && !isGenericKeywordGroupName(custom)) return custom
+  const keywords = keywordGroupMonitorKeywords(group)
+  if (keywords.length === 1) return keywords[0]
   return keywordGroupDisplayName(group, index)
 }
 
@@ -52,18 +77,49 @@ export function keywordGroupMonitorKeywords(group: BrandKeywordGroup): string[] 
   return primary ? [primary] : []
 }
 
+function truncateKeywordText(text: string, max = 24): string {
+  const cleaned = text.trim()
+  if (cleaned.length <= max) return cleaned
+  return `${cleaned.slice(0, max - 1)}…`
+}
+
+function isGenericKeywordGroupName(name: string | null | undefined): boolean {
+  const text = (name || '').trim()
+  return !text || /^词组(\s*\d+)?$/.test(text)
+}
+
 export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.sort_order ?? 0): string {
   const title = keywordGroupDisplayName(group, index)
+  const keywords = keywordGroupMonitorKeywords(group)
+  if (!keywords.length) return title
+
+  const genericTitle = isGenericKeywordGroupName(group.name)
+  if (keywords.length === 1) {
+    if (genericTitle) return truncateKeywordText(keywords[0], 36)
+    return `${title} · ${truncateKeywordText(keywords[0], 24)}`
+  }
+  if (genericTitle) {
+    return `${truncateKeywordText(keywords[0], 18)} 等 ${keywords.length} 个监测词`
+  }
+  return `${title} · ${truncateKeywordText(keywords[0], 16)} 等 ${keywords.length} 词`
+}
+
+/** Full hint for select tooltip: monitor + exposure terms. */
+export function formatKeywordGroupDetailHint(group: BrandKeywordGroup): string {
+  const keywords = keywordGroupMonitorKeywords(group)
   const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
-  if (!exposure.length) return title
-  return `${title}（露出：${exposure.join('、')}）`
+  const parts: string[] = []
+  if (keywords.length) parts.push(`监测词：${keywords.join('、')}`)
+  if (exposure.length) parts.push(`露出词：${exposure.join('、')}`)
+  return parts.join(' · ')
 }
 
 export function findKeywordGroupByFilter(filterValue: string, groups: BrandKeywordGroup[]): BrandKeywordGroup | null {
   const text = filterValue.trim()
   if (!text) return null
   return groups.find((group, index) => (
-    keywordGroupDisplayName(group, index) === text
+    keywordGroupFilterValue(group, index) === text
+    || keywordGroupDisplayName(group, index) === text
     || keywordGroupMonitorKeywords(group).includes(text)
   )) || null
 }

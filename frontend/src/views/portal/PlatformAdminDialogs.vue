@@ -2,6 +2,7 @@
 import { Building2, HelpCircle, ShieldCheck } from '@lucide/vue'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 import { menuIcon } from './menuIcons'
+import { actionsForMenu, actionLabelForMenu } from './menuPermissionMatrix'
 
 const admin = usePlatformAdminInject()
 const {
@@ -10,7 +11,9 @@ const {
   positionForm,
   savingPosition,
   savePosition,
-  permissionGroupsForPosition,
+  permissionModules,
+  activeGrantCount,
+  onPositionIdentityTypeChange,
   editDialog,
   editingUser,
   editForm,
@@ -35,35 +38,46 @@ const {
   cancelEditMenuConfig,
   saveMenuConfig,
 } = admin
+
+function actionOptions(type: 'PLATFORM' | 'CUSTOMER', menuCode: string) {
+  return actionsForMenu(menuCode, type)
+}
 </script>
 
 <template>
   <el-dialog v-model="positionDialog" width="920px" :title="editingPosition ? '编辑职位' : '新增职位'" class="user-maintain-dialog">
     <div class="form-grid">
       <label><span>职位名称</span><input v-model="positionForm.position_name" placeholder="例如 运营、销售、交付" /></label>
-      <label><span>适用端</span><select v-model="positionForm.identity_type"><option value="PLATFORM">平台运营端</option><option value="CUSTOMER">客户企业端</option></select></label>
+      <label><span>适用端</span><select v-model="positionForm.identity_type" @change="onPositionIdentityTypeChange"><option value="PLATFORM">平台运营端</option><option value="CUSTOMER">客户企业端</option></select></label>
       <label><span>状态</span><select v-model="positionForm.status"><option :value="true">启用</option><option :value="false">停用</option></select></label>
       <label class="form-field-full"><span>职位说明</span><textarea v-model="positionForm.description" rows="3" placeholder="说明这个职位适合哪些人员、默认能做哪些事"></textarea></label>
     </div>
     <div class="permission-head">
-      <b>职位默认菜单权限</b>
-      <small>新增人员选择该职位时，会默认带出这里勾选的菜单。</small>
+      <b>职位功能权限</b>
+        <small>按菜单实际能力勾选；不会出现菜单里没有的功能项。</small>
     </div>
     <div class="permission-box permission-group-box" :class="`permission-${positionForm.identity_type.toLowerCase()}`">
       <div class="permission-side-note">
         <b>{{ positionForm.identity_type === 'PLATFORM' ? '平台运营端' : '客户企业端' }}</b>
-        <span>{{ positionForm.identity_type === 'PLATFORM' ? '内部人员后台权限，按职位决定能管理哪些模块。' : '客户侧工作台权限，默认以展示和导出为主。' }}</span>
+        <span>已配置 {{ activeGrantCount }} 项功能权限。</span>
       </div>
-      <div v-for="group in permissionGroupsForPosition(positionForm.identity_type, positionForm.menu_ids)" :key="group.key" class="permission-group">
+      <div v-for="group in permissionModules" :key="group.key" class="permission-group">
         <div class="permission-group-head">
           <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-          <span>{{ group.checked }}/{{ group.menus.length }}</span>
+          <span>{{ group.menus.filter(menu => admin.menuGrants[menu.id] && (admin.menuGrants[menu.id].can_export || admin.menuGrants[menu.id].can_create || admin.menuGrants[menu.id].can_update || admin.menuGrants[menu.id].can_delete)).length }}/{{ group.menus.length }}</span>
         </div>
-        <label v-for="menu in group.menus" :key="menu.id" class="permission-item">
-          <input v-model="positionForm.menu_ids" type="checkbox" :value="menu.id" />
-          <component :is="menuIcon(menu)" />
-          <span>{{ menu.menu_name }}</span>
-        </label>
+        <div v-for="menu in group.menus" :key="menu.id" class="permission-action-row">
+          <div class="permission-action-title">
+            <component :is="menuIcon(menu)" />
+            <span>{{ menu.menu_name }}</span>
+          </div>
+          <div class="permission-action-options">
+            <label v-for="action in actionOptions(positionForm.identity_type, menu.menu_code)" :key="`${menu.id}-${action}`" class="permission-action-chip">
+              <input v-model="admin.menuGrants[menu.id][action]" type="checkbox" />
+              <span>{{ actionLabelForMenu(menu.menu_code, action) }}</span>
+            </label>
+          </div>
+        </div>
       </div>
     </div>
     <template #footer>
@@ -107,13 +121,8 @@ const {
         <div v-for="group in permissionGroupsForForm(type, editForm)" :key="group.key" class="permission-group">
           <div class="permission-group-head">
             <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-            <span>{{ group.checked }}/{{ group.menus.length }}</span>
           </div>
-          <label v-for="menu in group.menus" :key="menu.id" class="permission-item">
-            <input :checked="editForm.identity_configs[type].menu_ids.includes(menu.id)" type="checkbox" disabled />
-            <component :is="menuIcon(menu)" />
-            <span>{{ menu.menu_name }}</span>
-          </label>
+          <p class="feature-note">权限由所选职位决定，如需调整请到「职位管理」修改功能权限。</p>
         </div>
       </div>
       <p class="feature-note">权限由职位决定，如需调整请到“用户管理 / 职位管理”中修改职位权限。</p>

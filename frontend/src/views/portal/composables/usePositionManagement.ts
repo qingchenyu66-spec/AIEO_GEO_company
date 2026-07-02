@@ -1,13 +1,24 @@
-import { computed, reactive, ref, watch, type ComputedRef } from 'vue'
+import { computed, reactive, ref, type ComputedRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { notifyOperationError } from '../../../utils/requestError'
 import type { IdentityType } from '../../../services/auth'
 import {
-  createManagementPosition, deleteManagementPosition, updateManagementPosition, type PositionInfo,
+  createManagementPosition,
+  deleteManagementPosition,
+  updateManagementPosition,
+  type PositionInfo,
 } from '../../../services/management'
 import { managementErrorMessage } from '../managementErrorMessage'
-import { permissionGroupsFor } from '../permissionGroups'
 import type { UserIdentityForm } from '../permissionGroups'
+import {
+  assignablePermissionMenus,
+  countActiveGrants,
+  createEmptyGrantState,
+  grantsFromPosition,
+  grantsToPayload,
+  permissionModulesFor,
+  type MenuGrantState,
+} from '../menuPermissionMatrix'
 import type { AssignableOptions } from './useAssignableOptions'
 
 type PositionManagementOptions = {
@@ -25,23 +36,31 @@ export function usePositionManagement(options: PositionManagementOptions) {
   const editingPosition = ref<PositionInfo | null>(null)
   const positionDialog = ref(false)
   const savingPosition = ref(false)
+  const menuGrants = reactive<MenuGrantState>(createEmptyGrantState())
   const positionForm = reactive({
     position_name: '',
     identity_type: 'PLATFORM' as IdentityType,
     role_code: '',
     description: '',
-    menu_ids: [] as number[],
     status: true,
   })
 
-  const positionFormMenus = computed(() => assignMenus[positionForm.identity_type] || [])
+  const positionFormMenus = computed(() => assignablePermissionMenus(positionForm.identity_type, assignMenus[positionForm.identity_type] || []))
+  const permissionModules = computed(() => permissionModulesFor(positionForm.identity_type, assignMenus[positionForm.identity_type] || []))
+  const activeGrantCount = computed(() => countActiveGrants(menuGrants))
 
   function notifyError(error: unknown, context: string) {
     notifyOperationError(error, context, managementErrorMessage)
   }
 
-  function permissionGroupsForPosition(type: IdentityType, selectedMenuIds: number[] = []) {
-    return permissionGroupsFor(type, assignMenus, selectedMenuIds)
+  function resetMenuGrants(type: IdentityType = positionForm.identity_type) {
+    const menus = assignablePermissionMenus(type, assignMenus[type] || [])
+    for (const key of Object.keys(menuGrants)) {
+      delete menuGrants[Number(key)]
+    }
+    for (const menu of menus) {
+      menuGrants[menu.id] = { can_export: false, can_create: false, can_update: false, can_delete: false }
+    }
   }
 
   function resetPositionForm(type: IdentityType = positionForm.identity_type) {
@@ -50,8 +69,8 @@ export function usePositionManagement(options: PositionManagementOptions) {
     positionForm.identity_type = type
     positionForm.role_code = defaultRoleForIdentityType(type)
     positionForm.description = ''
-    positionForm.menu_ids = []
     positionForm.status = true
+    resetMenuGrants(type)
   }
 
   function openCreatePosition(type: IdentityType = 'PLATFORM') {
@@ -65,9 +84,27 @@ export function usePositionManagement(options: PositionManagementOptions) {
     positionForm.identity_type = row.identity_type
     positionForm.role_code = row.role_code
     positionForm.description = row.description || ''
-    positionForm.menu_ids = [...row.menu_ids]
     positionForm.status = true
+    resetMenuGrants(row.identity_type)
+    Object.assign(
+      menuGrants,
+      grantsFromPosition(
+        assignablePermissionMenus(row.identity_type, assignMenus[row.identity_type] || []),
+        row.menu_grants?.length ? row.menu_grants : row.menu_ids.map(menuId => ({
+          menu_id: menuId,
+          can_create: false,
+          can_update: false,
+          can_delete: false,
+          can_export: true,
+        })),
+      ),
+    )
     positionDialog.value = true
+  }
+
+  function onPositionIdentityTypeChange() {
+    positionForm.role_code = defaultRoleForIdentityType(positionForm.identity_type)
+    resetMenuGrants(positionForm.identity_type)
   }
 
   async function loadPositionManagement() {
@@ -86,6 +123,10 @@ export function usePositionManagement(options: PositionManagementOptions) {
       ElMessage.warning('职位底层权限未初始化，请刷新后重试')
       return
     }
+    if (!activeGrantCount.value) {
+      ElMessage.warning('请至少勾选一项功能权限')
+      return
+    }
     savingPosition.value = true
     try {
       const payload = {
@@ -93,12 +134,13 @@ export function usePositionManagement(options: PositionManagementOptions) {
         identity_type: positionForm.identity_type,
         role_code: positionForm.role_code,
         description: positionForm.description.trim() || null,
-        menu_ids: positionForm.menu_ids,
+        menu_grants: grantsToPayload(menuGrants, positionFormMenus.value),
+        menu_ids: [],
         status: positionForm.status,
       }
       if (editingPosition.value) {
         await updateManagementPosition(editingPosition.value.id, payload)
-        ElMessage.success('职位已更新')
+        ElMessage.success('职位已更新，已绑定该职位的人员需重新登录后生效')
       } else {
         await createManagementPosition(payload)
         ElMessage.success('职位已新增')
@@ -127,21 +169,19 @@ export function usePositionManagement(options: PositionManagementOptions) {
     }
   }
 
-  watch(() => positionForm.identity_type, (type) => {
-    positionForm.role_code = defaultRoleForIdentityType(type)
-    positionForm.menu_ids = positionForm.menu_ids.filter(menuId => positionFormMenus.value.some(menu => menu.id === menuId))
-  })
-
   return {
     positionRows,
     editingPosition,
     positionDialog,
     savingPosition,
     positionForm,
+    menuGrants,
     positionFormMenus,
-    permissionGroupsForPosition,
+    permissionModules,
+    activeGrantCount,
     openCreatePosition,
     editPosition,
+    onPositionIdentityTypeChange,
     loadPositionManagement,
     savePosition,
     removePosition,

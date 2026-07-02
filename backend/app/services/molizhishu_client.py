@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.rate_limiter import acquire_molizhishu_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,13 @@ class MolizhishuClient:
         json_body: dict[str, Any] | None = None,
         source: str,
         base_url: str | None = None,
+        rate_category: str = "default",
     ) -> dict[str, Any]:
+        try:
+            acquire_molizhishu_rate_limit(rate_category)  # type: ignore[arg-type]
+        except TimeoutError as exc:
+            raise MolizhishuApiError(str(exc)) from exc
+
         root = (base_url or self.base_url).rstrip("/")
         url = path if path.startswith("http") else f"{root}{path if path.startswith('/') else f'/{path}'}"
         started = time.perf_counter()
@@ -87,13 +94,13 @@ class MolizhishuClient:
         return payload
 
     def submit_task(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/task/batch/shared", json_body=payload, source="local-api:submit-task")
+        return self._request("POST", "/task/batch/shared", json_body=payload, source="local-api:submit-task", rate_category="submit")
 
     def get_task_status(self, task_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/task/status/{task_id}", source="local-api:manual-sync:status")
+        return self._request("GET", f"/task/status/{task_id}", source="local-api:manual-sync:status", rate_category="sync")
 
     def get_task_result(self, task_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/task/result/{task_id}", source="local-api:manual-sync:result")
+        return self._request("GET", f"/task/result/{task_id}", source="local-api:manual-sync:result", rate_category="sync")
 
     def get_account_balance(self) -> dict[str, Any]:
         """Query current Molizhishu account balance."""

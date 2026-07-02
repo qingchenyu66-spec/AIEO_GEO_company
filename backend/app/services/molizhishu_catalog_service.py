@@ -8,6 +8,8 @@ import threading
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.platform_order import sort_catalog_items, sort_platform_codes
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -16,18 +18,18 @@ MOLIZHISHU_PLATFORM_DOC_URL = "https://doc.molizhishu.com/docs/api/submit-task"
 MOLIZHISHU_PLATFORM_DOC_FALLBACK_URL = "https://doc.molizhishu.com/docs/intro"
 CACHE_TTL = timedelta(hours=24)
 
-_FALLBACK_CATALOG: list[dict[str, Any]] = [
-    {"code": "deepseek", "name": "DeepSeek", "description": "领先的国产自研大模型，性能强劲。", "channel": "web", "sort_order": 10},
-    {"code": "deepseek_mobile", "name": "DeepSeek 移动端", "description": "DeepSeek 移动端版本。", "channel": "mobile", "sort_order": 11},
-    {"code": "doubao", "name": "豆包", "description": "字节跳动旗下的智能 AI 助手。", "channel": "web", "sort_order": 20},
-    {"code": "doubao_mobile", "name": "豆包移动版", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 21},
-    {"code": "yuanbao", "name": "元宝", "description": "腾讯出品的 AI 助手，连接微信生态。", "channel": "web", "sort_order": 30},
-    {"code": "kimi", "name": "Kimi", "description": "月之暗面出品，支持长文本处理。", "channel": "web", "sort_order": 40},
-    {"code": "qianwen", "name": "通义千问", "description": "阿里巴巴自研大模型，功能全面。", "channel": "web", "sort_order": 50},
-    {"code": "quark", "name": "夸克", "description": "夸克浏览器内置 AI，主打搜索与学习。", "channel": "web", "sort_order": 60},
-    {"code": "baiduai", "name": "百度 AI+", "description": "百度推出的 AI 搜索。", "channel": "web", "sort_order": 70},
-    {"code": "weibo_zhisou", "name": "微博智搜", "description": "微博推出的 AI 搜索。", "channel": "web", "sort_order": 80},
-]
+_FALLBACK_CATALOG: list[dict[str, Any]] = sort_catalog_items([
+    {"code": "doubao", "name": "豆包", "description": "字节跳动旗下的智能 AI 助手。", "channel": "web", "sort_order": 10},
+    {"code": "doubao_mobile", "name": "豆包移动版", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 11},
+    {"code": "baiduai", "name": "百度 AI+", "description": "百度推出的 AI 搜索。", "channel": "web", "sort_order": 20},
+    {"code": "deepseek", "name": "DeepSeek", "description": "领先的国产自研大模型，性能强劲。", "channel": "web", "sort_order": 30},
+    {"code": "deepseek_mobile", "name": "DeepSeek 移动端", "description": "DeepSeek 移动端版本。", "channel": "mobile", "sort_order": 31},
+    {"code": "weibo_zhisou", "name": "微博智搜", "description": "微博推出的 AI 搜索。", "channel": "web", "sort_order": 40},
+    {"code": "yuanbao", "name": "元宝", "description": "腾讯出品的 AI 助手，连接微信生态。", "channel": "web", "sort_order": 50},
+    {"code": "qianwen", "name": "通义千问", "description": "阿里巴巴自研大模型，功能全面。", "channel": "web", "sort_order": 60},
+    {"code": "quark", "name": "夸克", "description": "夸克浏览器内置 AI，主打搜索与学习。", "channel": "web", "sort_order": 70},
+    {"code": "kimi", "name": "Kimi", "description": "月之暗面出品，支持长文本处理。", "channel": "web", "sort_order": 80},
+])
 
 _lock = threading.Lock()
 _cache: dict[str, Any] = {
@@ -128,7 +130,7 @@ def get_platform_catalog_meta() -> dict[str, Any]:
 def get_supported_platform_catalog(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     snapshot = refresh_platform_catalog(force=force_refresh)
     catalog = snapshot.get("catalog") or _FALLBACK_CATALOG
-    return [dict(item) for item in catalog]
+    return sort_catalog_items([dict(item) for item in catalog])
 
 
 def supported_platform_codes(*, force_refresh: bool = False) -> frozenset[str]:
@@ -146,4 +148,4 @@ def filter_submittable_platforms(codes: list[str] | None, *, force_refresh: bool
         seen.add(text)
         if text in allowed:
             result.append(text)
-    return result
+    return sort_platform_codes(result)

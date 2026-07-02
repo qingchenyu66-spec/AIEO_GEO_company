@@ -8,6 +8,7 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.models.platform import AlertThreshold, GeoPlatform
 from app.schemas.common import ApiResponse
+from app.core.celery_queue_monitor import business_metric_label, format_celery_monitor_zh, get_queue_monitor_snapshot, is_business_metric_type
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.services.molizhishu_platforms import (
     get_platform_catalog_meta,
@@ -141,11 +142,13 @@ def list_thresholds(
     else:
         stmt = stmt.where(AlertThreshold.tenant_id.is_(None))
     rows = list(db.scalars(stmt.order_by(AlertThreshold.id.asc())))
+    business_rows = [r for r in rows if is_business_metric_type(r.metric_type)]
     return ApiResponse(data=[
         {
             "id": r.id,
             "tenant_id": r.tenant_id,
             "metric_type": r.metric_type,
+            "metric_label": business_metric_label(r.metric_type),
             "threshold_name": r.threshold_name,
             "warning_value": r.warning_value,
             "critical_value": r.critical_value,
@@ -154,8 +157,17 @@ def list_thresholds(
             "updated_by": r.updated_by,
             "updated_at": r.updated_at.isoformat(),
         }
-        for r in rows
+        for r in business_rows
     ])
+
+
+@alert_router.get("/celery-monitor", response_model=ApiResponse[dict])
+def alerts_celery_monitor(
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """中文版 Celery 队列与 Worker 监控。"""
+    require_platform(current)
+    return ApiResponse(data=format_celery_monitor_zh(get_queue_monitor_snapshot()))
 
 
 @alert_router.put("/thresholds/{threshold_id}", response_model=ApiResponse[dict])

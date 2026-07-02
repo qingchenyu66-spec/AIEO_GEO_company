@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { sortPlatformRows } from '../platformOrder'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { platformAccentColor } from '../platformMeta'
 import type { PlatformMatrix } from '../../../services/platforms'
@@ -15,7 +16,7 @@ const emit = defineEmits<{ refresh: [] }>()
 const activeFilter = ref<'all' | 'healthy' | 'checking' | 'issue'>('all')
 
 const filteredPlatforms = computed(() => {
-  const rows = props.matrix?.platforms || []
+  const rows = sortPlatformRows(props.matrix?.platforms || [])
   if (activeFilter.value === 'healthy') return rows.filter(item => item.status === 'healthy')
   if (activeFilter.value === 'checking') return rows.filter(item => item.status === 'checking' || item.status === 'pending')
   if (activeFilter.value === 'issue') return rows.filter(item => item.status === 'degraded' || item.status === 'down')

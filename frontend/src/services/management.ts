@@ -18,6 +18,16 @@ export interface PositionInfo {
   role_code: string
   description: string | null
   menu_ids: number[]
+  menu_grants?: MenuGrantInfo[]
+}
+
+export interface MenuGrantInfo {
+  menu_id: number
+  menu_code?: string
+  can_create: boolean
+  can_update: boolean
+  can_delete: boolean
+  can_export: boolean
 }
 
 export interface TenantInfo {
@@ -178,22 +188,26 @@ export interface PositionPayload {
   identity_type: IdentityType
   role_code: string
   description?: string | null
-  menu_ids: number[]
+  menu_ids?: number[]
+  menu_grants?: MenuGrantInfo[]
   status: boolean
 }
 
 export async function createManagementPosition(payload: PositionPayload): Promise<PositionInfo> {
   const response = await http.post('/v1/management/positions', payload)
+  invalidateCache('/v1/management/positions')
   return response.data.data
 }
 
 export async function updateManagementPosition(positionId: number, payload: PositionPayload): Promise<PositionInfo> {
   const response = await http.put(`/v1/management/positions/${positionId}`, payload)
+  invalidateCache('/v1/management/positions')
   return response.data.data
 }
 
 export async function deleteManagementPosition(positionId: number): Promise<void> {
   await http.delete(`/v1/management/positions/${positionId}`)
+  invalidateCache('/v1/management/positions')
 }
 
 export async function getTenants(): Promise<TenantInfo[]> {

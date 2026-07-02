@@ -6,17 +6,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.api.dependencies import CurrentSession  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
-from app.models.user import User  # noqa: E402
-from app.models.user_identity import UserIdentity  # noqa: E402
+from app.core.redis_client import redis_lock  # noqa: E402
+from app.services.platform_session import load_platform_session  # noqa: E402
 from app.services.schedule_service import run_due_scheduled_tasks  # noqa: E402
 
 
@@ -30,40 +26,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_platform_session(db) -> CurrentSession:
-    identity = db.scalar(
-        select(UserIdentity)
-        .options(joinedload(UserIdentity.user), joinedload(UserIdentity.tenant))
-        .join(User, User.id == UserIdentity.user_id)
-        .where(
-            UserIdentity.identity_type == "PLATFORM",
-            UserIdentity.status.is_(True),
-            UserIdentity.deleted.is_(False),
-            User.status.is_(True),
-            User.deleted.is_(False),
-        )
-        .order_by(UserIdentity.is_default.desc(), UserIdentity.id.asc())
-    )
-    if identity is None or identity.user is None or not identity.user.status:
-        raise RuntimeError("没有可用的平台运营端身份，无法执行定时监测。")
-    return CurrentSession(user=identity.user, identity=identity)
-
-
 def main() -> int:
     args = parse_args()
     run_at = datetime.strptime(args.at, "%Y-%m-%d %H:%M") if args.at else None
     db = SessionLocal()
     try:
         current = load_platform_session(db)
-        result = run_due_scheduled_tasks(
-            db,
-            current,
-            tenant_id=args.tenant_id,
-            limit=args.limit,
-            max_prompts=args.max_prompts,
-            force=args.force,
-            now=run_at,
-        )
+        lock_time = (run_at or datetime.now()).strftime("%Y%m%d%H%M")
+        lock_key = f"scheduled-submit:{args.tenant_id or 'all'}:{lock_time}:{args.force}"
+        with redis_lock(lock_key) as acquired:
+            if not acquired:
+                print(json.dumps([{"status": "locked", "message": "已有其他进程正在执行本轮定时提交"}], ensure_ascii=False, indent=2))
+                return 0
+            result = run_due_scheduled_tasks(
+                db,
+                current,
+                tenant_id=args.tenant_id,
+                limit=args.limit,
+                max_prompts=args.max_prompts,
+                force=args.force,
+                now=run_at,
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     finally:

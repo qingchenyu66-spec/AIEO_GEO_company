@@ -11,20 +11,20 @@ export const http = axios.create({
 })
 
 interface CacheItem {
-  data: any
+  data: unknown
   timestamp: number
   url: string
 }
 
 const cache = new Map<string, CacheItem>()
-const CACHE_TTL = 5 * 60 * 1000 // 5分钟
+const CACHE_TTL = 5 * 60 * 1000
 
-function getCacheKey(config: any): string {
+function getCacheKey(config: { method?: string; url?: string; params?: unknown }): string {
   const params = JSON.stringify(config.params || {})
   return `${config.method}:${config.url}:${params}`
 }
 
-function isCacheable(config: any): boolean {
+function isCacheable(config: { method?: string; url?: string; params?: unknown; noCache?: boolean }): boolean {
   if (config.method !== 'get') return false
   if (config.noCache) return false
   if (config.url?.includes('/health')) return false
@@ -58,7 +58,7 @@ http.interceptors.request.use(
   (error) => {
     useLoadingStore().end()
     return Promise.reject(error)
-  }
+  },
 )
 
 http.interceptors.response.use(
@@ -90,9 +90,8 @@ http.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    // HTTP 业务错误（4xx/5xx）由页面 catch 用 notifyOperationError 展示带上下文的提示
     return Promise.reject(error)
-  }
+  },
 )
 
 export function invalidateCache(urlPattern?: string) {
@@ -108,12 +107,12 @@ export function getCacheStats() {
     size: cache.size,
     items: Array.from(cache.values()).map(item => ({
       url: item.url,
-      age: Math.round((Date.now() - item.timestamp) / 1000) + 's',
+      age: `${Math.round((Date.now() - item.timestamp) / 1000)}s`,
     })),
   }
 }
 
-export function getWithCache<T>(url: string, params?: any): Promise<T> {
+export function getWithCache<T>(url: string, params?: unknown): Promise<T> {
   if (!isCacheable({ method: 'get', url, params })) {
     return http.get(url, { params }).then(response => response.data as T)
   }

@@ -113,6 +113,23 @@
   font-weight: 500;
 }
 
+.source-platform-chip-icon {
+  flex-shrink: 0;
+}
+
+.source-platform-chip-icon .platform-badge__icon,
+.source-platform-chip-icon .platform-badge__fallback {
+  width: 18px;
+  height: 18px;
+}
+
+.source-platform-chip-globe {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #5b7aa8;
+}
+
 .source-hero {
   padding: 22px 24px;
   border: 1px solid #d9e8f6;

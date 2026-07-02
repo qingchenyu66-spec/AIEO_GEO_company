@@ -78,6 +78,15 @@
   font-size: 13px;
 }
 
+.realtime-sticky-filters select.monitor-group-select,
+.realtime-sticky-filters select.monitor-keyword-select {
+  max-width: min(300px, 44vw);
+}
+
+.realtime-sticky-filters select.monitor-exposure-select {
+  max-width: min(220px, 36vw);
+}
+
 .realtime-view-toggle {
   display: inline-flex;
   padding: 3px;

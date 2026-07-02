@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
-import { AlertTriangle, ArrowRight, Award, CheckCircle2, ChevronDown, ChevronRight, Clock3, Hash, Megaphone, Minimize2, PlusCircle, RefreshCw, Search } from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { AlertTriangle, ChevronDown, ChevronRight, Clock3, RefreshCw, Search } from '@lucide/vue'
 import { useWorkspaceEnter } from '../../../composables/useCountUp'
-import { useWorkspaceDeckWheel } from '../../../composables/useWorkspaceDeckWheel'
-import PlatformBadge from '../../../components/PlatformBadge.vue'
 import WorkspaceCountUp from '../components/WorkspaceCountUp.vue'
-import WorkspaceSparkline from '../components/WorkspaceSparkline.vue'
 import { useCustomerWorkspace } from '../composables/useCustomerWorkspace'
-import { WorkspaceFullscreenKey } from '../injectionKeys'
+import {
+  useWorkspaceCampusCharts,
+  watchWorkspaceCampusCharts,
+  type WorkspaceCampusChartData,
+} from '../composables/useWorkspaceCampusCharts'
 
 const {
   brief,
@@ -15,56 +16,40 @@ const {
   alertsExpanded,
   heroTone,
   statusBadge,
-  statusSummary,
   primaryAction,
   visibleAlerts,
   hiddenAlertCount,
   loadBrief,
   navigateToMenu,
   openSnapshot,
-  workspaceQuickLinks,
+  alertTargetMenu,
+  realtimeMenuName,
   formatDateTime,
   formatKpiDelta,
   kpiDeltaClass,
-  formatPlatformDelta,
-  platformDeltaClass,
-  platformHighlightsSorted,
-  platformMatrixSummary,
-  platformAccentColor,
-  platformLeaderRank,
-  platformMentionBarWidth,
-  unpurchasedPlatforms,
-  showUnpurchasedDeck,
-  kpiTrendValues,
   snapshotMetric,
   snapshotIntentClass,
   snapshotIntentLabel,
   platformLabelMap,
+  greetingLabel,
+  healthScore,
+  workspaceHeadline,
+  miniKpis,
+  trendBars,
+  platformRankList,
+  todoItems,
+  showTodoStrip,
+  latestSnapshot,
 } = useCustomerWorkspace()
 
 const { enterActive, enterGeneration } = useWorkspaceEnter(() => brief.value)
-const workspaceFullscreen = inject(WorkspaceFullscreenKey)
-const isFullscreen = computed(() => workspaceFullscreen?.isFullscreen.value ?? false)
-
-async function toggleFullscreen() {
-  await workspaceFullscreen?.toggle()
-}
 
 const displayName = computed(() => brief.value?.company_name || brief.value?.brand_name || '当前企业')
-const roundComparison = computed(() => brief.value?.round_comparison)
-const hasRoundDelta = computed(() => Boolean(roundComparison.value?.has_previous))
-const mentionTrend = computed(() => kpiTrendValues(brief.value, 'mention_rate'))
-const rankTrend = computed(() => kpiTrendValues(brief.value, 'avg_brand_rank'))
-const top3Trend = computed(() => kpiTrendValues(brief.value, 'top3_rate'))
 const showEmptyGuide = computed(() => heroTone.value === 'empty' && !loading.value)
 
 const scheduleLine = computed(() => {
   const latest = brief.value?.latest_schedule
   if (!latest?.schedule_label) return '暂无已完成调度轮次'
-  const previous = brief.value?.previous_schedule
-  if (previous?.schedule_label && roundComparison.value?.has_previous) {
-    return `${latest.schedule_label} · 对比 ${previous.schedule_label}`
-  }
   return `${latest.schedule_label} · 已完成 ${latest.completed_subtasks} 条`
 })
 
@@ -75,597 +60,252 @@ const emptyHint = computed(() => {
     : '暂无已完成检测结果，请等待定时监测任务返回。'
 })
 
-const heroClass = computed(() => ({
-  'is-calm': heroTone.value === 'calm',
-  'is-risk': heroTone.value === 'warn',
-  'is-empty': heroTone.value === 'empty',
-}))
-
-function platformRowDelay(rowIndex: number) {
-  return `${240 + rowIndex * 55}ms`
-}
-
-const scrollDeckRef = ref<HTMLElement | null>(null)
-
-const deckPageIds = computed(() => {
-  if (showEmptyGuide.value) return [] as string[]
-  const ids = ['workspace-deck-hero']
-  if (platformHighlightsSorted.value.length) ids.push('workspace-deck-platform')
-  if (showUnpurchasedDeck.value) ids.push('workspace-deck-upsell')
-  ids.push('workspace-deck-sources', 'workspace-deck-snapshots')
-  return ids
+const sampleTotal = computed(() => {
+  if (!brief.value) return 0
+  return brief.value.kpis.ranking_sample_count + brief.value.kpis.exposure_sample_count
 })
-useWorkspaceDeckWheel(scrollDeckRef, deckPageIds)
+
+const rankGaugeScore = computed(() => {
+  const rank = brief.value?.kpis.avg_brand_rank
+  if (rank == null) return 0
+  return Math.max(0, Math.min(100, 100 - (rank - 1) * 20))
+})
+
+const trendChartRef = ref<HTMLDivElement | null>(null)
+const healthGaugeRef = ref<HTMLDivElement | null>(null)
+const platformRankChartRef = ref<HTMLDivElement | null>(null)
+
+const { renderCharts, bindResize } = useWorkspaceCampusCharts({
+  trend: trendChartRef,
+  intent: ref(null),
+  mention: ref(null),
+  healthGauge: healthGaugeRef,
+  rankGauge: ref(null),
+  top3Gauge: ref(null),
+  platformRank: platformRankChartRef,
+})
+
+const chartData = computed<WorkspaceCampusChartData | null>(() => {
+  if (!brief.value) return null
+  const activeRanks = platformRankList.value
+  return {
+    trendLabels: trendBars.value.map(bar => bar.label),
+    trendValues: trendBars.value.map(bar => bar.value),
+    intentRows: [],
+    intentTotal: 0,
+    mentionRows: [],
+    mentionRate: brief.value.kpis.brand_mention_rate,
+    healthScore: healthScore.value,
+    rankGaugeScore: rankGaugeScore.value,
+    avgBrandRank: brief.value.kpis.avg_brand_rank,
+    top3Rate: brief.value.kpis.top3_rate ?? 0,
+    platformRankLabels: activeRanks.map(row => platformLabelMap[row.platform] || row.platform),
+    platformRankValues: activeRanks.map(row => row.mention_rate),
+  }
+})
+
+watchWorkspaceCampusCharts(chartData, renderCharts, bindResize)
+
+watch(showEmptyGuide, (empty) => {
+  if (!empty && chartData.value) {
+    renderCharts(chartData.value).then(() => bindResize())
+  }
+})
 </script>
 
 <template>
-  <section
-    ref="scrollDeckRef"
-    class="customer-workspace-page workspace-scroll-deck"
-    :class="{ 'is-fullscreen': isFullscreen }"
-    tabindex="0"
-  >
-    <button
-      v-if="isFullscreen"
-      type="button"
-      class="workspace-fullscreen-exit"
-      @click="toggleFullscreen"
-    >
-      <Minimize2 />
-      退出全屏
-      <kbd>Esc</kbd>
-    </button>
-    <article id="workspace-deck-hero" class="workspace-deck-page workspace-cinematic-hero" :class="[heroClass, { 'hero-visible': enterActive || loading || !brief }]">
-      <div class="workspace-hero-bg" aria-hidden="true">
-        <span class="workspace-orb orb-a" />
-        <span class="workspace-orb orb-b" />
-        <span class="workspace-hero-grid" />
+  <section class="customer-workspace-page ws-campus">
+    <header class="ws-campus-head">
+      <div>
+        <h1>工作台</h1>
+        <p>{{ displayName }} · 近 7 日监测简报 · {{ scheduleLine }}</p>
       </div>
-
-      <div class="workspace-hero-body workspace-enter-stage" :class="{ 'is-active': enterActive }">
-        <div class="workspace-brief-top workspace-enter" style="--enter-delay: 0ms">
-          <div class="workspace-brief-intro">
-            <span class="workspace-hero-kicker">GEO 智能监测 · 运营工作台</span>
-            <div class="workspace-status-row">
-              <h2>{{ displayName }}</h2>
-              <span class="workspace-status-badge" :class="`tone-${statusBadge.tone}`">{{ statusBadge.label }}</span>
-            </div>
-            <p class="workspace-hero-subline">近 7 日监测简报 · {{ scheduleLine }}</p>
-            <small v-if="brief?.next_schedule_hint">监测计划 {{ brief.next_schedule_hint }}</small>
-          </div>
-
-          <div v-if="brief" class="workspace-hero-spotlight workspace-enter" style="--enter-delay: 120ms">
-            <span class="workspace-spotlight-label">推荐类露出率</span>
-            <strong class="workspace-spotlight-value">
-              <WorkspaceCountUp
-                :value="brief.kpis.brand_mention_rate"
-                :active="enterActive"
-                :generation="enterGeneration"
-                :decimals="1"
-                :duration="1100"
-              /><em>%</em>
-            </strong>
-            <WorkspaceSparkline
-              :values="mentionTrend"
-              :width="120"
-              :height="36"
-              tone="light"
-              show-area
-            />
-          </div>
-
-          <div class="workspace-brief-actions workspace-enter" style="--enter-delay: 80ms">
-            <button
-              v-if="primaryAction"
-              type="button"
-              class="workspace-primary-cta"
-              @click="navigateToMenu(primaryAction.menu)"
-            >
-              {{ primaryAction.label }}
-              <ChevronRight />
-            </button>
-            <button type="button" class="workspace-ghost-btn" :disabled="loading" @click="loadBrief">
-              <RefreshCw :class="{ spinning: loading }" />
-              刷新
-            </button>
-          </div>
-        </div>
-
-        <nav class="workspace-quick-strip" aria-label="快捷入口">
-          <button
-            v-for="(link, index) in workspaceQuickLinks"
-            :key="link.code"
-            type="button"
-            class="workspace-quick-tile workspace-enter"
-            :style="{ '--enter-delay': `${180 + index * 70}ms` }"
-            @click="navigateToMenu(link.code)"
-          >
-            <span class="workspace-quick-tile-icon"><component :is="link.icon" /></span>
-            <span class="workspace-quick-tile-copy">
-              <b>{{ link.title }}</b>
-              <small>{{ link.note }}</small>
-            </span>
-            <ArrowRight />
-          </button>
-        </nav>
-
-        <div v-if="loading && !brief" class="workspace-brief-skeleton">
-          <div v-for="n in 3" :key="n" />
-        </div>
-        <template v-else-if="brief">
-          <template v-if="!showEmptyGuide">
-          <div class="workspace-hero-main-panel">
-          <p class="workspace-status-summary workspace-enter" :class="{ calm: heroTone === 'calm', warn: heroTone === 'warn', empty: heroTone === 'empty' }" style="--enter-delay: 260ms">
-            <CheckCircle2 v-if="heroTone === 'calm'" />
-            <AlertTriangle v-else-if="heroTone === 'warn'" />
-            <Clock3 v-else />
-            {{ statusSummary }}
-          </p>
-          <div class="workspace-kpi-row">
-            <div class="workspace-kpi-card tone-blue workspace-enter" style="--enter-delay: 340ms">
-              <div class="workspace-kpi-icon"><Megaphone /></div>
-              <div class="workspace-kpi-card-top">
-                <span>推荐类露出率</span>
-                <WorkspaceSparkline :values="mentionTrend" tone="light" show-area />
-              </div>
-              <b>
-                <WorkspaceCountUp
-                  :value="brief.kpis.brand_mention_rate"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :decimals="1"
-                  :duration="1000"
-                /><small>%</small>
-              </b>
-              <span class="workspace-kpi-note">{{ brief.kpis.ranking_sample_count }} 条排名类样本</span>
-              <span
-                v-if="hasRoundDelta && roundComparison?.mention_rate_delta != null"
-                class="workspace-kpi-delta"
-                :class="kpiDeltaClass(roundComparison?.mention_rate_delta)"
-              >
-                {{ formatKpiDelta(roundComparison?.mention_rate_delta, '%') }}
-              </span>
-            </div>
-            <div class="workspace-kpi-card tone-cyan workspace-enter" style="--enter-delay: 420ms">
-              <div class="workspace-kpi-icon"><Hash /></div>
-              <div class="workspace-kpi-card-top">
-                <span>平均推荐排名</span>
-                <WorkspaceSparkline :values="rankTrend" lower-is-better tone="light" show-area stroke="#7de8ff" />
-              </div>
-              <b>
-                <WorkspaceCountUp
-                  :value="brief.kpis.avg_brand_rank"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :decimals="1"
-                  :duration="1000"
-                />
-              </b>
-              <span class="workspace-kpi-note">越小越靠前</span>
-              <span
-                v-if="hasRoundDelta && roundComparison?.avg_brand_rank_delta != null"
-                class="workspace-kpi-delta"
-                :class="kpiDeltaClass(roundComparison?.avg_brand_rank_delta, true)"
-              >
-                {{ formatKpiDelta(roundComparison?.avg_brand_rank_delta, ' 位', true, 'rank') }}
-              </span>
-            </div>
-            <div class="workspace-kpi-card tone-emerald workspace-enter" style="--enter-delay: 500ms">
-              <div class="workspace-kpi-icon"><Award /></div>
-              <div class="workspace-kpi-card-top">
-                <span>Top3 占比</span>
-                <WorkspaceSparkline :values="top3Trend" tone="light" show-area stroke="#6dffc8" />
-              </div>
-              <b>
-                <WorkspaceCountUp
-                  :value="brief.kpis.top3_rate ?? 0"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :decimals="1"
-                  :duration="900"
-                /><small>%</small>
-              </b>
-              <span class="workspace-kpi-note">排名类 · 进入前三比例</span>
-              <span
-                v-if="hasRoundDelta && roundComparison?.top3_rate_delta != null"
-                class="workspace-kpi-delta"
-                :class="kpiDeltaClass(roundComparison?.top3_rate_delta)"
-              >
-                {{ formatKpiDelta(roundComparison?.top3_rate_delta, '%') }}
-              </span>
-            </div>
-          </div>
-
-          <div class="workspace-meta-strip workspace-enter" style="--enter-delay: 580ms">
-            <div class="workspace-meta-item">
-              <span>信源引用</span>
-              <b>
-                <WorkspaceCountUp
-                  :value="brief.kpis.source_count"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :duration="900"
-                />
-              </b>
-              <small>近 7 日 AI 回答引用</small>
-            </div>
-            <div class="workspace-meta-item">
-              <span>竞品监测</span>
-              <b>
-                <WorkspaceCountUp
-                  :value="brief.kpis.competitor_count"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :duration="900"
-                />
-              </b>
-              <small>已配置竞品数量</small>
-            </div>
-          </div>
-
-          <div v-if="visibleAlerts.length" class="workspace-alert-center workspace-enter" style="--enter-delay: 640ms">
-            <div
-              v-for="alert in visibleAlerts"
-              :key="alert.message"
-              class="workspace-alert"
-              :class="alert.level"
-            >
-              <AlertTriangle v-if="alert.level === 'warn'" />
-              <Clock3 v-else />
-              <span>{{ alert.message }}</span>
-            </div>
-            <button
-              v-if="hiddenAlertCount > 0"
-              type="button"
-              class="workspace-alert-toggle"
-              @click="alertsExpanded = true"
-            >
-              展开其余 {{ hiddenAlertCount }} 条提醒
-              <ChevronDown />
-            </button>
-            <button
-              v-else-if="alertsExpanded && (brief.alerts.length > 2)"
-              type="button"
-              class="workspace-alert-toggle"
-              @click="alertsExpanded = false"
-            >
-              收起提醒
-              <ChevronDown class="is-flipped" />
-            </button>
-          </div>
-          </div>
-          </template>
-
-          <p v-else class="workspace-status-summary workspace-enter" :class="{ calm: heroTone === 'calm', warn: heroTone === 'warn', empty: heroTone === 'empty' }" style="--enter-delay: 260ms">
-            <CheckCircle2 v-if="heroTone === 'calm'" />
-            <AlertTriangle v-else-if="heroTone === 'warn'" />
-            <Clock3 v-else />
-            {{ statusSummary }}
-          </p>
-
-          <section v-if="showEmptyGuide" class="workspace-empty-guide workspace-enter-stage" :class="{ 'is-active': enterActive }">
-            <div class="workspace-empty-guide-glow workspace-enter" style="--enter-delay: 0ms" aria-hidden="true" />
-            <div class="workspace-empty-guide-icon workspace-enter" style="--enter-delay: 80ms">
-              <Clock3 />
-            </div>
-            <div class="workspace-empty-guide-copy workspace-enter" style="--enter-delay: 160ms">
-              <h3>等待首次监测结果</h3>
-              <p>{{ emptyHint }}</p>
-              <ul>
-                <li>系统会按监测计划自动发起检测，无需手动提交</li>
-                <li>结果返回后，这里会展示 KPI、平台表现与检测快照</li>
-                <li>可先查看实时检测页了解任务结构，或维护品牌/竞品配置</li>
-              </ul>
-            </div>
-            <div class="workspace-empty-guide-actions workspace-enter" style="--enter-delay: 240ms">
-              <button type="button" class="primary-btn small-btn" @click="navigateToMenu('customer.realtime')">
-                <Search />
-                查看实时检测
-              </button>
-            </div>
-          </section>
-        </template>
-      </div>
-    </article>
-
-    <section
-      v-if="platformHighlightsSorted.length"
-      id="workspace-deck-platform"
-      class="workspace-deck-page workspace-platform-deck-page workspace-enter-stage"
-      :class="{ 'is-active': enterActive }"
-    >
-      <div class="workspace-glass-panel workspace-platform-panel workspace-platform-deck-inner">
-        <div class="workspace-section-head workspace-enter" style="--enter-delay: 120ms">
-          <div>
-            <span class="workspace-section-eyebrow">Platform Matrix</span>
-            <h2>已购平台表现</h2>
-            <p>最新调度轮次 · 按露出率排序 · 共 {{ platformHighlightsSorted.length }} 个平台</p>
-          </div>
-          <div class="workspace-platform-deck-actions">
-            <button type="button" class="ghost-link-btn" @click="navigateToMenu('customer.realtime')">
-              查看实时检测
-              <ChevronRight />
-            </button>
-          </div>
-        </div>
-
-        <div
-          v-if="platformMatrixSummary.activeCount"
-          class="workspace-platform-summary workspace-enter"
-          style="--enter-delay: 160ms"
+      <div class="ws-campus-head-actions">
+        <span class="ws-campus-badge" :class="`tone-${statusBadge.tone}`">{{ statusBadge.label }}</span>
+        <button
+          v-if="primaryAction"
+          type="button"
+          class="ws-campus-primary"
+          @click="navigateToMenu(primaryAction.menu)"
         >
-          <div class="workspace-platform-summary-item">
-            <span>有效平台</span>
-            <strong>{{ platformMatrixSummary.activeCount }}<em>/{{ platformMatrixSummary.total }}</em></strong>
-          </div>
-          <div class="workspace-platform-summary-item">
-            <span>平均露出</span>
-            <strong>
-              <WorkspaceCountUp
-                :value="platformMatrixSummary.avgMention"
-                :active="enterActive"
-                :generation="enterGeneration"
-                :decimals="1"
-                :duration="700"
-              />%
-            </strong>
-          </div>
-          <div v-if="platformMatrixSummary.leader" class="workspace-platform-summary-item is-leader">
-            <span>领跑平台</span>
-            <strong>
-              {{ platformLabelMap[platformMatrixSummary.leader.platform] || platformMatrixSummary.leader.platform }}
-              <em>
-                <WorkspaceCountUp
-                  :value="platformMatrixSummary.leader.mention_rate"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :decimals="1"
-                  :duration="700"
-                />%
-              </em>
-            </strong>
-          </div>
-          <div v-if="platformMatrixSummary.emptyCount" class="workspace-platform-summary-item is-muted">
-            <span>待返回</span>
-            <strong>{{ platformMatrixSummary.emptyCount }} 个</strong>
-          </div>
-        </div>
+          {{ primaryAction.label }}
+          <ChevronRight />
+        </button>
+        <button type="button" class="ws-campus-ghost" :disabled="loading" @click="loadBrief">
+          <RefreshCw :class="{ spinning: loading }" />
+          刷新
+        </button>
+      </div>
+    </header>
 
-        <div class="workspace-platform-matrix workspace-platform-matrix-scroll workspace-enter" style="--enter-delay: 200ms">
-          <div class="workspace-platform-matrix-head" aria-hidden="true">
-            <span>平台</span>
-            <span>品牌露出率</span>
-            <span>平均排名</span>
-            <span v-if="hasRoundDelta">较上一轮</span>
-            <span />
-          </div>
-          <button
-            v-for="(row, index) in platformHighlightsSorted"
-            :key="row.platform"
-            type="button"
-            class="workspace-platform-matrix-row workspace-enter"
-            :class="{
-              'is-empty': row.sample_count === 0,
-              'is-leader': row.platform === platformMatrixSummary.leader?.platform,
-            }"
-            :style="{
-              '--accent': platformAccentColor(row.platform),
-              '--enter-delay': platformRowDelay(index),
-            }"
-            @click="navigateToMenu('customer.realtime')"
-          >
-            <div class="workspace-platform-matrix-identity">
-              <span class="workspace-platform-avatar">
-                <PlatformBadge :code="row.platform" size="md" icon-only />
-              </span>
-              <div>
+    <div v-if="loading && !brief" class="ws-campus-loading">
+      <div v-for="n in 6" :key="n" class="ws-campus-skeleton" />
+    </div>
+
+    <section v-else-if="showEmptyGuide" class="ws-campus-empty">
+      <Clock3 />
+      <h3>等待首次监测结果</h3>
+      <p>{{ emptyHint }}</p>
+      <ul>
+        <li>系统会按监测计划自动发起检测，无需手动提交</li>
+        <li>结果返回后，这里会展示健康分、平台表现与检测快照</li>
+        <li>可先查看{{ realtimeMenuName }}页了解任务结构，或维护品牌/竞品配置</li>
+      </ul>
+      <button type="button" class="ws-campus-primary" @click="navigateToMenu('customer.realtime')">
+        <Search />
+        查看{{ realtimeMenuName }}
+      </button>
+    </section>
+
+    <template v-else-if="brief">
+      <!-- ① 结论 + ② 健康分 + 趋势 -->
+      <div class="ws-campus-grid-top">
+        <article class="ws-campus-card ws-campus-greet" :class="heroTone">
+          <div class="ws-campus-greet-main">
+            <div class="ws-campus-greet-copy">
+              <div class="ws-campus-greet-hello">{{ greetingLabel() }}，{{ workspaceHeadline }}</div>
+              <small v-if="brief.next_schedule_hint">监测计划 {{ brief.next_schedule_hint }}</small>
+              <div class="ws-campus-greet-sample">
                 <b>
-                  {{ platformLabelMap[row.platform] || row.platform }}
-                  <i v-if="platformLeaderRank(row, platformHighlightsSorted) === 1" class="workspace-platform-leader-tag">领跑</i>
-                  <i
-                    v-else-if="platformLeaderRank(row, platformHighlightsSorted) > 1"
-                    class="workspace-platform-rank-tag"
-                  >#{{ platformLeaderRank(row, platformHighlightsSorted) }}</i>
-                </b>
-                <small v-if="row.sample_count > 0">{{ row.sample_count }} 条样本</small>
-                <small v-else class="is-muted">本轮暂无返回</small>
-              </div>
-            </div>
-
-            <div class="workspace-platform-matrix-mention">
-              <div class="workspace-platform-mention-track" aria-hidden="true">
-                <i :style="{ width: `${platformMentionBarWidth(row.mention_rate)}%` }" />
-              </div>
-              <strong v-if="row.sample_count > 0">
-                <WorkspaceCountUp
-                  :value="row.mention_rate"
-                  :active="enterActive"
-                  :generation="enterGeneration"
-                  :decimals="1"
-                  :duration="800"
-                />%
-              </strong>
-              <span v-else class="workspace-platform-na">—</span>
-            </div>
-
-            <div class="workspace-platform-matrix-rank">
-              <template v-if="row.avg_rank != null && row.sample_count > 0">
-                <strong>
                   <WorkspaceCountUp
-                    :value="row.avg_rank"
+                    :value="sampleTotal"
                     :active="enterActive"
                     :generation="enterGeneration"
-                    :decimals="1"
-                    :duration="800"
+                    :duration="900"
                   />
-                </strong>
-                <small>位</small>
-              </template>
-              <span v-else class="workspace-platform-na">—</span>
+                </b>
+                <span>本轮完成样本</span>
+              </div>
             </div>
-
-            <div v-if="hasRoundDelta" class="workspace-platform-matrix-delta">
-              <template v-if="row.mention_rate_delta != null || row.avg_rank_delta != null">
-                <span v-if="row.mention_rate_delta != null" :class="platformDeltaClass(row.mention_rate_delta)">
-                  露出 {{ formatPlatformDelta(row.mention_rate_delta, '%') }}
-                </span>
-                <span v-if="row.avg_rank_delta != null" :class="platformDeltaClass(row.avg_rank_delta, true)">
-                  排名 {{ formatPlatformDelta(row.avg_rank_delta, ' 位', true) }}
-                </span>
-              </template>
-              <span v-else class="workspace-platform-na">—</span>
+            <div class="ws-campus-health-block">
+              <div ref="healthGaugeRef" class="ws-campus-chart ws-campus-chart-health" />
+              <span>GEO 健康分</span>
+              <small>可见度 60% + 排名 40%</small>
             </div>
+          </div>
+        </article>
 
-            <ChevronRight class="workspace-platform-matrix-arrow" aria-hidden="true" />
-          </button>
-        </div>
-
-        <p v-if="showUnpurchasedDeck" class="workspace-deck-inline-cue">
-          继续向下滚动 · 查看可扩容平台
-        </p>
+        <article class="ws-campus-card">
+          <div class="ws-campus-card-head">
+            <h3>露出率趋势</h3>
+            <span class="ws-campus-chip">近 7 日</span>
+          </div>
+          <div ref="trendChartRef" class="ws-campus-chart ws-campus-chart-trend" />
+          <p v-if="!trendBars.length" class="ws-campus-mini-empty ws-campus-chart-empty">暂无趋势数据</p>
+        </article>
       </div>
-    </section>
 
-    <section
-      v-if="showUnpurchasedDeck"
-      id="workspace-deck-upsell"
-      class="workspace-deck-page workspace-upsell-deck-page workspace-enter-stage"
-      :class="{ 'is-active': enterActive }"
-    >
-      <div class="workspace-glass-panel workspace-upsell-panel workspace-enter" style="--enter-delay: 120ms">
-        <div class="workspace-section-head">
-          <div>
-            <span class="workspace-section-eyebrow">Expand Coverage</span>
-            <h2>可扩容 AI 平台</h2>
-            <p>
-              当前已购 {{ brief?.purchased_platforms?.length || 0 }} 个平台 · 还有 {{ unpurchasedPlatforms.length }} 个可开通
-            </p>
-          </div>
-          <span class="workspace-section-chip is-upsell">
-            <PlusCircle />
-            联系运营扩容
-          </span>
-        </div>
-
-        <div class="workspace-unpurchased-grid">
-          <div
-            v-for="platform in unpurchasedPlatforms"
-            :key="platform.code"
-            class="workspace-unpurchased-card"
-            :style="{ '--accent': platformAccentColor(platform.code) }"
-          >
-            <span class="workspace-platform-avatar">
-              <PlatformBadge :code="platform.code" size="md" icon-only />
-            </span>
-            <div>
-              <b>{{ platform.name }}</b>
-              <small>尚未纳入监测</small>
-            </div>
-            <span class="workspace-unpurchased-tag">未开通</span>
-          </div>
-        </div>
-
-        <div class="workspace-upsell-foot">
-          <p>如需增加监测平台，请联系您的 GEO 运营顾问扩容套餐，开通后即可在本页查看各平台表现。</p>
-          <div class="workspace-upsell-purchased">
-            <span>已购平台</span>
-            <em>
-              {{ (brief?.purchased_platforms || []).map(code => platformLabelMap[code] || code).join('、') || '暂无' }}
-            </em>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section
-      v-if="!showEmptyGuide"
-      id="workspace-deck-sources"
-      class="workspace-deck-page workspace-insight-deck-page workspace-enter-stage"
-      :class="{ 'is-active': enterActive }"
-    >
-      <article class="workspace-glass-panel workspace-source-panel workspace-source-deck-inner workspace-enter" style="--enter-delay: 180ms">
-        <div class="workspace-section-head compact">
-          <div>
-            <span class="workspace-section-eyebrow">Top Sources</span>
-            <h2>高频信源</h2>
-            <p>近 7 日 AI 回答引用 Top 5</p>
-          </div>
-          <button type="button" class="ghost-link-btn" @click="navigateToMenu('customer.sources')">
-            查看全部信源
-            <ChevronRight />
-          </button>
-        </div>
-        <div v-if="brief?.top_sources?.length" class="workspace-source-list">
-          <a
-            v-for="(source, index) in brief.top_sources"
-            :key="source.url"
-            :href="source.url"
-            target="_blank"
-            rel="noopener"
-          >
-            <span class="workspace-source-rank">{{ index + 1 }}</span>
-            <div class="workspace-source-copy">
-              <b>{{ source.title }}</b>
-              <span class="workspace-source-platforms">{{ (source.platforms || []).map(code => platformLabelMap[code] || code).join('、') }}</span>
-            </div>
-            <span class="workspace-source-count">
+      <!-- ③ 三 KPI -->
+      <div class="ws-campus-kpi-strip">
+        <article v-for="kpi in miniKpis" :key="kpi.key" class="ws-campus-kpi-card">
+          <span>{{ kpi.label }}</span>
+          <b>
+            <template v-if="kpi.value != null">
               <WorkspaceCountUp
-                :value="source.count"
+                :value="kpi.value"
                 :active="enterActive"
                 :generation="enterGeneration"
-                :duration="700"
-              /> 次
-            </span>
-          </a>
-        </div>
-        <div v-else class="mini-empty">暂无信源数据，监测返回后会自动展示。</div>
-      </article>
-    </section>
-
-    <section
-      v-if="!showEmptyGuide"
-      id="workspace-deck-snapshots"
-      class="workspace-deck-page workspace-insight-deck-page workspace-enter-stage"
-      :class="{ 'is-active': enterActive }"
-    >
-      <article class="workspace-glass-panel workspace-snapshot-panel workspace-snapshot-deck-inner workspace-enter" style="--enter-delay: 280ms">
-        <div class="workspace-section-head compact">
-          <div>
-            <span class="workspace-section-eyebrow">Live Snapshots</span>
-            <h2>最近检测快照</h2>
-            <p>点击条目进入实时检测查看详情</p>
-          </div>
-          <button type="button" class="ghost-link-btn" @click="navigateToMenu('customer.realtime')">
-            进入实时检测
-            <ChevronRight />
-          </button>
-        </div>
-        <div v-if="loading" class="mini-empty">加载中…</div>
-        <div v-else-if="brief?.recent_snapshots?.length" class="workspace-snapshot-list">
-          <button
-            v-for="(item, index) in brief.recent_snapshots"
-            :key="item.subtask_id"
-            type="button"
-            class="workspace-snapshot-card workspace-enter"
-            :class="{ negative: item.sentiment === '负面' }"
-            :style="{ '--enter-delay': `${360 + index * 60}ms` }"
-            @click="openSnapshot(item)"
+                :decimals="kpi.decimals"
+                :duration="900"
+              />{{ kpi.unit }}
+            </template>
+            <template v-else>—</template>
+          </b>
+          <em
+            v-if="kpi.delta != null"
+            :class="kpiDeltaClass(kpi.delta, kpi.lowerIsBetter)"
           >
-            <div class="workspace-snapshot-head">
-              <span class="workspace-intent-pill" :class="snapshotIntentClass(item)">{{ snapshotIntentLabel(item) }}</span>
-              <span>{{ platformLabelMap[item.platform] || item.platform }}</span>
-              <span>{{ item.schedule_label || formatDateTime(item.updated_at) }}</span>
-            </div>
-            <h3>{{ item.prompt }}</h3>
-            <p>{{ item.answer_excerpt || '暂无摘要' }}</p>
-            <div class="workspace-snapshot-foot">
-              <span>{{ snapshotMetric(item) }}</span>
-              <span class="workspace-snapshot-link">查看详情 <ChevronRight /></span>
-            </div>
+            {{ formatKpiDelta(kpi.delta, kpi.unit || '', kpi.lowerIsBetter, kpi.deltaKind || 'default') }}
+          </em>
+          <em v-else class="is-muted">较上一轮 —</em>
+        </article>
+      </div>
+
+      <!-- ④ 平台横条 -->
+      <article class="ws-campus-card ws-campus-platform-panel">
+        <div class="ws-campus-card-head">
+          <h3>已购平台表现</h3>
+          <button type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
+            查看{{ realtimeMenuName }}
           </button>
         </div>
-        <div v-else class="mini-empty workspace-empty-hint">{{ emptyHint }}</div>
+        <div ref="platformRankChartRef" class="ws-campus-chart ws-campus-chart-rank" />
+        <p v-if="!platformRankList.length" class="ws-campus-mini-empty">暂无平台数据</p>
       </article>
-    </section>
+
+      <!-- 待办（仅有数量时显示） -->
+      <div v-if="showTodoStrip" class="ws-campus-todo-inline">
+        <button
+          v-for="item in todoItems.filter(row => row.count > 0)"
+          :key="item.key"
+          type="button"
+          class="ws-campus-todo-chip"
+          :class="item.tone"
+          @click="navigateToMenu(item.menu)"
+        >
+          <b>{{ item.count }}</b>
+          <span>{{ item.label }}</span>
+          <ChevronRight />
+        </button>
+      </div>
+
+      <!-- ⑤ 最近检测快照 -->
+      <article class="ws-campus-card ws-campus-snapshot">
+        <div class="ws-campus-card-head">
+          <h3>最近检测快照</h3>
+          <button type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
+            进入{{ realtimeMenuName }}
+          </button>
+        </div>
+        <template v-if="latestSnapshot">
+          <div class="ws-campus-snap-meta">
+            <span class="ws-campus-tag" :class="snapshotIntentClass(latestSnapshot)">{{ snapshotIntentLabel(latestSnapshot) }}</span>
+            <span>{{ platformLabelMap[latestSnapshot.platform] || latestSnapshot.platform }}</span>
+            <span>{{ latestSnapshot.schedule_label || formatDateTime(latestSnapshot.updated_at) }}</span>
+          </div>
+          <h4>{{ latestSnapshot.prompt }}</h4>
+          <p>{{ latestSnapshot.answer_excerpt || '暂无摘要' }}</p>
+          <button type="button" class="ws-campus-snap-foot" @click="openSnapshot(latestSnapshot)">
+            {{ snapshotMetric(latestSnapshot) }} · 点击查看详情 →
+          </button>
+        </template>
+        <p v-else class="ws-campus-mini-empty">{{ emptyHint }}</p>
+      </article>
+
+      <!-- 告警 -->
+      <div v-if="visibleAlerts.length" class="ws-campus-alerts">
+        <button
+          v-for="alert in visibleAlerts"
+          :key="alert.message"
+          type="button"
+          class="ws-campus-alert"
+          :class="alert.level"
+          @click="navigateToMenu(alertTargetMenu(alert))"
+        >
+          <AlertTriangle v-if="alert.level === 'warn'" />
+          <Clock3 v-else />
+          <span>{{ alert.message }}</span>
+          <ChevronRight />
+        </button>
+        <button
+          v-if="hiddenAlertCount > 0"
+          type="button"
+          class="ws-campus-alert-toggle"
+          @click="alertsExpanded = true"
+        >
+          展开其余 {{ hiddenAlertCount }} 条提醒
+          <ChevronDown />
+        </button>
+        <button
+          v-else-if="alertsExpanded && brief.alerts.length > 2"
+          type="button"
+          class="ws-campus-alert-toggle"
+          @click="alertsExpanded = false"
+        >
+          收起提醒
+          <ChevronDown class="is-flipped" />
+        </button>
+      </div>
+    </template>
   </section>
 </template>

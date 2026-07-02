@@ -15,14 +15,15 @@ export interface PlatformInfo {
 
 export interface AlertThreshold {
   id: number
-  threshold_key: string
-  threshold_name: string
-  threshold_value: number
-  threshold_unit: string
-  scope: 'global' | 'tenant'
   tenant_id: number | null
+  metric_type: string
+  metric_label?: string
+  threshold_name: string
+  warning_value: string
+  critical_value: string
+  unit: string
   enabled: boolean
-  last_triggered_at: string | null
+  updated_by: string | null
   updated_at: string
 }
 
@@ -35,8 +36,125 @@ export interface UpdatePlatformPayload {
 }
 
 export interface UpdateAlertThresholdPayload {
-  threshold_value?: number
+  threshold_name?: string
+  warning_value?: string
+  critical_value?: string
+  unit?: string
+  metric_type?: string
   enabled?: boolean
+}
+
+export interface CelerySyncPlatformBreakdown {
+  code: string
+  name: string
+  total: number
+  completed: number
+  pending: number
+  processing: number
+  failed: number
+  pending_prompts?: string[]
+}
+
+export interface CelerySyncTaskDetail {
+  task_id: string
+  task_id_short: string
+  tenant_id?: number | null
+  tenant_name?: string | null
+  monitor_keywords?: string | null
+  status: string
+  total_items: number
+  completed_items: number
+  failed_items: number
+  progress_text: string
+  prompt_count: number
+  prompts: string[]
+  prompts_preview?: string | null
+  platform_count: number
+  platform_codes: string[]
+  platform_breakdown: CelerySyncPlatformBreakdown[]
+  pending_platforms: string[]
+  processing_platforms: string[]
+  schedule_label?: string | null
+  keyword_group?: string | null
+  updated_at?: string | null
+  sync_error?: string
+  phase?: string
+}
+
+export interface CeleryMonitorData {
+  checked_at: string
+  queues: Array<{
+    key: string
+    name: string
+    pending: number
+    warning_threshold: number
+    critical_threshold: number
+    status: string
+    status_level: 'normal' | 'warning' | 'critical'
+    usage_percent: number
+  }>
+  workers: {
+    online_count: number
+    active_tasks: number
+    reserved_tasks: number
+    status: string
+    items: Array<{ name: string; role: string }>
+  }
+  alerts: Array<{ queue: string; level: string; title: string; message: string; queued: number; threshold: number }>
+  alert_count: number
+  flower_url?: string | null
+  tips: string[]
+  scheduler: {
+    submit_scan: string
+    sync_scan: string
+    backlog_check: string
+  }
+  runtime_tasks?: {
+    active: CeleryRuntimeTask[]
+    reserved: CeleryRuntimeTask[]
+    total: number
+  }
+  beat_history?: CeleryBeatHistoryItem[]
+  ops_insights?: {
+    scheduler_ok: boolean
+    scheduler_status: string
+    pending_sync_tasks: number
+    today_scan_count: number
+    today_enqueued_tasks: number
+    last_due_scan?: {
+      at?: string | null
+      status_label?: string | null
+      summary?: string | null
+    } | null
+  }
+  pending_sync_details?: CelerySyncTaskDetail[]
+  sync_live?: CelerySyncTaskDetail | null
+}
+
+export interface CeleryRuntimeTask {
+  task_id?: string
+  task_key: string
+  label: string
+  detail: string
+  worker: string
+  worker_role: string
+  phase: 'active' | 'reserved'
+  phase_label: string
+  started_at?: string | null
+}
+
+export interface CeleryBeatHistoryItem {
+  task_key: string
+  label: string
+  status: string
+  status_label: string
+  checked_at: string
+  enqueued?: number
+  skipped?: number
+  alert_count?: number
+  summary?: string
+  message?: string | null
+  sync_details?: CelerySyncTaskDetail[]
 }
 
 export type PlatformServiceStatus = 'pending' | 'checking' | 'healthy' | 'degraded' | 'down'
@@ -102,6 +220,11 @@ export async function updatePlatform(id: number, data: UpdatePlatformPayload): P
 
 export async function getAlertThresholds(): Promise<AlertThreshold[]> {
   const response = await http.get('/v1/alerts/thresholds')
+  return response.data.data
+}
+
+export async function getCeleryMonitor(): Promise<CeleryMonitorData> {
+  const response = await http.get('/v1/alerts/celery-monitor')
   return response.data.data
 }
 

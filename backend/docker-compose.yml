@@ -1,0 +1,132 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SCHEDULE_TOLERANCE_MINUTES: "60"
+      MOLIZHISHU_SUBMIT_RATE_PER_MINUTE: "30"
+      MOLIZHISHU_SYNC_RATE_PER_MINUTE: "60"
+      DATABASE_POOL_SIZE: "20"
+      DATABASE_MAX_OVERFLOW: "40"
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  celery-worker-submit-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app worker -Q submit -n submit-a@%h -c 4 --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  celery-worker-submit-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app worker -Q submit -n submit-b@%h -c 4 --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  celery-worker-sync-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app worker -Q sync -n sync-a@%h -c 4 --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  celery-worker-sync-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app worker -Q sync -n sync-b@%h -c 4 --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app flower --port=5555 --address=0.0.0.0 --loglevel=info
+    env_file:
+      - .env
+    environment:
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      FLOWER_URL: http://127.0.0.1:5555
+    depends_on:
+      - redis
+    ports:
+      - "5555:5555"
+
+volumes:
+  redis_data:
+
+# 50 家企业同点估算（4 词组/家）：
+# - 200 条 submit，全局限流 30/min → 约 7 分钟入模力指数
+# - 2 个 submit worker × concurrency 4 → 最多 8 路并行，但仍受 Redis 全局限流约束
+# - sync 全局限流 60/min，2 个 sync worker 负责长尾轮询
+# 扩容：复制 submit/sync worker 服务，或 docker compose up --scale celery-worker-submit-a=2

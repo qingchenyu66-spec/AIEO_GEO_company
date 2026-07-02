@@ -14,7 +14,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
   },
   deepseek_mobile: {
     code: 'deepseek_mobile',
-    name: 'DeepSeek（移动端）',
+    name: 'DeepSeek 移动端',
     accent: '#4d6bfe',
     icon: '/platform-icons/deepseek.svg',
   },
@@ -26,7 +26,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
   },
   doubao_mobile: {
     code: 'doubao_mobile',
-    name: '豆包（移动端）',
+    name: '豆包移动版',
     accent: '#ff7a45',
     icon: '/platform-icons/doubao.svg',
   },
@@ -94,16 +94,16 @@ export function getPlatformMeta(code: string): PlatformMeta {
 }
 
 export const supportedPlatforms = [
-  'deepseek',
   'doubao',
+  'doubao_mobile',
+  'baiduai',
+  'deepseek',
+  'deepseek_mobile',
+  'weibo_zhisou',
   'yuanbao',
-  'kimi',
   'qianwen',
   'quark',
-  'baiduai',
-  'weibo_zhisou',
-  'doubao_mobile',
-  'deepseek_mobile',
+  'kimi',
 ].map(code => getPlatformMeta(code))
 
 export function platformAccentColor(code: string) {

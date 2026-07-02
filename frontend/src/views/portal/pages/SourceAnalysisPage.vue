@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   AlertTriangle,
   Database,
   Download,
   Globe,
   Info,
-  Link2,
   RefreshCw,
 } from '@lucide/vue'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useSourceAnalysis, type SourceDatePreset } from '../composables/useSourceAnalysis'
+import { useAuthStore } from '../../../stores/auth'
 import '../../../styles/source-analysis.css'
+
+const auth = useAuthStore()
+const pageMenuName = computed(() => (
+  auth.allowedMenus.find(menu => ['customer.sources', 'platform.sources'].includes(menu.menu_code))?.menu_name || '信源'
+))
 
 const structureChartRef = ref<HTMLDivElement | null>(null)
 const trendChartRef = ref<HTMLDivElement | null>(null)
@@ -102,8 +108,8 @@ const categoryOptions = [
             :class="{ active: platformFilter === tab.code }"
             @click="platformFilter = tab.code"
           >
-            <Link2 v-if="tab.code !== 'all'" />
-            <Globe v-else />
+            <PlatformBadge v-if="tab.code !== 'all'" :code="tab.code" size="xs" icon-only class="source-platform-chip-icon" />
+            <Globe v-else class="source-platform-chip-globe" />
             <span>{{ tab.name }}</span>
             <em>{{ tab.count }} 次</em>
           </button>
@@ -113,7 +119,7 @@ const categoryOptions = [
 
     <article class="source-hero panel">
       <div class="source-hero-top">
-        <span class="source-hero-eyebrow">信源分析 · AI 引用溯源</span>
+        <span class="source-hero-eyebrow">{{ pageMenuName }} · AI 引用溯源</span>
         <h2>{{ brandAsset?.brand_name || '本品牌' }} · 含露出词信源</h2>
         <p class="source-hero-note">
           仅展示引用<strong>标题或链接中含品牌露出词</strong>的文章，便于追踪 AI 直接引用品牌相关内容的情况。

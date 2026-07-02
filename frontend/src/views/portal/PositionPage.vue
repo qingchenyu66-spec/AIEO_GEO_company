@@ -22,7 +22,7 @@ const {
       <div class="managed-user-list">
         <div v-for="position in positionRows" :key="position.id" class="managed-user-card">
           <div><b>{{ position.position_name }}</b><small>{{ position.identity_type === 'PLATFORM' ? '平台运营端' : '客户企业端' }}</small></div>
-          <span>{{ position.menu_ids.length }} 项权限</span>
+          <span>{{ (position.menu_grants?.length || position.menu_ids.length) }} 项权限</span>
           <p>{{ position.description || '暂无说明' }}</p>
           <div class="managed-user-actions">
             <button @click="editPosition(position)">编辑</button>

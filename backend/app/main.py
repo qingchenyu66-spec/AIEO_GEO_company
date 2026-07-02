@@ -26,5 +26,5 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 @app.get("/", response_model=ApiResponse[dict])
 def root() -> ApiResponse[dict]:
-    return ApiResponse(data={"service": settings.app_name, "docs": "/docs"})
+    return ApiResponse(data={"service": settings.app_name, "docs": "/docs", "version": "0.1.0"})
 

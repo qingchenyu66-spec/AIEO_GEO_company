@@ -1,26 +1,18 @@
-"""报告中心API——报告列表、生成、详情。"""
+"""报告中心API——报告列表、生成、详情、导出。"""
+
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, desc, func as sa_func
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
-from app.models.report import GeoReport
-from app.models.diagnosis import BrandDiagnosis
-from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.common import ApiResponse
+from app.services.report_export_service import build_report_export, content_disposition
+from app.services.report_service import generate_report, get_report_detail, list_reports, publish_report, update_report
 
 router = APIRouter(prefix="/reports")
-
-
-def _tenant_scope(current: CurrentSession) -> int | None:
-    """返回当前会话可访问的企业ID范围，客户只能看自己的。"""
-    if current.identity.identity_type == "CUSTOMER":
-        if current.identity.tenant_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定企业")
-        return current.identity.tenant_id
-    return None
 
 
 @router.get("/list", response_model=ApiResponse[list[dict]])
@@ -29,100 +21,83 @@ def report_list(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """报告列表——客户看自己的，运营看全部。"""
-    tenant_id = _tenant_scope(current)
-    stmt = (
-        select(GeoReport)
-        .where(GeoReport.deleted.is_(False))
-        .order_by(desc(GeoReport.id))
-    )
-    if tenant_id:
-        stmt = stmt.where(GeoReport.tenant_id == tenant_id)
-    rows = list(db.scalars(stmt))
-    return ApiResponse(data=[
-        {
-            "id": r.id,
-            "tenant_id": r.tenant_id,
-            "report_title": r.report_title,
-            "report_type": r.report_type,
-            "status": r.status,
-            "data_summary": r.data_summary,
-            "report_url": r.report_url,
-            "created_by": r.created_by,
-            "created_at": r.created_at.isoformat(),
-            "updated_at": r.updated_at.isoformat(),
-        }
-        for r in rows
-    ])
+    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定企业")
+    return ApiResponse(data=list_reports(db, current))
 
 
 @router.post("/generate", response_model=ApiResponse[dict])
-def generate_report(
+def generate_report_endpoint(
     payload: dict,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """生成报告——基于诊断记录+监测数据生成一份新报告。"""
-    tenant_id = payload.get("tenant_id")
-    if current.identity.identity_type == "CUSTOMER":
-        if current.identity.tenant_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定企业")
-        tenant_id = current.identity.tenant_id
-    if not tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定企业ID")
-    # 拉取最新的诊断记录
-    diagnosis = db.scalar(
-        select(BrandDiagnosis)
-        .where(BrandDiagnosis.tenant_id == tenant_id, BrandDiagnosis.deleted.is_(False))
-        .order_by(desc(BrandDiagnosis.id))
-        .limit(1)
+    """生成报告——仅运营端，基于诊断记录与监测快照，初始为草稿。"""
+    try:
+        return ApiResponse(data=generate_report(db, payload, current))
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.put("/{report_id}", response_model=ApiResponse[dict])
+def update_report_endpoint(
+    report_id: int,
+    payload: dict,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """编辑并保存报告草稿——仅运营端。"""
+    try:
+        return ApiResponse(data=update_report(db, report_id, payload, current))
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.post("/{report_id}/publish", response_model=ApiResponse[dict])
+def publish_report_endpoint(
+    report_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """发布报告——客户侧可见。"""
+    try:
+        return ApiResponse(data=publish_report(db, report_id, current))
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.get("/{report_id}/export/{export_format}")
+def export_report(
+    report_id: int,
+    export_format: Literal["pdf", "docx"],
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> Response:
+    """导出报告为 PDF 或 Word。"""
+    try:
+        from app.services.menu_permission_service import require_report_permission
+
+        require_report_permission(db, current, "can_export")
+        detail = get_report_detail(db, report_id, current)
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=message) from exc
+    try:
+        content, filename, mime = build_report_export(detail, export_format)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"报告导出失败：{exc}") from exc
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Content-Disposition": content_disposition(filename)},
     )
-    # 统计该企业的监测子任务数
-    task_ids_sub = select(GeoMonitorTask.task_id).where(
-        GeoMonitorTask.tenant_id == tenant_id, GeoMonitorTask.deleted.is_(False)
-    ).subquery()
-    total_subtasks = db.scalar(
-        sa_func.count(GeoMonitorSubtask.id)
-        .where(GeoMonitorSubtask.task_id.in_(select(task_ids_sub)))
-    ) or 0
-    report_type = payload.get("report_type", "diagnosis")
-    report_title = payload.get(
-        "report_title",
-        f"品牌监测报告-{diagnosis.diagnosis_title if diagnosis else tenant_id}",
-    )
-    data_summary = f"基于{total_subtasks}条监测子任务数据生成"
-    content = {
-        "diagnosis": {
-            "health_score": diagnosis.health_score if diagnosis else None,
-            "sentiment_summary": diagnosis.sentiment_summary if diagnosis else None,
-            "strength_points": diagnosis.strength_points if diagnosis else None,
-            "weakness_points": diagnosis.weakness_points if diagnosis else None,
-            "recommendation": diagnosis.recommendation if diagnosis else None,
-        },
-        "monitor_info": {
-            "total_subtasks": total_subtasks,
-            "generated_at": None,
-        },
-    }
-    report = GeoReport(
-        tenant_id=int(tenant_id),
-        report_title=report_title,
-        report_type=report_type,
-        status="published",
-        data_summary=data_summary,
-        report_content_json=content,
-        created_by=current.user.id,
-    )
-    db.add(report)
-    db.commit()
-    db.refresh(report)
-    return ApiResponse(data={
-        "id": report.id,
-        "report_title": report.report_title,
-        "report_type": report.report_type,
-        "status": report.status,
-        "data_summary": report.data_summary,
-        "created_at": report.created_at.isoformat(),
-    })
 
 
 @router.get("/{report_id}", response_model=ApiResponse[dict])
@@ -132,24 +107,9 @@ def report_detail(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """报告详情。"""
-    report = db.scalar(
-        select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False))
-    )
-    if report is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
-    if current.identity.identity_type == "CUSTOMER":
-        if report.tenant_id != current.identity.tenant_id:
-            raise HTTPException(status_code=403, detail="无权查看")
-    return ApiResponse(data={
-        "id": report.id,
-        "tenant_id": report.tenant_id,
-        "report_title": report.report_title,
-        "report_type": report.report_type,
-        "status": report.status,
-        "data_summary": report.data_summary,
-        "report_content": report.report_content_json,
-        "report_url": report.report_url,
-        "created_by": report.created_by,
-        "created_at": report.created_at.isoformat(),
-        "updated_at": report.updated_at.isoformat(),
-    })
+    try:
+        return ApiResponse(data=get_report_detail(db, report_id, current))
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=message) from exc

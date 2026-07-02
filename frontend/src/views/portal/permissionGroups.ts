@@ -1,11 +1,11 @@
-import type { MenuInfo } from '../../services/auth'
-import type { IdentityType } from '../../services/auth'
+import type { IdentityType, MenuInfo } from '../../services/auth'
 import { POSITION_MENU } from './constants'
 
 export function permissionGroupTitle(type: IdentityType, key: string) {
   const platformTitles: Record<string, string> = {
     dashboard: '运营总览',
     audit: '企业管理',
+    analysis: '分析报告',
     users: '用户管理',
     diagnosis: '品牌诊断',
     system: '系统管理',
@@ -22,12 +22,17 @@ export function permissionGroupTitle(type: IdentityType, key: string) {
 }
 
 export function permissionGroupNote(type: IdentityType, key: string) {
-  if (type === 'CUSTOMER') return key === 'knowledge' ? '客户侧唯一允许上传的位置，其余模块以展示、查看和导出为主。' : '客户侧菜单默认面向展示，不开放企业资料和任务创建入口。'
+  if (type === 'CUSTOMER') {
+    return key === 'knowledge'
+      ? '客户侧仅在知识库开放上传，其余模块以展示、查看和导出为主。'
+      : '客户侧菜单默认面向展示，不开放企业资料和任务创建入口。'
+  }
   if (key === 'audit') return '企业资料、监测词、购买模型、监控计划和竞品配置可在这里拆分授权。'
+  if (key === 'analysis') return '报告中心支持查看/导出、生成与编辑发布；客户侧默认仅查看已发布报告。'
   if (key === 'users') return '包含用户新增、用户列表和职位管理，通常只给管理员或负责人。'
-  if (key === 'diagnosis') return '品牌诊断由运营人工处理，可基于企业、平台和监测结果生成诊断建议。'
+  if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
   if (key === 'system') return '系统配置、操作日志、模型平台等后台维护能力。'
-  return '平台运营端用于内部管理，可按职位控制新建、编辑、禁用和导出。'
+  return '平台运营端用于内部管理，可按职位控制新增、编辑、禁用和导出。'
 }
 
 export function permissionGroupKey(menu: MenuInfo) {
@@ -41,7 +46,8 @@ export function permissionGroupKey(menu: MenuInfo) {
   if (menu.menu_code === 'platform.dashboard') return 'dashboard'
   if (menu.menu_code.startsWith('platform.audit')) return 'audit'
   if (menu.menu_code.startsWith('platform.users') || menu.menu_code === POSITION_MENU) return 'users'
-  if (menu.menu_code === 'platform.diagnosis') return 'diagnosis'
+  if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
+  if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
   if (['platform.plans', 'platform.admins', 'platform.models', 'platform.alerts', 'platform.logs', 'platform.settings'].includes(menu.menu_code)) return 'system'
   return 'other'
 }
@@ -52,7 +58,7 @@ export function permissionGroupsFor(
   selectedMenuIds: number[] = [],
 ) {
   const order = type === 'PLATFORM'
-    ? ['dashboard', 'audit', 'users', 'diagnosis', 'system', 'other']
+    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'system', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   const buckets: Record<string, MenuInfo[]> = {}
   for (const menu of assignMenus[type]) {
@@ -107,7 +113,7 @@ export function createEmptyIdentityForm(): UserIdentityForm {
     display_name: '',
     identity_types: [],
     identity_configs: {
-      PLATFORM: { ...emptyConfig(), identity_name: '平台运营专员' },
+      PLATFORM: { ...emptyConfig(), identity_name: '平台运营成员' },
       CUSTOMER: { ...emptyConfig(), identity_name: '客户企业成员' },
     },
   }

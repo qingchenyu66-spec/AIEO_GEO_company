@@ -229,12 +229,22 @@ export function usePortalCharts(refs: PortalChartRefs) {
     if (mentionTrendChart) {
       const trend = data.mentionTrendSeries
       if (trend?.labels?.length && trend.series?.length) {
-        const palette = ['#36cfc9', '#5b8ff9', '#f6bd16', '#9270ca', '#ff9845']
+        const palette = ['#2d6cdf', '#14a7c7', '#32c48d', '#8b5cf6', '#f97316', '#ef5da8', '#64748b', '#0f766e', '#f59e0b', '#06b6d4']
         mentionTrendChart.setOption({
           color: palette,
-          grid: { left: 42, right: 18, top: 36, bottom: 28 },
+          grid: { left: 42, right: 18, top: trend.series.length > 5 ? 54 : 40, bottom: 28 },
           tooltip: { trigger: 'axis', valueFormatter: (value: number) => `${value}%` },
-          legend: { top: 0, itemWidth: 12, itemHeight: 4, textStyle: { color: '#58708f', fontSize: 11 } },
+          legend: {
+            type: 'scroll',
+            top: 0,
+            left: 8,
+            right: 8,
+            itemWidth: 12,
+            itemHeight: 4,
+            pageIconSize: 9,
+            pageTextStyle: { color: '#58708f', fontSize: 10 },
+            textStyle: { color: '#58708f', fontSize: 11 },
+          },
           xAxis: {
             type: 'category',
             data: trend.labels,

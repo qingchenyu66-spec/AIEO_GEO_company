@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, func, or_, select
@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
+from app.core.celery_queue_monitor import format_celery_monitor_zh, get_queue_monitor_snapshot
+from app.core.platform_order import sort_platform_items
+from app.core.redis_client import get_json_cache, redis_health, set_json_cache
 from app.models.ops import OperationLog, SystemConfig
 from app.models.permission import Menu, Position, PositionMenu, Role, UserIdentityMenu
 from app.models.tenant import Tenant
@@ -39,7 +42,17 @@ from app.services.management_service import (
     set_managed_user_status,
     update_managed_user,
 )
-from app.services.permission_service import default_menu_ids_for_position, list_menus_by_identity_type, list_positions_by_identity_type, list_roles_by_identity_type
+from app.services.menu_permission_service import (
+    has_identity_menu_permission,
+    position_menu_grants,
+    sync_identity_menus_for_position,
+    sync_position_menu_grants,
+)
+from app.services.permission_service import (
+    list_menus_by_identity_type,
+    list_positions_by_identity_type,
+    list_roles_by_identity_type,
+)
 
 router = APIRouter(prefix="/management")
 
@@ -64,17 +77,9 @@ def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
 
 
 def has_identity_menu_permission(db: Session, identity_id: int, menu_code: str, action: str = "can_create") -> bool:
-    grant = db.execute(
-        select(UserIdentityMenu)
-        .join(Menu, Menu.id == UserIdentityMenu.menu_id)
-        .where(
-            UserIdentityMenu.identity_id == identity_id,
-            Menu.menu_code == menu_code,
-            Menu.status.is_(True),
-            Menu.deleted.is_(False),
-        )
-    ).scalar_one_or_none()
-    return bool(grant and getattr(grant, action, False))
+    from app.services.menu_permission_service import has_identity_menu_permission as check_permission
+
+    return check_permission(db, identity_id, menu_code, action)
 
 
 def require_user_identity_create_permission(
@@ -207,21 +212,27 @@ def position_code_from_name(identity_type: str, name: str) -> str:
     return f"{identity_type}_POS_{digest}"
 
 
-def sync_position_menus(db: Session, position_id: int, menu_ids: list[int], *, identity_type: str, writable: bool) -> None:
-    db.query(PositionMenu).filter(PositionMenu.position_id == position_id).delete(synchronize_session=False)
-    valid_menu_ids = list(db.scalars(select(Menu.id).where(Menu.id.in_(menu_ids), Menu.identity_type == identity_type, Menu.status.is_(True), Menu.deleted.is_(False)))) if menu_ids else []
-    for menu_id in valid_menu_ids:
-        db.add(PositionMenu(
-            position_id=position_id,
-            menu_id=menu_id,
-            can_create=writable,
-            can_update=writable,
-            can_delete=writable,
-            can_export=True,
-        ))
+def sync_position_menus(
+    db: Session,
+    position_id: int,
+    menu_ids: list[int],
+    *,
+    identity_type: str,
+    writable: bool,
+    menu_grants=None,
+) -> None:
+    sync_position_menu_grants(
+        db,
+        position_id,
+        menu_grants or [],
+        identity_type=identity_type,
+        menu_ids=menu_ids if not menu_grants else None,
+        writable=writable,
+    )
 
 
 def position_to_dict(db: Session, position: Position) -> dict:
+    grants = position_menu_grants(db, position.id)
     return PositionInfo(
         id=position.id,
         position_code=position.position_code,
@@ -229,7 +240,8 @@ def position_to_dict(db: Session, position: Position) -> dict:
         identity_type=position.identity_type,
         role_code=position.role_code,
         description=position.description,
-        menu_ids=default_menu_ids_for_position(db, position.id),
+        menu_ids=[item.menu_id for item in grants],
+        menu_grants=grants,
     ).model_dump()
 
 
@@ -313,7 +325,14 @@ def management_create_position(
     )
     db.add(position)
     db.flush()
-    sync_position_menus(db, position.id, payload.menu_ids, identity_type=payload.identity_type, writable=payload.identity_type == "PLATFORM")
+    sync_position_menus(
+        db,
+        position.id,
+        payload.menu_ids,
+        identity_type=payload.identity_type,
+        writable=payload.identity_type == "PLATFORM",
+        menu_grants=payload.menu_grants or None,
+    )
     write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}", target_module="职位管理", target_id=position.id)
     db.commit()
     db.refresh(position)
@@ -350,8 +369,16 @@ def management_update_position(
     position.role_code = payload.role_code
     position.description = (payload.description or "").strip() or None
     position.status = payload.status
-    sync_position_menus(db, position.id, payload.menu_ids, identity_type=payload.identity_type, writable=payload.identity_type == "PLATFORM")
-    write_management_log(db, current, "职位修改", f"修改职位：{position.position_name}", target_module="职位管理", target_id=position.id, risk_level="关注")
+    sync_position_menus(
+        db,
+        position.id,
+        payload.menu_ids,
+        identity_type=payload.identity_type,
+        writable=payload.identity_type == "PLATFORM",
+        menu_grants=payload.menu_grants or None,
+    )
+    synced_users = sync_identity_menus_for_position(db, position.id)
+    write_management_log(db, current, "职位修改", f"修改职位：{position.position_name}（已同步 {synced_users} 个身份）", target_module="职位管理", target_id=position.id, risk_level="关注")
     db.commit()
     db.refresh(position)
     return ApiResponse(data=position_to_dict(db, position))
@@ -406,6 +433,15 @@ def management_operation_logs(
     return ApiResponse(data=[operation_log_to_dict(item) for item in rows])
 
 
+@router.get("/celery-monitor", response_model=ApiResponse[dict])
+def management_celery_monitor(
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """中文版 Celery 队列与 Worker 监控数据。"""
+    require_platform(current)
+    return ApiResponse(data=format_celery_monitor_zh(get_queue_monitor_snapshot()))
+
+
 @router.get("/system-configs", response_model=ApiResponse[list[dict]])
 def management_system_configs(
     current: CurrentSession = Depends(get_current_session),
@@ -435,6 +471,10 @@ def management_overview(
 ) -> ApiResponse[dict]:
     """平台运营总览聚合接口，避免首页多接口聚合导致加载慢。"""
     require_platform(current)
+    cache_key = "management:overview:v1"
+    cached = get_json_cache(cache_key)
+    if cached is not None:
+        return ApiResponse(data=cached)
     today = date.today()
     tomorrow = today + timedelta(days=1)
     thirty_days_later = today + timedelta(days=30)
@@ -488,7 +528,7 @@ def management_overview(
         .order_by(func.count(GeoMonitorSubtask.id).desc())
         .limit(12)
     ).all()
-    platform_stats = [
+    platform_stats = sort_platform_items([
         {
             "platform": row[0],
             "total": int(row[1] or 0),
@@ -498,7 +538,7 @@ def management_overview(
             "success_rate": round(((int(row[2] or 0) - int(row[3] or 0)) / max(1, int(row[2] or 0))) * 100, 1),
         }
         for row in platform_rows
-    ]
+    ])
 
     cost_rank_rows = db.execute(
         select(GeoMonitorTask.tenant_id, func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
@@ -555,6 +595,22 @@ def management_overview(
     if today_schedule_failed:
         todo_items.append({"type": "schedule_failed", "title": "今日调度失败", "count": today_schedule_failed, "level": "danger"})
 
+    redis_status = redis_health()
+    queue_snapshot = get_queue_monitor_snapshot()
+    queue_alerts = queue_snapshot.get("alerts") or []
+    submit_backlog = int(queue_snapshot.get("queues", {}).get("submit", {}).get("queued") or 0)
+    sync_backlog = int(queue_snapshot.get("queues", {}).get("sync", {}).get("queued") or 0)
+    workers_online = int(queue_snapshot.get("workers", {}).get("workers_online") or 0)
+    if queue_alerts:
+        for alert in queue_alerts:
+            todo_items.append(
+                {
+                    "type": "celery_queue",
+                    "title": alert.get("title") or "队列积压",
+                    "count": alert.get("queued") or 0,
+                    "level": "danger" if alert.get("level") == "critical" else "warning",
+                }
+            )
     data = {
         "kpis": {
             "today_tasks": len(today_task_rows),
@@ -590,17 +646,24 @@ def management_overview(
             {"title": "调度失败", "value": today_schedule_failed, "level": "danger" if today_schedule_failed else "normal"},
             {"title": "即将到期", "value": len(expiring_tenants), "level": "warning" if expiring_tenants else "normal"},
             {"title": "运行中任务", "value": len(running_tasks), "level": "normal"},
+            {"title": "提交队列", "value": submit_backlog, "level": "danger" if submit_backlog >= queue_snapshot.get("queues", {}).get("submit", {}).get("critical_threshold", 150) else "warning" if submit_backlog >= queue_snapshot.get("queues", {}).get("submit", {}).get("warning_threshold", 50) else "normal"},
+            {"title": "同步队列", "value": sync_backlog, "level": "danger" if sync_backlog >= queue_snapshot.get("queues", {}).get("sync", {}).get("critical_threshold", 300) else "warning" if sync_backlog >= queue_snapshot.get("queues", {}).get("warning_threshold", 100) else "normal"},
         ],
         "todo_items": todo_items,
         "operation_logs": [operation_log_to_dict(row) for row in recent_logs],
         "system_health": [
             {"name": "API 服务", "status": "正常", "detail": "FastAPI 已运行"},
             {"name": "数据库", "status": "正常", "detail": "MySQL 可连接"},
+            {"name": "Redis 缓存", "status": "正常" if redis_status["status"] == "ready" else "未启用" if redis_status["status"] == "disabled" else "异常", "detail": redis_status["detail"]},
+            {"name": "Celery Worker", "status": "正常" if workers_online > 0 else "异常", "detail": f"{workers_online} 个 Worker 在线"},
+            {"name": "任务队列", "status": "异常" if any(item.get("level") == "critical" for item in queue_alerts) else "关注" if queue_alerts else "正常", "detail": f"submit {submit_backlog} / sync {sync_backlog}"},
             {"name": "调度任务", "status": "正常" if today_schedule_failed == 0 else "异常", "detail": f"今日提交 {today_schedule_submitted} 次，失败 {today_schedule_failed} 次"},
             {"name": "结果同步", "status": "待处理" if running_tasks else "正常", "detail": f"{len(running_tasks)} 个任务未终态"},
         ],
+        "celery_queues": queue_snapshot,
         "molizhishu_balance": fetch_molizhishu_balance(),
     }
+    set_json_cache(cache_key, data, ttl_seconds=30)
     return ApiResponse(data=data)
 
 

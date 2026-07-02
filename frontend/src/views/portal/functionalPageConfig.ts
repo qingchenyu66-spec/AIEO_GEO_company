@@ -13,6 +13,7 @@ export function buildFunctionalPage(
   summary: MonitorSummary | null,
   sourceTotalCount: number,
   sourceRankingLength: number,
+  menuName?: string | null,
 ): FunctionalPageConfig {
   const common = {
     kpis: [
@@ -74,9 +75,9 @@ export function buildFunctionalPage(
     },
     'customer.knowledge': {
       title: '企业知识库',
-      subtitle: '客户侧仅允许上传文章类文件，平台端可查看各公司上传记录。',
+      subtitle: '归档品牌白皮书、产品手册等资料，供监测报告引用与团队共享。',
       mode: 'knowledge',
-      actions: ['上传 PDF / Word', '查看文件记录'],
+      actions: ['上传资料', '查看归档'],
       ...common,
     },
     'platform.plans': { title: '套餐额度', subtitle: '按企业查看接口消耗、额度余量和预警阈值。', mode: 'platform', actions: ['导出额度', '查看消耗'], ...common },
@@ -85,16 +86,20 @@ export function buildFunctionalPage(
     'platform.sources': { title: '信源分析', subtitle: '运营端查看企业各模型引用的信源结构、高频站点与可跳转原文。', mode: 'sources', actions: ['导出信源', '加入报告'], ...common },
     'platform.diagnosis': { title: '品牌诊断', subtitle: '运营人员选择企业和模型平台后，基于监测结果生成诊断依据与建议。', mode: 'diagnosis', actions: ['保存诊断', '生成报告'], ...common },
     'platform.models': { title: '模型平台', subtitle: '平台目录同步自模力指数官方文档，并结合今日检测探测各平台服务可用性。', mode: 'platforms', actions: ['刷新状态'], ...common },
-    'platform.alerts': { title: '预警阈值', subtitle: '配置排名下滑、负面占比、失败率和额度预警。', mode: 'platform', actions: ['导出规则', '查看日志'], ...common },
-    'platform.reports': { title: '报告中心', subtitle: '运营端生成、预览、编辑并导出客户报告。', mode: 'report', actions: ['生成预览', '导出 PDF', '导出 Word'], ...common },
+    'platform.alerts': { title: '预警阈值', subtitle: '查看任务队列运行状态，并配置业务监测指标预警规则。', mode: 'alerts', actions: ['刷新监控', '查看规则'], ...common },
+    'platform.reports': { title: '报告中心', subtitle: '查看、编辑并发布企业报告；生成入口在企业管理。', mode: 'report', actions: ['编辑草稿', '发布', '导出 PDF', '导出 Word'], ...common },
     'platform.logs': { title: '操作日志', subtitle: '审计用户、企业、任务、权限和导出操作。', mode: 'logs', actions: ['导出日志', '筛选操作'], ...common },
     'platform.settings': { title: '系统配置', subtitle: '基础参数、数据上传接口、菜单权限和安全策略。', mode: 'settings', actions: ['导出配置', '操作日志'], ...common },
   }
-  return map[code] || map['customer.realtime'] || {
+  const page = map[code] || map['customer.realtime'] || {
     title: '功能页',
     subtitle: '',
     mode: 'default',
     actions: [],
     ...common,
   }
+  if (menuName?.trim()) {
+    return { ...page, title: menuName.trim() }
+  }
+  return page
 }

@@ -20,6 +20,43 @@ class Settings(BaseSettings):
     database_password: str
     database_name: str
 
+    redis_enabled: bool = False
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    redis_socket_timeout_seconds: float = 2.0
+    redis_key_prefix: str = "geo_monitor"
+    redis_default_ttl_seconds: int = 60
+    redis_scheduler_lock_ttl_seconds: int = 1800
+
+    celery_enabled: bool = True
+    celery_broker_url: str = "redis://127.0.0.1:6379/1"
+    celery_result_backend: str = "redis://127.0.0.1:6379/1"
+    celery_submit_rate_limit: str = "10/m"
+    celery_sync_rate_limit: str = "30/m"
+    celery_scan_submit_max_prompts: int = 50
+    celery_sync_batch_limit: int = 500
+    celery_sync_terminal_grace_hours: int = 24
+
+    schedule_tolerance_minutes: int = 60
+    molizhishu_submit_rate_per_minute: int = 30
+    molizhishu_sync_rate_per_minute: int = 60
+    molizhishu_rate_limit_max_wait_seconds: float = 120.0
+
+    database_pool_size: int = 20
+    database_max_overflow: int = 40
+
+    celery_queue_submit_warning: int = 50
+    celery_queue_submit_critical: int = 150
+    celery_queue_sync_warning: int = 100
+    celery_queue_sync_critical: int = 300
+
+    flower_enabled: bool = True
+    flower_port: int = 5555
+    flower_basic_auth: str = ""
+    flower_url: str = "http://127.0.0.1:5555"
+
+    monitor_webhook_url: str = ""
+    monitor_alert_cooldown_seconds: int = 900
+
     cors_origins: list[str] = []
     molizhishu_base_url: str = "https://business-api.molizhishu.com/api/business/monitor"
     molizhishu_token: str = ""
@@ -31,6 +68,10 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     deepseek_timeout_seconds: float = 60.0
     deepseek_sentiment_keyword_enabled: bool = True
+    deepseek_report_enabled: bool = True
+    deepseek_knowledge_parse_enabled: bool = True
+    deepseek_knowledge_auto_parse_on_upload: bool = True
+    deepseek_knowledge_parse_max_chars: int = 12000
 
     model_config = SettingsConfigDict(
         env_file=".env",

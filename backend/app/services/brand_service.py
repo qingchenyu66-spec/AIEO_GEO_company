@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.dependencies import CurrentSession
+from app.core.platform_order import sort_platform_codes
 from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
@@ -249,7 +250,7 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     asset.monitor_keywords_json = _dedupe([payload.brand_name, payload.brand_short_name, *payload.monitor_keywords, *payload.product_keywords])
     asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
     asset.product_keywords_json = []
-    asset.monitored_platforms_json = _dedupe(payload.monitored_platforms)
+    asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
     asset.region_code = payload.region_code.strip() if payload.region_code else None
     asset.official_url = payload.official_url
     asset.description = payload.description
@@ -343,7 +344,7 @@ def asset_to_dict(
         "monitor_keywords": asset.monitor_keywords_json,
         "aliases": asset.aliases_json,
         "product_keywords": asset.product_keywords_json,
-        "monitored_platforms": asset.monitored_platforms_json,
+        "monitored_platforms": sort_platform_codes(asset.monitored_platforms_json),
         "keyword_groups": normalized_groups,
         "region_code": asset.region_code,
         "official_url": asset.official_url,

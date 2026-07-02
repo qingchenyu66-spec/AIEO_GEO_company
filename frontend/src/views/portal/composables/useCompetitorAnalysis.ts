@@ -1,4 +1,4 @@
-import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+﻿import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
@@ -7,6 +7,7 @@ import { getCompetitorCompare, getSentimentKeywords, type CompetitorCompareSumma
 import { useSentimentWordCloud } from '../../../composables/useSentimentWordCloud'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
+import { sortPlatformTabs } from '../platformOrder'
 
 export type CompetitorDatePreset = '7' | '30' | '90'
 
@@ -50,6 +51,7 @@ export function useBrandInsights(options?: {
   const summary = ref<CompetitorCompareSummary | null>(null)
   const sentimentKeywords = ref<SentimentKeywordsSummary | null>(null)
   const sentimentKeywordTab = ref<'positive' | 'negative'>('positive')
+  let loadVersion = 0
 
   const mentionTrendChartRef = options?.mentionTrendChartRef ?? ref<HTMLDivElement | null>(null)
   const sentimentTrendChartRef = options?.sentimentTrendChartRef ?? ref<HTMLDivElement | null>(null)
@@ -72,12 +74,11 @@ export function useBrandInsights(options?: {
       if (!counts.has(code)) counts.set(code, 0)
     })
     const total = summary.value?.sample_total || 0
-    return [
-      { code: 'all', name: '全部平台', count: total },
+    return sortPlatformTabs([
+      { code: 'all', name: '鍏ㄩ儴骞冲彴', count: total },
       ...Array.from(counts.entries())
-        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count }))
-        .sort((a, b) => b.count - a.count),
-    ]
+        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count })),
+    ])
   })
 
   const promptOptions = computed(() => summary.value?.prompt_options || [])
@@ -154,7 +155,7 @@ export function useBrandInsights(options?: {
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '提及率 = 品牌在推荐列表中出现次数 ÷ 样本总数。情绪指数按「该品牌出现在推荐列表时」的回答情感标签统计（含竞品）。点击趋势图、排行榜或情绪词可下钻实时检测。',
+      body: '提及率 = 品牌在推荐列表中出现次数 / 样本总数。情绪指数按品牌出现在推荐列表时的回答情感标签统计。点击趋势图、排行榜或情绪词可下钻实时检测。',
     }
   })
 
@@ -224,6 +225,7 @@ export function useBrandInsights(options?: {
   }
 
   async function loadSummary() {
+    const version = ++loadVersion
     loading.value = true
     try {
       const params = {
@@ -231,16 +233,20 @@ export function useBrandInsights(options?: {
         platforms: selectedPlatforms.value.length ? selectedPlatforms.value.join(',') : undefined,
         prompt: promptFilter.value || undefined,
       }
-      const [compareData, keywordData] = await Promise.all([
-        withRetry(() => getCompetitorCompare(params)),
-        withRetry(() => getSentimentKeywords(params)),
-      ])
+      const compareData = await withRetry(() => getCompetitorCompare(params))
+      if (version !== loadVersion) return
       summary.value = compareData
-      sentimentKeywords.value = keywordData
+      sentimentKeywords.value = null
+      void withRetry(() => getSentimentKeywords({ ...params, limit: 60 }))
+        .then(keywordData => {
+          if (version === loadVersion) sentimentKeywords.value = keywordData
+        })
+        .catch(() => undefined)
     } catch (error: unknown) {
+      if (version !== loadVersion) return
       ElMessage.error(`品牌洞察数据加载失败：${errorMessage(error)}`)
     } finally {
-      loading.value = false
+      if (version === loadVersion) loading.value = false
     }
   }
 
@@ -277,7 +283,7 @@ export function useBrandInsights(options?: {
       return
     }
     const lines = [
-      ['名称', '类型', '提及率%', '首位提及率%', '提及次数', '平均排名'].join(','),
+      ['名称', '类型', '提及率', '首位提及率', '提及次数', '平均排名'].join(','),
       ...leaderboardRows.value.map(row => [
         `"${row.name.replace(/"/g, '""')}"`,
         row.is_brand ? '本品牌' : '竞品',

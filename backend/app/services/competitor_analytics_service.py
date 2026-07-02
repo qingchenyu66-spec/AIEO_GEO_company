@@ -13,6 +13,7 @@ from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import get_brand_asset, list_competitors
+from app.core.platform_order import sort_platform_items
 from app.services.ranking_parser import (
     normalize_structured_rankings,
     ranking_entry_explicit_rank,
@@ -50,6 +51,20 @@ def _entity_mentioned_in_entries(entries: list[dict[str, Any]], entity_name: str
     return any(_names_match(ranking_entry_name(entry), entity_name) for entry in entries)
 
 
+def _competitor_field(item: Any, attr: str, dict_key: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(dict_key)
+    return getattr(item, attr, None)
+
+
+def _competitor_aliases(item: Any) -> list[Any]:
+    if isinstance(item, dict):
+        raw = item.get("aliases")
+    else:
+        raw = getattr(item, "aliases_json", None)
+    return list(raw or [])
+
+
 def _tracked_entities(asset: BrandAsset | None, competitors: list[Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -67,8 +82,8 @@ def _tracked_entities(asset: BrandAsset | None, competitors: list[Any]) -> list[
         add(asset.brand_short_name, is_brand=False)
         add(asset.company_full_name, is_brand=False)
     for item in competitors:
-        add(getattr(item, "name", None) or item.get("name"), is_brand=False)
-        for alias in getattr(item, "aliases_json", None) or item.get("aliases") or []:
+        add(_competitor_field(item, "name", "name"), is_brand=False)
+        for alias in _competitor_aliases(item):
             add(str(alias or ""), is_brand=False)
     return rows
 
@@ -340,7 +355,12 @@ def build_competitor_compare_summary(
     rows.sort(key=lambda row: (-row["mention_rate"], row["avg_rank"] if row["avg_rank"] is not None else 999))
 
     platform_rows = []
-    for platform_code, entity_map in sorted(platform_buckets.items()):
+    for item in sort_platform_items(
+        [{"platform": code, "entity_map": entity_map} for code, entity_map in platform_buckets.items()],
+        key="platform",
+    ):
+        platform_code = item["platform"]
+        entity_map = item["entity_map"]
         platform_sample = sum(
             1 for item in subtasks if item.platform == platform_code
         )
@@ -376,7 +396,7 @@ def build_competitor_compare_summary(
     trend_entities = sorted(
         merged_global.values(),
         key=lambda row: (-int(row["is_brand"]), -row["mention_count"], row["name"]),
-    )[:4]
+    )
     mention_trend_series = []
     for bucket in trend_entities:
         name = bucket["name"]

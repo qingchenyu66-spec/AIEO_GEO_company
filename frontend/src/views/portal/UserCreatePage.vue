@@ -3,7 +3,6 @@ import { computed } from 'vue'
 import { Building2, HelpCircle, ShieldCheck } from '@lucide/vue'
 import type { IdentityType } from '../../services/auth'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
-import { menuIcon } from './menuIcons'
 
 const {
   userForm,
@@ -72,16 +71,10 @@ const positionsFor = (type: IdentityType) => positions[type] || []
           <div v-for="group in permissionGroupsForForm(type, userForm)" :key="group.key" class="permission-group">
             <div class="permission-group-head">
               <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-              <span>{{ group.checked }}/{{ group.menus.length }}</span>
             </div>
-            <label v-for="menu in group.menus" :key="menu.id" class="permission-item">
-              <input :checked="userForm.identity_configs[type].menu_ids.includes(menu.id)" type="checkbox" disabled />
-              <component :is="menuIcon(menu)" />
-              <span>{{ menu.menu_name }}</span>
-            </label>
           </div>
         </div>
-        <p class="feature-note">权限由职位决定，如需调整请到“用户管理 / 职位管理”中修改职位权限。</p>
+        <p class="feature-note">权限由职位决定，如需调整请到「用户管理 / 职位管理」中修改功能权限。</p>
       </div>
       <button class="primary-btn" :disabled="creatingUser" @click="submitUser">新增用户并保存权限</button>
     </article>

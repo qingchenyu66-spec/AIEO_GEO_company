@@ -3,11 +3,12 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
+from app.core.platform_order import platform_market_rank, sort_platform_codes, sort_platform_items
 from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
@@ -40,6 +41,204 @@ from app.services.schedule_context import (
 
 TERMINAL_STATUSES = {"completed", "partial_completed", "failed", "stopped"}
 NON_TERMINAL_STATUSES = {"pending", "processing", "running", "queued"}
+
+
+def list_pending_monitor_task_ids(
+    db: Session,
+    *,
+    task_id: str | None = None,
+    limit: int = 50,
+    terminal_grace_hours: int = 24,
+) -> list[str]:
+    """Return monitor task ids that still need Molizhishu sync."""
+    stmt = select(GeoMonitorTask.task_id).where(GeoMonitorTask.deleted.is_(False))
+    if task_id:
+        stmt = stmt.where(GeoMonitorTask.task_id == task_id)
+    else:
+        grace_cutoff = datetime.now() - timedelta(hours=max(0, terminal_grace_hours))
+        stmt = stmt.where(
+            or_(
+                GeoMonitorTask.status.notin_(TERMINAL_STATUSES),
+                and_(
+                    GeoMonitorTask.status.in_(("partial_completed", "failed", "stopped")),
+                    GeoMonitorTask.updated_at >= grace_cutoff,
+                ),
+            )
+        )
+    stmt = stmt.order_by(GeoMonitorTask.updated_at.asc(), GeoMonitorTask.id.asc()).limit(limit)
+    return list(db.scalars(stmt))
+
+
+def _platform_display_names() -> dict[str, str]:
+    from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+
+    return {
+        str(item.get("code") or ""): str(item.get("name") or item.get("code") or "")
+        for item in get_supported_platform_catalog()
+    }
+
+
+def _short_task_id(task_id: str) -> str:
+    text = str(task_id or "").strip()
+    if len(text) <= 16:
+        return text
+    return f"{text[:8]}…{text[-4:]}"
+
+
+def _subtask_effective_status(subtask: GeoMonitorSubtask) -> str:
+    if subtask.error_message or subtask.status in {"failed", "stopped"}:
+        return "failed"
+    if subtask.answer_content or subtask.status in {"completed", "partial_completed"}:
+        return "completed"
+    if subtask.status in {"pending", "queued"}:
+        return "pending"
+    return "processing"
+
+
+def _truncate_prompt(text: str, max_len: int = 48) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1] + "…"
+
+
+def summarize_monitor_task_for_ops(
+    task: GeoMonitorTask,
+    *,
+    tenant_name: str | None = None,
+    schedule_run: GeoMonitorScheduleRun | None = None,
+    asset: BrandAsset | None = None,
+    platform_names: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build operations-dashboard summary for one monitor task (sync/submit visibility)."""
+    platform_names = platform_names or _platform_display_names()
+    _reconcile_task_progress(task)
+    prompts = [str(item) for item in (task.prompts_json or []) if str(item or "").strip()]
+    configured_platforms = [
+        str(item.get("platform") if isinstance(item, dict) else item)
+        for item in (task.platforms_json or [])
+        if str(item.get("platform") if isinstance(item, dict) else item or "").strip()
+    ]
+    configured_platforms = sort_platform_codes(configured_platforms)
+
+    platform_stats: dict[str, dict[str, Any]] = {
+        code: {
+            "code": code,
+            "name": platform_names.get(code, code),
+            "total": 0,
+            "completed": 0,
+            "pending": 0,
+            "processing": 0,
+            "failed": 0,
+            "pending_prompts": [],
+        }
+        for code in configured_platforms
+    }
+    for subtask in task.subtasks or []:
+        code = str(subtask.platform or "").strip()
+        if not code:
+            continue
+        bucket = platform_stats.setdefault(
+            code,
+            {
+                "code": code,
+                "name": platform_names.get(code, code),
+                "total": 0,
+                "completed": 0,
+                "pending": 0,
+                "processing": 0,
+                "failed": 0,
+                "pending_prompts": [],
+            },
+        )
+        bucket["total"] += 1
+        effective = _subtask_effective_status(subtask)
+        bucket[effective] = int(bucket.get(effective) or 0) + 1
+        if effective == "pending":
+            pending_prompts = bucket["pending_prompts"]
+            if len(pending_prompts) < 5:
+                pending_prompts.append(_truncate_prompt(subtask.prompt))
+
+    platform_breakdown = sort_platform_items(list(platform_stats.values()), key="code")
+    pending_platforms = [item["name"] for item in platform_breakdown if int(item.get("pending") or 0) > 0]
+    processing_platforms = [item["name"] for item in platform_breakdown if int(item.get("processing") or 0) > 0]
+    schedule_context = resolve_task_schedule_context(task, schedule_run, asset)
+
+    return {
+        "task_id": task.task_id,
+        "task_id_short": _short_task_id(task.task_id),
+        "tenant_id": task.tenant_id,
+        "tenant_name": tenant_name,
+        "monitor_keywords": task.monitor_keywords,
+        "status": task.status,
+        "total_items": task.total_items,
+        "completed_items": task.completed_items,
+        "failed_items": task.failed_items,
+        "progress_text": f"{task.completed_items or 0}/{task.total_items or len(task.subtasks or [])}",
+        "prompt_count": len(prompts),
+        "prompts": prompts[:8],
+        "prompts_preview": "；".join(_truncate_prompt(item) for item in prompts[:3]) or None,
+        "platform_count": len(configured_platforms),
+        "platform_codes": configured_platforms,
+        "platform_breakdown": platform_breakdown,
+        "pending_platforms": pending_platforms,
+        "processing_platforms": processing_platforms,
+        "schedule_label": schedule_context.get("schedule_label"),
+        "keyword_group": schedule_context.get("keyword_group"),
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+
+def summarize_monitor_tasks_for_ops(
+    db: Session,
+    *,
+    task_ids: list[str] | None = None,
+    limit: int = 15,
+    terminal_grace_hours: int = 24,
+) -> list[dict[str, Any]]:
+    """Summarize pending/in-progress monitor tasks for the operations dashboard."""
+    ids = task_ids or list_pending_monitor_task_ids(
+        db,
+        limit=limit,
+        terminal_grace_hours=terminal_grace_hours,
+    )
+    if not ids:
+        return []
+
+    tasks = list(
+        db.scalars(
+            select(GeoMonitorTask)
+            .options(joinedload(GeoMonitorTask.subtasks))
+            .where(GeoMonitorTask.task_id.in_(ids), GeoMonitorTask.deleted.is_(False))
+        ).unique()
+    )
+    task_map = {item.task_id: item for item in tasks}
+    ordered_tasks = [task_map[task_id] for task_id in ids if task_id in task_map]
+
+    tenant_ids = {item.tenant_id for item in ordered_tasks if item.tenant_id}
+    tenant_map = {
+        item.id: item.name
+        for item in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids), Tenant.deleted.is_(False)))
+    } if tenant_ids else {}
+    runs_map = schedule_runs_for_tasks(db, ids)
+    assets = {
+        item.tenant_id: item
+        for item in db.scalars(
+            select(BrandAsset).where(BrandAsset.tenant_id.in_(tenant_ids), BrandAsset.deleted.is_(False))
+        )
+    } if tenant_ids else {}
+    platform_names = _platform_display_names()
+
+    return [
+        summarize_monitor_task_for_ops(
+            task,
+            tenant_name=tenant_map.get(task.tenant_id) if task.tenant_id else None,
+            schedule_run=runs_map.get(task.task_id),
+            asset=assets.get(task.tenant_id) if task.tenant_id else None,
+            platform_names=platform_names,
+        )
+        for task in ordered_tasks
+    ]
 
 
 def _validate_tenant_service_available(tenant: Tenant) -> None:
@@ -283,6 +482,56 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     return task
 
 
+def submit_standalone_monitor_task(
+    db: Session,
+    *,
+    payload: MonitorTaskCreateRequest,
+    created_by: int | None = None,
+    tenant_id: int | None = None,
+) -> GeoMonitorTask:
+    """提交不依赖企业服务的监测任务（用于售前诊断等场景）。"""
+    monitor_keywords = payload.monitor_keywords
+    if not monitor_keywords:
+        raise ValueError("请先填写品牌或监测词")
+    request_body = _build_submit_payload(
+        payload,
+        monitor_keywords=monitor_keywords,
+        monitor_keyword_aliases=payload.monitor_keyword_aliases,
+        competitors=[item.model_dump() for item in payload.competitors if item.name],
+    )
+    response = MolizhishuClient().submit_task(request_body)
+    data = response.get("data") or {}
+    task_id = data.get("taskId")
+    if not task_id:
+        raise ValueError("模力指数提交成功但未返回 taskId")
+    existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
+    if existing is not None:
+        raise ValueError(f"任务已存在：{task_id}")
+    task = GeoMonitorTask(
+        task_id=task_id,
+        tenant_id=tenant_id,
+        created_by=created_by,
+        monitor_keywords=monitor_keywords,
+        status=data.get("status") or "pending",
+        total_items=data.get("totalTask") or data.get("totalItems") or 0,
+        completed_items=data.get("completedItems") or 0,
+        failed_items=data.get("failedItems") or 0,
+        prompts_json=payload.prompts,
+        platforms_json=[item.model_dump() for item in payload.platforms],
+        region_code_json=payload.region_code,
+        callback_url=data.get("callbackUrl"),
+        poll_url=data.get("pollUrl"),
+        raw_request_json=request_body,
+        raw_response_json=response,
+    )
+    db.add(task)
+    for subtask in data.get("subTaskList") or []:
+        _upsert_subtask(db, task_id, subtask)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
 def list_monitor_tasks(db: Session, current: CurrentSession) -> list[GeoMonitorTask]:
     """读取本地任务列表，不隐式调用模力指数远端。"""
     stmt = select(GeoMonitorTask).where(GeoMonitorTask.deleted.is_(False)).order_by(GeoMonitorTask.id.desc())
@@ -401,7 +650,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
             "mention_rate": round(bucket["mentioned"] / total * 100, 1),
             "avg_rank": round(bucket["rank_total"] / bucket["rank_count"], 1) if bucket["rank_count"] else None,
         })
-    platform_stats.sort(key=lambda item: (item["mention_rate"], -(item["avg_rank"] or 99)), reverse=True)
+    platform_stats = sort_platform_items(platform_stats)
 
     source_map: dict[str, dict[str, Any]] = {}
     for item in completed:
@@ -444,7 +693,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
                 row["latest_time"] = item.updated_at.isoformat()
     source_stats = sorted(source_map.values(), key=lambda item: item["count"], reverse=True)
     for row in source_stats:
-        row["platforms"] = row["platforms"][:6]
+        row["platforms"] = sort_platform_codes(row["platforms"])[:6]
         row["exposure_terms"] = row["exposure_terms"][:8]
         row["questions"] = row["questions"][:8]
 
@@ -725,6 +974,91 @@ def _keyword_group_option(group: dict[str, Any]) -> dict[str, Any] | None:
             if str(term or "").strip()
         ],
     }
+
+
+def _resolve_keyword_group_filter(
+    filter_text: str,
+    keyword_groups: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    text = str(filter_text or "").strip()
+    if not text:
+        return None
+    if text.startswith("id:"):
+        target = text[3:].strip()
+        return next((group for group in keyword_groups if str(group.get("id")) == target), None)
+    if text.startswith("idx:"):
+        try:
+            target_index = int(text[4:])
+        except ValueError:
+            return None
+        sorted_groups = sorted(keyword_groups, key=lambda item: int(item.get("sort_order") or 0))
+        if 0 <= target_index < len(sorted_groups):
+            return sorted_groups[target_index]
+        return None
+    return next((group for group in keyword_groups if _group_filter_matches(group, text)), None)
+
+
+def _filter_subtasks_by_keyword_group(
+    subtasks: list[GeoMonitorSubtask],
+    keyword_group: str,
+    keyword_groups: list[dict[str, Any]],
+) -> list[GeoMonitorSubtask]:
+    selected_group = _resolve_keyword_group_filter(keyword_group, keyword_groups)
+    if selected_group is None:
+        return []
+    return [
+        item for item in subtasks
+        if _prompt_belongs_to_group(
+            item.prompt or "",
+            keyword_group_monitor_keywords(selected_group),
+            selected_group.get("exposure_terms") or [],
+        )
+    ]
+
+
+def _filter_subtasks_by_monitor_keyword(
+    subtasks: list[GeoMonitorSubtask],
+    monitor_keyword: str,
+) -> list[GeoMonitorSubtask]:
+    text = str(monitor_keyword or "").strip()
+    if not text:
+        return subtasks
+    lower = text.lower()
+    return [
+        item for item in subtasks
+        if (item.prompt or "").strip() == text or lower in (item.prompt or "").lower()
+    ]
+
+
+def _filter_subtasks_by_exposure_term(
+    subtasks: list[GeoMonitorSubtask],
+    exposure_term: str,
+) -> list[GeoMonitorSubtask]:
+    text = str(exposure_term or "").strip()
+    if not text:
+        return subtasks
+    return [item for item in subtasks if text in (item.prompt or "")]
+
+
+def _filter_subtasks_by_scope(
+    subtasks: list[GeoMonitorSubtask],
+    *,
+    keyword_group: str | None,
+    monitor_keyword: str | None,
+    exposure_term: str | None,
+    keyword_groups: list[dict[str, Any]],
+) -> list[GeoMonitorSubtask]:
+    result = subtasks
+    group_filter = str(keyword_group or "").strip()
+    monitor_filter = str(monitor_keyword or "").strip()
+    exposure_filter = str(exposure_term or "").strip()
+    if group_filter:
+        result = _filter_subtasks_by_keyword_group(result, group_filter, keyword_groups)
+    if monitor_filter:
+        result = _filter_subtasks_by_monitor_keyword(result, monitor_filter)
+    if exposure_filter:
+        result = _filter_subtasks_by_exposure_term(result, exposure_filter)
+    return result
 
 
 def _filter_subtasks_by_monitor_group(
@@ -1208,6 +1542,9 @@ def ranking_matrix(
     end_at: datetime | None = None,
     keyword: str | None = None,
     monitor_group: str | None = None,
+    keyword_group: str | None = None,
+    monitor_keyword: str | None = None,
+    exposure_term: str | None = None,
     limit_rows: int = 120,
 ) -> dict[str, Any]:
     """Build prompt × daily-average ranking matrix for realtime monitor view."""
@@ -1228,7 +1565,7 @@ def ranking_matrix(
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = list(asset.monitored_platforms_json or []) if asset else []
+    purchased_platforms = sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
     daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
@@ -1269,9 +1606,20 @@ def ranking_matrix(
         stmt = stmt.where(GeoMonitorSubtask.platform == selected_platform)
 
     subtasks = list(db.scalars(stmt.limit(5000)))
-    group_filter = (monitor_group or keyword or "").strip()
-    if group_filter:
-        subtasks = _filter_subtasks_by_monitor_group(subtasks, group_filter, keyword_groups)
+    legacy_group_filter = str(monitor_group or keyword or "").strip()
+    scoped_group = str(keyword_group or "").strip()
+    scoped_monitor = str(monitor_keyword or "").strip()
+    scoped_exposure = str(exposure_term or "").strip()
+    if scoped_group or scoped_monitor or scoped_exposure:
+        subtasks = _filter_subtasks_by_scope(
+            subtasks,
+            keyword_group=scoped_group or None,
+            monitor_keyword=scoped_monitor or None,
+            exposure_term=scoped_exposure or None,
+            keyword_groups=keyword_groups,
+        )
+    elif legacy_group_filter:
+        subtasks = _filter_subtasks_by_monitor_group(subtasks, legacy_group_filter, keyword_groups)
 
     if not all_platforms and subtasks:
         selected_platform = subtasks[0].platform
@@ -1350,6 +1698,7 @@ def ranking_matrix(
         key=lambda row: (
             row.get("day_key") or "",
             row.get("keyword_group") or "",
+            platform_market_rank(row.get("platform")),
             row.get("platform") or "",
         ),
         reverse=True,
@@ -1567,7 +1916,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = list(asset.monitored_platforms_json or []) if asset else []
+    purchased_platforms = sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
     purchased_set = set(purchased_platforms)
 
     stmt = (
@@ -1782,7 +2131,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
 
     top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
     for row in top_sources:
-        row["platforms"] = row["platforms"][:4]
+        row["platforms"] = sort_platform_codes(row["platforms"])[:4]
 
     recent_snapshots = snapshot_candidates[:6]
 

@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
-import { BookOpen } from '@lucide/vue'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
-import { formatFileSize } from '../portalUtils'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import '../../../styles/platform-matrix.css'
 
@@ -28,10 +26,6 @@ const {
   operationLogs,
   systemSettings,
   loadPlatformSystemData,
-  loadingKnowledgeFiles,
-  uploadingKnowledgeFile,
-  knowledgeFiles,
-  handleKnowledgeUpload,
   recentSubtasks,
 } = analytics
 
@@ -77,7 +71,7 @@ onUnmounted(() => {
     <section class="feature-grid">
       <article class="panel feature-primary">
         <div class="panel-head">
-          <h2>{{ functionalPage.mode === 'diagnosis' ? '品牌健康分' : functionalPage.mode === 'report' ? '报告预览' : functionalPage.mode === 'knowledge' ? '文章文件上传' : '业务明细' }}</h2>
+          <h2>{{ functionalPage.mode === 'diagnosis' ? '品牌健康分' : functionalPage.mode === 'report' ? '报告预览' : '业务明细' }}</h2>
         </div>
 
         <div v-if="functionalPage.mode === 'diagnosis'" class="diagnosis-workbench">
@@ -132,23 +126,6 @@ onUnmounted(() => {
           <div class="ops-head"><span>配置项</span><span>当前值</span><span>作用范围</span><span>状态</span></div>
           <div v-for="row in systemSettings" :key="row[0]" class="ops-row">
             <b>{{ row[0] }}</b><span>{{ row[1] }}</span><em>{{ row[2] }}</em><i>{{ row[3] }}</i>
-          </div>
-        </div>
-
-        <div v-else-if="functionalPage.mode === 'knowledge'" class="knowledge-upload">
-          <label class="upload-drop" :class="{ disabled: uploadingKnowledgeFile }">
-            <input type="file" accept=".pdf,.doc,.docx,.md,.txt" :disabled="uploadingKnowledgeFile" @change="handleKnowledgeUpload" />
-            <BookOpen />
-            <b>{{ uploadingKnowledgeFile ? '上传中...' : '上传文章类文件' }}</b>
-            <span>支持 PDF / Word / Markdown / TXT，只保存原文件和上传记录，不做解析入库。</span>
-          </label>
-          <div class="knowledge-files">
-            <div v-if="loadingKnowledgeFiles" class="mini-empty">文件列表加载中...</div>
-            <div v-for="file in knowledgeFiles" :key="file.id">
-              <b>{{ file.original_name }}</b>
-              <span>{{ file.file_ext.toUpperCase() }} · {{ formatFileSize(file.file_size) }} · 已上传</span>
-            </div>
-            <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">暂无上传文件，客户可在这里上传 PDF / Word 等文章资料。</div>
           </div>
         </div>
 
