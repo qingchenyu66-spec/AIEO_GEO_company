@@ -1,4 +1,4 @@
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
@@ -116,6 +116,8 @@ function resolvePrimaryAction(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
 function alertTargetMenu(alert: WorkspaceAlert) {
   if (/竞品/.test(alert.message)) return 'customer.competitor'
   if (/信源|引用/.test(alert.message)) return 'customer.sources'
+  if (/负面|口碑/.test(alert.message)) return 'customer.realtime'
+  if (/排名|露出/.test(alert.message)) return 'customer.realtime'
   return 'customer.realtime'
 }
 
@@ -224,6 +226,8 @@ export function useCustomerWorkspace() {
   const brief = ref<WorkspaceBrief | null>(null)
   const loading = ref(false)
   const alertsExpanded = ref(false)
+  const alertsSectionRef = ref<HTMLElement | null>(null)
+  const alertsFocused = ref(false)
 
   const realtimeMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
@@ -474,6 +478,29 @@ export function useCustomerWorkspace() {
     router.push({ path: route.path, query: { ...route.query, menu: menuCode } }).catch(() => undefined)
   }
 
+  function focusWorkspaceAlerts() {
+    const warns = warnAlerts.value
+    if (!warns.length && !visibleAlerts.value.length) {
+      const action = primaryAction.value
+      if (action) navigateToMenu(action.menu)
+      return
+    }
+    if (hiddenAlertCount.value > 0 || (brief.value?.alerts.length || 0) > 2) {
+      alertsExpanded.value = true
+    }
+    nextTick(() => {
+      alertsSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      alertsFocused.value = true
+      window.setTimeout(() => {
+        alertsFocused.value = false
+      }, 2200)
+    })
+  }
+
+  function openAlertTarget(alert: WorkspaceAlert) {
+    navigateToMenu(alertTargetMenu(alert))
+  }
+
   function openSnapshot(snapshot: WorkspaceSnapshot) {
     const nextQuery: Record<string, string | string[]> = { ...route.query, menu: 'customer.realtime' }
     if (snapshot.task_id) nextQuery.task_id = snapshot.task_id
@@ -489,6 +516,8 @@ export function useCustomerWorkspace() {
     brief,
     loading,
     alertsExpanded,
+    alertsSectionRef,
+    alertsFocused,
     heroTone,
     statusBadge,
     statusSummary,
@@ -499,6 +528,8 @@ export function useCustomerWorkspace() {
     hiddenAlertCount,
     loadBrief,
     navigateToMenu,
+    focusWorkspaceAlerts,
+    openAlertTarget,
     openSnapshot,
     alertTargetMenu,
     realtimeMenuName,

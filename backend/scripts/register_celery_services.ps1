@@ -147,6 +147,11 @@ function Start-CeleryProcesses {
 }
 
 function Stop-CeleryProcesses {
+    $cleanup = Join-Path $PSScriptRoot "cleanup_celery_workers.ps1"
+    if (Test-Path $cleanup) {
+        & $cleanup
+        return
+    }
     Get-CimInstance Win32_Process |
         Where-Object {
             $_.CommandLine -and (

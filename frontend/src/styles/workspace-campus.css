@@ -78,6 +78,20 @@
   color: #475569;
   background: #e2e8f0;
 }
+.ws-campus-badge.is-clickable {
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.ws-campus-badge.is-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(180, 83, 9, 0.18);
+}
+.ws-campus-alerts.is-focused {
+  box-shadow: 0 0 0 2px #f59e0b, 0 8px 24px rgba(245, 158, 11, 0.12);
+  border-radius: 12px;
+  transition: box-shadow 0.25s ease;
+}
 .ws-campus-primary {
   display: inline-flex;
   align-items: center;

@@ -2,6 +2,7 @@
 import { Building2, ChevronDown, LogOut, ShieldCheck } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
+import NotificationBell from './components/NotificationBell.vue'
 import {
   POSITION_MENU,
   USER_CREATE_MENU,
@@ -38,6 +39,7 @@ const emit = defineEmits<{
   setMenuCode: [code: string]
   switchIdentity: [identityId: number]
   logout: []
+  openAlerts: []
 }>()
 </script>
 
@@ -110,6 +112,7 @@ const emit = defineEmits<{
       <header v-if="!fullscreen" class="topbar">
         <div class="crumb">GEO Monitor / {{ pageTitle }}</div>
         <div class="top-actions">
+          <NotificationBell @open-alerts="emit('openAlerts')" />
           <el-dropdown v-if="identityCount > 1" trigger="click" @command="(id: number) => emit('switchIdentity', id)">
             <button type="button" class="identity-switch">
               <span><small>当前职位</small><b>{{ identityDisplayName(identities.find(i => i.id === currentIdentityId)) }}</b></span>

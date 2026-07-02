@@ -22,6 +22,7 @@ from app.services.molizhishu_platforms import (
     get_supported_platform_catalog,
     refresh_platform_catalog,
 )
+from app.services.geo_platform_seed_service import sync_geo_platforms_from_catalog
 from app.services.platform_matrix_service import build_platform_matrix
 
 router = APIRouter(prefix="/platforms")
@@ -62,6 +63,18 @@ def list_platforms(
         }
         for r in rows
     ])
+
+
+@router.post("/sync-catalog", response_model=ApiResponse[dict])
+def sync_platform_catalog(
+    force_refresh: bool = Query(False),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """从模力官方目录同步 geo_platform 表（幂等 upsert）。"""
+    require_platform(current)
+    result = sync_geo_platforms_from_catalog(db, force_refresh=force_refresh)
+    return ApiResponse(data=result)
 
 
 @router.get("/matrix", response_model=ApiResponse[dict])

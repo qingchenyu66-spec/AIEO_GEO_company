@@ -14,6 +14,8 @@ const {
   brief,
   loading,
   alertsExpanded,
+  alertsSectionRef,
+  alertsFocused,
   heroTone,
   statusBadge,
   primaryAction,
@@ -21,8 +23,9 @@ const {
   hiddenAlertCount,
   loadBrief,
   navigateToMenu,
+  focusWorkspaceAlerts,
+  openAlertTarget,
   openSnapshot,
-  alertTargetMenu,
   realtimeMenuName,
   formatDateTime,
   formatKpiDelta,
@@ -119,7 +122,17 @@ watch(showEmptyGuide, (empty) => {
         <p>{{ displayName }} · 近 7 日监测简报 · {{ scheduleLine }}</p>
       </div>
       <div class="ws-campus-head-actions">
-        <span class="ws-campus-badge" :class="`tone-${statusBadge.tone}`">{{ statusBadge.label }}</span>
+        <button
+          v-if="statusBadge.tone === 'warn'"
+          type="button"
+          class="ws-campus-badge is-clickable"
+          :class="`tone-${statusBadge.tone}`"
+          title="查看需关注提醒"
+          @click="focusWorkspaceAlerts"
+        >
+          {{ statusBadge.label }}
+        </button>
+        <span v-else class="ws-campus-badge" :class="`tone-${statusBadge.tone}`">{{ statusBadge.label }}</span>
         <button
           v-if="primaryAction"
           type="button"
@@ -271,14 +284,19 @@ watch(showEmptyGuide, (empty) => {
       </article>
 
       <!-- 告警 -->
-      <div v-if="visibleAlerts.length" class="ws-campus-alerts">
+      <div
+        v-if="visibleAlerts.length"
+        ref="alertsSectionRef"
+        class="ws-campus-alerts"
+        :class="{ 'is-focused': alertsFocused }"
+      >
         <button
           v-for="alert in visibleAlerts"
           :key="alert.message"
           type="button"
           class="ws-campus-alert"
           :class="alert.level"
-          @click="navigateToMenu(alertTargetMenu(alert))"
+          @click="openAlertTarget(alert)"
         >
           <AlertTriangle v-if="alert.level === 'warn'" />
           <Clock3 v-else />

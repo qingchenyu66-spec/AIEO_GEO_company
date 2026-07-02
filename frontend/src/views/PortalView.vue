@@ -246,6 +246,7 @@ onMounted(() => {
     @set-menu-code="navigateToMenu"
     @switch-identity="switchIdentity"
     @logout="logout"
+    @open-alerts="navigateToMenu('platform.alerts', true)"
   >
     <PositionPage v-if="isPositionManagementPage" />
 

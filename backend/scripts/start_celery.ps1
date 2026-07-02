@@ -41,7 +41,7 @@ try {
             Start-CeleryWindow "GEO Celery Submit Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "submit",
-                "-n", "submit@localhost",
+                "-n", "submit@$env:COMPUTERNAME",
                 "-c", "$SubmitConcurrency",
                 "--pool=solo",
                 "--loglevel=info"
@@ -51,7 +51,7 @@ try {
             Start-CeleryWindow "GEO Celery Sync Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "sync",
-                "-n", "sync@localhost",
+                "-n", "sync@$env:COMPUTERNAME",
                 "-c", "$SyncConcurrency",
                 "--pool=solo",
                 "--loglevel=info"
@@ -61,7 +61,7 @@ try {
             Start-CeleryWindow "GEO Celery Default Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "default",
-                "-n", "default@localhost",
+                "-n", "default@$env:COMPUTERNAME",
                 "-c", "$DefaultConcurrency",
                 "--pool=solo",
                 "--loglevel=info"
@@ -77,7 +77,7 @@ try {
             Start-CeleryWindow "GEO Celery Submit Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "submit",
-                "-n", "submit@localhost",
+                "-n", "submit@$env:COMPUTERNAME",
                 "-c", "$SubmitConcurrency",
                 "--pool=solo",
                 "--loglevel=info"
@@ -86,7 +86,7 @@ try {
             Start-CeleryWindow "GEO Celery Sync Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "sync",
-                "-n", "sync@localhost",
+                "-n", "sync@$env:COMPUTERNAME",
                 "-c", "$SyncConcurrency",
                 "--pool=solo",
                 "--loglevel=info"
@@ -95,7 +95,7 @@ try {
             Start-CeleryWindow "GEO Celery Default Worker" @(
                 "-A", "app.celery_app", "worker",
                 "-Q", "default",
-                "-n", "default@localhost",
+                "-n", "default@$env:COMPUTERNAME",
                 "-c", "$DefaultConcurrency",
                 "--pool=solo",
                 "--loglevel=info"

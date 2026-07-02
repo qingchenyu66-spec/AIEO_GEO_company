@@ -834,6 +834,80 @@ button:disabled {
   font-weight:800;
 }
 .alert-threshold-row em.off { color:#b42335; }
+.notification-bell { position:relative; }
+.notification-badge {
+  position:absolute;
+  top:2px;
+  right:2px;
+  min-width:16px;
+  height:16px;
+  padding:0 4px;
+  border-radius:999px;
+  background:#e5484d;
+  color:#fff;
+  font-size:10px;
+  font-weight:800;
+  line-height:16px;
+  text-align:center;
+}
+.notification-panel {
+  width:360px;
+  max-height:420px;
+  padding:12px;
+  display:grid;
+  gap:10px;
+}
+.notification-panel-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.notification-panel-head strong { color:#15243e; font-size:14px; }
+.notification-read-all {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  border:none;
+  background:transparent;
+  color:#2b97ee;
+  font-size:12px;
+  cursor:pointer;
+}
+.notification-read-all svg { width:14px; height:14px; }
+.notification-read-all:disabled { opacity:.45; cursor:not-allowed; }
+.notification-empty { padding:18px 8px; text-align:center; color:#8294ab; font-size:13px; }
+.notification-list {
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:grid;
+  gap:8px;
+  max-height:320px;
+  overflow:auto;
+}
+.notification-item {
+  padding:10px 12px;
+  border:1px solid #dce8f5;
+  border-radius:8px;
+  background:#f9fcff;
+  cursor:pointer;
+}
+.notification-item.unread { border-color:#9ecdf5; background:#eef7ff; }
+.notification-item.is-warning { border-left:3px solid #f5a623; }
+.notification-item.is-critical { border-left:3px solid #e5484d; }
+.notification-item.is-info { border-left:3px solid #2b97ee; }
+.notification-item-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:4px;
+}
+.notification-item-head b { color:#15243e; font-size:13px; }
+.notification-item-head time { color:#8294ab; font-size:11px; white-space:nowrap; }
+.notification-item p { margin:0; color:#516579; font-size:12px; line-height:1.5; }
+.ops-error.compact { padding:8px 10px; font-size:12px; }
 .alert-threshold-table.has-actions .alert-threshold-head,
 .alert-threshold-table.has-actions .alert-threshold-row {
   grid-template-columns:1.2fr .9fr .7fr .7fr .5fr .5fr .8fr;

@@ -572,6 +572,12 @@ def _emit_alert(alert: dict[str, Any]) -> None:
         return
 
     _set_alert_cooldown(alert)
+    try:
+        from app.services.system_notification_service import push_monitor_alert_notification
+
+        push_monitor_alert_notification(alert)
+    except Exception:
+        logger.exception("Failed to push in-app monitor notification")
     if settings.monitor_webhook_url.strip():
         _post_webhook(alert)
 
