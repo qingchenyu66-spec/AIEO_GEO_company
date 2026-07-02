@@ -69,6 +69,8 @@ export interface OperationLogRecord {
   description: string
   risk_level: string
   ip_address: string | null
+  target_module?: string | null
+  tenant_id?: number | null
   created_at: string
 }
 
@@ -222,6 +224,12 @@ export async function getOperationLogs(): Promise<OperationLogRecord[]> {
 
 export async function getSystemConfigs(): Promise<SystemConfigRecord[]> {
   const response = await http.get('/v1/management/system-configs')
+  return response.data.data
+}
+
+export async function updateSystemConfig(configId: number, configValue: string): Promise<SystemConfigRecord> {
+  const response = await http.put(`/v1/management/system-configs/${configId}`, { config_value: configValue })
+  invalidateCache('/v1/management/system-configs')
   return response.data.data
 }
 

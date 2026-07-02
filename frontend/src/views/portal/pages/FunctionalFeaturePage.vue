@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
+import { updateSystemConfig } from '../../../services/management'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
@@ -24,10 +26,63 @@ const {
   loadPlatformMatrix,
   platformRanking,
   operationLogs,
-  systemSettings,
+  systemConfigRows,
   loadPlatformSystemData,
   recentSubtasks,
 } = analytics
+
+const primaryPanelTitle = computed(() => {
+  const mode = functionalPage.value.mode
+  if (mode === 'diagnosis') return '品牌健康分'
+  if (mode === 'report') return '报告预览'
+  if (mode === 'platforms') return '模型平台状态'
+  if (mode === 'logs') return '操作日志'
+  if (mode === 'settings') return '系统配置'
+  return '检测明细'
+})
+
+const editingConfigId = ref<number | null>(null)
+const editingConfigValue = ref('')
+const savingConfig = ref(false)
+
+function isSecretConfigKey(key: string) {
+  return /key|token|secret|password/i.test(key)
+}
+
+function maskedConfigValue(value: string, key: string) {
+  if (!value) return '-'
+  if (!isSecretConfigKey(key)) return value
+  if (value.length <= 8) return '****'
+  return `${value.slice(0, 4)}****${value.slice(-4)}`
+}
+
+function startEditConfig(row: { id: number; config_key: string; config_value: string }) {
+  editingConfigId.value = row.id
+  editingConfigValue.value = row.config_value
+}
+
+function cancelEditConfig() {
+  editingConfigId.value = null
+  editingConfigValue.value = ''
+}
+
+async function saveConfigRow(row: { id: number; config_key: string }) {
+  if (!editingConfigValue.value.trim()) {
+    ElMessage.warning('配置值不能为空')
+    return
+  }
+  savingConfig.value = true
+  try {
+    await updateSystemConfig(row.id, editingConfigValue.value.trim())
+    ElMessage.success('配置已更新')
+    cancelEditConfig()
+    await loadPlatformSystemData()
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '配置更新失败')
+  } finally {
+    savingConfig.value = false
+  }
+}
 
 const diagnosisChartRef = ref<HTMLDivElement | null>(null)
 
@@ -71,7 +126,7 @@ onUnmounted(() => {
     <section class="feature-grid">
       <article class="panel feature-primary">
         <div class="panel-head">
-          <h2>{{ functionalPage.mode === 'diagnosis' ? '品牌健康分' : functionalPage.mode === 'report' ? '报告预览' : '业务明细' }}</h2>
+          <h2>{{ primaryPanelTitle }}</h2>
         </div>
 
         <div v-if="functionalPage.mode === 'diagnosis'" class="diagnosis-workbench">
@@ -95,7 +150,7 @@ onUnmounted(() => {
           v-else-if="functionalPage.mode === 'platforms'"
           :matrix="platformMatrix"
           :loading="loadingPlatformMatrix"
-          @refresh="loadPlatformMatrix()"
+          @refresh="loadPlatformMatrix(true)"
         />
 
         <div v-else-if="functionalPage.mode === 'report'" class="report-preview">
@@ -113,9 +168,9 @@ onUnmounted(() => {
           <div class="settings-header-actions">
             <button class="primary-btn small-btn" @click="loadPlatformSystemData">刷新日志</button>
           </div>
-          <div class="ops-head"><span>时间</span><span>操作人</span><span>类型</span><span>描述</span><span>风险</span></div>
+          <div class="ops-head ops-head-detailed"><span>时间</span><span>操作人</span><span>类型</span><span>描述</span><span>上下文</span><span>风险</span></div>
           <div v-for="row in operationLogs" :key="row.join('-')" class="ops-row">
-            <span>{{ row[0] }}</span><b>{{ row[1] }}</b><span>{{ row[2] }}</span><em>{{ row[3] }}</em><i>{{ row[4] }}</i>
+            <span>{{ row[0] }}</span><b>{{ row[1] }}</b><span>{{ row[2] }}</span><em>{{ row[3] }}</em><span>{{ row[4] }}</span><i>{{ row[5] }}</i>
           </div>
         </div>
 
@@ -123,9 +178,33 @@ onUnmounted(() => {
           <div class="settings-header-actions">
             <button class="primary-btn small-btn" @click="emit('open-menu-config')">菜单配置管理</button>
           </div>
-          <div class="ops-head"><span>配置项</span><span>当前值</span><span>作用范围</span><span>状态</span></div>
-          <div v-for="row in systemSettings" :key="row[0]" class="ops-row">
-            <b>{{ row[0] }}</b><span>{{ row[1] }}</span><em>{{ row[2] }}</em><i>{{ row[3] }}</i>
+          <div class="settings-summary-grid">
+            <article><b>接口密钥</b><span>模力指数、AI 增强服务等敏感配置统一脱敏展示</span></article>
+            <article><b>调度策略</b><span>定时监测、同步频率、队列阈值等运行参数</span></article>
+            <article><b>缓存与队列</b><span>Redis、Celery、任务锁和进度缓存状态</span></article>
+            <article><b>菜单权限</b><span>平台运营端与客户企业端菜单可见性配置</span></article>
+          </div>
+          <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
+          <div v-for="row in systemConfigRows" :key="row.id" class="ops-row settings-config-row">
+            <b>{{ row.config_key }}</b>
+            <span v-if="editingConfigId !== row.id">{{ maskedConfigValue(row.config_value, row.config_key) }}</span>
+            <input v-else v-model="editingConfigValue" class="settings-config-input" type="text" />
+            <em>{{ row.remark || row.scope || '平台运行配置' }}</em>
+            <i>{{ row.status || '启用' }}</i>
+            <span class="settings-config-actions">
+              <button
+                v-if="editingConfigId !== row.id"
+                type="button"
+                class="filter-reset-btn tiny-btn"
+                @click="startEditConfig(row)"
+              >
+                编辑
+              </button>
+              <template v-else>
+                <button type="button" class="primary-btn small-btn" :disabled="savingConfig" @click="saveConfigRow(row)">保存</button>
+                <button type="button" class="filter-reset-btn tiny-btn" @click="cancelEditConfig">取消</button>
+              </template>
+            </span>
           </div>
         </div>
 

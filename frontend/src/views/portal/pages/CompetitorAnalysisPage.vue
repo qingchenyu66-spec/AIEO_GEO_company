@@ -9,10 +9,10 @@ import {
   Globe,
   HeartPulse,
   Info,
-  Link2,
   RefreshCw,
   Trophy,
 } from '@lucide/vue'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useBrandInsights, type CompetitorDatePreset } from '../composables/useCompetitorAnalysis'
 import '../../../styles/competitor-analysis.css'
 
@@ -38,7 +38,6 @@ const {
   sentimentKeywordTab,
   activeSentimentKeywords,
   activeSentimentKeywordSample,
-  sentimentKeywordSource,
   loadSummary,
   resetFilters,
   exportCsv,
@@ -106,7 +105,7 @@ function isPlatformActive(code: string) {
           :class="{ active: isPlatformActive(tab.code) }"
           @click="togglePlatform(tab.code)"
         >
-          <Link2 v-if="tab.code !== 'all'" />
+          <PlatformBadge v-if="tab.code !== 'all'" :code="tab.code" size="xs" icon-only />
           <Globe v-else />
           <span>{{ tab.name }}</span>
           <em>{{ tab.count }}</em>
@@ -156,7 +155,7 @@ function isPlatformActive(code: string) {
               <h3>品牌提及率分析</h3>
               <p>各品牌每日提及率走势 · 点击数据点下钻</p>
             </div>
-            <button type="button" class="ghost-link-btn" @click="drillDownToRealtime()">
+            <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
               查看明细
               <ArrowRight />
             </button>
@@ -225,7 +224,7 @@ function isPlatformActive(code: string) {
               <h3>情绪指数排行榜</h3>
               <p>品牌出现在推荐列表时的情绪分布</p>
             </div>
-            <button type="button" class="ghost-link-btn" @click="drillDownToRealtime()">
+            <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
               查看明细
               <ArrowRight />
             </button>
@@ -263,8 +262,8 @@ function isPlatformActive(code: string) {
           <div>
             <h3>品牌情绪词</h3>
             <p>
-              从本品牌被提及的回答中提取短语 · 点击词条直达快照
-              <span v-if="sentimentKeywordSource === 'deepseek'" class="brand-insights-ai-badge">DeepSeek 提炼</span>
+              基于监测回答语义聚合的高频表达 · 点击词条直达快照
+              <span class="brand-insights-ai-badge">智能语义洞察</span>
             </p>
           </div>
           <Cloud />

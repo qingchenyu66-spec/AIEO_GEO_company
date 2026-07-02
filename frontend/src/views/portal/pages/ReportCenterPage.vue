@@ -191,7 +191,7 @@ function diagnosisTitleText(title: string | null | undefined) {
             </div>
             <div class="report-card-meta">
               <span class="report-badge type">{{ item.report_type_label || item.report_type }}</span>
-              <span v-if="item.ai_source === 'deepseek'" class="report-badge status">DeepSeek</span>
+              <span v-if="item.ai_source === 'deepseek'" class="report-badge status">智能生成</span>
               <span class="report-badge status" :class="{ 'is-draft': item.status === 'draft' }">{{ item.status_label || item.status }}</span>
               <span v-if="isPlatform && item.tenant_name" class="report-badge type">{{ item.tenant_name }}</span>
             </div>
@@ -269,7 +269,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div class="report-preview-title">
             <div class="report-card-meta">
               <span class="report-badge type">{{ reportDetail.report_type_label || reportDetail.report_type }}</span>
-              <span v-if="isDeepseekReport" class="report-badge status">DeepSeek 撰写</span>
+              <span v-if="isDeepseekReport" class="report-badge status">智能撰写</span>
               <span class="report-badge status">{{ reportDetail.status_label || reportDetail.status }}</span>
               <span v-if="previewContent?.period_label" class="report-badge type">{{ previewContent.period_label }}</span>
             </div>

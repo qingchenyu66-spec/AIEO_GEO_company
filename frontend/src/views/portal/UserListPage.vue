@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { Users } from '@lucide/vue'
+import { ElOption, ElSelect } from 'element-plus'
+import 'element-plus/es/components/select/style/css'
+import 'element-plus/es/components/option/style/css'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 
 const {
@@ -39,26 +42,43 @@ const {
         </label>
         <label>
           <span>所属公司</span>
-          <select v-model.number="userFilters.tenant_id">
-            <option :value="null">全部公司</option>
-            <option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option>
-          </select>
+          <ElSelect
+            v-model="userFilters.tenant_id"
+            clearable
+            placeholder="全部公司"
+            class="portal-field-select"
+          >
+            <ElOption
+              v-for="tenant in tenants"
+              :key="tenant.id"
+              :label="tenant.name"
+              :value="tenant.id"
+            />
+          </ElSelect>
         </label>
         <label>
           <span>身份</span>
-          <select v-model="userFilters.identity_type">
-            <option value="">全部身份</option>
-            <option value="PLATFORM">平台运营端</option>
-            <option value="CUSTOMER">客户企业端</option>
-          </select>
+          <ElSelect
+            v-model="userFilters.identity_type"
+            clearable
+            placeholder="全部身份"
+            class="portal-field-select"
+          >
+            <ElOption label="平台运营端" value="PLATFORM" />
+            <ElOption label="客户企业端" value="CUSTOMER" />
+          </ElSelect>
         </label>
         <label>
           <span>状态</span>
-          <select v-model="userFilters.enabled">
-            <option value="">全部状态</option>
-            <option value="true">启用</option>
-            <option value="false">停用</option>
-          </select>
+          <ElSelect
+            v-model="userFilters.enabled"
+            clearable
+            placeholder="全部状态"
+            class="portal-field-select"
+          >
+            <ElOption label="启用" value="true" />
+            <ElOption label="停用" value="false" />
+          </ElSelect>
         </label>
         <label class="deleted-filter">
           <input v-model="userFilters.deleted" type="checkbox" />

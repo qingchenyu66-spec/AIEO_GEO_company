@@ -86,14 +86,12 @@ function resolveHeroTone(data: WorkspaceBrief | null): WorkspaceHeroTone {
 
 function resolveStatusSummary(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') {
-    return data.next_schedule_hint
-      ? `近 7 日暂无已完成检测，下次监测计划：${data.next_schedule_hint}`
-      : '近 7 日暂无已完成检测，请等待定时监测任务返回。'
+    return '近 7 日暂无已完成检测，请等待监测任务返回。'
   }
   if (tone === 'calm') {
     const latest = data.latest_schedule?.schedule_label
     return latest
-      ? `${latest} 数据已更新，推荐露出与排名表现整体稳定。`
+      ? `${latest.replace(/\d{1,2}:\d{2}/g, '').replace(/[·•]\s*$/g, '').trim() || '最新监测'} 数据已更新，推荐露出与排名表现整体稳定。`
       : '近 7 日推荐类监测表现整体稳定。'
   }
   const firstWarn = data.alerts.find(alert => alert.level === 'warn')
@@ -181,9 +179,7 @@ function computeRankScore(data: WorkspaceBrief) {
 
 function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') {
-    return data.next_schedule_hint
-      ? `近 7 日暂无已完成检测，下次计划 ${data.next_schedule_hint}`
-      : '近 7 日暂无已完成检测，请等待定时监测任务返回'
+    return '近 7 日暂无已完成检测，请等待监测任务返回'
   }
   const rc = data.round_comparison
   if (rc?.has_previous) {
@@ -195,7 +191,7 @@ function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone)
       parts.push(`均排名${rc.avg_brand_rank_delta < 0 ? '前移' : '后移'} ${Math.abs(rc.avg_brand_rank_delta).toFixed(1)} 位`)
     }
     if (parts.length) {
-      return `较上一轮${rc.previous_schedule_label ? `「${rc.previous_schedule_label}」` : ''}，${parts.join('，')}`
+      return `较上一轮，${parts.join('，')}`
     }
   }
   const leader = data.platform_highlights
@@ -210,8 +206,9 @@ function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone)
     if (firstWarn) return firstWarn.message
   }
   const latest = data.latest_schedule?.schedule_label
-  return latest
-    ? `${latest} 数据已更新，推荐露出与排名表现整体稳定`
+  const latestLabel = latest?.replace(/\d{1,2}:\d{2}/g, '').replace(/[·•]\s*$/g, '').trim()
+  return latestLabel
+    ? `${latestLabel} 数据已更新，推荐露出与排名表现整体稳定`
     : '近 7 日推荐类监测表现整体稳定'
 }
 

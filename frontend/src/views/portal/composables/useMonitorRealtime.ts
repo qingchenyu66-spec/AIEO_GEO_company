@@ -2,6 +2,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
+import { useAuthStore } from '../../../stores/auth'
 import {
   findKeywordGroupByFilter,
   findKeywordGroupBySelectValue,
@@ -38,6 +39,7 @@ import {
   sentimentLabelMap,
 } from '../portalMaps'
 import { sortPlatformCodes } from '../platformOrder'
+import { sanitizeCustomerScheduleLabel } from '../portalUtils'
 
 export type MonitorViewMode = 'list' | 'matrix'
 export type RealtimeDatePreset = '7d' | '30d' | 'custom'
@@ -147,6 +149,8 @@ function matrixCellRankClass(rank: number | null | undefined) {
 export function useMonitorRealtime(tenantId: number | null = null) {
   const route = useRoute()
   const router = useRouter()
+  const auth = useAuthStore()
+  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
   const monitorTasks = ref<MonitorTask[]>([])
   const monitorDetail = ref<{ task: MonitorTask; subtasks: MonitorSubtask[] } | null>(null)
   const loadingMonitor = ref(false)
@@ -341,9 +345,16 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     }
     return [...map.entries()].map(([schedule_window_key, schedule_label]) => ({
       schedule_window_key,
-      schedule_label,
+      schedule_label: isCustomerView.value
+        ? sanitizeCustomerScheduleLabel(schedule_label)
+        : schedule_label,
     }))
   })
+
+  function displayScheduleLabel(label: string | null | undefined, fallback = '暂无批次') {
+    if (isCustomerView.value) return sanitizeCustomerScheduleLabel(label, fallback)
+    return label?.trim() || fallback
+  }
 
   const monitorResultPlatformOptions = computed(() => {
     const rows = monitorDetail.value?.subtasks || []
@@ -461,10 +472,12 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     return {
       brandName: brandAsset.value?.brand_name || rankingMatrix.value?.brand_name || '未配置品牌',
       companyName: brandAsset.value?.company_full_name || '',
-      latestSchedule: latestGroup?.schedule_label
+      latestSchedule: displayScheduleLabel(
+        latestGroup?.schedule_label
         || latestMatrixRow?.schedule_label
-        || latestMatrixRow?.snapshot_at
-        || '暂无轮次',
+        || latestMatrixRow?.snapshot_at,
+        isCustomerView.value ? '暂无批次' : '暂无轮次',
+      ),
       completed,
       total,
       avgRank: monitorSummary.value?.avg_rank ?? null,
@@ -952,6 +965,8 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     filterScope,
     platformOptions,
     scheduleRoundOptions,
+    isCustomerView,
+    displayScheduleLabel,
     formatMonitorGroupLabel,
     formatKeywordGroupDetailHint,
     keywordGroupSelectValue,

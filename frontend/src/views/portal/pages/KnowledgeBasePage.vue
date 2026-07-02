@@ -132,9 +132,9 @@ function fileIconClass(ext: string) {
       <div class="kb-hero-copy">
         <span class="kb-hero-eyebrow">{{ tenantName }}</span>
         <h2>{{ headline }}</h2>
-        <p>沉淀产品手册、白皮书、FAQ 和品牌资料，系统会自动提炼摘要、关键词与 GEO 引用要点，让资料变成可复用的内容资产。</p>
+        <p>沉淀产品手册、白皮书、FAQ 和品牌资料，上传后进入内容资产引擎，自动形成摘要、关键词与 GEO 引用要点，让资料变成可复用的交付素材。</p>
         <div class="kb-hero-signals">
-          <span><BrainCircuit /> 智能知识提炼</span>
+          <span><BrainCircuit /> 内容资产引擎</span>
           <span><Layers3 /> GEO 引用要点</span>
           <span><CheckCircle2 /> 报告素材沉淀</span>
         </div>
@@ -248,8 +248,8 @@ function fileIconClass(ext: string) {
                 <strong>{{ parseStatusLabel(selectedFile.parse_status) }}</strong>
                 <span>{{ parseProgress(selectedFile.parse_status) }}%</span>
               </div>
-              <div class="kb-progress-track" aria-hidden="true">
-                <i :style="{ width: `${parseProgress(selectedFile.parse_status)}%` }" />
+              <div class="kb-progress-track" :class="{ 'is-indeterminate': parseProgress(selectedFile.parse_status) === null }" aria-hidden="true">
+                <i :style="parseProgress(selectedFile.parse_status) != null ? { width: `${parseProgress(selectedFile.parse_status)}%` } : undefined" />
               </div>
               <p>{{ parseProgressText(selectedFile.parse_status) }}</p>
             </div>
@@ -330,8 +330,8 @@ function fileIconClass(ext: string) {
           <div v-else class="kb-parse-loading">
             <Sparkles />
             <div>
-              <strong>智能解析引擎正在处理资料</strong>
-              <p>通常需要 10-30 秒，请稍候刷新查看结构化摘要、关键词和引用要点。</p>
+              <strong>内容资产引擎正在处理资料</strong>
+              <p>系统正在抽取摘要、关键词和可引用要点，完成后会自动刷新预览。</p>
             </div>
           </div>
         </template>

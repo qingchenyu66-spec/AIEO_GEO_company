@@ -14,7 +14,6 @@ const {
   loadingDetail,
   filters,
   datePreset,
-  brandAsset,
   brandCompetitors,
   viewMode,
   rankingMatrix,
@@ -32,8 +31,9 @@ const {
   exposureTermOptions,
   filterScope,
   filteredGroupedMonitorTasks,
-  schedulePlanDisplay,
   scheduleSourceLabel,
+  isCustomerView,
+  displayScheduleLabel,
   refreshCurrentView,
   selectMonitorTask,
   switchViewMode,
@@ -221,10 +221,10 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
       </div>
       <div v-else class="realtime-hero-metrics">
         <div class="realtime-hero-metric">
-          <span>{{ viewMode === 'matrix' ? '最近日期' : '最新轮次' }}</span>
+          <span>{{ viewMode === 'matrix' ? '最近日期' : (isCustomerView ? '最近监测' : '最新轮次') }}</span>
           <b>{{ heroMetrics.latestSchedule }}</b>
           <em v-if="viewMode === 'matrix'">{{ heroMetrics.scheduleRoundCount }} 天有均值</em>
-          <em v-else>{{ heroMetrics.scheduleRoundCount }} 个调度轮次</em>
+          <em v-else>{{ heroMetrics.scheduleRoundCount }} 个{{ isCustomerView ? '监测批次' : '调度轮次' }}</em>
         </div>
         <div class="realtime-hero-metric">
           <span>子任务完成</span>
@@ -246,21 +246,11 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
 
     <details class="panel realtime-config-panel">
       <summary>
-        监测计划与平台范围
+        {{ isCustomerView ? '监测范围' : '监测计划与平台范围' }}
         <ChevronDown />
       </summary>
       <div class="realtime-config-body">
-        <div class="realtime-config-grid">
-          <div class="realtime-config-card">
-            <span>监测企业</span>
-            <b>{{ brandAsset?.company_full_name || heroMetrics.companyName || '未配置' }}</b>
-            <small>主品牌 {{ brandAsset?.brand_name || heroMetrics.brandName }}</small>
-          </div>
-          <div class="realtime-config-card">
-            <span>监测计划</span>
-            <b>{{ schedulePlanDisplay?.typeLabel || '监测计划' }}</b>
-            <small>{{ (schedulePlanDisplay?.times || []).join('、') || '待配置具体时刻' }}</small>
-          </div>
+        <div class="realtime-config-grid is-customer-safe">
           <div class="realtime-config-card">
             <span>竞品监测</span>
             <b>{{ brandCompetitors.length }} 个竞品</b>
@@ -333,7 +323,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
               :class="{ 'realtime-matrix-row-latest': isLatestMatrixRow(row) }"
             >
               <th class="realtime-matrix-time-col">
-                <span>{{ row.schedule_label || row.snapshot_at || '-' }}{{ scheduleSourceLabel(row.schedule_source) }}</span>
+                <span>{{ displayScheduleLabel(row.schedule_label || row.snapshot_at || '-') }}{{ isCustomerView ? '' : scheduleSourceLabel(row.schedule_source) }}</span>
                 <small v-if="row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
                 <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
                   <PlatformBadge :code="row.platform" size="xs" />
@@ -375,7 +365,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         </div>
         <div v-for="group in filteredGroupedMonitorTasks" :key="group.schedule_window_key" class="realtime-schedule-group">
           <div class="realtime-schedule-group-head">
-            <b>{{ group.schedule_label }}</b>
+            <b>{{ displayScheduleLabel(group.schedule_label) }}</b>
             <span>{{ group.tasks.length }} 个词组</span>
           </div>
           <button
@@ -404,7 +394,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
 
         <template v-if="monitorDetail">
           <div class="realtime-result-summary">
-            <span>轮次 <b>{{ monitorDetail.task.schedule_label || '—' }}</b></span>
+            <span>{{ isCustomerView ? '批次' : '轮次' }} <b>{{ displayScheduleLabel(monitorDetail.task.schedule_label, '—') }}</b></span>
             <span>状态 <b>{{ monitorStatusLabelMap[monitorDetail.task.status] || monitorDetail.task.status }}</b></span>
             <span>完成 <b>{{ monitorDetail.task.completed_items }}/{{ monitorDetail.task.total_items }}</b></span>
             <span v-if="monitorDetail.task.failed_items">失败 <b>{{ monitorDetail.task.failed_items }}</b></span>

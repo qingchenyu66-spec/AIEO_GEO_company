@@ -22,6 +22,14 @@ export const monitorSummaryMenuCodes = new Set([
 
 const terminalTaskStatuses = new Set(['completed', 'partial_completed', 'failed', 'stopped'])
 
+function cleanLogText(value: string | null | undefined, fallback = '历史编码异常记录，原文不可恢复') {
+  const text = String(value || '').trim()
+  if (!text) return '-'
+  const questionMarks = (text.match(/\?/g) || []).length
+  if (questionMarks >= 3 && questionMarks / Math.max(1, text.length) > 0.25) return fallback
+  return text
+}
+
 export const sourceCategoryLabels: Record<string, string> = {
   official: '官网/企业库',
   media: '行业媒体',
@@ -281,8 +289,25 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       .slice(0, 6)
   })
 
-  const operationLogs = computed(() => operationLogRows.value.map(row => [row.created_at, row.operator_name, row.action_type, row.description, row.risk_level]))
-  const systemSettings = computed(() => systemConfigRows.value.map(row => [row.config_name, row.config_value, row.scope, row.status]))
+  const operationLogs = computed(() => operationLogRows.value.map(row => [
+    row.created_at,
+    cleanLogText(row.operator_name, '历史日志'),
+    cleanLogText(row.action_type, '编码异常'),
+    cleanLogText(row.description),
+    [row.target_module, row.tenant_id ? `企业ID ${row.tenant_id}` : '', row.ip_address ? `IP ${row.ip_address}` : ''].filter(Boolean).join(' · ') || '平台操作',
+    row.risk_level,
+  ]))
+
+  const systemSettings = computed(() => systemConfigRows.value.map(row => {
+    const isSecret = /key|token|secret|password/i.test(row.config_key)
+    const value = isSecret && row.config_value ? `${row.config_value.slice(0, 4)}****${row.config_value.slice(-4)}` : row.config_value
+    return [
+      row.config_key,
+      value || '-',
+      row.remark || row.scope || '平台运行配置',
+      row.status ? '启用' : '停用',
+    ]
+  }))
 
   const functionalPage = computed(() => {
     const menuName = auth.allowedMenus.find(item => item.menu_code === activeMenuCode.value)?.menu_name
@@ -349,11 +374,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     }
   }
 
-  async function loadPlatformMatrix() {
+  async function loadPlatformMatrix(force = false) {
     if (!shouldLoadPlatformMatrix.value) return
     loadingPlatformMatrix.value = true
     try {
-      platformMatrix.value = await withRetry(() => getPlatformMatrix())
+      platformMatrix.value = await withRetry(() => getPlatformMatrix(force))
     } catch (error: unknown) {
       notifyError(error, '模型平台服务状态加载失败')
     } finally {
@@ -381,7 +406,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
 
   watch(activeMenuCode, () => loadMonitorSummary(isDashboardPage.value))
   watch(activeMenuCode, loadPlatformSystemData)
-  watch(activeMenuCode, loadPlatformMatrix)
+  watch(activeMenuCode, () => loadPlatformMatrix())
   watch(sourcePlatformTabs, tabs => {
     if (!tabs.some(tab => tab.code === selectedSourcePlatform.value)) {
       selectedSourcePlatform.value = 'all'

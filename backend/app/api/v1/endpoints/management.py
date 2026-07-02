@@ -175,6 +175,8 @@ def operation_log_to_dict(item: OperationLog) -> dict:
         "description": clean_log_text(item.description, "该条历史日志在早期编码异常时写入，原文不可恢复"),
         "risk_level": clean_log_text(item.risk_level, "历史记录" if garbled else "普通"),
         "ip_address": item.ip_address,
+        "target_module": item.target_module,
+        "tenant_id": item.tenant_id,
         "created_at": item.created_at.isoformat(sep=" ", timespec="minutes"),
     }
 
@@ -462,6 +464,41 @@ def management_system_configs(
         }
         for item in rows
     ])
+
+
+@router.put("/system-configs/{config_id}", response_model=ApiResponse[dict])
+def management_update_system_config(
+    config_id: int,
+    payload: dict,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    require_platform(current)
+    config = db.scalar(select(SystemConfig).where(SystemConfig.id == config_id))
+    if config is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置项不存在")
+    new_value = payload.get("config_value")
+    if new_value is None or not str(new_value).strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="配置值不能为空")
+    config.config_value = str(new_value).strip()
+    config.updated_by = current.user.display_name or current.identity.identity_name or current.user.username
+    write_management_log(
+        db,
+        current,
+        "系统配置",
+        f"更新配置 {config.config_key}",
+        target_module="系统配置",
+        target_id=config.id,
+        risk_level="关注",
+    )
+    db.commit()
+    db.refresh(config)
+    return ApiResponse(data={
+        "id": config.id,
+        "config_key": config.config_key,
+        "config_value": config.config_value,
+        "updated_at": config.updated_at.isoformat(sep=" ", timespec="minutes"),
+    })
 
 
 @router.get("/overview", response_model=ApiResponse[dict])

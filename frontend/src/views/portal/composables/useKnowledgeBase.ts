@@ -203,6 +203,13 @@ export function useKnowledgeBase() {
       ElMessage.success('资料已上传，正在进行智能解析')
       files.value = [record, ...files.value.filter(item => item.id !== record.id)]
       selectedId.value = record.id
+      if (record.parse_status === 'none') {
+        void parseKnowledgeFile(record.id)
+          .then(updated => {
+            files.value = [updated, ...files.value.filter(item => item.id !== updated.id)]
+          })
+          .catch(() => undefined)
+      }
       syncParsePolling()
     } catch (error: unknown) {
       ElMessage.error(error instanceof Error ? error.message : '文件上传失败')
@@ -278,18 +285,18 @@ export function useKnowledgeBase() {
     return 'is-idle'
   }
 
-  function parseProgress(status?: KnowledgeParseStatus) {
+  function parseProgress(status?: KnowledgeParseStatus): number | null {
     if (status === 'parsed') return 100
     if (status === 'failed') return 100
-    if (status === 'parsing') return 68
-    return 18
+    if (status === 'parsing') return null
+    return 12
   }
 
   function parseProgressText(status?: KnowledgeParseStatus) {
-    if (status === 'parsed') return '知识结构化完成，可用于引用分析与报告素材'
+    if (status === 'parsed') return '内容资产已完成结构化，可用于引用分析、诊断和报告素材'
     if (status === 'failed') return '解析未完成，请检查文件内容或重新上传'
-    if (status === 'parsing') return '正在提取摘要、关键词和可引用要点'
-    return '已入库，等待智能解析引擎处理'
+    if (status === 'parsing') return '内容资产引擎正在抽取摘要、关键词和可引用要点（状态同步自后台任务）'
+    return '文件已入库，等待内容资产引擎处理'
   }
 
   onMounted(loadFiles)

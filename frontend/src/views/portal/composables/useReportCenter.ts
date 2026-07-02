@@ -158,10 +158,13 @@ export function useReportCenter(options: UseReportCenterOptions) {
     loading.value = true
     try {
       reports.value = await withRetry(() => getReportList())
-      if (!selectedReportId.value && reports.value.length) {
-        selectedReportId.value = reports.value[0].id
-      } else if (selectedReportId.value && !reports.value.some(item => item.id === selectedReportId.value)) {
-        selectedReportId.value = reports.value[0]?.id ?? null
+      const visibleRows = filteredReports.value
+      if (!visibleRows.length) {
+        selectedReportId.value = null
+        reportDetail.value = null
+        editMode.value = false
+      } else if (!selectedReportId.value || !visibleRows.some(item => item.id === selectedReportId.value)) {
+        selectedReportId.value = visibleRows[0].id
       }
     } catch (error: unknown) {
       ElMessage.error(`报告列表加载失败：${errorMessage(error)}`)
@@ -289,7 +292,11 @@ export function useReportCenter(options: UseReportCenterOptions) {
   })
 
   watch([typeFilter, tenantFilter], () => {
-    if (filteredReports.value.length && !filteredReports.value.some(item => item.id === selectedReportId.value)) {
+    if (!filteredReports.value.length) {
+      selectedReportId.value = null
+      reportDetail.value = null
+      editMode.value = false
+    } else if (!filteredReports.value.some(item => item.id === selectedReportId.value)) {
       selectedReportId.value = filteredReports.value[0]?.id ?? null
     }
   })

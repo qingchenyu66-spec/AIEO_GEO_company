@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import * as echarts from 'echarts'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, WalletCards, Zap } from '@lucide/vue'
 import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
 import { getMolizhishuBalance } from '../../services/platforms'
@@ -16,8 +17,18 @@ const overview = ref<PlatformOverview | null>(null)
 const molizhishuBalance = ref<MolizhishuBalance | null>(null)
 const loading = ref(false)
 const errorText = ref('')
+const taskCompletionChartRef = ref<HTMLDivElement | null>(null)
+let taskCompletionChart: echarts.ECharts | null = null
 
 const platformStats = computed(() => sortPlatformRows(overview.value?.platform_stats || []))
+
+function cleanDashboardLog(value: string | null | undefined, fallback = '历史编码异常记录，原文不可恢复') {
+  const text = String(value || '').trim()
+  if (!text) return '-'
+  const questionMarks = (text.match(/\?/g) || []).length
+  if (questionMarks >= 3 && questionMarks / Math.max(1, text.length) > 0.25) return fallback
+  return text
+}
 
 const kpiCards = computed(() => {
   const kpis = overview.value?.kpis
@@ -45,6 +56,14 @@ const serviceRows = computed(() => {
 const taskRate = computed(() => {
   const kpis = overview.value?.kpis
   return kpis?.today_tasks ? Math.round(((kpis.today_completed_tasks || 0) / kpis.today_tasks) * 100) : 0
+})
+
+const taskSuccessRate = computed(() => {
+  const kpis = overview.value?.kpis
+  const total = kpis?.today_tasks || 0
+  const failed = kpis?.today_failed_tasks || 0
+  if (!total) return 100
+  return Math.max(0, Math.round(((total - failed) / total) * 100))
 })
 
 const customerDataRows = computed(() => {
@@ -91,7 +110,54 @@ async function loadOverview() {
   }
 }
 
-onMounted(loadOverview)
+function renderTaskCompletionChart() {
+  if (!taskCompletionChartRef.value) return
+  if (!taskCompletionChart) taskCompletionChart = echarts.init(taskCompletionChartRef.value)
+  taskCompletionChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}<br />{c}%' },
+    color: ['#2d6cdf', '#34c49a'],
+    series: [
+      {
+        type: 'pie',
+        radius: ['68%', '86%'],
+        center: ['42%', '50%'],
+        avoidLabelOverlap: true,
+        label: {
+          position: 'center',
+          formatter: `{value|${taskRate.value}%}\n{name|完成率}`,
+          rich: {
+            value: { color: '#10233f', fontSize: 28, fontWeight: 800, lineHeight: 36 },
+            name: { color: '#6a7f9a', fontSize: 12, lineHeight: 18 },
+          },
+        },
+        labelLine: { show: false },
+        data: [
+          { value: taskRate.value, name: '已完成' },
+          { value: Math.max(0, 100 - taskRate.value), name: '待完成', itemStyle: { color: '#e8f0f8' }, tooltip: { show: false } },
+        ],
+      },
+    ],
+  })
+}
+
+function resizeTaskCompletionChart() {
+  taskCompletionChart?.resize()
+}
+
+watch([taskRate, taskSuccessRate], () => nextTick(renderTaskCompletionChart))
+
+onMounted(async () => {
+  await loadOverview()
+  await nextTick()
+  renderTaskCompletionChart()
+  window.addEventListener('resize', resizeTaskCompletionChart)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', resizeTaskCompletionChart)
+  taskCompletionChart?.dispose()
+  taskCompletionChart = null
+})
 </script>
 
 <template>
@@ -122,18 +188,16 @@ onMounted(loadOverview)
     <section class="ops-first-grid">
       <article class="panel ops-trend-card">
         <div class="panel-head">
-          <div><h2>任务完成趋势</h2><p>今日任务完成率与成功率趋势</p></div>
+          <div><h2>任务完成趋势</h2><p>今日完成率与接口成功率</p></div>
           <span>{{ taskRate }}%</span>
         </div>
         <div class="ops-progress-ring">
-          <div :style="{ '--rate': `${taskRate}%` }">
-            <b>{{ taskRate }}%</b>
-            <span>完成率</span>
-          </div>
+          <div ref="taskCompletionChartRef" class="ops-progress-echart"></div>
           <ul>
             <li><i></i>今日任务 {{ overview?.kpis.today_tasks || 0 }}</li>
             <li><i></i>已完成 {{ overview?.kpis.today_completed_tasks || 0 }}</li>
             <li><i></i>异常任务 {{ overview?.kpis.today_failed_tasks || 0 }}</li>
+            <li><i></i>成功率 {{ taskSuccessRate }}%</li>
           </ul>
         </div>
       </article>
@@ -250,9 +314,9 @@ onMounted(loadOverview)
         <div class="ops-log-list">
           <div v-for="log in overview?.operation_logs || []" :key="log.id">
             <span>{{ log.created_at }}</span>
-            <b>{{ log.operator_name }}</b>
-            <em>{{ log.action_type }}</em>
-            <p>{{ log.description }}</p>
+            <b>{{ cleanDashboardLog(log.operator_name, '历史日志') }}</b>
+            <em>{{ cleanDashboardLog(log.action_type, '编码异常') }}</em>
+            <p>{{ cleanDashboardLog(log.description) }}</p>
           </div>
           <div v-if="!overview?.operation_logs?.length" class="mini-empty">暂无操作日志。</div>
         </div>

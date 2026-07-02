@@ -49,15 +49,13 @@ const showEmptyGuide = computed(() => heroTone.value === 'empty' && !loading.val
 
 const scheduleLine = computed(() => {
   const latest = brief.value?.latest_schedule
-  if (!latest?.schedule_label) return '暂无已完成调度轮次'
-  return `${latest.schedule_label} · 已完成 ${latest.completed_subtasks} 条`
+  if (!latest?.completed_subtasks) return '暂无已完成监测批次'
+  return `最新监测批次 · 已完成 ${latest.completed_subtasks} 条`
 })
 
 const emptyHint = computed(() => {
   if (brief.value?.recent_snapshots?.length) return ''
-  return brief.value?.next_schedule_hint
-    ? `暂无已完成检测结果，下次监测计划：${brief.value.next_schedule_hint}`
-    : '暂无已完成检测结果，请等待定时监测任务返回。'
+  return '暂无已完成检测结果，请等待监测任务返回。'
 })
 
 const sampleTotal = computed(() => {
@@ -147,7 +145,7 @@ watch(showEmptyGuide, (empty) => {
       <h3>等待首次监测结果</h3>
       <p>{{ emptyHint }}</p>
       <ul>
-        <li>系统会按监测计划自动发起检测，无需手动提交</li>
+        <li>系统会自动发起检测并同步结果，无需手动提交</li>
         <li>结果返回后，这里会展示健康分、平台表现与检测快照</li>
         <li>可先查看{{ realtimeMenuName }}页了解任务结构，或维护品牌/竞品配置</li>
       </ul>
@@ -164,7 +162,7 @@ watch(showEmptyGuide, (empty) => {
           <div class="ws-campus-greet-main">
             <div class="ws-campus-greet-copy">
               <div class="ws-campus-greet-hello">{{ greetingLabel() }}，{{ workspaceHeadline }}</div>
-              <small v-if="brief.next_schedule_hint">监测计划 {{ brief.next_schedule_hint }}</small>
+              <small>数据来自真实监测任务返回</small>
               <div class="ws-campus-greet-sample">
                 <b>
                   <WorkspaceCountUp

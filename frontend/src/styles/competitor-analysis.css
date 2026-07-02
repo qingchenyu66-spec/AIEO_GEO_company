@@ -611,12 +611,20 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
 }
 
 .brand-insights-platform-chip.active {
   border-color: rgba(45, 108, 223, .35);
   background: linear-gradient(135deg, rgba(45, 108, 223, .1), rgba(34, 199, 196, .08));
   color: #17406a;
+  box-shadow: 0 8px 20px rgba(45, 108, 223, .1);
+}
+
+.brand-insights-platform-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(45, 108, 223, .32);
+  box-shadow: 0 10px 22px rgba(35, 72, 118, .1);
 }
 
 .brand-insights-platform-chip em {
@@ -698,6 +706,68 @@
   font-size: 11px;
   font-weight: 700;
   vertical-align: middle;
+}
+
+.brand-insights-rank-head span:nth-child(3),
+.brand-insights-rank-head span:nth-child(4),
+.brand-insights-rank-row strong,
+.brand-insights-rank-row > span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.brand-insights-rank-head span:first-child,
+.brand-insights-rank-row > span:first-child {
+  text-align: center;
+}
+
+.brand-insights-rank-row > span:first-child {
+  color: #6d8099;
+  font-weight: 700;
+}
+
+.ghost-link-btn,
+.insight-detail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 13px 0 14px;
+  border: 1px solid rgba(45, 108, 223, .24);
+  border-radius: 9px;
+  color: #17406a;
+  background: linear-gradient(180deg, #fff, #f6fbff);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(35, 72, 118, .08);
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.ghost-link-btn svg,
+.insight-detail-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform .18s ease;
+}
+
+.ghost-link-btn:hover,
+.insight-detail-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(45, 108, 223, .42);
+  box-shadow: 0 12px 26px rgba(35, 72, 118, .12);
+}
+
+.ghost-link-btn:hover svg,
+.insight-detail-btn:hover svg {
+  transform: translateX(2px);
+}
+
+.ghost-link-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .competitor-sticky-bar .competitor-sticky-inner {

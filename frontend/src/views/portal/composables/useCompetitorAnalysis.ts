@@ -239,7 +239,10 @@ export function useBrandInsights(options?: {
       sentimentKeywords.value = null
       void withRetry(() => getSentimentKeywords({ ...params, limit: 60 }))
         .then(keywordData => {
-          if (version === loadVersion) sentimentKeywords.value = keywordData
+          if (version !== loadVersion) return
+          sentimentKeywords.value = keywordData
+          const rows = sentimentKeywordTab.value === 'positive' ? keywordData.positive : keywordData.negative
+          void renderWordCloud(rows, sentimentKeywordTab.value)
         })
         .catch(() => undefined)
     } catch (error: unknown) {
@@ -268,7 +271,9 @@ export function useBrandInsights(options?: {
         sentimentTrend: payload => drillDownToRealtime({ dayLabel: payload.label }),
       },
     })
-    await renderWordCloud(activeSentimentKeywords.value, sentimentKeywordTab.value)
+    if (sentimentKeywords.value) {
+      await renderWordCloud(activeSentimentKeywords.value, sentimentKeywordTab.value)
+    }
   }
 
   function resetFilters() {

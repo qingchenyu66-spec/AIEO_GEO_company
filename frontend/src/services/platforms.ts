@@ -198,23 +198,37 @@ export interface PlatformMatrix {
   platforms: PlatformMatrixItem[]
 }
 
+let platformMatrixCache: { data: PlatformMatrix; at: number } | null = null
+let platformListCache: { data: PlatformInfo[]; at: number } | null = null
+const PLATFORM_CACHE_TTL = 60 * 1000
+
 export async function getMolizhishuBalance(): Promise<MolizhishuBalance> {
   const response = await http.get('/v1/platforms/molizhishu-balance')
   return response.data.data
 }
 
-export async function getPlatformMatrix(): Promise<PlatformMatrix> {
+export async function getPlatformMatrix(force = false): Promise<PlatformMatrix> {
+  if (!force && platformMatrixCache && Date.now() - platformMatrixCache.at < PLATFORM_CACHE_TTL) {
+    return platformMatrixCache.data
+  }
   const response = await http.get('/v1/platforms/matrix')
-  return response.data.data
+  platformMatrixCache = { data: response.data.data, at: Date.now() }
+  return platformMatrixCache.data
 }
 
 export async function getPlatforms(): Promise<PlatformInfo[]> {
+  if (platformListCache && Date.now() - platformListCache.at < PLATFORM_CACHE_TTL) {
+    return platformListCache.data
+  }
   const response = await http.get('/v1/platforms')
-  return response.data.data
+  platformListCache = { data: response.data.data, at: Date.now() }
+  return platformListCache.data
 }
 
 export async function updatePlatform(id: number, data: UpdatePlatformPayload): Promise<PlatformInfo> {
   const response = await http.put(`/v1/platforms/${id}`, data)
+  platformListCache = null
+  platformMatrixCache = null
   return response.data.data
 }
 
