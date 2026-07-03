@@ -963,6 +963,7 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
         db.commit()
         raise
     db.commit()
+    invalidate_monitor_summary_cache(task.tenant_id)
     return get_monitor_task(db, task_id, current)
 
 
@@ -2067,12 +2068,10 @@ def customer_subtask_visible(
 
 
 def invalidate_monitor_summary_cache(tenant_id: int | None = None) -> None:
-    """补录/同步后清理监测摘要缓存，避免客户侧仍读旧数据。"""
-    from app.core.redis_client import delete_cache
+    """补录/同步后清理监测摘要与运营总览缓存，避免仍读旧数据。"""
+    from app.core.read_cache import invalidate_dashboard_caches
 
-    if tenant_id is not None:
-        delete_cache(f"monitor:summary:v3:CUSTOMER:{tenant_id}")
-    delete_cache("monitor:summary:v3:PLATFORM:platform")
+    invalidate_dashboard_caches(tenant_id)
 
 
 def filter_subtasks_for_customer(

@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
+from app.core.http_rate_limit import enforce_login_rate_limit
 from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
@@ -50,7 +51,8 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
 
 
 @router.post("/login", response_model=ApiResponse[dict])
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    enforce_login_rate_limit(request)
     result = authenticate(db, payload.username, payload.password)
     if result is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")

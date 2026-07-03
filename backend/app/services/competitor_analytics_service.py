@@ -14,6 +14,7 @@ from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import get_brand_asset, list_competitors
 from app.services.monitor_service import customer_display_cutoff
+from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
 from app.services.ranking_parser import (
     normalize_structured_rankings,
@@ -179,12 +180,6 @@ def _finalize_bucket(bucket: dict[str, Any], sample_total: int) -> dict[str, Any
     }
 
 
-def _resolve_tenant_id(current: CurrentSession, tenant_id: int | None) -> int | None:
-    if current.identity.identity_type == "CUSTOMER":
-        return current.identity.tenant_id
-    return tenant_id
-
-
 def _parse_platform_filters(platform: str | None, platforms: str | None = None) -> list[str]:
     raw = str(platforms or platform or "").strip()
     if not raw or raw.lower() == "all":
@@ -223,19 +218,7 @@ def build_competitor_compare_summary(
     days: int = 30,
     prompt: str | None = None,
 ) -> dict[str, Any]:
-    resolved_tenant_id = _resolve_tenant_id(current, tenant_id)
-    if resolved_tenant_id is None:
-        return {
-            "brand_name": None,
-            "competitor_count": 0,
-            "sample_total": 0,
-            "rows": [],
-            "platform_rows": [],
-            "mention_trends": {"labels": [], "series": []},
-            "sentiment_trends": {"labels": [], "positive": [], "neutral": [], "negative": []},
-            "sentiment_rows": [],
-            "trend_day_keys": [],
-        }
+    resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
 
     asset = get_brand_asset(db, resolved_tenant_id)
     competitors = list_competitors(db, resolved_tenant_id)

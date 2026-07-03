@@ -33,3 +33,6 @@ def test_lead_diagnosis_list_returns_200_with_region_code_field() -> None:
     assert isinstance(rows, list)
     if rows:
         assert "region_code" in rows[0]
+        phone = rows[0].get("contact_phone")
+        if phone:
+            assert "****" in phone or "*" in phone

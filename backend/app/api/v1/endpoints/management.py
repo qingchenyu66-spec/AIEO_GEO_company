@@ -1,15 +1,22 @@
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.core.celery_queue_monitor import format_celery_monitor_zh, get_queue_monitor_snapshot
 from app.core.platform_order import sort_platform_items
-from app.core.redis_client import get_json_cache, redis_health, set_json_cache
+from app.core.redis_client import redis_health
+from app.core.http_rate_limit import enforce_overview_rate_limit
+from app.core.read_cache import (
+    MANAGEMENT_OVERVIEW_CACHE_KEY,
+    MANAGEMENT_OVERVIEW_CACHE_TTL,
+    get_or_build_json_cache,
+)
 from app.services.system_config_service import (
     list_system_configs,
     update_system_config as persist_system_config,
@@ -493,15 +500,25 @@ def management_update_system_config(
 
 @router.get("/overview", response_model=ApiResponse[dict])
 def management_overview(
+    request: Request,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """平台运营总览聚合接口，避免首页多接口聚合导致加载慢。"""
     require_platform(current)
-    cache_key = "management:overview:v1"
-    cached = get_json_cache(cache_key)
-    if cached is not None:
-        return ApiResponse(data=cached)
+    enforce_overview_rate_limit(request, current)
+    try:
+        data = get_or_build_json_cache(
+            MANAGEMENT_OVERVIEW_CACHE_KEY,
+            lambda: _build_management_overview(db),
+            ttl_seconds=MANAGEMENT_OVERVIEW_CACHE_TTL,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="management.overview")
+
+
+def _build_management_overview(db: Session) -> dict:
     today = date.today()
     tomorrow = today + timedelta(days=1)
     thirty_days_later = today + timedelta(days=30)
@@ -709,8 +726,7 @@ def management_overview(
         "molizhishu_balance": fetch_molizhishu_balance(),
         "deepseek_balance": fetch_deepseek_balance(),
     }
-    set_json_cache(cache_key, data, ttl_seconds=30)
-    return ApiResponse(data=data)
+    return data
 
 
 @router.post("/tenants", response_model=ApiResponse[dict])

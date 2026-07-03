@@ -27,7 +27,7 @@ def test_snapshot_backfill_pending_respects_export_permission() -> None:
     response = client.get(
         "/api/v1/monitor/snapshot-backfill/pending",
         headers={"Authorization": f"Bearer {token}"},
-        params={"limit": 10},
+        params={"limit": 10, "all_tenants": True},
     )
     assert response.status_code in (200, 403), response.text
     if response.status_code == 403:

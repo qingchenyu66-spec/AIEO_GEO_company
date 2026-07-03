@@ -2,37 +2,34 @@
 
 from collections import Counter
 import re
-from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func as sa_func
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.common import ApiResponse
 from app.services.competitor_analytics_service import build_competitor_compare_summary
 from app.services.monitor_service import customer_display_cutoff
 from app.services.sentiment_keyword_service import build_sentiment_keywords
+from app.services.tenant_scope import resolve_and_guard_analytics_tenant
+
+from app.core.chinese_stop_words import WORDCLOUD_STOP_WORDS
 
 router = APIRouter(prefix="/analytics")
-
-# 中文停用词表（精简版）
-_STOP_WORDS = set(
-    "的 了 在 是 我 有 和 就 不 人 都 一 个 上 也 很 到 说 要 去 你 会 着 没有 看 好 自己 这 他 她 它 们 那 什么 怎么 哪 为什么 可以 因为 所以 但是 如果 虽然 而且 还是 只是 已经 比较 非常 一起 需要 可能 应该 或者 然后 不过 其实 目前 根据 方面 通过 进行 使用 以及 一些 更加 相关 存在 包括 不同 主要 关于 其中 对于 同时 问题 情况 内容 结果 信息 用户 数据 功能 服务 产品 公司 企业 品牌 提供 是否 如何 这样 那样 那样 之后 以前 之后 以后 之前 之中 之外 之内".split()
-)
 
 
 def _extract_keywords(text: str, top_n: int = 100) -> list[dict]:
     """从文本中提取关键词及词频，过滤停用词和短词。"""
     if not text:
         return []
-    # 提取中文字符序列
     words = re.findall(r"[\u4e00-\u9fff]{2,}", text)
     counter: Counter[str] = Counter()
     for w in words:
-        if w not in _STOP_WORDS and len(w) >= 2:
+        if w not in WORDCLOUD_STOP_WORDS and len(w) >= 2:
             counter[w] += 1
     return [{"word": w, "count": c} for w, c in counter.most_common(top_n)]
 
@@ -46,31 +43,31 @@ def wordcloud(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """从 subtask answer_content 提取关键词频率，用于词云展示。"""
-    stmt = select(GeoMonitorSubtask.answer_content).where(
-        GeoMonitorSubtask.answer_content.isnot(None),
-        GeoMonitorSubtask.answer_content != "",
-    )
-    if current.identity.identity_type == "CUSTOMER":
-        if current.identity.tenant_id is None:
-            return ApiResponse(data=[])
-        tenant_id = current.identity.tenant_id
-        cutoff = customer_display_cutoff()
-        stmt = stmt.where(GeoMonitorSubtask.updated_at <= cutoff)
+    try:
+        resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        stmt = select(GeoMonitorSubtask.answer_content).where(
+            GeoMonitorSubtask.answer_content.isnot(None),
+            GeoMonitorSubtask.answer_content != "",
+        )
+        if current.identity.identity_type == "CUSTOMER":
+            cutoff = customer_display_cutoff()
+            stmt = stmt.where(GeoMonitorSubtask.updated_at <= cutoff)
 
-    if tenant_id:
         task_ids_sub = select(GeoMonitorTask.task_id).where(
-            GeoMonitorTask.tenant_id == tenant_id, GeoMonitorTask.deleted.is_(False)
+            GeoMonitorTask.tenant_id == resolved_tenant_id,
+            GeoMonitorTask.deleted.is_(False),
         )
         stmt = stmt.where(GeoMonitorSubtask.task_id.in_(task_ids_sub))
-    if task_id:
-        stmt = stmt.where(GeoMonitorSubtask.task_id == task_id)
+        if task_id:
+            stmt = stmt.where(GeoMonitorSubtask.task_id == task_id)
 
-    stmt = stmt.limit(limit)
-    rows = db.execute(stmt).all()
-
-    combined = " ".join(row[0] for row in rows if row[0])
-    keywords = _extract_keywords(combined)
-    return ApiResponse(data=keywords)
+        stmt = stmt.limit(limit)
+        rows = db.execute(stmt).all()
+        combined = " ".join(row[0] for row in rows if row[0])
+        keywords = _extract_keywords(combined)
+        return ApiResponse(data=keywords)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.wordcloud")
 
 
 @router.get("/sentiment-keywords", response_model=ApiResponse[dict])
@@ -85,17 +82,20 @@ def sentiment_keywords(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """品牌情绪词——按正/负面回答提取短语，供词云展示与快照下钻。"""
-    data = build_sentiment_keywords(
-        db,
-        current,
-        tenant_id=tenant_id,
-        platform=platform,
-        platforms=platforms,
-        days=days,
-        prompt=prompt,
-        limit=limit,
-    )
-    return ApiResponse(data=data)
+    try:
+        data = build_sentiment_keywords(
+            db,
+            current,
+            tenant_id=tenant_id,
+            platform=platform,
+            platforms=platforms,
+            days=days,
+            prompt=prompt,
+            limit=limit,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.sentiment_keywords")
 
 
 @router.get("/competitor-compare", response_model=ApiResponse[dict])
@@ -109,13 +109,16 @@ def competitor_compare(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """品牌洞察——提及率/排名/情绪趋势及竞品对比。"""
-    data = build_competitor_compare_summary(
-        db,
-        current,
-        tenant_id=tenant_id,
-        platform=platform,
-        platforms=platforms,
-        days=days,
-        prompt=prompt,
-    )
-    return ApiResponse(data=data)
+    try:
+        data = build_competitor_compare_summary(
+            db,
+            current,
+            tenant_id=tenant_id,
+            platform=platform,
+            platforms=platforms,
+            days=days,
+            prompt=prompt,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.competitor_compare")

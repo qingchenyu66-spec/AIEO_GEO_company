@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
-from app.models.lead_diagnosis import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCHEDULE_DAYS, LeadDiagnosis, LeadDiagnosisRun
+from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
+from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCHEDULE_DAYS
+from app.core.masking import mask_phone
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
 from app.schemas.monitor import CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
@@ -141,14 +143,15 @@ def _lead_region_codes(lead: LeadDiagnosis) -> list[str] | None:
     return [code] if code else None
 
 
-def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False) -> dict[str, Any]:
+def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False, mask_contact: bool = False) -> dict[str, Any]:
     result = lead.diagnosis_result_json or {}
     kpis = result.get("kpis") or {}
+    contact_phone = mask_phone(lead.contact_phone) if mask_contact else lead.contact_phone
     payload: dict[str, Any] = {
         "id": lead.id,
         "brand_name": lead.brand_name,
         "contact_name": lead.contact_name,
-        "contact_phone": lead.contact_phone,
+        "contact_phone": contact_phone,
         "contact_note": lead.contact_note,
         "prompts": lead.prompts_json or [],
         "competitors": lead.competitors_json or [],
@@ -193,7 +196,7 @@ def list_lead_diagnoses(db: Session, current: CurrentSession, *, keyword: str | 
             or needle in (row.contact_name or "").lower()
             or needle in (row.contact_phone or "").lower()
         ]
-    return [_serialize_lead(row) for row in rows]
+    return [_serialize_lead(row, mask_contact=True) for row in rows]
 
 
 def get_lead_diagnosis(db: Session, lead_id: int) -> dict[str, Any]:

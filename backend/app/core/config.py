@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     molizhishu_submit_rate_per_minute: int = 30
     molizhishu_sync_rate_per_minute: int = 60
     molizhishu_rate_limit_max_wait_seconds: float = 120.0
+    http_login_rate_per_minute: int = 15
+    http_overview_rate_per_minute: int = 30
+    rate_limit_local_fallback_ratio: float = 0.5
 
     database_pool_size: int = 20
     database_max_overflow: int = 40

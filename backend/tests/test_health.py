@@ -16,3 +16,8 @@ def test_health() -> None:
     assert response.status_code == 200
     assert response.json()["data"]["database"] == "ready"
 
+
+def test_api_responses_include_request_id_header() -> None:
+    response = client.get("/api/v1/health")
+    assert response.headers.get("X-Request-ID")
+

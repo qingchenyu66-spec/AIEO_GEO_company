@@ -5,8 +5,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
-from app.core.redis_client import get_json_cache, set_json_cache
+from app.core.read_cache import (
+    MANAGEMENT_OVERVIEW_CACHE_KEY,
+    MANAGEMENT_OVERVIEW_CACHE_TTL,
+    MONITOR_SUMMARY_CACHE_TTL,
+    get_or_build_json_cache,
+    monitor_summary_cache_key,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.monitor import (
     MonitorTaskCreateRequest,
@@ -109,13 +116,16 @@ def monitor_dashboard_summary(
 ) -> ApiResponse[dict]:
     """Read aggregated real monitoring data for customer and platform dashboards."""
     tenant_key = current.identity.tenant_id or "platform"
-    cache_key = f"monitor:summary:v3:{current.identity.identity_type}:{tenant_key}"
-    cached = get_json_cache(cache_key)
-    if cached is not None:
-        return ApiResponse(data=cached)
-    data = monitor_summary(db, current)
-    set_json_cache(cache_key, data, ttl_seconds=20)
-    return ApiResponse(data=data)
+    cache_key = monitor_summary_cache_key(current.identity.identity_type, tenant_key)
+    try:
+        data = get_or_build_json_cache(
+            cache_key,
+            lambda: monitor_summary(db, current),
+            ttl_seconds=MONITOR_SUMMARY_CACHE_TTL,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.summary")
 
 
 @router.get("/ranking-matrix", response_model=ApiResponse[dict])
@@ -170,6 +180,10 @@ def monitor_workspace_brief(
 @router.get("/snapshot-backfill/pending", response_model=ApiResponse[SnapshotBackfillListResponse])
 def monitor_snapshot_backfill_pending(
     tenant_id: int | None = None,
+    all_tenants: bool = Query(
+        default=False,
+        description="为 true 时允许不传 tenant_id 查询全部企业（默认需指定企业以防误扫全库）",
+    ),
     on_date: date | None = Query(default=None, alias="date"),
     source: str | None = Query(default=None, pattern="^(tenant_monitor|lead_diagnosis)$"),
     platform: str | None = Query(default=None),
@@ -183,6 +197,11 @@ def monitor_snapshot_backfill_pending(
 ) -> ApiResponse[SnapshotBackfillListResponse]:
     """运营端快照补录列表：可按企业、单日、来源、平台、关键词/词组筛选；默认含已有结果以便覆盖更正。"""
     require_platform(current)
+    if tenant_id is None and not all_tenants:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请指定 tenant_id，或显式传入 all_tenants=true 查询全部企业",
+        )
     try:
         require_snapshot_backfill_permission(db, current, "can_export")
     except PermissionError as exc:

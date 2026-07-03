@@ -34,6 +34,7 @@ export interface SnapshotBackfillPendingItem {
 
 export interface SnapshotBackfillQuery {
   tenant_id?: number | null
+  all_tenants?: boolean
   date?: string
   source?: 'tenant_monitor' | 'lead_diagnosis' | ''
   platform?: string
@@ -73,6 +74,7 @@ export async function getPendingSnapshotBackfills(query: SnapshotBackfillQuery =
       offset: query.offset ?? 0,
       pending_only: query.pending_only ?? false,
       tenant_id: query.tenant_id || undefined,
+      all_tenants: query.tenant_id ? undefined : (query.all_tenants ?? true),
       date: query.date || undefined,
       source: query.source || undefined,
       platform: query.platform || undefined,

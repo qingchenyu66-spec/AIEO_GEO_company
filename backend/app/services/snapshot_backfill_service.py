@@ -37,6 +37,7 @@ from app.services.monitor_service import (
     serialize_subtask_for_display,
     subtask_needs_snapshot_backfill,
 )
+from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import parse_answer_rankings
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
@@ -247,7 +248,7 @@ def apply_snapshot_backfill(
     }
     if previous_answer:
         manual_meta["replaced_previous_source"] = previous_source
-        manual_meta["replaced_previous_answer_preview"] = str(previous_answer)[:200]
+        manual_meta["replaced_previous_answer_preview"] = excerpt_sensitive_text(previous_answer, limit=80)
     raw = dict(previous_raw)
     raw.update(manual_meta)
     subtask.raw_result_json = raw

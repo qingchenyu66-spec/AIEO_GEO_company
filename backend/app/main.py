@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.exception_handlers import register_exception_handlers
+from app.middleware.request_logging import RequestLoggingMiddleware
 from app.schemas.common import ApiResponse
 from app.services.system_config_service import bootstrap_and_apply
 
@@ -36,6 +38,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
+
+register_exception_handlers(app)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 

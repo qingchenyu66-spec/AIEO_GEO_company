@@ -1,4 +1,4 @@
-"""省级地区编码与展示名称（与前端 regionOptions 对齐）。"""
+"""省级地区编码与展示名称（与前端 regionOptions.ts 保持同步）。"""
 
 from __future__ import annotations
 

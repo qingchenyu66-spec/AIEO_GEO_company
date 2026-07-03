@@ -4,10 +4,9 @@ from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Strin
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCHEDULE_DAYS
 
-
-DEFAULT_LEAD_SCHEDULE_TIMES = ["09:30", "14:30", "20:30"]
-LEAD_SCHEDULE_DAYS = 3
+__all__ = ["DEFAULT_LEAD_SCHEDULE_TIMES", "LEAD_SCHEDULE_DAYS", "LeadDiagnosis", "LeadDiagnosisRun"]
 
 
 class LeadDiagnosis(Base):
