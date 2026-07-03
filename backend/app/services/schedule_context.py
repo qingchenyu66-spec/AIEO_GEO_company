@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.brand import BrandAsset
+from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
 
 SCHEDULE_TYPE_LABELS = {
@@ -115,10 +116,33 @@ def schedule_runs_for_tasks(db: Session, task_ids: list[str]) -> dict[str, GeoMo
     return {row.task_id: row for row in rows if row.task_id}
 
 
+def resolve_monitor_task_source(task: GeoMonitorTask, *, has_lead_run: bool = False) -> str:
+    """签约企业任务一律视为 GEO 监测；仅无 tenant_id 的独立售前抓取标为 lead_diagnosis。"""
+    if getattr(task, "tenant_id", None):
+        return "tenant_monitor"
+    if has_lead_run:
+        return "lead_diagnosis"
+    return "tenant_monitor"
+
+
+def lead_diagnosis_runs_for_tasks(db: Session, task_ids: list[str]) -> dict[str, LeadDiagnosisRun]:
+    """售前诊断抓取记录：task_id -> run，用于正确展示 16:30 等诊断批次。"""
+    ids = [item for item in task_ids if item]
+    if not ids:
+        return {}
+    rows = list(
+        db.scalars(
+            select(LeadDiagnosisRun).where(LeadDiagnosisRun.task_id.in_(ids))
+        )
+    )
+    return {row.task_id: row for row in rows if row.task_id}
+
+
 def resolve_task_schedule_context(
     task: GeoMonitorTask,
     schedule_run: GeoMonitorScheduleRun | None,
     asset: BrandAsset | None,
+    lead_run: LeadDiagnosisRun | None = None,
 ) -> dict[str, Any]:
     keyword_group = str(task.monitor_keywords or "").strip() or None
     if schedule_run and schedule_run.schedule_key:
@@ -130,6 +154,18 @@ def resolve_task_schedule_context(
             "schedule_label": label or window_key,
             "schedule_run_status": schedule_run.status,
             "schedule_source": "run",
+            "keyword_group": keyword_group,
+        }
+
+    if lead_run and lead_run.schedule_key:
+        window_key = extract_schedule_window_key(lead_run.schedule_key) or lead_run.schedule_key
+        label = lead_run.schedule_label or format_schedule_window_label(window_key) or window_key
+        return {
+            "schedule_key": lead_run.schedule_key,
+            "schedule_window_key": window_key,
+            "schedule_label": label,
+            "schedule_run_status": lead_run.status,
+            "schedule_source": "lead_diagnosis" if not getattr(task, "tenant_id", None) else "run",
             "keyword_group": keyword_group,
         }
 

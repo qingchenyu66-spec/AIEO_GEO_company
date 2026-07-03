@@ -47,6 +47,7 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.sources": frozenset({"can_export"}),
     "platform.diagnosis": frozenset({"can_export"}),
     "platform.lead_diagnosis": frozenset({"can_export", "can_create"}),
+    "platform.snapshot_backfill": frozenset({"can_export", "can_update"}),
     "platform.reports": frozenset({"can_export", "can_create", "can_update"}),
     "platform.plans": frozenset({"can_export"}),
     "platform.admins": frozenset({"can_export"}),
@@ -436,6 +437,20 @@ def ensure_identity_menus_from_position(db: Session, identity: UserIdentity) -> 
         return False
     replace_identity_menus_from_position(db, identity.id, identity.position_id)
     return True
+
+
+def require_snapshot_backfill_permission(
+    db: Session,
+    current,
+    action: str = "can_export",
+) -> None:
+    from app.api.dependencies import CurrentSession
+
+    session: CurrentSession = current
+    if session.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可访问快照补录")
+    if not has_identity_menu_permission(db, session.identity.id, "platform.snapshot_backfill", action):
+        raise PermissionError("当前身份无快照补录权限")
 
 
 def require_report_permission(db: Session, current, action: str) -> None:

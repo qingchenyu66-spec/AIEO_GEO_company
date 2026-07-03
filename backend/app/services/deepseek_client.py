@@ -215,6 +215,7 @@ class DeepseekClient:
         top_sources: list[dict[str, Any]],
         competitor_names: list[str],
         rule_highlights: list[str],
+        lead_analytics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """基于监测快照生成 GEO 报告结论与诊断建议。"""
         report_type_label = {
@@ -244,12 +245,49 @@ class DeepseekClient:
             f"- {item.get('title') or item.get('url')}（{item.get('count')} 次）"
             for item in top_sources[:6]
         ]
+        prompt_lines: list[str] = []
+        if lead_analytics:
+            for row in lead_analytics.get("prompt_analytics") or []:
+                prompt_lines.append(
+                    f"- {row.get('prompt')}: 样本 {row.get('sample_count')}，"
+                    f"品牌提及率 {row.get('brand_mention_rate')}%，"
+                    f"平均排名 {row.get('brand_avg_rank') or '—'}"
+                )
+            source_note = (lead_analytics.get("source_analysis") or {}).get("coverage_note")
+            if source_note:
+                source_lines.append(f"- 信源覆盖：{source_note}")
+
+        json_schema = (
+            "{\n"
+            '  "executive_summary": "80-160字执行摘要",\n'
+            '  "highlights": ["3-5条核心结论，每条20-50字"],\n'
+            '  "sentiment_summary": "口碑与情绪总结",\n'
+            '  "strength_points": "优势亮点，可多句",\n'
+            '  "weakness_points": "待改善项，可多句",\n'
+            '  "recommendation": "可执行的 GEO 优化建议",\n'
+            '  "health_score": 0-100 的整数'
+        )
+        if lead_analytics:
+            json_schema += (
+                ',\n'
+                '  "report_sections": {\n'
+                '    "industry_analysis": "行业与搜索意图分析",\n'
+                '    "ranking_analysis": "分语义词排名与竞品对比",\n'
+                '    "mention_analysis": "提及率与曝光分析",\n'
+                '    "source_analysis": "引用网站与信源覆盖",\n'
+                '    "action_recommendations": "分渠道 GEO 优化建议"\n'
+                "  }"
+            )
+        json_schema += "\n}"
 
         system_prompt = (
             "你是 GEO（生成式引擎优化）监测报告撰写专家。"
             "请根据真实监测 KPI 与平台数据，输出面向客户交付的结构化报告结论。"
             "不得编造未提供的数据，不得虚构平台或指标。只输出 JSON，不要解释。"
         )
+        prompt_section = ""
+        if prompt_lines:
+            prompt_section = "分语义词表现：\n" + "\n".join(prompt_lines) + "\n\n"
         user_prompt = (
             f"品牌：{brand_name}\n"
             f"企业：{company_name or brand_name}\n"
@@ -266,20 +304,12 @@ class DeepseekClient:
             f"纳入竞品：{('、'.join(competitor_names) if competitor_names else '未配置')}\n\n"
             "各平台表现：\n"
             f"{chr(10).join(platform_lines) or '- 暂无平台明细'}\n\n"
+            f"{prompt_section}"
             "高频信源：\n"
             f"{chr(10).join(source_lines) or '- 暂无信源'}\n\n"
             "规则引擎初稿（可参考，勿照搬）：\n"
             f"{chr(10).join(f'- {line}' for line in rule_highlights) or '- 无'}\n\n"
-            "请输出 JSON：\n"
-            "{\n"
-            '  "executive_summary": "80-160字执行摘要",\n'
-            '  "highlights": ["3-5条核心结论，每条20-50字"],\n'
-            '  "sentiment_summary": "口碑与情绪总结",\n'
-            '  "strength_points": "优势亮点，可多句",\n'
-            '  "weakness_points": "待改善项，可多句",\n'
-            '  "recommendation": "可执行的 GEO 优化建议",\n'
-            '  "health_score": 0-100 的整数\n'
-            "}"
+            f"请输出 JSON：\n{json_schema}"
         )
 
         content = self.chat_completion(
@@ -288,7 +318,7 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.25,
-            max_tokens=1800,
+            max_tokens=2600 if lead_analytics else 1800,
             source="report-insights",
         )
         payload = self._parse_json_payload(content)
@@ -315,6 +345,22 @@ class DeepseekClient:
             text = str(value).strip()
             return text or None
 
+        report_sections = payload.get("report_sections")
+        if not isinstance(report_sections, dict):
+            report_sections = None
+        else:
+            report_sections = {
+                key: str(report_sections.get(key) or "").strip()
+                for key in (
+                    "industry_analysis",
+                    "ranking_analysis",
+                    "mention_analysis",
+                    "source_analysis",
+                    "action_recommendations",
+                )
+                if str(report_sections.get(key) or "").strip()
+            } or None
+
         return {
             "executive_summary": _text("executive_summary"),
             "highlights": highlights,
@@ -323,6 +369,7 @@ class DeepseekClient:
             "weakness_points": _text("weakness_points"),
             "recommendation": _text("recommendation"),
             "health_score": health_score,
+            "report_sections": report_sections,
         }
 
     def parse_knowledge_document(

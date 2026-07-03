@@ -87,6 +87,7 @@ export function buildFunctionalPage(
     'platform.diagnosis': { title: '品牌诊断', subtitle: '运营人员选择企业和模型平台后，基于监测结果生成诊断依据与建议。', mode: 'diagnosis', actions: ['保存诊断', '生成报告'], ...common },
     'platform.models': { title: '模型平台', subtitle: '平台目录同步自模力指数官方文档，并结合今日检测探测各平台服务可用性。', mode: 'platforms', actions: ['刷新状态'], ...common },
     'platform.alerts': { title: '预警阈值', subtitle: '查看任务队列运行状态，并配置业务监测指标预警规则。', mode: 'alerts', actions: ['刷新监控', '查看规则'], ...common },
+    'platform.snapshot_backfill': { title: '快照补录', subtitle: '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分。', mode: 'backfill', actions: ['提交补录'], ...common },
     'platform.reports': { title: '报告中心', subtitle: '查看、编辑并发布企业报告；生成入口在企业管理。', mode: 'report', actions: ['编辑草稿', '发布', '导出 PDF', '导出 Word'], ...common },
     'platform.logs': { title: '操作日志', subtitle: '审计用户、企业、任务、权限和导出操作。', mode: 'logs', actions: ['导出日志', '筛选操作'], ...common },
     'platform.settings': { title: '系统配置', subtitle: '基础参数、数据上传接口、菜单权限和安全策略。', mode: 'settings', actions: ['导出配置', '操作日志'], ...common },

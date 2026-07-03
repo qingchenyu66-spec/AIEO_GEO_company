@@ -8,6 +8,7 @@ export function permissionGroupTitle(type: IdentityType, key: string) {
     analysis: '分析报告',
     users: '用户管理',
     diagnosis: '品牌诊断',
+    backfill: '快照补录',
     system: '系统管理',
     other: '其他权限',
   }
@@ -31,6 +32,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
   if (key === 'analysis') return '报告中心支持查看/导出、生成与编辑发布；客户侧默认仅查看已发布报告。'
   if (key === 'users') return '包含用户新增、用户列表和职位管理，通常只给管理员或负责人。'
   if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
+  if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'
   if (key === 'system') return '系统配置、操作日志、模型平台等后台维护能力。'
   return '平台运营端用于内部管理，可按职位控制新增、编辑、禁用和导出。'
 }
@@ -47,6 +49,7 @@ export function permissionGroupKey(menu: MenuInfo) {
   if (menu.menu_code.startsWith('platform.audit')) return 'audit'
   if (menu.menu_code.startsWith('platform.users') || menu.menu_code === POSITION_MENU) return 'users'
   if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
+  if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
   if (['platform.plans', 'platform.admins', 'platform.models', 'platform.alerts', 'platform.logs', 'platform.settings'].includes(menu.menu_code)) return 'system'
   return 'other'
@@ -58,7 +61,7 @@ export function permissionGroupsFor(
   selectedMenuIds: number[] = [],
 ) {
   const order = type === 'PLATFORM'
-    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'system', 'other']
+    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   const buckets: Record<string, MenuInfo[]> = {}
   for (const menu of assignMenus[type]) {

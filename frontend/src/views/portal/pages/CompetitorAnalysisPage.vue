@@ -22,6 +22,8 @@ const sentimentWordCloudRef = ref<HTMLDivElement | null>(null)
 
 const {
   brandAsset,
+  isCustomerView,
+  customerPeriodLabel,
   datePreset,
   promptFilter,
   promptOptions,
@@ -38,6 +40,7 @@ const {
   sentimentKeywordTab,
   activeSentimentKeywords,
   activeSentimentKeywordSample,
+  mentionTrendHiddenCount,
   loadSummary,
   resetFilters,
   exportCsv,
@@ -66,7 +69,8 @@ function isPlatformActive(code: string) {
     <header class="competitor-sticky-bar">
       <div class="competitor-sticky-inner">
         <span class="brand-insights-brand-pill">{{ brandAsset?.brand_name || '本品牌' }}</span>
-        <div class="competitor-date-presets">
+        <div v-if="isCustomerView" class="competitor-customer-period">{{ customerPeriodLabel }}</div>
+        <div v-else class="competitor-date-presets">
           <button
             v-for="preset in datePresets"
             :key="preset.value"
@@ -153,7 +157,12 @@ function isPlatformActive(code: string) {
           <div class="competitor-panel-head">
             <div>
               <h3>品牌提及率分析</h3>
-              <p>各品牌每日提及率走势 · 点击数据点下钻</p>
+              <p>
+                本品牌 + 全部配置竞品走势 · 点击数据点下钻
+                <span v-if="mentionTrendHiddenCount > 0" class="brand-insights-trend-note">
+                  （另有 {{ mentionTrendHiddenCount }} 个竞品见右侧排行榜）
+                </span>
+              </p>
             </div>
             <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
               查看明细
@@ -184,7 +193,7 @@ function isPlatformActive(code: string) {
               <span>首位提及率</span>
             </div>
             <button
-              v-for="(row, index) in leaderboardRows.slice(0, 8)"
+              v-for="(row, index) in leaderboardRows"
               :key="row.name"
               type="button"
               class="brand-insights-rank-row is-clickable"
@@ -222,7 +231,7 @@ function isPlatformActive(code: string) {
           <div class="competitor-panel-head">
             <div>
               <h3>情绪指数排行榜</h3>
-              <p>品牌出现在推荐列表时的情绪分布</p>
+              <p>各品牌在推荐列表中被提及时的回答情绪分布</p>
             </div>
             <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
               查看明细
@@ -237,7 +246,7 @@ function isPlatformActive(code: string) {
               <span>负面占比</span>
             </div>
             <button
-              v-for="(row, index) in sentimentLeaderboardRows.slice(0, 8)"
+              v-for="(row, index) in sentimentLeaderboardRows"
               :key="`sentiment-${row.name}`"
               type="button"
               class="brand-insights-rank-row is-clickable"

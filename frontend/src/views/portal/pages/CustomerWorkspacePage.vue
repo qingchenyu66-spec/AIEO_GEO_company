@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { AlertTriangle, ChevronDown, ChevronRight, Clock3, RefreshCw, Search } from '@lucide/vue'
+import { AlertTriangle, ChevronDown, ChevronRight, Clock3, HelpCircle, RefreshCw, Search } from '@lucide/vue'
 import { useWorkspaceEnter } from '../../../composables/useCountUp'
 import WorkspaceCountUp from '../components/WorkspaceCountUp.vue'
 import { useCustomerWorkspace } from '../composables/useCustomerWorkspace'
@@ -35,7 +35,11 @@ const {
   snapshotIntentLabel,
   platformLabelMap,
   greetingLabel,
+  trendPeriodLabel,
+  platformPeriodLabel,
   healthScore,
+  healthScoreExplanation,
+  healthScoreSummary,
   workspaceHeadline,
   miniKpis,
   trendBars,
@@ -46,6 +50,7 @@ const {
 } = useCustomerWorkspace()
 
 const { enterActive, enterGeneration } = useWorkspaceEnter(() => brief.value)
+void alertsSectionRef
 
 const displayName = computed(() => brief.value?.company_name || brief.value?.brand_name || '当前企业')
 const showEmptyGuide = computed(() => heroTone.value === 'empty' && !loading.value)
@@ -62,6 +67,8 @@ const emptyHint = computed(() => {
 })
 
 const sampleTotal = computed(() => {
+  const latest = brief.value?.latest_schedule
+  if (latest?.completed_subtasks) return latest.completed_subtasks
   if (!brief.value) return 0
   return brief.value.kpis.ranking_sample_count + brief.value.kpis.exposure_sample_count
 })
@@ -102,6 +109,7 @@ const chartData = computed<WorkspaceCampusChartData | null>(() => {
     top3Rate: brief.value.kpis.top3_rate ?? 0,
     platformRankLabels: activeRanks.map(row => platformLabelMap[row.platform] || row.platform),
     platformRankValues: activeRanks.map(row => row.mention_rate),
+    platformRankSamples: activeRanks.map(row => row.sample_count),
   }
 })
 
@@ -119,7 +127,7 @@ watch(showEmptyGuide, (empty) => {
     <header class="ws-campus-head">
       <div>
         <h1>工作台</h1>
-        <p>{{ displayName }} · 近 7 日监测简报 · {{ scheduleLine }}</p>
+        <p>{{ displayName }} · 监测简报 · {{ scheduleLine }}</p>
       </div>
       <div class="ws-campus-head-actions">
         <button
@@ -190,8 +198,20 @@ watch(showEmptyGuide, (empty) => {
             </div>
             <div class="ws-campus-health-block">
               <div ref="healthGaugeRef" class="ws-campus-chart ws-campus-chart-health" />
-              <span>GEO 健康分</span>
-              <small>可见度 60% + 排名 40%</small>
+              <div class="ws-campus-health-label">
+                <span>GEO 健康分</span>
+                <el-tooltip placement="left" effect="light" :show-after="200">
+                  <template #content>
+                    <div class="ws-health-score-tip">
+                      <p v-for="(line, index) in healthScoreExplanation" :key="index">{{ line }}</p>
+                    </div>
+                  </template>
+                  <button type="button" class="ws-health-score-help" aria-label="健康分计算说明">
+                    <HelpCircle :size="13" />
+                  </button>
+                </el-tooltip>
+              </div>
+              <small>{{ healthScoreSummary }}</small>
             </div>
           </div>
         </article>
@@ -199,7 +219,7 @@ watch(showEmptyGuide, (empty) => {
         <article class="ws-campus-card">
           <div class="ws-campus-card-head">
             <h3>露出率趋势</h3>
-            <span class="ws-campus-chip">近 7 日</span>
+            <span class="ws-campus-chip">{{ trendPeriodLabel }}</span>
           </div>
           <div ref="trendChartRef" class="ws-campus-chart ws-campus-chart-trend" />
           <p v-if="!trendBars.length" class="ws-campus-mini-empty ws-campus-chart-empty">暂无趋势数据</p>
@@ -236,6 +256,7 @@ watch(showEmptyGuide, (empty) => {
       <article class="ws-campus-card ws-campus-platform-panel">
         <div class="ws-campus-card-head">
           <h3>已购平台表现</h3>
+          <span class="ws-campus-chip">{{ platformPeriodLabel }}</span>
           <button type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
             查看{{ realtimeMenuName }}
           </button>

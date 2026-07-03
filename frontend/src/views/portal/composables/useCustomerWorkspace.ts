@@ -1,7 +1,9 @@
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
+import { customerDisplayPeriodLabel, customerTrendPeriodLabel } from '../../../utils/customerMonitorDate'
+import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import { useAuthStore } from '../../../stores/auth'
 import {
   getWorkspaceBrief,
@@ -86,13 +88,13 @@ function resolveHeroTone(data: WorkspaceBrief | null): WorkspaceHeroTone {
 
 function resolveStatusSummary(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') {
-    return '近 7 日暂无已完成检测，请等待监测任务返回。'
+    return '截至昨日暂无已完成检测，请等待监测任务返回。'
   }
   if (tone === 'calm') {
     const latest = data.latest_schedule?.schedule_label
     return latest
       ? `${latest.replace(/\d{1,2}:\d{2}/g, '').replace(/[·•]\s*$/g, '').trim() || '最新监测'} 数据已更新，推荐露出与排名表现整体稳定。`
-      : '近 7 日推荐类监测表现整体稳定。'
+      : '截至昨日，推荐类监测表现整体稳定。'
   }
   const firstWarn = data.alerts.find(alert => alert.level === 'warn')
   if (firstWarn) return firstWarn.message
@@ -162,8 +164,18 @@ function greetingLabel() {
 }
 
 function computeHealthScore(data: WorkspaceBrief) {
+  if (data.health_score != null) return data.health_score
   const visibility = computeVisibilityScore(data)
-  const rankScore = computeRankScore(data) ?? 50
+  const rankScore = computeRankScore(data)
+  const competitorScore = computeCompetitorScore(data)
+  const hasCompetitor = (data.kpis.competitor_count || 0) > 0 && competitorScore != null
+  if (hasCompetitor) {
+    if (rankScore != null) {
+      return Math.round(visibility * 0.5 + rankScore * 0.3 + competitorScore * 0.2)
+    }
+    return Math.round(visibility * 0.65 + competitorScore * 0.35)
+  }
+  if (rankScore == null) return visibility
   return Math.round(visibility * 0.6 + rankScore * 0.4)
 }
 
@@ -179,9 +191,17 @@ function computeRankScore(data: WorkspaceBrief) {
   return Math.round(Math.max(0, Math.min(100, 100 - (avgRank - 1) * 20)))
 }
 
+function computeCompetitorScore(data: WorkspaceBrief) {
+  if (data.competitor_score != null) return data.competitor_score
+  if ((data.kpis.competitor_count || 0) <= 0) return null
+  const delta = data.competitor_lead_delta
+  if (delta == null) return null
+  return Math.round(Math.max(0, Math.min(100, 50 + delta)))
+}
+
 function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') {
-    return '近 7 日暂无已完成检测，请等待监测任务返回'
+    return '截至昨日暂无已完成检测，请等待监测任务返回'
   }
   const rc = data.round_comparison
   if (rc?.has_previous) {
@@ -211,7 +231,7 @@ function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone)
   const latestLabel = latest?.replace(/\d{1,2}:\d{2}/g, '').replace(/[·•]\s*$/g, '').trim()
   return latestLabel
     ? `${latestLabel} 数据已更新，推荐露出与排名表现整体稳定`
-    : '近 7 日推荐类监测表现整体稳定'
+    : '截至昨日，推荐类监测表现整体稳定'
 }
 
 function gaugeDashOffset(score: number, circumference = 176) {
@@ -271,6 +291,10 @@ export function useCustomerWorkspace() {
     sortPlatformHighlights(brief.value?.platform_highlights || [])
   ))
 
+  const platformPeriodLabel = computed(() => (
+    brief.value?.platform_period_label || customerDisplayPeriodLabel()
+  ))
+
   const maxPlatformMentionRate = computed(() => {
     const rates = (brief.value?.platform_highlights || [])
       .filter(row => row.sample_count > 0)
@@ -312,12 +336,66 @@ export function useCustomerWorkspace() {
   ))
 
   const visibilityScore = computed(() => (
-    brief.value ? computeVisibilityScore(brief.value) : null
+    brief.value?.visibility_score ?? (brief.value ? computeVisibilityScore(brief.value) : null)
   ))
 
   const rankScore = computed(() => (
-    brief.value ? computeRankScore(brief.value) : null
+    brief.value?.rank_score !== undefined
+      ? brief.value.rank_score
+      : (brief.value ? computeRankScore(brief.value) : null)
   ))
+
+  const competitorScore = computed(() => (
+    brief.value ? computeCompetitorScore(brief.value) : null
+  ))
+
+  const healthScoreExplanation = computed(() => {
+    const data = brief.value
+    if (!data) return []
+    const vis = visibilityScore.value ?? 0
+    const rank = rankScore.value
+    const comp = competitorScore.value
+    const mention = data.kpis.brand_mention_rate
+    const top3 = data.kpis.top3_rate ?? 0
+    const avgRank = data.kpis.avg_brand_rank
+    const total = healthScore.value
+    const hasCompetitor = (data.kpis.competitor_count || 0) > 0 && comp != null
+    const lines = [
+      '基于本轮已完成的推荐类监测样本，满分 100：',
+      `可见度分 ${vis} = 品牌露出率 ${mention}% × 60% + 前三露出率 ${top3}% × 40%`,
+    ]
+    if (rank != null) {
+      lines.push(`排名分 ${rank} = 均排名 ${avgRank}（第 1 位 100 分，每后移 1 位减 20 分）`)
+    } else {
+      lines.push('本轮暂无排名样本，健康分暂不纳入排名维度')
+    }
+    if (hasCompetitor) {
+      const delta = data.competitor_lead_delta
+      const topComp = data.top_competitor_mention_rate
+      lines.push(
+        `竞品分 ${comp} = 品牌露出率较最强竞品${delta != null && delta >= 0 ? '领先' : '落后'} ${delta != null ? Math.abs(delta) : 0}%（最强竞品 ${topComp ?? '-'}%）`,
+      )
+      lines.push(
+        rank != null
+          ? `健康分 ${total} = 可见度 × 50% + 排名 × 30% + 竞品 × 20%`
+          : `健康分 ${total} = 可见度 × 65% + 竞品 × 35%`,
+      )
+    } else if (rank != null) {
+      lines.push(`健康分 ${total} = 可见度分 × 60% + 排名分 × 40%`)
+    } else {
+      lines.push(`健康分 ${total} = 可见度分（无排名样本时不计入排名维度）`)
+    }
+    return lines
+  })
+
+  const healthScoreSummary = computed(() => {
+    const vis = visibilityScore.value
+    const rank = rankScore.value
+    if (vis == null && rank == null) return ''
+    if (rank == null) return `可见度 ${vis}%`
+    if (vis == null) return `排名 ${rank}%`
+    return `可见度 ${vis}% · 排名 ${rank}%`
+  })
 
   const dimensionBars = computed(() => {
     const data = brief.value
@@ -337,11 +415,15 @@ export function useCustomerWorkspace() {
       },
     ]
     if (data.kpis.competitor_count > 0) {
+      const comp = competitorScore.value
+      const delta = data.competitor_lead_delta
       bars.push({
         key: 'competitor',
         label: '较竞品',
-        value: 100,
-        hint: `已配置 ${data.kpis.competitor_count} 个 · 进入竞品页查看`,
+        value: comp ?? 50,
+        hint: delta != null
+          ? `较最强竞品${delta >= 0 ? '领先' : '落后'} ${Math.abs(delta)}%`
+          : `已配置 ${data.kpis.competitor_count} 个竞品`,
       })
     }
     return bars
@@ -512,6 +594,11 @@ export function useCustomerWorkspace() {
     loadBrief()
   })
 
+  const stopMonitorRefresh = onMonitorRefresh(() => {
+    void loadBrief()
+  })
+  onUnmounted(stopMonitorRefresh)
+
   return {
     brief,
     loading,
@@ -554,7 +641,12 @@ export function useCustomerWorkspace() {
     platformLabelMap,
     formatPlatformLabels,
     greetingLabel,
+    customerPeriodLabel: customerDisplayPeriodLabel(),
+    trendPeriodLabel: customerTrendPeriodLabel(),
+    platformPeriodLabel,
     healthScore,
+    healthScoreExplanation,
+    healthScoreSummary,
     workspaceHeadline,
     visibilityScore,
     rankScore,

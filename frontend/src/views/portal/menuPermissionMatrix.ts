@@ -31,6 +31,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'platform.sources': ['can_export'],
   'platform.diagnosis': ['can_export'],
   'platform.lead_diagnosis': ['can_export', 'can_create'],
+  'platform.snapshot_backfill': ['can_export', 'can_update'],
   'platform.reports': ['can_export', 'can_create', 'can_update'],
 
   'platform.plans': ['can_export'],
@@ -62,6 +63,7 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   'platform.audit.schedule': { can_export: '查看', can_update: '编辑监控计划' },
   'platform.audit.competitors': { can_export: '查看', can_update: '编辑竞品' },
   'platform.lead_diagnosis': { can_export: '查看/导出 PDF', can_create: '新建诊断' },
+  'platform.snapshot_backfill': { can_export: '查看待补录', can_update: '提交补录' },
   'platform.reports': { can_export: '查看/导出', can_create: '生成报告', can_update: '编辑/发布' },
   'platform.alerts': { can_export: '查看', can_update: '配置规则' },
   'platform.settings': { can_export: '查看', can_update: '修改配置' },
@@ -171,7 +173,7 @@ export function permissionModulesFor(type: IdentityType, menus: MenuInfo[]) {
     buckets[key].push(menu)
   }
   const order = type === 'PLATFORM'
-    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'system', 'other']
+    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   return order
     .filter(key => buckets[key]?.length)

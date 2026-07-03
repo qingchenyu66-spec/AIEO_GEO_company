@@ -614,6 +614,89 @@
   color: #6a7f9a;
 }
 
+.lead-report-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lead-report-section {
+  padding: 20px 22px;
+  border: 1px solid #dce9f8;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fcfdff 0%, #f7fbff 100%);
+}
+
+.lead-report-section.wide {
+  width: 100%;
+}
+
+.lead-report-section h4 {
+  margin: 0 0 8px;
+  color: #12385f;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.lead-report-intro {
+  margin: 0 0 14px;
+  color: #58708f;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.lead-report-lead {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid #d6e8fb;
+  border-radius: 8px;
+  background: #f4f9ff;
+  color: #334e6f;
+  font-size: 14px;
+  line-height: 1.85;
+  text-align: justify;
+}
+
+.lead-report-highlights {
+  margin: 14px 0 0;
+  padding-left: 20px;
+  color: #334e6f;
+  line-height: 1.8;
+}
+
+.lead-report-highlights li + li {
+  margin-top: 6px;
+}
+
+.lead-report-analysis-item {
+  padding: 16px 0;
+  border-top: 1px solid #e8f1fb;
+}
+
+.lead-report-analysis-item:first-of-type {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.lead-report-analysis-item h5 {
+  margin: 0 0 10px;
+  color: #2272d9;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.lead-report-analysis-body p {
+  margin: 0 0 10px;
+  color: #334e6f;
+  font-size: 14px;
+  line-height: 1.85;
+  text-align: justify;
+}
+
+.lead-report-analysis-body p:last-child {
+  margin-bottom: 0;
+}
+
 .lead-report-block {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -649,6 +732,79 @@
 .lead-report-block ul {
   margin: 0;
   padding-left: 18px;
+}
+
+.lead-rank-trend-card p {
+  margin-bottom: 12px;
+}
+
+.lead-analysis-intro {
+  margin: 0 0 4px;
+  color: #58708f;
+  font-size: 13px;
+}
+
+.lead-rank-trend-chart {
+  width: 100%;
+  height: 280px;
+}
+
+.lead-mention-chart {
+  width: 100%;
+  height: 320px;
+}
+
+.lead-query-charts {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.lead-query-chart-card {
+  padding: 12px;
+  border: 1px solid #dce9f8;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.lead-rank-change-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.lead-rank-change-grid.head > span {
+  padding-bottom: 4px;
+  color: #6a7f9a;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.lead-rank-change-grid > span {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid #e6f0fb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.lead-rank-cell.is-top {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 900;
+}
+
+.lead-rank-cell.is-mid {
+  background: #fef9c3;
+  color: #854d0e;
+  font-weight: 900;
+}
+
+.lead-rank-cell.is-low {
+  background: #ffedd5;
+  color: #9a3412;
+  font-weight: 900;
 }
 
 .lead-platform-grid {
@@ -776,7 +932,8 @@
 }
 
 .lead-field input,
-.lead-field textarea {
+.lead-field textarea,
+.lead-field select {
   width: 100%;
   border: 1px solid #d6e5f6;
   border-radius: 6px;
@@ -792,13 +949,20 @@
   padding: 0 12px;
 }
 
+.lead-field select {
+  height: 42px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
 .lead-field textarea {
   padding: 11px 12px;
   resize: vertical;
 }
 
 .lead-field input:focus,
-.lead-field textarea:focus {
+.lead-field textarea:focus,
+.lead-field select:focus {
   border-color: #1677ff;
   box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
 }
@@ -849,6 +1013,60 @@
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+.lead-query-block {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #dbe8f5;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.lead-query-block header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.lead-query-block header b {
+  color: #0f2340;
+  font-size: 15px;
+}
+
+.lead-query-block header small {
+  color: #667c99;
+}
+
+.lead-query-subtitle {
+  margin: 12px 0 8px;
+  color: #45627f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lead-query-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 0.7fr 0.8fr;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e6eef8;
+  font-size: 13px;
+}
+
+.lead-query-grid.head {
+  background: #eef4fb;
+  color: #58708f;
+  font-weight: 700;
+}
+
+.lead-query-grid.is-brand {
+  background: rgba(22, 119, 255, 0.06);
+}
+
+.lead-query-grid.is-competitor {
+  background: rgba(245, 158, 11, 0.08);
 }
 
 @media (max-width: 1180px) {

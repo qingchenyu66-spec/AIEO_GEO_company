@@ -251,6 +251,41 @@
   font-weight: 700;
   color: #ffffff;
 }
+.ws-campus-health-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ws-campus-health-label > span {
+  margin-top: 0;
+}
+.ws-health-score-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(226, 239, 255, .78);
+  cursor: help;
+}
+.ws-health-score-help:hover {
+  color: #ffffff;
+}
+.ws-health-score-tip {
+  max-width: 280px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #334155;
+}
+.ws-health-score-tip p {
+  margin: 0 0 6px;
+}
+.ws-health-score-tip p:last-child {
+  margin-bottom: 0;
+}
 .ws-campus-health-block small {
   font-size: 10px;
   color: rgba(226, 239, 255, .72);

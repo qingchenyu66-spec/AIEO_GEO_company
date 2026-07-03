@@ -1,7 +1,13 @@
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
+import { onMonitorRefresh } from '../../../utils/monitorRefresh'
+import {
+  customerDisplayPeriodLabel,
+  customerDisplayDateRange,
+  monitorTaskBeforeToday,
+} from '../../../utils/customerMonitorDate'
 import { useAuthStore } from '../../../stores/auth'
 import {
   findKeywordGroupByFilter,
@@ -39,10 +45,10 @@ import {
   sentimentLabelMap,
 } from '../portalMaps'
 import { sortPlatformCodes } from '../platformOrder'
-import { sanitizeCustomerScheduleLabel } from '../portalUtils'
+import { formatExposureLabel, formatRank, sanitizeCustomerScheduleLabel } from '../portalUtils'
 
 export type MonitorViewMode = 'list' | 'matrix'
-export type RealtimeDatePreset = '7d' | '30d' | 'custom'
+export type RealtimeDatePreset = 'yesterday' | '7d' | '30d' | 'custom'
 
 function promptBelongsToGroup(prompt: string, group: BrandKeywordGroup) {
   const text = (prompt || '').trim()
@@ -55,9 +61,10 @@ function promptBelongsToGroup(prompt: string, group: BrandKeywordGroup) {
 
 const WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
-function scheduleSourceLabel(source: MonitorTask['schedule_source'] | RankingMatrixRow['schedule_source']) {
+function scheduleSourceLabel(source: MonitorTask['schedule_source'] | RankingMatrixRow['schedule_source'] | RankingMatrixCellSnapshot['schedule_source']) {
   if (!source || source === 'daily_avg') return ''
   if (source === 'run') return ''
+  if (source === 'lead_diagnosis') return '（售前诊断）'
   if (source === 'inferred') return '（推断）'
   if (source === 'created_at') return '（创建时间）'
   return ''
@@ -151,6 +158,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   const router = useRouter()
   const auth = useAuthStore()
   const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const monitorTasks = ref<MonitorTask[]>([])
   const monitorDetail = ref<{ task: MonitorTask; subtasks: MonitorSubtask[] } | null>(null)
   const loadingMonitor = ref(false)
@@ -160,7 +168,9 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   const viewMode = ref<MonitorViewMode>('matrix')
   const rankingMatrix = ref<RankingMatrix | null>(null)
   const loadingMatrix = ref(false)
-  const datePreset = ref<RealtimeDatePreset>('7d')
+  const datePreset = ref<RealtimeDatePreset>(
+    auth.session?.identity?.identity_type === 'CUSTOMER' ? '7d' : '7d',
+  )
   const configExpanded = ref(false)
 
   const detailVisible = ref(false)
@@ -184,15 +194,17 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     cell: RankingMatrixCell
   } | null>(null)
 
-  const defaultDates = defaultDateRange(7)
+  const initialDates = auth.session?.identity?.identity_type === 'CUSTOMER'
+    ? customerDisplayDateRange(7)
+    : defaultDateRange(7)
   const filters = reactive({
     platform: '',
     keywordGroup: '',
     monitorKeyword: '',
     exposureTerm: '',
     exactPrompt: '',
-    startDate: defaultDates.startDate,
-    endDate: defaultDates.endDate,
+    startDate: initialDates.startDate,
+    endDate: initialDates.endDate,
     scheduleWindowKey: '',
     status: 'all',
   })
@@ -490,14 +502,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
 
   const latestMatrixWindowKey = computed(() => rankingMatrix.value?.rows[0]?.schedule_window_key || '')
 
-  function formatRank(value: number | null | undefined) {
-    if (value === null || value === undefined) return '-'
-    return Number.isInteger(value) ? String(value) : value.toFixed(1)
-  }
-
-  function formatExposureLabel(mentioned?: boolean) {
-    return mentioned ? '已提及' : '未提及'
-  }
+  // formatRank / formatExposureLabel 见 portalUtils，与快照补录等页面共用
 
   function formatTaskTime(value: string | null | undefined) {
     if (!value) return '-'
@@ -704,7 +709,9 @@ export function useMonitorRealtime(tenantId: number | null = null) {
         withRetry(() => getMonitorTasks()),
         withRetry(() => getMonitorSummary()).catch(() => null),
       ])
-      monitorTasks.value = tasks
+      monitorTasks.value = isCustomerView.value
+        ? tasks.filter(task => monitorTaskBeforeToday(task))
+        : tasks
       if (summary) monitorSummary.value = summary
       applyInsightsQuery()
       if (taskIdFromQuery) {
@@ -808,9 +815,34 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     try {
       detailSubtask.value = await withRetry(() => getMonitorSubtask(snapshot.subtask_id))
     } catch (error: unknown) {
-      notifyOperationError(error, '子任务详情加载失败')
-      expandedSnapshotId.value = null
-      detailSubtask.value = null
+      if (snapshot.page_screenshot) {
+        detailSubtask.value = {
+          subtask_id: snapshot.subtask_id,
+          platform: detailContext.value?.platform || '',
+          mode: 'standard',
+          prompt: detailContext.value?.prompt || '',
+          status: snapshot.status || 'completed',
+          page_screenshot: snapshot.page_screenshot,
+          answer_content: null,
+          reference_list: [],
+          citation_list: [],
+          recommended_questions: [],
+          error_message: null,
+          mention_position: snapshot.mention_position ?? null,
+          mention_context: null,
+          raw_mention_position: snapshot.raw_mention_position ?? null,
+          sentiment: snapshot.sentiment ?? null,
+          competitor_rankings: [],
+          all_rankings: [],
+          amount: null,
+          prompt_intent: snapshot.prompt_intent,
+          brand_mentioned: snapshot.brand_mentioned,
+        }
+      } else {
+        notifyOperationError(error, '子任务详情加载失败')
+        expandedSnapshotId.value = null
+        detailSubtask.value = null
+      }
     } finally {
       loadingSnapshotId.value = null
     }
@@ -845,6 +877,14 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   }
 
   function applyDatePreset(preset: RealtimeDatePreset) {
+    if (isCustomerView.value) {
+      datePreset.value = preset === '30d' ? '30d' : '7d'
+      const range = customerDisplayDateRange(preset === '30d' ? 30 : 7)
+      filters.startDate = range.startDate
+      filters.endDate = range.endDate
+      void loadRankingMatrix()
+      return
+    }
     datePreset.value = preset
     if (preset === 'custom') return
     const range = defaultDateRange(preset === '30d' ? 30 : 7)
@@ -854,12 +894,13 @@ export function useMonitorRealtime(tenantId: number | null = null) {
   }
 
   function onCustomDateChange() {
+    if (isCustomerView.value) return
     datePreset.value = 'custom'
     void loadRankingMatrix()
   }
 
   function resetFilters() {
-    const range = defaultDateRange(7)
+    const range = isCustomerView.value ? customerDisplayDateRange(7) : defaultDateRange(7)
     filters.platform = ''
     filters.keywordGroup = ''
     filters.monitorKeyword = ''
@@ -869,7 +910,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     filters.status = 'all'
     filters.startDate = range.startDate
     filters.endDate = range.endDate
-    datePreset.value = '7d'
+    datePreset.value = isCustomerView.value ? '7d' : '7d'
     void loadRankingMatrix()
   }
 
@@ -950,6 +991,14 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     }
   })
 
+  const stopMonitorRefresh = onMonitorRefresh(() => {
+    void loadMonitorTasks()
+    if (viewMode.value === 'matrix') {
+      void loadRankingMatrix()
+    }
+  })
+  onUnmounted(stopMonitorRefresh)
+
   return {
     monitorTasks,
     monitorDetail,
@@ -966,6 +1015,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
     platformOptions,
     scheduleRoundOptions,
     isCustomerView,
+    customerPeriodLabel,
     displayScheduleLabel,
     formatMonitorGroupLabel,
     formatKeywordGroupDetailHint,

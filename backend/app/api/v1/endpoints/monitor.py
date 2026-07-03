@@ -8,8 +8,13 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.core.redis_client import get_json_cache, set_json_cache
 from app.schemas.common import ApiResponse
-from app.schemas.monitor import MonitorTaskCreateRequest
+from app.schemas.monitor import (
+    MonitorTaskCreateRequest,
+    SnapshotBackfillListResponse,
+    SnapshotBackfillRequest,
+)
 from app.services.monitor_service import (
+    filter_subtasks_for_customer,
     get_monitor_subtask,
     get_monitor_task,
     list_monitor_tasks,
@@ -22,9 +27,17 @@ from app.services.monitor_service import (
     submit_monitor_task,
     sync_monitor_task,
 )
+from app.services.snapshot_backfill_service import (
+    apply_snapshot_backfill,
+    build_snapshot_backfill_item,
+    list_snapshot_backfill_page,
+)
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
+from app.services.menu_permission_service import require_snapshot_backfill_permission
 from app.services.schedule_context import schedule_plan_summary, schedule_runs_for_tasks
+from app.services.schedule_service import preview_scheduled_tasks, run_due_scheduled_tasks
+
 router = APIRouter(prefix="/monitor")
 
 
@@ -38,9 +51,12 @@ def _keyword_groups_for_tenant(db: Session, tenant_id: int | None) -> list[dict]
     ]
 
 
-def _serialize_task_subtasks(db: Session, task) -> list[dict]:
+def _serialize_task_subtasks(db: Session, task, current: CurrentSession | None = None) -> list[dict]:
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = _keyword_groups_for_tenant(db, task.tenant_id)
+    subtasks = task.subtasks
+    if current and current.identity.identity_type == "CUSTOMER":
+        subtasks = filter_subtasks_for_customer(subtasks, task=task, db=db)
     return [
         serialize_subtask_for_display(
             item,
@@ -48,7 +64,7 @@ def _serialize_task_subtasks(db: Session, task) -> list[dict]:
             asset=asset,
             keyword_groups=groups,
         )
-        for item in task.subtasks
+        for item in subtasks
     ]
 
 
@@ -93,7 +109,7 @@ def monitor_dashboard_summary(
 ) -> ApiResponse[dict]:
     """Read aggregated real monitoring data for customer and platform dashboards."""
     tenant_key = current.identity.tenant_id or "platform"
-    cache_key = f"monitor:summary:v1:{current.identity.identity_type}:{tenant_key}"
+    cache_key = f"monitor:summary:v3:{current.identity.identity_type}:{tenant_key}"
     cached = get_json_cache(cache_key)
     if cached is not None:
         return ApiResponse(data=cached)
@@ -151,9 +167,76 @@ def monitor_workspace_brief(
     return ApiResponse(data=data)
 
 
+@router.get("/snapshot-backfill/pending", response_model=ApiResponse[SnapshotBackfillListResponse])
+def monitor_snapshot_backfill_pending(
+    tenant_id: int | None = None,
+    on_date: date | None = Query(default=None, alias="date"),
+    source: str | None = Query(default=None, pattern="^(tenant_monitor|lead_diagnosis)$"),
+    platform: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    keyword_group: str | None = Query(default=None),
+    pending_only: bool = Query(default=False),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[SnapshotBackfillListResponse]:
+    """运营端快照补录列表：可按企业、单日、来源、平台、关键词/词组筛选；默认含已有结果以便覆盖更正。"""
+    require_platform(current)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_export")
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    payload = list_snapshot_backfill_page(
+        db,
+        tenant_id=tenant_id,
+        detect_date=on_date,
+        source=source,
+        platform=platform,
+        keyword=keyword,
+        keyword_group=keyword_group,
+        pending_only=pending_only,
+        offset=offset,
+        limit=limit,
+    )
+    return ApiResponse(data=SnapshotBackfillListResponse.model_validate(payload))
+
+
+@router.post("/subtasks/{subtask_id}/snapshot-backfill", response_model=ApiResponse[dict])
+def monitor_subtask_snapshot_backfill(
+    subtask_id: str,
+    payload: SnapshotBackfillRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """运营对子任务粘贴分享链接与回答正文；可覆盖原有抓取结果并重算排名。"""
+    require_platform(current)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    try:
+        data = apply_snapshot_backfill(
+            db,
+            subtask_id=subtask_id,
+            snapshot_url=payload.snapshot_url,
+            answer_content=payload.answer_content,
+            current=current,
+            mention_position=payload.mention_position,
+            sentiment=payload.sentiment,
+            reference_urls=payload.reference_urls,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
 @router.get("/subtasks/{subtask_id}", response_model=ApiResponse[dict])
 def monitor_subtask_detail(
     subtask_id: str,
+    include_ops: bool = Query(default=False),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -165,12 +248,21 @@ def monitor_subtask_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = _keyword_groups_for_tenant(db, task.tenant_id)
-    return ApiResponse(data=serialize_subtask_for_display(
+    display = serialize_subtask_for_display(
         subtask,
         monitor_keywords=task.monitor_keywords,
         asset=asset,
         keyword_groups=groups,
-    ))
+    )
+    if not include_ops:
+        return ApiResponse(data=display)
+    if current.identity.identity_type == "PLATFORM":
+        try:
+            require_snapshot_backfill_permission(db, current, "can_export")
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    ops_meta = build_snapshot_backfill_item(db, subtask, task)
+    return ApiResponse(data={**display, **ops_meta})
 
 
 @router.get("/scheduled/preview", response_model=ApiResponse[list[dict]])
@@ -222,7 +314,7 @@ def monitor_task_detail(
     schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
     return ApiResponse(data={
         "task": serialize_task(task, schedule_run=schedule_run, asset=asset),
-        "subtasks": _serialize_task_subtasks(db, task),
+        "subtasks": _serialize_task_subtasks(db, task, current),
     })
 
 
@@ -239,4 +331,4 @@ def monitor_task_sync(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task)})
+    return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task, current)})

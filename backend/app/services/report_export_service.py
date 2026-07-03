@@ -4,22 +4,30 @@ from __future__ import annotations
 
 import io
 import re
+from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import quote
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import Image as PdfImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_chart_service import (
+    build_entity_rank_trend_chart,
+    build_mention_rate_bar_chart,
+    build_platform_mention_chart,
+    build_rank_trend_chart,
+)
 
 REPORT_TYPE_LABELS = {
     "diagnosis": "企业诊断",
@@ -32,6 +40,18 @@ REPORT_TYPE_LABELS = {
 
 PDF_FONT = "STSong-Light"
 ExportFormat = Literal["pdf", "docx"]
+REPORT_HERO_TAGLINE = "GEO 全平台监测 · 竞品对标 · 决策级诊断"
+INSIGHT_SECTION_TITLE = "核心洞察"
+INSIGHT_SECTION_SUBTITLE = "基于多轮抓取、语义词矩阵与引用信源交叉验证"
+ANALYSIS_SECTION_TITLE = "数据分析与优化建议"
+REPORT_FOOTER_NOTE = "本报告由 GEO Monitor 售前诊断引擎输出，仅供售前研判与客户沟通使用。"
+REPORT_SECTION_TITLES = [
+    ("industry_analysis", "1. 行业分析"),
+    ("ranking_analysis", "2. 排名分析"),
+    ("mention_analysis", "3. 提及率分析"),
+    ("source_analysis", "4. 引用网站分析"),
+    ("action_recommendations", "5. 优化建议"),
+]
 
 
 def _register_pdf_font() -> None:
@@ -68,6 +88,165 @@ def _format_rank(value: Any) -> str:
     return f"#{number:.1f}"
 
 
+def _format_report_timestamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return moment.strftime("%Y年%m月%d日 %H:%M")
+    except ValueError:
+        return text[:19]
+
+
+def _split_narrative_paragraphs(text: Any) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    numbered = [part.strip() for part in re.split(r"(?=\d+\.\s)", raw) if part.strip()]
+    if len(numbered) > 1:
+        return numbered
+    if raw.count("；") >= 2:
+        chunks: list[str] = []
+        for part in raw.split("；"):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            if not cleaned.endswith(("。", "！", "？", "；")):
+                cleaned += "。"
+            chunks.append(cleaned)
+        return chunks
+    lines = [line.strip() for line in re.split(r"\n+", raw) if line.strip()]
+    return lines or [raw]
+
+
+def _has_report_sections(sections: dict[str, Any]) -> bool:
+    return any(str(sections.get(key) or "").strip() for key, _ in REPORT_SECTION_TITLES)
+
+
+def _append_pdf_narrative_sections(
+    story: list[Any],
+    sections: dict[str, Any],
+    *,
+    section_style: ParagraphStyle,
+    subheading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+    intro: str | None = None,
+) -> None:
+    if not _has_report_sections(sections):
+        return
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(ANALYSIS_SECTION_TITLE, section_style))
+    if intro:
+        story.append(Paragraph(intro, body_style))
+        story.append(Spacer(1, 4))
+    for index, (key, title) in enumerate(REPORT_SECTION_TITLES):
+        text = str(sections.get(key) or "").strip()
+        if not text:
+            continue
+        if index:
+            story.append(Spacer(1, 6))
+        story.append(Paragraph(title, subheading_style))
+        for paragraph in _split_narrative_paragraphs(text):
+            story.append(Paragraph(paragraph.replace("\n", "<br/>"), body_style))
+    story.append(Spacer(1, 8))
+
+
+def _append_docx_narrative_sections(document: Document, sections: dict[str, Any], *, intro: str | None = None) -> None:
+    if not _has_report_sections(sections):
+        return
+    _add_docx_section_title(document, ANALYSIS_SECTION_TITLE)
+    if intro:
+        hint = document.add_paragraph(intro)
+        hint.runs[0].font.color.rgb = RGBColor(0x58, 0x70, 0x8F)
+        hint.runs[0].font.size = Pt(9)
+    for key, title in REPORT_SECTION_TITLES:
+        text = str(sections.get(key) or "").strip()
+        if not text:
+            continue
+        heading = document.add_paragraph()
+        heading_run = heading.add_run(title)
+        heading_run.bold = True
+        heading_run.font.color.rgb = RGBColor(0x22, 0x72, 0xD9)
+        heading_run.font.size = Pt(11)
+        for paragraph in _split_narrative_paragraphs(text):
+            body = document.add_paragraph(paragraph)
+            body.paragraph_format.left_indent = Pt(6)
+            body.paragraph_format.space_after = Pt(6)
+            for run in body.runs:
+                run.font.color.rgb = RGBColor(0x33, 0x4E, 0x6F)
+
+
+def _append_pdf_insight_block(
+    story: list[Any],
+    *,
+    title: str,
+    subtitle: str,
+    body: str,
+    section_style: ParagraphStyle,
+    subtitle_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    story.append(Paragraph(title, section_style))
+    if subtitle:
+        story.append(Paragraph(subtitle, subtitle_style))
+    card = Table([[Paragraph(body.replace("\n", "<br/>"), body_style)]], colWidths=[174 * mm])
+    card.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4f9ff")),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#c7dcf5")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ]
+        )
+    )
+    story.append(card)
+    story.append(Spacer(1, 8))
+
+
+def _append_docx_insight_block(document: Document, *, title: str, subtitle: str, body: str) -> None:
+    _add_docx_section_title(document, title)
+    if subtitle:
+        hint = document.add_paragraph(subtitle)
+        hint.runs[0].font.color.rgb = RGBColor(0x58, 0x70, 0x8F)
+        hint.runs[0].font.size = Pt(9)
+    paragraph = document.add_paragraph(body)
+    paragraph.paragraph_format.left_indent = Pt(8)
+    paragraph.paragraph_format.space_before = Pt(4)
+    paragraph.paragraph_format.space_after = Pt(8)
+    for run in paragraph.runs:
+        run.font.color.rgb = RGBColor(0x33, 0x4E, 0x6F)
+
+
+def _append_png_to_pdf(story: list[Any], png_bytes: bytes | None, *, width_mm: float = 170, height_mm: float = 72) -> None:
+    if not png_bytes:
+        return
+    story.append(PdfImage(io.BytesIO(png_bytes), width=width_mm * mm, height=height_mm * mm))
+    story.append(Spacer(1, 6))
+
+
+def _append_png_to_docx(document: Document, png_bytes: bytes | None, *, width_inches: float = 6.3) -> None:
+    if not png_bytes:
+        return
+    document.add_picture(io.BytesIO(png_bytes), width=Inches(width_inches))
+    document.add_paragraph("")
+
+
+def _rank_cell_bg(rank: Any) -> colors.Color | None:
+    try:
+        value = float(rank)
+    except (TypeError, ValueError):
+        return None
+    if value <= 3:
+        return colors.HexColor("#dcfce7")
+    if value <= 5:
+        return colors.HexColor("#fef9c3")
+    return colors.HexColor("#ffedd5")
+
+
 def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
     content = report.get("report_content") or {}
     kpis = content.get("kpis") or {}
@@ -93,13 +272,17 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "completed_count": kpis.get("completed_count"),
         "source_count": kpis.get("source_count"),
         "executive_summary": ai_insights.get("executive_summary"),
-        "ai_source": ai_insights.get("source"),
         "highlights": snapshot.get("highlights") or [],
         "diagnosis": diagnosis,
         "platform_stats": snapshot.get("platform_stats") or [],
         "top_sources": snapshot.get("top_sources") or [],
+        "prompt_analytics": snapshot.get("prompt_analytics") or [],
+        "source_analysis": snapshot.get("source_analysis") or {},
+        "rank_trend": snapshot.get("rank_trend") or [],
+        "tracked_entities": snapshot.get("tracked_entities") or [],
+        "brand_city_rankings": snapshot.get("brand_city_rankings") or [],
+        "report_sections": content.get("report_sections") or {},
     }
-
 
 def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
     _register_pdf_font()
@@ -153,13 +336,49 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
     bullet_style = ParagraphStyle(
         "Bullet",
         parent=body_style,
-        leftIndent=12,
+        leftIndent=14,
         bulletIndent=0,
-        spaceAfter=4,
+        spaceAfter=6,
+        leading=16,
+    )
+    subheading_style = ParagraphStyle(
+        "Subheading",
+        parent=body_style,
+        fontSize=11,
+        leading=16,
+        textColor=colors.HexColor("#17406a"),
+        spaceBefore=4,
+        spaceAfter=6,
+    )
+    lead_style = ParagraphStyle(
+        "Lead",
+        parent=body_style,
+        fontSize=10.5,
+        leading=17,
+        textColor=colors.HexColor("#334e6f"),
+        spaceAfter=8,
+    )
+
+    tagline_style = ParagraphStyle(
+        "ReportTagline",
+        parent=subtitle_style,
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor("#2272d9"),
+        spaceAfter=8,
+    )
+    footer_style = ParagraphStyle(
+        "ReportFooter",
+        parent=subtitle_style,
+        fontSize=8,
+        leading=12,
+        textColor=colors.HexColor("#8aa0ba"),
+        spaceBefore=6,
     )
 
     story: list[Any] = []
     story.append(Paragraph(payload["title"], title_style))
+    story.append(Paragraph(REPORT_HERO_TAGLINE, tagline_style))
     meta_bits = [payload["type_label"], payload["period_label"], payload["tenant_name"]]
     story.append(Paragraph(" · ".join(item for item in meta_bits if item), subtitle_style))
     if payload["summary"]:
@@ -194,33 +413,75 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
     story.append(kpi_table)
 
     if payload.get("executive_summary"):
-        story.append(Paragraph("执行摘要", section_style))
-        ai_note = "（DeepSeek 生成）" if payload.get("ai_source") == "deepseek" else ""
-        story.append(Paragraph(f'{payload["executive_summary"]}{ai_note}', body_style))
-
-    if payload["highlights"]:
-        story.append(Paragraph("核心结论", section_style))
-        for line in payload["highlights"]:
-            story.append(Paragraph(f"• {line}", bullet_style))
+        _append_pdf_insight_block(
+            story,
+            title=INSIGHT_SECTION_TITLE,
+            subtitle=INSIGHT_SECTION_SUBTITLE,
+            body=str(payload["executive_summary"]),
+            section_style=section_style,
+            subtitle_style=subtitle_style,
+            body_style=lead_style,
+        )
 
     diagnosis = payload["diagnosis"]
-    diagnosis_blocks = [
-        ("口碑情绪", diagnosis.get("sentiment_summary")),
-        ("优势亮点", diagnosis.get("strength_points")),
-        ("待改善项", diagnosis.get("weakness_points")),
-        ("优化建议", diagnosis.get("recommendation")),
-    ]
-    if any(text for _, text in diagnosis_blocks if text):
-        story.append(Paragraph("品牌诊断", section_style))
-        for heading, text in diagnosis_blocks:
-            if not text:
-                continue
-            story.append(Paragraph(f"<b>{heading}</b>", body_style))
-            story.append(Paragraph(str(text).replace("\n", "<br/>"), body_style))
-            story.append(Spacer(1, 4))
+    sections = payload.get("report_sections") or {}
+    if not payload.get("executive_summary") and diagnosis.get("sentiment_summary"):
+        _append_pdf_insight_block(
+            story,
+            title=INSIGHT_SECTION_TITLE,
+            subtitle=INSIGHT_SECTION_SUBTITLE,
+            body=str(diagnosis["sentiment_summary"]),
+            section_style=section_style,
+            subtitle_style=subtitle_style,
+            body_style=lead_style,
+        )
+
+    if payload["highlights"]:
+        story.append(Paragraph("核心发现", section_style))
+        for line in payload["highlights"]:
+            story.append(Paragraph(f"• {line}", bullet_style))
+        story.append(Spacer(1, 6))
+
+    if _has_report_sections(sections):
+        _append_pdf_narrative_sections(
+            story,
+            sections,
+            section_style=section_style,
+            subheading_style=subheading_style,
+            body_style=body_style,
+            intro="基于监测样本、竞品对标与引用信源交叉分析，形成可落地的优化路径。",
+        )
+    else:
+        fallback_blocks = [
+            ("优势亮点", diagnosis.get("strength_points")),
+            ("待改善项", diagnosis.get("weakness_points")),
+            ("GEO 优化建议", diagnosis.get("recommendation")),
+        ]
+        fallback_sections = {
+            "industry_analysis": diagnosis.get("sentiment_summary"),
+            "action_recommendations": next((text for _, text in fallback_blocks if text), None),
+        }
+        if any(str(fallback_sections.get(key) or "").strip() for key in fallback_sections):
+            _append_pdf_narrative_sections(
+                story,
+                {key: value for key, value in fallback_sections.items() if value},
+                section_style=section_style,
+                subheading_style=subheading_style,
+                body_style=body_style,
+            )
+        else:
+            for heading, text in fallback_blocks:
+                if not text:
+                    continue
+                story.append(Paragraph(str(heading), subheading_style))
+                for paragraph in _split_narrative_paragraphs(text):
+                    story.append(Paragraph(paragraph, body_style))
+                story.append(Spacer(1, 6))
 
     if payload["platform_stats"]:
         story.append(Paragraph("各平台表现", section_style))
+        platform_chart = build_platform_mention_chart(payload["platform_stats"])
+        _append_png_to_pdf(story, platform_chart)
         platform_rows = [["平台", "完成数", "提及率", "平均排名"]]
         for row in payload["platform_stats"]:
             platform_rows.append(
@@ -247,6 +508,188 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         )
         story.append(platform_table)
 
+    rank_trend = payload.get("rank_trend") or []
+    if rank_trend:
+        story.append(Paragraph("平均排名趋势图", section_style))
+        story.append(Paragraph("品牌及竞品平均排名", body_style))
+        entity_chart = build_entity_rank_trend_chart(
+            rank_trend,
+            brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+            tracked_entities=payload.get("tracked_entities") or [],
+            title="平均排名趋势图",
+            subtitle="品牌及竞品平均排名",
+        )
+        _append_png_to_pdf(story, entity_chart, height_mm=82)
+        story.append(Paragraph("各轮次明细如下（排名越小越靠前）：", body_style))
+        trend_rows = [["轮次", "样本", "提及率", "平均排名"]]
+        for row in rank_trend:
+            trend_rows.append([
+                str(row.get("schedule_label") or row.get("schedule_key") or "—"),
+                str(row.get("sample_count") or 0),
+                f'{row.get("mention_rate")}%',
+                _format_rank(row.get("avg_rank")),
+            ])
+        trend_table = Table(trend_rows, colWidths=[55 * mm, 25 * mm, 25 * mm, 35 * mm])
+        trend_table.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), PDF_FONT),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4fb")),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9e8f6")),
+                    *[
+                        ("BACKGROUND", (3, row_index), (3, row_index), bg)
+                        for row_index, row in enumerate(rank_trend, start=1)
+                        if (bg := _rank_cell_bg(row.get("avg_rank"))) is not None
+                    ],
+                ]
+            )
+        )
+        story.append(trend_table)
+        story.append(Spacer(1, 6))
+
+    city_rankings = payload.get("brand_city_rankings") or []
+    if city_rankings:
+        story.append(Paragraph("品牌区域排名", section_style))
+        story.append(Paragraph("按监测地区汇总的品牌与竞品平均排名、提及率。", body_style))
+        for block in city_rankings:
+            region_name = str(block.get("region_name") or "全部区域")
+            story.append(Paragraph(f"监测地区：{region_name}（样本 {block.get('sample_count') or 0}）", body_style))
+            rows = block.get("rows") or []
+            if not rows:
+                continue
+            table_rows = [["品牌", "提及率", "平均排名"]]
+            for row in rows:
+                name = str(row.get("name") or "—")
+                if row.get("is_brand"):
+                    name = f"{name}（本品牌）"
+                table_rows.append([
+                    name,
+                    f'{row.get("mention_rate")}%',
+                    _format_rank(row.get("avg_rank")),
+                ])
+            city_table = Table(table_rows, colWidths=[70 * mm, 30 * mm, 30 * mm])
+            city_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), PDF_FONT),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4fb")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9e8f6")),
+                    ]
+                )
+            )
+            story.append(city_table)
+            story.append(Spacer(1, 4))
+
+    for prompt_index, prompt_block in enumerate(payload.get("prompt_analytics") or [], start=1):
+        prompt = str(prompt_block.get("prompt") or "")
+        if not prompt:
+            continue
+        story.append(Paragraph(f"语义词 {prompt_index}：{prompt}", section_style))
+        summary_bits = [
+            f"样本 {prompt_block.get('sample_count') or 0}",
+            f"品牌提及率 {prompt_block.get('brand_mention_rate')}%",
+            f"平均排名 {_format_rank(prompt_block.get('brand_avg_rank'))}",
+        ]
+        story.append(Paragraph(" · ".join(summary_bits), body_style))
+
+        round_trend = prompt_block.get("round_trend") or []
+        if round_trend:
+            story.append(Paragraph(f"问题{prompt_index}趋势图", body_style))
+            prompt_trend_chart = build_entity_rank_trend_chart(
+                round_trend,
+                brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+                tracked_entities=payload.get("tracked_entities") or [],
+                title=f"问题{prompt_index}趋势图",
+                subtitle=prompt[:48] + ("…" if len(prompt) > 48 else ""),
+            )
+            _append_png_to_pdf(story, prompt_trend_chart, height_mm=78)
+
+            story.append(Paragraph("品牌排名变化趋势", body_style))
+            change_rows = [["日期", prompt[:36] + ("…" if len(prompt) > 36 else "")]]
+            change_styles: list[tuple] = []
+            for row_index, row in enumerate(round_trend, start=1):
+                change_rows.append([
+                    str(row.get("schedule_label") or row.get("schedule_key") or "—"),
+                    _format_rank(row.get("avg_rank")),
+                ])
+                bg = _rank_cell_bg(row.get("avg_rank"))
+                if bg is not None:
+                    change_styles.append(("BACKGROUND", (1, row_index), (1, row_index), bg))
+            change_table = Table(change_rows, colWidths=[55 * mm, 35 * mm])
+            change_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), PDF_FONT),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4fb")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9e8f6")),
+                        *change_styles,
+                    ]
+                )
+            )
+            story.append(change_table)
+            story.append(Spacer(1, 6))
+
+        mention_table = prompt_block.get("mention_table") or []
+        if mention_table:
+            story.append(Paragraph("品牌提及率分析", body_style))
+            mention_chart = build_mention_rate_bar_chart(
+                mention_table,
+                title=f"语义词：{prompt[:40]}",
+                brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+            )
+            _append_png_to_pdf(story, mention_chart, height_mm=max(72, min(120, len(mention_table[:12]) * 8)))
+            rows = [["品牌", "提及次数", "提及率", "平均排名"]]
+            for row in mention_table[:10]:
+                marker = " ★" if row.get("is_brand") else (" ◆" if row.get("is_competitor") else "")
+                rows.append([
+                    f'{row.get("name")}{marker}',
+                    f'{row.get("mention_count")}/{row.get("sample_count")}',
+                    f'{row.get("mention_rate")}%',
+                    _format_rank(row.get("avg_rank")),
+                ])
+            table = Table(rows, colWidths=[55 * mm, 30 * mm, 25 * mm, 30 * mm])
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), PDF_FONT),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4fb")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9e8f6")),
+                    ]
+                )
+            )
+            story.append(table)
+            story.append(Spacer(1, 6))
+
+    source_analysis = payload.get("source_analysis") or {}
+    if source_analysis.get("coverage_note"):
+        story.append(Paragraph("引用信源覆盖", section_style))
+        story.append(Paragraph(str(source_analysis["coverage_note"]), body_style))
+        domain_stats = source_analysis.get("domain_stats") or []
+        if domain_stats:
+            domain_rows = [["域名", "引用次数", "品牌相关"]]
+            for row in domain_stats[:10]:
+                domain_rows.append([
+                    str(row.get("domain") or "—"),
+                    str(row.get("count") or 0),
+                    str(row.get("brand_related_count") or 0),
+                ])
+            domain_table = Table(domain_rows, colWidths=[90 * mm, 30 * mm, 30 * mm])
+            domain_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), PDF_FONT),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4fb")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9e8f6")),
+                    ]
+                )
+            )
+            story.append(domain_table)
+
     if payload["top_sources"]:
         story.append(Paragraph("高频引用信源", section_style))
         source_rows = [["序号", "标题", "引用次数"]]
@@ -271,10 +714,11 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         )
         story.append(source_table)
 
-    generated = payload["generated_at"]
+    generated = _format_report_timestamp(payload["generated_at"])
+    story.append(Spacer(1, 10))
     if generated:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph(f"生成时间：{generated}", subtitle_style))
+        story.append(Paragraph(f"报告出具时间：{generated}", footer_style))
+    story.append(Paragraph(REPORT_FOOTER_NOTE, footer_style))
 
     doc.build(story)
     return buffer.getvalue()
@@ -305,6 +749,10 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
     for run in title.runs:
         run.font.color.rgb = RGBColor(0x12, 0x38, 0x5F)
 
+    tagline = document.add_paragraph(REPORT_HERO_TAGLINE)
+    tagline.runs[0].font.color.rgb = RGBColor(0x22, 0x72, 0xD9)
+    tagline.runs[0].font.size = Pt(9)
+
     meta = " · ".join(item for item in [payload["type_label"], payload["period_label"], payload["tenant_name"]] if item)
     if meta:
         meta_paragraph = document.add_paragraph(meta)
@@ -326,36 +774,46 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
         kpi_table.rows[1].cells[index].text = values[index]
 
     if payload.get("executive_summary"):
-        _add_docx_section_title(document, "执行摘要")
-        paragraph = document.add_paragraph(payload["executive_summary"])
-        if payload.get("ai_source") == "deepseek":
-            note = paragraph.add_run("（DeepSeek 生成）")
-            note.font.color.rgb = RGBColor(0x2D, 0x6C, 0xDF)
+        _append_docx_insight_block(
+            document,
+            title=INSIGHT_SECTION_TITLE,
+            subtitle=INSIGHT_SECTION_SUBTITLE,
+            body=str(payload["executive_summary"]),
+        )
 
     if payload["highlights"]:
-        _add_docx_section_title(document, "核心结论")
+        _add_docx_section_title(document, "核心发现")
         for line in payload["highlights"]:
             document.add_paragraph(line, style="List Bullet")
 
     diagnosis = payload["diagnosis"]
-    diagnosis_blocks = [
-        ("口碑情绪", diagnosis.get("sentiment_summary")),
-        ("优势亮点", diagnosis.get("strength_points")),
-        ("待改善项", diagnosis.get("weakness_points")),
-        ("优化建议", diagnosis.get("recommendation")),
-    ]
-    if any(text for _, text in diagnosis_blocks if text):
-        _add_docx_section_title(document, "品牌诊断")
-        for heading, text in diagnosis_blocks:
-            if not text:
-                continue
-            paragraph = document.add_paragraph()
-            label = paragraph.add_run(f"{heading}：")
-            label.bold = True
-            paragraph.add_run(str(text))
+    sections = payload.get("report_sections") or {}
+    if not payload.get("executive_summary") and diagnosis.get("sentiment_summary"):
+        _append_docx_insight_block(
+            document,
+            title=INSIGHT_SECTION_TITLE,
+            subtitle=INSIGHT_SECTION_SUBTITLE,
+            body=str(diagnosis["sentiment_summary"]),
+        )
+
+    if _has_report_sections(sections):
+        _append_docx_narrative_sections(
+            document,
+            sections,
+            intro="基于监测样本、竞品对标与引用信源交叉分析，形成可落地的优化路径。",
+        )
+    elif any(diagnosis.get(key) for key in ("strength_points", "weakness_points", "recommendation")):
+        fallback = {
+            "ranking_analysis": diagnosis.get("strength_points"),
+            "mention_analysis": diagnosis.get("weakness_points"),
+            "action_recommendations": diagnosis.get("recommendation"),
+        }
+        _append_docx_narrative_sections(document, fallback)
 
     if payload["platform_stats"]:
         _add_docx_section_title(document, "各平台表现")
+        platform_chart = build_platform_mention_chart(payload["platform_stats"])
+        _append_png_to_docx(document, platform_chart)
         table = document.add_table(rows=1, cols=4)
         table.style = "Table Grid"
         headers = ["平台", "完成数", "提及率", "平均排名"]
@@ -367,6 +825,97 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
             cells[1].text = f'{row.get("completed")}/{row.get("total")}'
             cells[2].text = f'{row.get("mention_rate")}%'
             cells[3].text = _format_rank(row.get("avg_rank"))
+
+    rank_trend = payload.get("rank_trend") or []
+    if rank_trend:
+        _add_docx_section_title(document, "平均排名趋势图")
+        entity_chart = build_entity_rank_trend_chart(
+            rank_trend,
+            brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+            tracked_entities=payload.get("tracked_entities") or [],
+            title="平均排名趋势图",
+            subtitle="品牌及竞品平均排名",
+        )
+        _append_png_to_docx(document, entity_chart)
+        document.add_paragraph("各轮次明细如下（排名越小越靠前）：")
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        for index, label in enumerate(["轮次", "样本", "提及率", "平均排名"]):
+            table.rows[0].cells[index].text = label
+        for row in rank_trend:
+            cells = table.add_row().cells
+            cells[0].text = str(row.get("schedule_label") or row.get("schedule_key") or "—")
+            cells[1].text = str(row.get("sample_count") or 0)
+            cells[2].text = f'{row.get("mention_rate")}%'
+            cells[3].text = _format_rank(row.get("avg_rank"))
+
+    city_rankings = payload.get("brand_city_rankings") or []
+    if city_rankings:
+        _add_docx_section_title(document, "品牌区域排名")
+        document.add_paragraph("按监测地区汇总的品牌与竞品平均排名、提及率。")
+        for block in city_rankings:
+            region_name = str(block.get("region_name") or "全部区域")
+            document.add_paragraph(f"监测地区：{region_name}（样本 {block.get('sample_count') or 0}）")
+            rows = block.get("rows") or []
+            if not rows:
+                continue
+            table = document.add_table(rows=1, cols=3)
+            table.style = "Table Grid"
+            for index, label in enumerate(["品牌", "提及率", "平均排名"]):
+                table.rows[0].cells[index].text = label
+            for row in rows:
+                cells = table.add_row().cells
+                name = str(row.get("name") or "—")
+                if row.get("is_brand"):
+                    name = f"{name}（本品牌）"
+                cells[0].text = name
+                cells[1].text = f'{row.get("mention_rate")}%'
+                cells[2].text = _format_rank(row.get("avg_rank"))
+
+    for prompt_index, prompt_block in enumerate(payload.get("prompt_analytics") or [], start=1):
+        prompt = str(prompt_block.get("prompt") or "")
+        if not prompt:
+            continue
+        _add_docx_section_title(document, f"语义词 {prompt_index}：{prompt}")
+        document.add_paragraph(
+            f"样本 {prompt_block.get('sample_count') or 0} · "
+            f"品牌提及率 {prompt_block.get('brand_mention_rate')}% · "
+            f"平均排名 {_format_rank(prompt_block.get('brand_avg_rank'))}"
+        )
+        round_trend = prompt_block.get("round_trend") or []
+        if round_trend:
+            prompt_trend_chart = build_entity_rank_trend_chart(
+                round_trend,
+                brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+                tracked_entities=payload.get("tracked_entities") or [],
+                title=f"问题{prompt_index}趋势图",
+                subtitle=prompt[:48],
+            )
+            _append_png_to_docx(document, prompt_trend_chart)
+        mention_table = prompt_block.get("mention_table") or []
+        if mention_table:
+            mention_chart = build_mention_rate_bar_chart(
+                mention_table,
+                title=f"语义词：{prompt[:40]}",
+                brand=payload.get("brand_name") or payload.get("tenant_name") or "",
+            )
+            _append_png_to_docx(document, mention_chart)
+            table = document.add_table(rows=1, cols=4)
+            table.style = "Table Grid"
+            for index, label in enumerate(["品牌", "提及次数", "提及率", "平均排名"]):
+                table.rows[0].cells[index].text = label
+            for row in mention_table[:10]:
+                cells = table.add_row().cells
+                marker = " ★" if row.get("is_brand") else (" ◆" if row.get("is_competitor") else "")
+                cells[0].text = f'{row.get("name")}{marker}'
+                cells[1].text = f'{row.get("mention_count")}/{row.get("sample_count")}'
+                cells[2].text = f'{row.get("mention_rate")}%'
+                cells[3].text = _format_rank(row.get("avg_rank"))
+
+    source_analysis = payload.get("source_analysis") or {}
+    if source_analysis.get("coverage_note"):
+        _add_docx_section_title(document, "引用信源覆盖")
+        document.add_paragraph(str(source_analysis["coverage_note"]))
 
     if payload["top_sources"]:
         _add_docx_section_title(document, "高频引用信源")
@@ -380,9 +929,14 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
             cells[1].text = str(row.get("title") or row.get("url") or "—")
             cells[2].text = str(row.get("count") or 0)
 
-    if payload["generated_at"]:
-        footer = document.add_paragraph(f"生成时间：{payload['generated_at']}")
-        footer.runs[0].font.color.rgb = RGBColor(0x7A, 0x93, 0xB0)
+    generated = _format_report_timestamp(payload["generated_at"])
+    if generated:
+        footer = document.add_paragraph(f"报告出具时间：{generated}")
+        footer.runs[0].font.color.rgb = RGBColor(0x8A, 0xA0, 0xBA)
+        footer.runs[0].font.size = Pt(9)
+    note = document.add_paragraph(REPORT_FOOTER_NOTE)
+    note.runs[0].font.color.rgb = RGBColor(0x8A, 0xA0, 0xBA)
+    note.runs[0].font.size = Pt(9)
 
     buffer = io.BytesIO()
     document.save(buffer)

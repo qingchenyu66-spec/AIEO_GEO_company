@@ -1,9 +1,9 @@
-"""售前线索诊断：三时段抓取、汇总统计、PDF 导出。"""
+"""售前线索诊断：三天九次抓取、汇总统计、PDF 导出。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Iterator
 
 from sqlalchemy import desc, select
@@ -11,11 +11,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
-from app.models.lead_diagnosis import DEFAULT_LEAD_SCHEDULE_TIMES, LeadDiagnosis, LeadDiagnosisRun
+from app.models.lead_diagnosis import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCHEDULE_DAYS, LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
 from app.schemas.monitor import CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
+from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, build_rule_report_sections
 from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
@@ -23,6 +24,31 @@ from app.services.report_export_service import build_report_export
 
 ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
+LEAD_DIAGNOSIS_TASK_SUBTITLE = "售前诊断"
+
+
+def lead_diagnosis_task_displays(db: Session, task_ids: list[str]) -> dict[str, dict[str, str]]:
+    """监测 task_id -> 售前诊断在运营看板上的展示文案。"""
+    cleaned_ids = [item for item in task_ids if item]
+    if not cleaned_ids:
+        return {}
+    rows = db.execute(
+        select(LeadDiagnosisRun.task_id, LeadDiagnosis.brand_name)
+        .join(LeadDiagnosis, LeadDiagnosis.id == LeadDiagnosisRun.lead_diagnosis_id)
+        .where(LeadDiagnosisRun.task_id.in_(cleaned_ids), LeadDiagnosis.deleted.is_(False))
+    )
+    displays: dict[str, dict[str, str]] = {}
+    for task_id, brand_name in rows:
+        if not task_id or not brand_name:
+            continue
+        brand = str(brand_name).strip()
+        if not brand:
+            continue
+        displays[str(task_id)] = {
+            "tenant_name": f"{brand} 诊断报告",
+            "monitor_keywords": LEAD_DIAGNOSIS_TASK_SUBTITLE,
+        }
+    return displays
 
 
 @dataclass(frozen=True)
@@ -43,6 +69,24 @@ def _schedule_slots(lead: LeadDiagnosis) -> list[str]:
     raw = lead.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES
     cleaned = [str(item).strip() for item in raw if str(item).strip()]
     return cleaned or list(DEFAULT_LEAD_SCHEDULE_TIMES)
+
+
+def _schedule_total_count(lead: LeadDiagnosis) -> int:
+    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead))
+
+
+def _iter_schedule_plan(lead: LeadDiagnosis) -> Iterator[tuple[date, str, str, str]]:
+    """按时间顺序产出 (day, slot, schedule_key, schedule_label)。"""
+    slots = _schedule_slots(lead)
+    for day_offset in range(LEAD_SCHEDULE_DAYS):
+        day = lead.diagnosis_date + timedelta(days=day_offset)
+        for slot in slots:
+            key, label = _build_schedule_key(day, slot)
+            yield day, slot, key, label
+
+
+def _expected_schedule_keys(lead: LeadDiagnosis) -> set[str]:
+    return {key for _, _, key, _ in _iter_schedule_plan(lead)}
 
 
 def _slot_time(value: str) -> time | None:
@@ -92,6 +136,11 @@ def _serialize_run(run: LeadDiagnosisRun) -> dict[str, Any]:
     }
 
 
+def _lead_region_codes(lead: LeadDiagnosis) -> list[str] | None:
+    code = (lead.region_code or "").strip()
+    return [code] if code else None
+
+
 def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False) -> dict[str, Any]:
     result = lead.diagnosis_result_json or {}
     kpis = result.get("kpis") or {}
@@ -103,7 +152,10 @@ def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False) -> dic
         "contact_note": lead.contact_note,
         "prompts": lead.prompts_json or [],
         "competitors": lead.competitors_json or [],
+        "region_code": lead.region_code,
         "schedule_times": _schedule_slots(lead),
+        "schedule_days": LEAD_SCHEDULE_DAYS,
+        "schedule_total_count": _schedule_total_count(lead),
         "diagnosis_date": lead.diagnosis_date.isoformat(),
         "status": lead.status,
         "health_score": lead.health_score,
@@ -169,6 +221,7 @@ def create_lead_diagnosis(
         contact_note=(payload.contact_note or "").strip() or None,
         prompts_json=payload.prompts,
         competitors_json=payload.competitors,
+        region_code=(payload.region_code or "").strip() or None,
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
         diagnosis_date=diagnosis_date,
         status="pending",
@@ -205,22 +258,19 @@ def update_lead_diagnosis(
 
 
 def _is_slot_due(
-    diagnosis_date: date,
+    day: date,
     slot: str,
     now: datetime,
     *,
     tolerance_minutes: int,
-    force: bool = False,
 ) -> bool:
-    if diagnosis_date != now.date():
-        return diagnosis_date < now.date()
     slot_time = _slot_time(slot)
     if slot_time is None:
         return False
-    scheduled = datetime.combine(diagnosis_date, slot_time)
-    if force:
-        return now >= scheduled
-    return scheduled <= now <= scheduled + timedelta(minutes=tolerance_minutes)
+    scheduled = datetime.combine(day, slot_time)
+    if now < scheduled:
+        return False
+    return now <= scheduled + timedelta(minutes=tolerance_minutes) or now >= scheduled
 
 
 def enumerate_due_lead_runs(
@@ -243,11 +293,10 @@ def enumerate_due_lead_runs(
         if lead.diagnosis_date > now.date():
             continue
         existing_keys = {run.schedule_key for run in (lead.runs or [])}
-        for slot in _schedule_slots(lead):
-            schedule_key, schedule_label = _build_schedule_key(lead.diagnosis_date, slot)
+        for day, slot, schedule_key, schedule_label in _iter_schedule_plan(lead):
             if schedule_key in existing_keys:
                 continue
-            if _is_slot_due(lead.diagnosis_date, slot, now, tolerance_minutes=tolerance, force=force):
+            if force or _is_slot_due(day, slot, now, tolerance_minutes=tolerance):
                 yield DueLeadRun(lead_id=lead.id, schedule_key=schedule_key, schedule_label=schedule_label)
 
 
@@ -275,8 +324,7 @@ def submit_due_lead_run(
         due_items = [item for item in due_items if item.schedule_key == schedule_key]
     if not due_items and force:
         existing_keys = {run.schedule_key for run in (lead.runs or [])}
-        for slot in _schedule_slots(lead):
-            key, label = _build_schedule_key(lead.diagnosis_date, slot)
+        for _day, _slot, key, label in _iter_schedule_plan(lead):
             if schedule_key and key != schedule_key:
                 continue
             if key in existing_keys:
@@ -301,6 +349,7 @@ def submit_due_lead_run(
         competitors=_competitor_payload(lead.competitors_json or []),
         prompts=lead.prompts_json or [],
         platforms=platforms,
+        region_code=_lead_region_codes(lead),
     )
     run = LeadDiagnosisRun(
         lead_diagnosis_id=lead.id,
@@ -366,9 +415,15 @@ def refresh_lead_diagnosis_runs(db: Session, lead_id: int) -> dict[str, Any]:
 
 
 def _all_slots_attempted(lead: LeadDiagnosis) -> bool:
-    expected = {_build_schedule_key(lead.diagnosis_date, slot)[0] for slot in _schedule_slots(lead)}
+    expected = _expected_schedule_keys(lead)
     attempted = {run.schedule_key for run in (lead.runs or [])}
     return expected.issubset(attempted)
+
+
+def _all_slots_completed(lead: LeadDiagnosis) -> bool:
+    expected = _expected_schedule_keys(lead)
+    completed = {run.schedule_key for run in (lead.runs or []) if run.status == "completed"}
+    return expected == completed
 
 
 def _runs_terminal(lead: LeadDiagnosis, tasks: dict[str, GeoMonitorTask]) -> bool:
@@ -382,16 +437,6 @@ def _runs_terminal(lead: LeadDiagnosis, tasks: dict[str, GeoMonitorTask]) -> boo
     return bool(lead.runs)
 
 
-def _after_diagnosis_deadline(lead: LeadDiagnosis, now: datetime) -> bool:
-    if lead.diagnosis_date < now.date():
-        return True
-    if lead.diagnosis_date > now.date():
-        return False
-    latest_slot = max((_slot_time(slot) or time(20, 30) for slot in _schedule_slots(lead)), default=time(20, 30))
-    deadline = datetime.combine(lead.diagnosis_date, latest_slot) + timedelta(hours=2)
-    return now >= deadline
-
-
 def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
     lead = db.scalar(
         select(LeadDiagnosis)
@@ -402,10 +447,11 @@ def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
         return False
 
     tasks = _task_map(db, lead)
-    now = datetime.now()
-    ready_by_completion = _all_slots_attempted(lead) and _runs_terminal(lead, tasks)
-    ready_by_deadline = _after_diagnosis_deadline(lead, now) and bool(lead.runs)
-    if not ready_by_completion and not ready_by_deadline:
+    if not (
+        _all_slots_attempted(lead)
+        and _runs_terminal(lead, tasks)
+        and _all_slots_completed(lead)
+    ):
         return False
 
     subtasks = _load_subtasks(db, lead)
@@ -414,12 +460,59 @@ def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
         db.commit()
         return True
 
-    result = aggregate_lead_diagnosis(lead, subtasks)
+    result = aggregate_lead_diagnosis(
+        lead,
+        subtasks,
+        task_region_map=_task_region_map(tasks),
+    )
     lead.diagnosis_result_json = result
     lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
     lead.status = "ready"
     db.commit()
     return True
+
+
+def refresh_lead_diagnosis_after_backfill(db: Session, task_id: str) -> None:
+    """快照补录后刷新关联售前诊断的运行状态并重算聚合结果。"""
+    run = db.scalar(select(LeadDiagnosisRun).where(LeadDiagnosisRun.task_id == task_id))
+    if run is None:
+        return
+
+    lead = db.scalar(
+        select(LeadDiagnosis)
+        .where(LeadDiagnosis.id == run.lead_diagnosis_id, LeadDiagnosis.deleted.is_(False))
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+    if lead is None:
+        return
+
+    tasks = _task_map(db, lead)
+    task = tasks.get(task_id)
+    if task is not None and task.completed_items > 0 and run.status == "failed":
+        run.status = "completed"
+        run.error_message = None
+
+    if lead.status not in ACTIVE_STATUSES and lead.status != "ready":
+        db.commit()
+        return
+
+    if lead.status in ACTIVE_STATUSES:
+        if maybe_finalize_lead_diagnosis(db, lead.id):
+            return
+
+    if lead.status == "ready":
+        subtasks = _load_subtasks(db, lead)
+        if not subtasks:
+            db.commit()
+            return
+        result = aggregate_lead_diagnosis(
+            lead,
+            subtasks,
+            task_region_map=_task_region_map(tasks),
+        )
+        lead.diagnosis_result_json = result
+        lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
+        db.commit()
 
 
 def _load_subtasks(db: Session, lead: LeadDiagnosis) -> list[GeoMonitorSubtask]:
@@ -435,7 +528,16 @@ def _load_subtasks(db: Session, lead: LeadDiagnosis) -> list[GeoMonitorSubtask]:
     )
 
 
-def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubtask]) -> dict[str, Any]:
+def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | None]:
+    return {task_id: task.region_code_json for task_id, task in tasks.items()}
+
+
+def aggregate_lead_diagnosis(
+    lead: LeadDiagnosis,
+    subtasks: list[GeoMonitorSubtask],
+    *,
+    task_region_map: dict[str, list[str] | None] | None = None,
+) -> dict[str, Any]:
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
     mentioned = [item for item in completed if item.mention_position]
     ranks = [item.mention_position for item in mentioned if item.mention_position]
@@ -512,7 +614,16 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
         })
 
     top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:12]
+    plan_end = lead.diagnosis_date + timedelta(days=LEAD_SCHEDULE_DAYS - 1)
     schedule_round_count = len({run.schedule_key for run in (lead.runs or []) if run.status == "completed"})
+    total_rounds = _schedule_total_count(lead)
+
+    extended_analytics = build_lead_diagnosis_analytics(
+        lead,
+        subtasks,
+        lead.runs or [],
+        task_region_map=task_region_map,
+    )
 
     kpis = {
         "mention_rate": mention_rate,
@@ -527,9 +638,22 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
     }
     health_score = _rule_health_score(kpis)
     rule_highlights = _rule_highlights(kpis, platform_stats)
-    diagnosis_block = _rule_diagnosis_block(lead, kpis, rule_highlights)
+    diagnosis_block = _rule_diagnosis_block(
+        lead,
+        kpis,
+        rule_highlights,
+        schedule_round_count=schedule_round_count,
+        total_rounds=total_rounds,
+    )
+    report_sections = build_rule_report_sections(
+        brand=lead.brand_name,
+        competitors=extended_analytics.get("competitors") or [],
+        prompt_analytics=extended_analytics.get("prompt_analytics") or [],
+        source_analysis=extended_analytics.get("source_analysis") or {},
+        kpis=kpis,
+    )
 
-    ai_insights: dict[str, Any] = {"source": "rule"}
+    ai_insights: dict[str, Any] = {}
     client = DeepseekClient()
     if client.report_enabled:
         try:
@@ -537,15 +661,21 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
                 brand_name=lead.brand_name,
                 company_name=lead.brand_name,
                 report_type="diagnosis",
-                period_label=f"{lead.diagnosis_date.isoformat()}（{schedule_round_count} 次抓取均值）",
+                period_label=f"{lead.diagnosis_date.isoformat()} 起 {LEAD_SCHEDULE_DAYS} 天（{schedule_round_count}/{total_rounds} 次抓取均值）",
                 kpis={**kpis, "health_score": health_score},
                 platform_stats=platform_stats,
                 top_sources=top_sources,
                 sentiment_counts=sentiment_counts,
                 competitor_names=lead.competitors_json or [],
                 rule_highlights=rule_highlights,
+                lead_analytics=extended_analytics,
             )
-            ai_insights = {"source": "deepseek", "model": client.model, **ai}
+            ai_insights = {
+                "executive_summary": ai.get("executive_summary"),
+                "highlights": ai.get("highlights") or rule_highlights,
+            }
+            if ai.get("report_sections"):
+                report_sections = ai["report_sections"]
             if ai.get("health_score") is not None:
                 health_score = ai["health_score"]
             diagnosis_block.update({
@@ -556,7 +686,7 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
                 "health_score": health_score,
             })
         except (DeepseekApiError, RuntimeError):
-            ai_insights = {"source": "rule", "fallback_reason": "DeepSeek 不可用，已使用规则引擎"}
+            ai_insights = {"highlights": rule_highlights}
 
     diagnosis_block["health_score"] = health_score
     kpis["health_score"] = health_score
@@ -564,7 +694,10 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
     return {
         "brand_name": lead.brand_name,
         "company_name": lead.brand_name,
-        "period_label": f"{lead.diagnosis_date.isoformat()} · 三时段均值（{schedule_round_count} 次有效抓取）",
+        "period_label": (
+            f"{lead.diagnosis_date.isoformat()} 至 {plan_end.isoformat()} · "
+            f"三天九次均值（{schedule_round_count}/{total_rounds} 次有效抓取）"
+        ),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "kpis": kpis,
         "diagnosis": diagnosis_block,
@@ -575,7 +708,13 @@ def aggregate_lead_diagnosis(lead: LeadDiagnosis, subtasks: list[GeoMonitorSubta
             "top_sources": top_sources,
             "sentiment_counts": sentiment_counts,
             "matrix_rows": matrix_rows,
+            "prompt_analytics": extended_analytics.get("prompt_analytics") or [],
+            "source_analysis": extended_analytics.get("source_analysis") or {},
+            "rank_trend": extended_analytics.get("rank_trend") or [],
+            "tracked_entities": extended_analytics.get("tracked_entities") or [],
+            "brand_city_rankings": extended_analytics.get("brand_city_rankings") or [],
         },
+        "report_sections": report_sections,
         "runs": [_serialize_run(run) for run in sorted(lead.runs or [], key=lambda row: row.schedule_key)],
     }
 
@@ -603,11 +742,21 @@ def _rule_highlights(kpis: dict[str, Any], platform_stats: list[dict[str, Any]])
     return lines[:5]
 
 
-def _rule_diagnosis_block(lead: LeadDiagnosis, kpis: dict[str, Any], highlights: list[str]) -> dict[str, Any]:
+def _rule_diagnosis_block(
+    lead: LeadDiagnosis,
+    kpis: dict[str, Any],
+    highlights: list[str],
+    *,
+    schedule_round_count: int,
+    total_rounds: int,
+) -> dict[str, Any]:
     return {
         "diagnosis_title": f"{lead.brand_name} 售前品牌诊断",
         "health_score": _rule_health_score(kpis),
-        "sentiment_summary": f"基于 {kpis.get('schedule_round_count')} 个时段抓取结果，品牌整体提及率 {kpis.get('mention_rate')}%。",
+        "sentiment_summary": (
+            f"基于 {schedule_round_count}/{total_rounds} 次抓取结果，"
+            f"品牌整体提及率 {kpis.get('mention_rate')}%。"
+        ),
         "strength_points": highlights[0] if highlights else "品牌已在部分 AI 平台获得露出。",
         "weakness_points": "部分平台/问题场景下排名与提及率仍有提升空间，建议补充权威信源与对比内容。",
         "recommendation": "建议签约后开启持续监测，针对低提及平台补充结构化内容与第三方引用。",

@@ -1,0 +1,398 @@
+/* ── 快照补录运营页 (platform.snapshot_backfill) ── */
+.snapshot-backfill-denied {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  padding: 48px 24px;
+}
+
+.snapshot-backfill-denied .mini-empty {
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+.snapshot-backfill-page {
+  display: grid;
+  gap: 12px;
+}
+
+.snapshot-backfill-scan-cap {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(45, 108, 223, 0.08);
+  color: #315070;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.snapshot-backfill-scan-cap.is-warn {
+  background: rgba(194, 65, 12, 0.08);
+  color: #9a3412;
+}
+
+.snapshot-backfill-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: -4px 0 0;
+  padding: 10px 0 12px;
+  background: rgba(247, 251, 255, 0.92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(217, 232, 246, 0.92);
+}
+
+.snapshot-backfill-toolbar-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.snapshot-backfill-toolbar select,
+.snapshot-backfill-toolbar input[type='date'],
+.snapshot-backfill-toolbar .snapshot-backfill-keyword-input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #fff;
+  color: #17406a;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.snapshot-backfill-toolbar select {
+  max-width: min(200px, 38vw);
+}
+
+.snapshot-backfill-toolbar select.snapshot-backfill-group-select {
+  max-width: min(240px, 44vw);
+}
+
+.snapshot-backfill-toolbar .snapshot-backfill-keyword-input {
+  width: min(220px, 40vw);
+}
+
+.snapshot-backfill-toolbar select:focus,
+.snapshot-backfill-toolbar input:focus {
+  outline: none;
+  border-color: #4288e8;
+  box-shadow: 0 0 0 3px rgba(66, 136, 232, 0.1);
+}
+
+.snapshot-backfill-toolbar select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.snapshot-backfill-toolbar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #fff;
+  color: #315070;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.snapshot-backfill-toolbar-check input {
+  width: auto;
+  margin: 0;
+}
+
+.snapshot-backfill-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.snapshot-backfill-loading-dot {
+  color: #58708f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.snapshot-backfill-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.snapshot-backfill-stats--head {
+  gap: 8px;
+}
+
+.snapshot-backfill-stats--head .snapshot-backfill-stat {
+  min-width: 76px;
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+
+.snapshot-backfill-stats--head .snapshot-backfill-stat strong {
+  font-size: 18px;
+}
+
+.snapshot-backfill-stats--head .snapshot-backfill-stat span {
+  font-size: 11px;
+}
+
+.snapshot-backfill-stat {
+  display: grid;
+  gap: 2px;
+  min-width: 88px;
+  padding: 10px 14px;
+  border: 1px solid #e2ebf4;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.snapshot-backfill-stat strong {
+  font-size: 22px;
+  line-height: 1.1;
+  color: #153052;
+  font-weight: 800;
+}
+
+.snapshot-backfill-stat span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.snapshot-backfill-stat.is-warn {
+  border-color: rgba(194, 65, 12, 0.18);
+  background: rgba(194, 65, 12, 0.04);
+}
+
+.snapshot-backfill-stat.is-warn strong {
+  color: #c2410c;
+}
+
+.snapshot-backfill-stat.is-ok {
+  border-color: rgba(22, 163, 74, 0.18);
+  background: rgba(22, 163, 74, 0.04);
+}
+
+.snapshot-backfill-stat.is-ok strong {
+  color: #15803d;
+}
+
+.snapshot-backfill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.snapshot-backfill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(45, 108, 223, 0.08);
+  color: #2d6cdf;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.snapshot-backfill-chips small {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.snapshot-backfill-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.snapshot-backfill-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e2ebf4;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.snapshot-backfill-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 24px rgba(45, 108, 223, 0.07);
+}
+
+.snapshot-backfill-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.snapshot-backfill-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.snapshot-backfill-tag.source {
+  background: rgba(45, 108, 223, 0.08);
+  color: #2d6cdf;
+}
+
+.snapshot-backfill-tag.pending {
+  background: rgba(194, 65, 12, 0.1);
+  color: #c2410c;
+}
+
+.snapshot-backfill-tag.done {
+  background: rgba(22, 163, 74, 0.1);
+  color: #15803d;
+}
+
+.snapshot-backfill-card-tenant {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.snapshot-backfill-card-prompt {
+  margin: 0;
+  color: #153052;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.snapshot-backfill-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snapshot-backfill-metric {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  min-width: 0;
+}
+
+.snapshot-backfill-metric dt {
+  margin: 0 0 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.snapshot-backfill-metric dd {
+  margin: 0;
+  color: #153052;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.snapshot-backfill-metric.is-rank dd {
+  color: #c2410c;
+}
+
+.snapshot-backfill-card-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(194, 65, 12, 0.06);
+  color: #c2410c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.snapshot-backfill-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 7px 12px;
+  border: 1px solid #d9e8f6;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #315070;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.snapshot-backfill-card-action:hover {
+  border-color: #9fc5ee;
+  color: #236bd1;
+}
+
+.snapshot-backfill-card-action.is-overwrite {
+  border-color: rgba(45, 108, 223, 0.2);
+  background: rgba(45, 108, 223, 0.06);
+  color: #2d6cdf;
+}
+
+.snapshot-backfill-empty {
+  padding: 48px 16px;
+}
+
+.snapshot-backfill-load-more,
+.snapshot-backfill-end {
+  padding: 18px 0 8px;
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
+}
+
+.snapshot-backfill-load-more {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 960px) {
+  .snapshot-backfill-toolbar-inner {
+    gap: 8px;
+  }
+
+  .snapshot-backfill-toolbar select,
+  .snapshot-backfill-toolbar .snapshot-backfill-keyword-input {
+    max-width: none;
+    width: calc(50% - 4px);
+  }
+
+  .snapshot-backfill-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  .snapshot-backfill-metrics {
+    grid-template-columns: 1fr;
+  }
+}

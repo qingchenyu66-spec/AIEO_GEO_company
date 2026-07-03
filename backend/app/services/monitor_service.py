@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -10,6 +10,7 @@ from app.api.dependencies import CurrentSession
 from app.core.config import settings
 from app.core.platform_order import platform_market_rank, sort_platform_codes, sort_platform_items
 from app.models.brand import BrandAsset, BrandKeywordGroup
+from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
 from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
@@ -33,6 +34,7 @@ from app.services.molizhishu_client import MolizhishuClient
 from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
 from app.services.schedule_context import (
     prompt_monitor_intent,
+    lead_diagnosis_runs_for_tasks,
     resolve_task_schedule_context,
     schedule_plan_summary,
     schedule_runs_for_tasks,
@@ -41,6 +43,93 @@ from app.services.schedule_context import (
 
 TERMINAL_STATUSES = {"completed", "partial_completed", "failed", "stopped"}
 NON_TERMINAL_STATUSES = {"pending", "processing", "running", "queued"}
+
+
+def customer_display_cutoff(now: datetime | None = None) -> datetime:
+    """客户侧数据截止时间：昨日 23:59:59.999999（不含今日）。"""
+    anchor = now or datetime.now()
+    day = anchor.date() - timedelta(days=1)
+    return datetime.combine(day, time.max)
+
+
+def customer_display_date_range(
+    *,
+    now: datetime | None = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    default_lookback_days: int | None = 7,
+) -> tuple[datetime, datetime]:
+    """客户可见区间：结束不晚于昨日；起始默认近 default_lookback_days 天，None 表示不限起始。"""
+    cutoff = customer_display_cutoff(now)
+    range_end = min(end_at, cutoff) if end_at else cutoff
+    if start_at is not None:
+        range_start = start_at
+    elif default_lookback_days is not None:
+        range_start = datetime.combine(
+            range_end.date() - timedelta(days=max(0, default_lookback_days - 1)),
+            time.min,
+        )
+    else:
+        range_start = datetime(2000, 1, 1)
+    if range_start > range_end:
+        range_start = datetime.combine(range_end.date(), time.min)
+    return range_start, range_end
+
+
+def resolve_monitor_date_range(
+    current: CurrentSession,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """客户身份截止昨日且不含今日；平台运营可按参数或默认近 7 日。"""
+    if current.identity.identity_type == "CUSTOMER":
+        return customer_display_date_range(start_at=start_at, end_at=end_at, default_lookback_days=7)
+    now = datetime.now()
+    range_start = start_at or (now - timedelta(days=7))
+    range_end = end_at or now
+    if range_start > range_end:
+        range_start, range_end = range_end, range_start
+    return range_start, range_end
+
+
+def filter_customer_visible_subtasks(
+    db: Session,
+    subtasks: list[GeoMonitorSubtask],
+    *,
+    now: datetime | None = None,
+) -> list[GeoMonitorSubtask]:
+    """客户侧可见子任务，与单条详情 API 共用检测日 / updated_at 截止昨日规则。"""
+    if not subtasks:
+        return []
+    task_ids = list({item.task_id for item in subtasks if item.task_id})
+    schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
+    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
+    tenant_ids = list({
+        item.task.tenant_id
+        for item in subtasks
+        if item.task and item.task.tenant_id
+    })
+    assets_by_tenant: dict[int, BrandAsset | None] = {
+        tenant_id: get_brand_asset(db, tenant_id) for tenant_id in tenant_ids
+    }
+    schedule_ctx_by_task: dict[str, dict[str, Any]] = {}
+    visible: list[GeoMonitorSubtask] = []
+    for item in subtasks:
+        task = item.task
+        if task is None:
+            continue
+        task_id = task.task_id
+        if task_id not in schedule_ctx_by_task:
+            asset = assets_by_tenant.get(task.tenant_id) if task.tenant_id else None
+            schedule_ctx_by_task[task_id] = _resolve_subtask_schedule_context(
+                task,
+                schedule_runs_map,
+                asset,
+                lead_runs_map,
+            )
+        if customer_subtask_visible(item, now, task=task, schedule_ctx=schedule_ctx_by_task[task_id]):
+            visible.append(item)
+    return visible
 
 
 def list_pending_monitor_task_ids(
@@ -540,6 +629,30 @@ def list_monitor_tasks(db: Session, current: CurrentSession) -> list[GeoMonitorT
     return list(db.scalars(stmt))
 
 
+def _build_source_citation_trend(
+    daily_counts: dict[str, int],
+    *,
+    range_start: datetime,
+    range_end: datetime,
+) -> dict[str, Any]:
+    points: list[dict[str, Any]] = []
+    cursor = range_start.date()
+    end = range_end.date()
+    while cursor <= end:
+        day_key = cursor.isoformat()
+        points.append({
+            "label": cursor.strftime("%m-%d"),
+            "day_key": day_key,
+            "value": daily_counts.get(day_key, 0),
+        })
+        cursor += timedelta(days=1)
+    return {
+        "start_at": datetime.combine(range_start.date(), time.min).isoformat(),
+        "end_at": datetime.combine(end, time.max).isoformat(),
+        "points": points,
+    }
+
+
 def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     """Build a read-only dashboard summary from stored Molizhishu task results."""
     summary_task_limit = 200
@@ -602,6 +715,10 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     }
     subtask_tenant_map = {subtask.id: task.tenant_id for task in tasks for subtask in task.subtasks}
     subtasks = [subtask for task in tasks for subtask in task.subtasks]
+    if current.identity.identity_type == "CUSTOMER":
+        subtasks = filter_customer_visible_subtasks(db, subtasks)
+        visible_task_ids = {item.task_id for item in subtasks if item.task_id}
+        tasks = [task for task in tasks if task.task_id in visible_task_ids]
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
     completed_ids = {item.id for item in completed}
     mentioned = [item for item in completed if item.mention_position is not None]
@@ -653,6 +770,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     platform_stats = sort_platform_items(platform_stats)
 
     source_map: dict[str, dict[str, Any]] = {}
+    source_daily_counts: dict[str, int] = {}
     for item in completed:
         purchased_platforms = purchased_platforms_by_tenant.get(subtask_tenant_map.get(item.id))
         if purchased_platforms and item.platform not in purchased_platforms:
@@ -682,6 +800,9 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
                 },
             )
             row["count"] += 1
+            if item.updated_at:
+                day_key = item.updated_at.date().isoformat()
+                source_daily_counts[day_key] = source_daily_counts.get(day_key, 0) + 1
             if item.platform and item.platform not in row["platforms"]:
                 row["platforms"].append(item.platform)
             for term in matched_exposure:
@@ -697,10 +818,30 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
         row["exposure_terms"] = row["exposure_terms"][:8]
         row["questions"] = row["questions"][:8]
 
+    citation_lookback = 30
+    if current.identity.identity_type == "CUSTOMER":
+        citation_range_end = customer_display_cutoff()
+        citation_range_start = datetime.combine(
+            citation_range_end.date() - timedelta(days=citation_lookback - 1),
+            time.min,
+        )
+    else:
+        citation_range_end = datetime.now()
+        citation_range_start = datetime.combine(
+            citation_range_end.date() - timedelta(days=citation_lookback - 1),
+            time.min,
+        )
+    source_citation_trend = _build_source_citation_trend(
+        source_daily_counts,
+        range_start=citation_range_start,
+        range_end=citation_range_end,
+    )
+
     today = datetime.now().date()
     day_labels = []
     daily_trend = []
-    for offset in range(6, -1, -1):
+    trend_offsets = range(7, 0, -1) if current.identity.identity_type == "CUSTOMER" else range(6, -1, -1)
+    for offset in trend_offsets:
         day = today - timedelta(days=offset)
         value = sum(1 for item in mentioned if item.updated_at and item.updated_at.date() == day)
         day_labels.append(day.strftime("%m-%d"))
@@ -732,6 +873,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
         "sentiment_counts": sentiment_counts,
         "platform_stats": platform_stats,
         "source_stats": source_stats,
+        "source_citation_trend": source_citation_trend,
         "daily_trend": daily_trend,
         "daily_labels": day_labels,
         "recent_tasks": recent_tasks,
@@ -760,6 +902,7 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .options(joinedload(GeoMonitorSubtask.task))
         .where(
             GeoMonitorSubtask.subtask_id == subtask_id,
             GeoMonitorTask.deleted.is_(False),
@@ -770,6 +913,19 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
     subtask = db.scalar(stmt)
     if subtask is None:
         raise ValueError("子任务不存在或无权访问")
+    if current.identity.identity_type == "CUSTOMER":
+        task = subtask.task
+        if task is None:
+            task = get_monitor_task(db, subtask.task_id, current)
+        asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+        schedule_ctx = _resolve_subtask_schedule_context(
+            task,
+            schedule_runs_for_tasks(db, [task.task_id]),
+            asset,
+            lead_diagnosis_runs_for_tasks(db, [task.task_id]),
+        )
+        if not customer_subtask_visible(subtask, task=task, schedule_ctx=schedule_ctx):
+            raise ValueError("子任务不存在或无权访问")
     return subtask
 
 
@@ -799,6 +955,9 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
                 _upsert_subtask(db, task_id, subtask)
         task.last_error = None
         _reconcile_task_progress(task)
+        from app.services.snapshot_backfill_service import notify_failed_subtasks_for_task
+
+        notify_failed_subtasks_for_task(db, task)
     except Exception as exc:
         task.last_error = str(exc)
         db.commit()
@@ -1097,12 +1256,22 @@ def _filter_subtasks_by_monitor_group(
     ]
 
 
-def _prompt_group_name(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
+def _resolve_prompt_keyword_group(
+    prompt: str,
+    groups: list[BrandKeywordGroup],
+) -> BrandKeywordGroup | None:
     for group in groups:
         keywords = keyword_group_monitor_keywords(group)
         if _prompt_belongs_to_group(prompt, keywords, group.exposure_terms_json or []):
-            return keyword_group_display_label(group) or keyword_group_primary_keyword(group) or None
+            return group
     return None
+
+
+def _prompt_group_name(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
+    group = _resolve_prompt_keyword_group(prompt, groups)
+    if group is None:
+        return None
+    return keyword_group_display_label(group) or keyword_group_primary_keyword(group) or None
 
 
 def _keyword_group_from_schedule_key(
@@ -1166,6 +1335,53 @@ def _matrix_day_key(value: datetime | None) -> str | None:
     return value.date().isoformat()
 
 
+def _schedule_window_date(schedule_ctx: dict[str, Any] | None) -> date | None:
+    window_key = str((schedule_ctx or {}).get("schedule_window_key") or "").strip()
+    if len(window_key) >= 8 and window_key[:8].isdigit():
+        try:
+            return datetime.strptime(window_key[:8], "%Y%m%d").date()
+        except ValueError:
+            pass
+    schedule_label = str((schedule_ctx or {}).get("schedule_label") or "").strip()
+    if len(schedule_label) >= 10:
+        try:
+            return datetime.strptime(schedule_label[:10], "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    return None
+
+
+def _subtask_detect_datetime(
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask | None,
+    schedule_ctx: dict[str, Any] | None,
+) -> datetime | None:
+    """检测日优先取调度批次，避免运营补录更新 updated_at 后客户侧看不到历史格子。"""
+    detect_date = _schedule_window_date(schedule_ctx)
+    if detect_date is not None:
+        return datetime.combine(detect_date, time.min)
+    if task and task.created_at:
+        return task.created_at
+    return subtask.updated_at
+
+
+def _resolve_subtask_schedule_context(
+    task: GeoMonitorTask,
+    schedule_runs_map: dict[str, GeoMonitorScheduleRun],
+    asset: BrandAsset | None,
+    lead_runs_map: dict[str, LeadDiagnosisRun],
+) -> dict[str, Any]:
+    lead_run = None
+    if not getattr(task, "tenant_id", None):
+        lead_run = lead_runs_map.get(task.task_id)
+    return resolve_task_schedule_context(
+        task,
+        schedule_runs_map.get(task.task_id),
+        asset,
+        lead_run,
+    )
+
+
 def _matrix_day_label(day_key: str, schedule_round_count: int = 0) -> str:
     """Format matrix row date; schedule_round_count = max runs averaged in any cell (not prompt count)."""
     text = str(day_key or "").strip()
@@ -1206,9 +1422,15 @@ def _dedupe_matrix_cell_samples(
         key=lambda item: item.get("_updated_at") or datetime.min,
         reverse=True,
     )
-    if max_samples and max_samples > 0 and len(ordered) > max_samples:
-        ordered = ordered[:max_samples]
-    return ordered
+    scheduled = [item for item in ordered if item.get("schedule_source") != "lead_diagnosis"]
+    lead_samples = [item for item in ordered if item.get("schedule_source") == "lead_diagnosis"]
+    if max_samples and max_samples > 0 and len(scheduled) > max_samples:
+        scheduled = scheduled[:max_samples]
+    return sorted(
+        scheduled + lead_samples,
+        key=lambda item: item.get("_updated_at") or datetime.min,
+        reverse=True,
+    )
 
 
 def _matrix_row_schedule_round_count(cells: dict[str, dict[str, Any]]) -> int:
@@ -1239,6 +1461,7 @@ def _matrix_cell_snapshot(sample: dict[str, Any]) -> dict[str, Any]:
         "prompt_intent": sample.get("prompt_intent"),
         "schedule_window_key": sample.get("schedule_window_key"),
         "schedule_label": sample.get("schedule_label"),
+        "schedule_source": sample.get("schedule_source"),
         "updated_at": sample.get("updated_at"),
         "status": sample.get("status"),
         "page_screenshot": sample.get("page_screenshot"),
@@ -1368,11 +1591,24 @@ def _brand_appears_in_text(text: str | None, brand_terms: list[str]) -> bool:
     if not normalized:
         return False
     for term in brand_terms:
+        text_value = term.strip().lower()
+        if text_value and (text_value in normalized or normalized in text_value):
+            return True
         for fragment in _brand_term_match_fragments(term):
             token = fragment.lower()
-            if len(token) >= 2 and token in normalized:
+            if _significant_brand_fragment(token) and token in normalized:
                 return True
     return False
+
+
+_GENERIC_BRAND_FRAGMENTS = frozenset({
+    "集团", "控股", "有限", "公司", "中国", "广告", "传媒", "媒体", "地铁", "自有", "运营商",
+})
+
+
+def _significant_brand_fragment(token: str) -> bool:
+    text = str(token or "").strip()
+    return len(text) >= 3 and text not in _GENERIC_BRAND_FRAGMENTS
 
 
 def _subtask_brand_text(subtask: GeoMonitorSubtask) -> str:
@@ -1405,9 +1641,21 @@ def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
             return True
         for fragment in _brand_term_match_fragments(term):
             token = fragment.lower()
-            if len(token) >= 2 and (token in normalized or normalized in token):
+            if _significant_brand_fragment(token) and (token in normalized or normalized in token):
                 return True
     return False
+
+
+def _collect_ranking_entries(subtask: GeoMonitorSubtask) -> list[dict[str, Any]]:
+    text = _subtask_answer_plaintext(subtask)
+    entries: list[dict[str, Any]] = []
+    for source in (
+        normalize_structured_rankings(subtask.all_rankings_json or []),
+        parse_answer_rankings(text),
+    ):
+        if source:
+            entries.extend(source)
+    return entries
 
 
 def _find_brand_in_rankings(
@@ -1480,6 +1728,9 @@ def _resolve_brand_rank(
     if in_ranking_list:
         return None, True
 
+    if _collect_ranking_entries(subtask):
+        return None, False
+
     if is_industry_task:
         return None, has_brand_in_text
 
@@ -1489,7 +1740,7 @@ def _resolve_brand_rank(
         if appearance_rank is not None:
             return appearance_rank, True
 
-    if subtask.mention_position is not None:
+    if subtask.mention_position is not None and has_brand_in_text:
         return subtask.mention_position, True
 
     return None, has_brand_in_text
@@ -1522,8 +1773,6 @@ def serialize_subtask_for_display(
 ) -> dict[str, Any]:
     """Serialize subtask with brand-aware rank for customer-facing views."""
     data = serialize_subtask(subtask)
-    if asset is None:
-        return data
     rank_payload = _matrix_cell_rank(subtask, monitor_keywords, asset, keyword_groups)
     data["raw_mention_position"] = rank_payload["raw_mention_position"]
     data["brand_mentioned"] = rank_payload["brand_mentioned"]
@@ -1552,11 +1801,7 @@ def ranking_matrix(
     if tenant_id is None:
         raise ValueError("排名矩阵仅支持客户侧查看，请使用企业账号登录")
 
-    now = datetime.now()
-    range_start = start_at or (now - timedelta(days=7))
-    range_end = end_at or now
-    if range_start > range_end:
-        range_start, range_end = range_end, range_start
+    range_start, range_end = resolve_monitor_date_range(current, start_at, end_at)
 
     asset = get_brand_asset(db, tenant_id)
     keyword_group_rows = list_keyword_groups(db, tenant_id)
@@ -1596,9 +1841,11 @@ def ranking_matrix(
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
-            GeoMonitorSubtask.updated_at >= range_start,
-            GeoMonitorSubtask.updated_at <= range_end,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
+            or_(
+                GeoMonitorSubtask.updated_at >= range_start - timedelta(days=45),
+                GeoMonitorTask.created_at >= range_start - timedelta(days=45),
+            ),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
     )
@@ -1626,6 +1873,7 @@ def ranking_matrix(
 
     task_ids = list({item.task_id for item in subtasks if item.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
+    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
 
     prompt_set: dict[str, str | None] = {}
     task_rows: dict[str, dict[str, Any]] = {}
@@ -1637,14 +1885,18 @@ def ranking_matrix(
             continue
         if prompt_monitor_intent(prompt) != "ranking":
             continue
-        day_key = _matrix_day_key(item.updated_at)
-        if not day_key:
-            continue
-        schedule_ctx = resolve_task_schedule_context(
+        schedule_ctx = _resolve_subtask_schedule_context(
             item.task,
-            schedule_runs_map.get(task_id),
+            schedule_runs_map,
             asset,
+            lead_runs_map,
         )
+        detect_dt = _subtask_detect_datetime(item, item.task, schedule_ctx)
+        if detect_dt is None:
+            continue
+        if detect_dt < range_start or detect_dt > range_end:
+            continue
+        day_key = detect_dt.date().isoformat()
         keyword_group = schedule_ctx.get("keyword_group")
         prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
         row_key = _matrix_row_key(
@@ -1673,6 +1925,7 @@ def ranking_matrix(
             "task_id": task_id,
             "schedule_window_key": schedule_ctx.get("schedule_window_key"),
             "schedule_label": schedule_ctx.get("schedule_label"),
+            "schedule_source": schedule_ctx.get("schedule_source"),
             "status": item.status,
             "page_screenshot": item.page_screenshot,
             "sentiment": item.sentiment,
@@ -1735,6 +1988,7 @@ def ranking_matrix(
         "brand_name": asset.brand_name if asset else None,
         "start_at": range_start.isoformat(),
         "end_at": range_end.isoformat(),
+        "display_period": "through_yesterday" if current.identity.identity_type == "CUSTOMER" else "custom",
         "columns": columns,
         "rows": rows,
         "schedule_round_count": schedule_round_count,
@@ -1793,6 +2047,75 @@ def _top3_rate_from_ranking_rows(ranking_rows: list[dict[str, Any]]) -> float:
         if row.get("brand_rank") is not None and float(row["brand_rank"]) <= 3
     )
     return round(top3 / ranking_total * 100, 1)
+
+
+def customer_subtask_visible(
+    subtask: GeoMonitorSubtask,
+    now: datetime | None = None,
+    *,
+    task: GeoMonitorTask | None = None,
+    schedule_ctx: dict[str, Any] | None = None,
+) -> bool:
+    """客户侧是否可见：按检测日或 updated_at 截止昨日（补录不改检测日）。"""
+    cutoff = customer_display_cutoff(now)
+    if subtask.updated_at and subtask.updated_at <= cutoff:
+        return True
+    if task is None:
+        return False
+    detect_dt = _subtask_detect_datetime(subtask, task, schedule_ctx)
+    return bool(detect_dt and detect_dt <= cutoff)
+
+
+def invalidate_monitor_summary_cache(tenant_id: int | None = None) -> None:
+    """补录/同步后清理监测摘要缓存，避免客户侧仍读旧数据。"""
+    from app.core.redis_client import delete_cache
+
+    if tenant_id is not None:
+        delete_cache(f"monitor:summary:v3:CUSTOMER:{tenant_id}")
+    delete_cache("monitor:summary:v3:PLATFORM:platform")
+
+
+def filter_subtasks_for_customer(
+    subtasks: list[GeoMonitorSubtask],
+    now: datetime | None = None,
+    *,
+    task: GeoMonitorTask | None = None,
+    db: Session | None = None,
+) -> list[GeoMonitorSubtask]:
+    schedule_ctx: dict[str, Any] | None = None
+    if task is not None and db is not None:
+        schedule_runs_map = schedule_runs_for_tasks(db, [task.task_id])
+        lead_runs_map = lead_diagnosis_runs_for_tasks(db, [task.task_id])
+        asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+        schedule_ctx = _resolve_subtask_schedule_context(task, schedule_runs_map, asset, lead_runs_map)
+    return [
+        item
+        for item in subtasks
+        if customer_subtask_visible(
+            item,
+            now,
+            task=task or getattr(item, "task", None),
+            schedule_ctx=schedule_ctx,
+        )
+    ]
+
+
+def _workspace_visible_day_keys(
+    daily_ranking: dict[str, list[dict[str, Any]]],
+    daily_exposure: dict[str, list[dict[str, Any]]],
+    *,
+    cutoff: datetime,
+) -> list[str]:
+    cutoff_day = cutoff.date().isoformat()
+    keys = set(daily_ranking) | set(daily_exposure)
+    return sorted(key for key in keys if key <= cutoff_day)
+
+
+def _workspace_day_label(day_key: str) -> str:
+    try:
+        return datetime.strptime(day_key, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return day_key
 
 
 def _round_metrics_from_rows(
@@ -1900,14 +2223,87 @@ def _build_workspace_kpi_trends(
     return points
 
 
+def compute_workspace_health_score(
+    *,
+    brand_mention_rate: float,
+    top3_rate: float,
+    avg_brand_rank: float | None,
+    competitor_count: int = 0,
+    competitor_score: int | None = None,
+) -> dict[str, int | None]:
+    """客户工作台健康分：默认可见度 60% + 排名 40%；配置竞品时纳入竞品优势 20%。"""
+    visibility = round(float(brand_mention_rate or 0) * 0.6 + float(top3_rate or 0) * 0.4)
+    rank_score: int | None = None
+    if avg_brand_rank is not None:
+        rank_score = round(max(0.0, min(100.0, 100.0 - (float(avg_brand_rank) - 1.0) * 20.0)))
+
+    use_competitor = competitor_count > 0 and competitor_score is not None
+    if use_competitor:
+        if rank_score is not None:
+            health_score = round(visibility * 0.5 + rank_score * 0.3 + competitor_score * 0.2)
+        else:
+            health_score = round(visibility * 0.65 + competitor_score * 0.35)
+    elif rank_score is not None:
+        health_score = round(visibility * 0.6 + rank_score * 0.4)
+    else:
+        health_score = visibility
+
+    return {
+        "health_score": health_score,
+        "visibility_score": visibility,
+        "rank_score": rank_score,
+        "competitor_score": competitor_score if use_competitor else None,
+    }
+
+
+def _workspace_competitor_score(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int,
+    competitor_count: int,
+) -> dict[str, float | int | None]:
+    """较竞品维度：品牌露出率相对最强竞品的领先幅度映射为 0–100 分。"""
+    if competitor_count <= 0:
+        return {
+            "competitor_score": None,
+            "top_competitor_mention_rate": None,
+            "competitor_lead_delta": None,
+        }
+    from app.services.competitor_analytics_service import build_competitor_compare_summary
+
+    summary = build_competitor_compare_summary(db, current, tenant_id=tenant_id, days=7)
+    if int(summary.get("sample_total") or 0) <= 0:
+        return {
+            "competitor_score": None,
+            "top_competitor_mention_rate": None,
+            "competitor_lead_delta": None,
+        }
+    brand_row = next((row for row in summary.get("rows", []) if row.get("is_brand")), None)
+    comp_rows = [row for row in summary.get("rows", []) if not row.get("is_brand")]
+    if brand_row is None or not comp_rows:
+        return {
+            "competitor_score": None,
+            "top_competitor_mention_rate": None,
+            "competitor_lead_delta": None,
+        }
+    brand_rate = float(brand_row.get("mention_rate") or 0)
+    top_comp_rate = max(float(row.get("mention_rate") or 0) for row in comp_rows)
+    lead_delta = round(brand_rate - top_comp_rate, 1)
+    return {
+        "competitor_score": round(max(0.0, min(100.0, 50.0 + lead_delta))),
+        "top_competitor_mention_rate": top_comp_rate,
+        "competitor_lead_delta": lead_delta,
+    }
+
+
 def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
     """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources."""
     if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
         raise ValueError("运营工作台简报仅支持客户企业账号")
 
     tenant_id = current.identity.tenant_id
-    now = datetime.now()
-    range_start = now - timedelta(days=7)
+    range_end = customer_display_cutoff()
+    trend_start, trend_end = customer_display_date_range(default_lookback_days=7)
 
     asset = get_brand_asset(db, tenant_id)
     keyword_group_rows = list_keyword_groups(db, tenant_id)
@@ -1937,6 +2333,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
                 GeoMonitorSubtask.status,
                 GeoMonitorSubtask.answer_content,
                 GeoMonitorSubtask.mention_context,
+                GeoMonitorSubtask.page_screenshot,
                 GeoMonitorSubtask.reference_list_json,
                 GeoMonitorSubtask.mention_position,
                 GeoMonitorSubtask.all_rankings_json,
@@ -1947,8 +2344,11 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
-            GeoMonitorSubtask.updated_at >= range_start,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
+            or_(
+                GeoMonitorSubtask.updated_at >= trend_start - timedelta(days=45),
+                GeoMonitorTask.created_at >= trend_start - timedelta(days=45),
+            ),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
     )
@@ -1958,10 +2358,8 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
 
     task_ids = list({item.task_id for item in subtasks if item.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
+    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
 
-    schedule_buckets: dict[str, dict[str, Any]] = {}
-    window_ranking: dict[str, list[dict[str, Any]]] = {}
-    window_exposure: dict[str, list[dict[str, Any]]] = {}
     ranking_rows: list[dict[str, Any]] = []
     exposure_rows: list[dict[str, Any]] = []
     daily_ranking: dict[str, list[dict[str, Any]]] = {}
@@ -1973,23 +2371,15 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         if item.task is None:
             continue
         intent = prompt_monitor_intent(item.prompt)
-        schedule_ctx = resolve_task_schedule_context(
+        schedule_ctx = _resolve_subtask_schedule_context(
             item.task,
-            schedule_runs_map.get(item.task_id or ""),
+            schedule_runs_map,
             asset,
+            lead_runs_map,
         )
-        window_key = str(schedule_ctx.get("schedule_window_key") or item.task_id or "")
-        bucket = schedule_buckets.setdefault(
-            window_key,
-            {
-                "schedule_window_key": window_key,
-                "schedule_label": schedule_ctx.get("schedule_label"),
-                "completed_subtasks": 0,
-                "total_subtasks": 0,
-            },
-        )
-        bucket["total_subtasks"] += 1
-        bucket["completed_subtasks"] += 1
+        detect_dt = _subtask_detect_datetime(item, item.task, schedule_ctx)
+        if detect_dt is None or detect_dt > range_end:
+            continue
 
         monitor_keywords = item.task.monitor_keywords
         brand_rank, brand_mentioned = _resolve_brand_rank(
@@ -2008,29 +2398,26 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             "prompt": item.prompt,
             "keyword_group": keyword_group,
             "schedule_label": schedule_ctx.get("schedule_label"),
-            "schedule_window_key": window_key,
+            "schedule_window_key": schedule_ctx.get("schedule_window_key"),
             "prompt_intent": intent,
             "brand_rank": brand_rank,
             "brand_mentioned": brand_mentioned,
             "sentiment": sentiment_label,
             "answer_excerpt": _answer_excerpt(item.answer_content, 100),
+            "page_screenshot": item.page_screenshot,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         }
         snapshot_candidates.append(row_payload)
 
         if intent == "ranking":
             ranking_rows.append(row_payload)
-            window_ranking.setdefault(window_key, []).append(row_payload)
-            if item.updated_at:
-                day_key = item.updated_at.date().isoformat()
-                daily_ranking.setdefault(day_key, []).append(row_payload)
+            day_key = detect_dt.date().isoformat()
+            daily_ranking.setdefault(day_key, []).append(row_payload)
 
         else:
             exposure_rows.append(row_payload)
-            window_exposure.setdefault(window_key, []).append(row_payload)
-            if item.updated_at:
-                day_key = item.updated_at.date().isoformat()
-                daily_exposure.setdefault(day_key, []).append(row_payload)
+            day_key = detect_dt.date().isoformat()
+            daily_exposure.setdefault(day_key, []).append(row_payload)
 
         for source in item.reference_list_json or []:
             if not _is_valid_citation_source(source):
@@ -2052,10 +2439,11 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             if item.platform and item.platform not in src["platforms"]:
                 src["platforms"].append(item.platform)
 
-    latest_key = None
-    previous_key = None
+    latest_day: str | None = None
+    previous_day: str | None = None
     latest_schedule = None
     previous_schedule = None
+    display_metrics = _round_metrics_from_rows([], [])
     round_comparison: dict[str, Any] = {
         "has_previous": False,
         "latest_schedule_label": None,
@@ -2065,59 +2453,67 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         "top3_rate_delta": None,
         "negative_count_delta": None,
     }
-    if schedule_buckets:
-        sorted_windows = sorted(schedule_buckets.keys(), key=schedule_window_sort_key)
-        latest_key = sorted_windows[-1]
-        latest_schedule = schedule_buckets[latest_key]
-        latest_metrics = _round_metrics_from_rows(
-            window_ranking.get(latest_key, []),
-            window_exposure.get(latest_key, []),
-        )
-        round_comparison["latest_schedule_label"] = latest_schedule.get("schedule_label")
-        if len(sorted_windows) >= 2:
-            previous_key = sorted_windows[-2]
-            previous_schedule = schedule_buckets[previous_key]
-            previous_metrics = _round_metrics_from_rows(
-                window_ranking.get(previous_key, []),
-                window_exposure.get(previous_key, []),
-            )
+
+    visible_days = _workspace_visible_day_keys(daily_ranking, daily_exposure, cutoff=range_end)
+    if visible_days:
+        latest_day = visible_days[-1]
+        latest_ranking_rows = daily_ranking.get(latest_day, [])
+        latest_exposure_rows = daily_exposure.get(latest_day, [])
+        display_metrics = _round_metrics_from_rows(latest_ranking_rows, latest_exposure_rows)
+        latest_label = _workspace_day_label(latest_day)
+        latest_schedule = {
+            "schedule_window_key": latest_day,
+            "schedule_label": f"{latest_label} 监测",
+            "completed_subtasks": len(latest_ranking_rows) + len(latest_exposure_rows),
+            "total_subtasks": len(latest_ranking_rows) + len(latest_exposure_rows),
+        }
+        round_comparison["latest_schedule_label"] = latest_schedule["schedule_label"]
+        if len(visible_days) >= 2:
+            previous_day = visible_days[-2]
+            previous_ranking_rows = daily_ranking.get(previous_day, [])
+            previous_exposure_rows = daily_exposure.get(previous_day, [])
+            previous_metrics = _round_metrics_from_rows(previous_ranking_rows, previous_exposure_rows)
+            previous_schedule = {
+                "schedule_window_key": previous_day,
+                "schedule_label": f"{_workspace_day_label(previous_day)} 监测",
+                "completed_subtasks": len(previous_ranking_rows) + len(previous_exposure_rows),
+                "total_subtasks": len(previous_ranking_rows) + len(previous_exposure_rows),
+            }
             round_comparison["has_previous"] = True
-            round_comparison["previous_schedule_label"] = previous_schedule.get("schedule_label")
-            if latest_metrics["avg_brand_rank"] is not None and previous_metrics["avg_brand_rank"] is not None:
+            round_comparison["previous_schedule_label"] = previous_schedule["schedule_label"]
+            if display_metrics["avg_brand_rank"] is not None and previous_metrics["avg_brand_rank"] is not None:
                 round_comparison["avg_brand_rank_delta"] = round(
-                    latest_metrics["avg_brand_rank"] - previous_metrics["avg_brand_rank"],
+                    display_metrics["avg_brand_rank"] - previous_metrics["avg_brand_rank"],
                     1,
                 )
             round_comparison["mention_rate_delta"] = round(
-                latest_metrics["brand_mention_rate"] - previous_metrics["brand_mention_rate"],
+                display_metrics["brand_mention_rate"] - previous_metrics["brand_mention_rate"],
                 1,
             )
             round_comparison["top3_rate_delta"] = round(
-                latest_metrics["top3_rate"] - previous_metrics["top3_rate"],
+                display_metrics["top3_rate"] - previous_metrics["top3_rate"],
                 1,
             )
             round_comparison["negative_count_delta"] = (
-                latest_metrics["negative_count"] - previous_metrics["negative_count"]
+                display_metrics["negative_count"] - previous_metrics["negative_count"]
             )
+    elif ranking_rows or exposure_rows:
+        display_metrics = _round_metrics_from_rows(ranking_rows, exposure_rows)
 
-    ranking_total = len(ranking_rows)
-    ranking_mentioned = sum(1 for row in ranking_rows if row.get("brand_mentioned"))
-    rank_values = [float(row["brand_rank"]) for row in ranking_rows if row.get("brand_rank") is not None]
+    ranking_total = display_metrics["ranking_sample_count"]
+    brand_mention_rate = display_metrics["brand_mention_rate"]
+    avg_brand_rank = display_metrics["avg_brand_rank"]
+    top3_rate = display_metrics["top3_rate"]
+    negative_count = display_metrics["negative_count"]
+    negative_rate = display_metrics["negative_rate"]
+    exposure_sample_count = display_metrics["exposure_sample_count"]
     competitor_count = len(list_competitors(db, tenant_id))
 
-    brand_mention_rate = round(ranking_mentioned / ranking_total * 100, 1) if ranking_total else 0.0
-    avg_brand_rank = round(sum(rank_values) / len(rank_values), 1) if rank_values else None
-    top3_rate = _top3_rate_from_ranking_rows(ranking_rows)
-
-    exposure_recognized = [row for row in exposure_rows if row.get("sentiment") in ("正面", "中性", "负面")]
-    negative_count = sum(1 for row in exposure_rows if row.get("sentiment") == "负面")
-    negative_rate = round(negative_count / len(exposure_recognized) * 100, 1) if exposure_recognized else 0.0
-
     latest_platform_stats = _platform_stats_from_ranking_rows(
-        window_ranking.get(latest_key, []) if latest_key else ranking_rows
+        daily_ranking.get(latest_day, []) if latest_day else ranking_rows
     )
     previous_platform_stats = _platform_stats_from_ranking_rows(
-        window_ranking.get(previous_key, []) if previous_key else []
+        daily_ranking.get(previous_day, []) if previous_day else []
     )
     platform_highlights = [
         _platform_highlight_entry(
@@ -2127,24 +2523,54 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         )
         for code in purchased_platforms
     ]
-    kpi_trends = _build_workspace_kpi_trends(daily_ranking, daily_exposure, range_start, now)
+    kpi_trends = _build_workspace_kpi_trends(daily_ranking, daily_exposure, trend_start, trend_end)
 
-    top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
+    latest_day_source_map: dict[str, dict[str, Any]] = {}
+    for item in subtasks:
+        if latest_day and (not item.updated_at or item.updated_at.date().isoformat() != latest_day):
+            continue
+        for source in item.reference_list_json or []:
+            if not _is_valid_citation_source(source):
+                continue
+            url = source.get("url") or source.get("site") or source.get("title")
+            if not url:
+                continue
+            key = str(url).split("?")[0]
+            src = latest_day_source_map.setdefault(
+                key,
+                {
+                    "title": source.get("title") or source.get("site") or key,
+                    "url": key,
+                    "count": 0,
+                    "platforms": [],
+                },
+            )
+            src["count"] += 1
+            if item.platform and item.platform not in src["platforms"]:
+                src["platforms"].append(item.platform)
+
+    top_sources = sorted(latest_day_source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
+    if not top_sources:
+        top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
     for row in top_sources:
         row["platforms"] = sort_platform_codes(row["platforms"])[:4]
 
-    recent_snapshots = snapshot_candidates[:6]
+    recent_snapshots = (
+        [item for item in snapshot_candidates if (item.get("updated_at") or "")[:10] == latest_day][:6]
+        if latest_day
+        else snapshot_candidates[:6]
+    )
 
     alerts: list[dict[str, str]] = []
     if not subtasks:
         alerts.append({
             "level": "info",
-            "message": "近 7 日暂无已完成检测结果，请等待定时监测任务返回。",
+            "message": "截至昨日暂无已完成检测结果，请等待定时监测任务返回。",
         })
     elif negative_count > 0:
         alerts.append({
             "level": "warn",
-            "message": f"近 7 日口碑类问题中有 {negative_count} 条负面样本，建议查看实时检测详情。",
+            "message": f"截至昨日，口碑类问题中有 {negative_count} 条负面样本，建议查看实时检测详情。",
         })
     if round_comparison.get("has_previous"):
         rank_delta = round_comparison.get("avg_brand_rank_delta")
@@ -2169,19 +2595,35 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         if highlight["sample_count"] == 0 and highlight["platform"] in purchased_set:
             alerts.append({
                 "level": "info",
-                "message": f"平台 {highlight['platform']} 近 7 日暂无推荐类返回，请确认监测配置。",
+                "message": f"平台 {highlight['platform']} 截至昨日暂无推荐类返回，请确认监测配置。",
             })
 
     plan = schedule_plan_summary(asset)
     schedule_times = plan.get("schedule_times") or []
     next_schedule_hint = f"每日 {('、'.join(schedule_times))}" if schedule_times else plan.get("schedule_type_label")
 
+    competitor_metrics = _workspace_competitor_score(db, current, tenant_id, competitor_count)
+    health = compute_workspace_health_score(
+        brand_mention_rate=brand_mention_rate,
+        top3_rate=top3_rate,
+        avg_brand_rank=avg_brand_rank,
+        competitor_count=competitor_count,
+        competitor_score=competitor_metrics.get("competitor_score"),
+    )
+
     return {
         "tenant_id": tenant_id,
         "brand_name": asset.brand_name if asset else None,
         "company_name": asset.company_full_name if asset else None,
-        "start_at": range_start.isoformat(),
-        "end_at": now.isoformat(),
+        "start_at": trend_start.isoformat(),
+        "end_at": range_end.isoformat(),
+        "trend_start_at": trend_start.isoformat(),
+        "trend_end_at": trend_end.isoformat(),
+        "display_period": "through_yesterday",
+        "display_day": latest_day,
+        "platform_period_label": (
+            f"最新监测日 {latest_day}" if latest_day else None
+        ),
         "latest_schedule": latest_schedule,
         "previous_schedule": previous_schedule,
         "round_comparison": round_comparison,
@@ -2193,10 +2635,10 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             "brand_mention_rate": brand_mention_rate,
             "avg_brand_rank": avg_brand_rank,
             "top3_rate": top3_rate,
-            "exposure_sample_count": len(exposure_rows),
+            "exposure_sample_count": exposure_sample_count,
             "negative_count": negative_count,
             "negative_rate": negative_rate,
-            "source_count": sum(row["count"] for row in source_map.values()),
+            "source_count": sum(row["count"] for row in top_sources),
             "keyword_group_count": len(keyword_groups),
             "competitor_count": competitor_count,
         },
@@ -2205,4 +2647,54 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         "top_sources": top_sources,
         "recent_snapshots": recent_snapshots,
         "alerts": alerts,
+        "health_score": health["health_score"],
+        "visibility_score": health["visibility_score"],
+        "rank_score": health["rank_score"],
+        "competitor_score": health["competitor_score"],
+        "top_competitor_mention_rate": competitor_metrics.get("top_competitor_mention_rate"),
+        "competitor_lead_delta": competitor_metrics.get("competitor_lead_delta"),
     }
+
+
+def subtask_needs_snapshot_backfill(subtask: GeoMonitorSubtask) -> bool:
+    """失败或无回答的子任务需要运营快照补录。"""
+    if subtask.answer_content:
+        return False
+    if subtask.status in {"failed", "stopped"}:
+        return True
+    if subtask.error_message and subtask.status in TERMINAL_STATUSES:
+        return True
+    return False
+
+
+def recompute_subtask_rank_from_answer(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    override_mention_position: int | None = None,
+) -> None:
+    """根据补录正文重算 mention_position，供聚合与健康分使用。"""
+    if override_mention_position is not None:
+        subtask.mention_position = override_mention_position
+        return
+
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    groups = (
+        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+        if task.tenant_id
+        else []
+    )
+    brand_terms = _ranking_match_terms(asset, groups)
+    if not brand_terms:
+        keyword = str(task.monitor_keywords or "").strip()
+        brand_terms = [keyword] if keyword else []
+        request = task.raw_request_json or {}
+        for alias in request.get("monitorKeywordAliases") or request.get("monitor_keyword_aliases") or []:
+            text = str(alias or "").strip()
+            if text and text not in brand_terms:
+                brand_terms.append(text)
+
+    rank, _mentioned = _resolve_brand_rank(subtask, task.monitor_keywords, brand_terms, asset)
+    if rank is not None:
+        subtask.mention_position = int(rank) if float(rank).is_integer() else rank

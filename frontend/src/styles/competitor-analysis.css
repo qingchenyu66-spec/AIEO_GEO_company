@@ -22,6 +22,17 @@
   gap: 10px 12px;
 }
 
+.competitor-customer-period,
+.source-customer-period {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(45, 108, 223, 0.08);
+  color: #2d6cdf;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .competitor-date-presets {
   display: inline-flex;
   padding: 3px;
@@ -528,6 +539,11 @@
 
 .brand-insights-trend-echart {
   height: 240px;
+}
+
+.brand-insights-trend-note {
+  color: #8a9bb1;
+  font-size: 12px;
 }
 
 .brand-insights-rank-table {

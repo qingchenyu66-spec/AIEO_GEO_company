@@ -17,7 +17,10 @@ import {
   TimerReset,
   Zap,
 } from '@lucide/vue'
+import * as echarts from 'echarts'
+import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
+import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
 import '../../../styles/lead-diagnosis.css'
 
 const {
@@ -42,8 +45,20 @@ const {
   diagnosisBlock,
   platformStats,
   highlights,
+  reportSections,
+  promptAnalytics,
+  sourceAnalysis,
+  rankTrend,
+  brandCityRankings,
+  trackedEntities,
+  executiveSummary,
+  hasReportSections,
+  regionOptions,
+  regionLabel,
   promptTemplates,
   scheduleSlots,
+  scheduleDays,
+  scheduleTotal,
   runStatusLabels,
   statusLabels,
   platformLabelMap,
@@ -62,9 +77,18 @@ const {
   handleExport,
 } = useLeadDiagnosis()
 
+const sectionLabels: Record<string, string> = {
+  industry_analysis: '1. 行业分析',
+  ranking_analysis: '2. 排名分析',
+  mention_analysis: '3. 提及率分析',
+  source_analysis: '4. 引用网站分析',
+  action_recommendations: '5. 优化建议',
+}
+const analysisSectionTitle = '数据分析与优化建议'
+
 const workflowSteps = [
-  { title: '录入客户画像', desc: '品牌、联系人、竞品与核心问题', icon: Target },
-  { title: '三时段采集', desc: scheduleSlots.join(' / '), icon: TimerReset },
+  { title: '录入客户画像', desc: '品牌、竞品与核心问题', icon: Target },
+  { title: '三天九次采集', desc: `${scheduleDays} 天 × ${scheduleSlots.join(' / ')}`, icon: TimerReset },
   { title: '生成诊断结论', desc: '聚合平台表现、排名与引用信源', icon: Sparkles },
   { title: '交付 PDF', desc: '可直接用于售前沟通', icon: FileText },
 ]
@@ -83,14 +107,110 @@ function formatRank(value: unknown) {
   return Number.isInteger(number) ? `#${number}` : `#${number.toFixed(1)}`
 }
 
-function listProgress(item: { completed_run_count: number; schedule_times: string[] }) {
-  const total = item.schedule_times?.length || 3
+function listProgress(item: { completed_run_count: number; schedule_total_count?: number }) {
+  const total = item.schedule_total_count ?? scheduleTotal
   return Array.from({ length: total }, (_, index) => {
     if (index < item.completed_run_count) return 'done'
     if (index === item.completed_run_count && item.completed_run_count < total) return 'running'
     return ''
   })
 }
+
+const rankTrendChartRef = ref<HTMLElement | null>(null)
+let rankTrendChart: echarts.ECharts | null = null
+const promptTrendRefs = new Map<number, HTMLElement>()
+const promptMentionRefs = new Map<number, HTMLElement>()
+const promptTrendCharts = new Map<number, echarts.ECharts>()
+const promptMentionCharts = new Map<number, echarts.ECharts>()
+
+function bindPromptTrendRef(index: number, el: Element | null) {
+  if (el instanceof HTMLElement) promptTrendRefs.set(index, el)
+}
+
+function bindPromptMentionRef(index: number, el: Element | null) {
+  if (el instanceof HTMLElement) promptMentionRefs.set(index, el)
+}
+
+function renderRankTrendChart() {
+  if (!rankTrendChartRef.value || !rankTrend.value.length || !detail.value) return
+  if (!rankTrendChart) rankTrendChart = echarts.init(rankTrendChartRef.value)
+  const entities = trackedEntities.value.length
+    ? trackedEntities.value
+    : [detail.value.brand_name, ...(detail.value.competitors || [])].filter(Boolean).slice(0, 4)
+  renderEntityRankTrendChart(
+    rankTrendChart,
+    rankTrend.value,
+    detail.value.brand_name,
+    entities as string[],
+  )
+}
+
+function disposeRankTrendChart() {
+  if (rankTrendChart) {
+    rankTrendChart.dispose()
+    rankTrendChart = null
+  }
+}
+
+function disposePromptCharts() {
+  for (const chart of promptTrendCharts.values()) chart.dispose()
+  for (const chart of promptMentionCharts.values()) chart.dispose()
+  promptTrendCharts.clear()
+  promptMentionCharts.clear()
+}
+
+async function renderPromptCharts() {
+  if (detailTab.value !== 'queries' || !promptAnalytics.value.length || !detail.value) {
+    disposePromptCharts()
+    return
+  }
+  await nextTick()
+  const brand = detail.value.brand_name
+  const entities = trackedEntities.value.length
+    ? trackedEntities.value
+    : [brand, ...(detail.value.competitors || [])].filter(Boolean).slice(0, 4)
+
+  promptAnalytics.value.forEach((block, index) => {
+    const roundTrend = (block.round_trend as Array<Record<string, unknown>> | undefined) || []
+    const mentionTable = (block.mention_table as Array<Record<string, unknown>> | undefined) || []
+    const trendEl = promptTrendRefs.get(index)
+    if (trendEl && roundTrend.length) {
+      let chart = promptTrendCharts.get(index)
+      if (!chart) {
+        chart = echarts.init(trendEl)
+        promptTrendCharts.set(index, chart)
+      }
+      renderEntityRankTrendChart(chart, roundTrend, brand, entities as string[])
+    }
+    const mentionEl = promptMentionRefs.get(index)
+    if (mentionEl && mentionTable.length) {
+      let chart = promptMentionCharts.get(index)
+      if (!chart) {
+        chart = echarts.init(mentionEl)
+        promptMentionCharts.set(index, chart)
+      }
+      renderMentionRateBarChart(chart, mentionTable)
+    }
+  })
+}
+
+watch([detailTab, rankTrend, trackedEntities, selectedId], async () => {
+  if (detailTab.value !== 'report' || !rankTrend.value.length) {
+    disposeRankTrendChart()
+    return
+  }
+  await nextTick()
+  renderRankTrendChart()
+}, { deep: true })
+
+watch([detailTab, promptAnalytics, trackedEntities, selectedId], () => {
+  void renderPromptCharts()
+}, { deep: true })
+
+onUnmounted(() => {
+  disposeRankTrendChart()
+  disposePromptCharts()
+})
 </script>
 
 <template>
@@ -118,17 +238,17 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
             <span>品牌名称 *</span>
             <input v-model="createForm.brand_name" placeholder="例如：北京艾迪亚控股集团有限公司" />
           </label>
-          <label class="lead-field">
-            <span>联系人</span>
-            <input v-model="createForm.contact_name" placeholder="销售跟进对象" />
-          </label>
-          <label class="lead-field">
-            <span>手机号</span>
-            <input v-model="createForm.contact_phone" placeholder="内部备注，不对外展示" />
-          </label>
           <label class="lead-field lead-field-wide">
             <span>主要竞品</span>
             <input v-model="createForm.competitors" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
+          </label>
+          <label class="lead-field">
+            <span>监测地区</span>
+            <select v-model="createForm.region_code">
+              <option v-for="region in regionOptions" :key="region.code || 'all'" :value="region.code">
+                {{ region.name }}
+              </option>
+            </select>
           </label>
           <label class="lead-field lead-field-wide">
             <span>销售备注</span>
@@ -137,7 +257,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
         </div>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
-          <span>提交后按 <b>{{ scheduleSlots.join(' / ') }}</b> 三个时段抓取，全平台数据汇总后可导出 PDF。</span>
+          <span>提交后连续 <b>{{ scheduleDays }}</b> 天、每天 <b>{{ scheduleSlots.join(' / ') }}</b> 共九次抓取，全部完成后可导出 PDF。</span>
         </div>
         <div class="lead-form-actions">
           <button type="button" class="lead-secondary-btn" @click="closeCreatePanel">取消</button>
@@ -161,7 +281,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
         </div>
         <label class="lead-check-row">
           <input v-model="createForm.start_immediately" type="checkbox" />
-          <span>创建后立即启动首轮抓取，其余时段仍按计划执行</span>
+          <span>创建后立即启动第 1 次抓取（计入九次），其余八次仍按计划自动执行</span>
         </label>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
@@ -198,7 +318,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
 
         <label class="lead-search">
           <Search :size="15" />
-          <input v-model="keywordFilter" placeholder="搜索品牌、联系人、手机号" />
+          <input v-model="keywordFilter" placeholder="搜索品牌" />
         </label>
 
         <div class="lead-rail-filters">
@@ -231,7 +351,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
               <b>{{ item.brand_name }}</b>
               <span class="lead-badge" :class="item.status">{{ statusLabels[item.status] }}</span>
             </div>
-            <p>{{ item.contact_name || '未填联系人' }} · {{ item.diagnosis_date }}</p>
+            <p>诊断日期 {{ item.diagnosis_date }}</p>
             <div class="lead-rail-progress">
               <i v-for="(state, idx) in listProgress(item)" :key="idx" :class="state" />
             </div>
@@ -271,11 +391,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
             <div>
               <span class="lead-badge" :class="detail?.status">{{ detail ? statusLabels[detail.status] : '' }}</span>
               <h2>{{ detail?.brand_name }}</h2>
-              <small>
-                {{ detail?.contact_name || '未填联系人' }}
-                <template v-if="detail?.contact_phone"> · {{ detail.contact_phone }}</template>
-                · 诊断日期 {{ detail?.diagnosis_date }}
-              </small>
+              <small>诊断日期 {{ detail?.diagnosis_date }}</small>
             </div>
             <div class="lead-detail-actions">
               <button type="button" class="lead-secondary-btn small" :disabled="detailLoading" @click="handleRefresh">
@@ -314,7 +430,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
               <div class="lead-kpi">
                 <label>采集进度</label>
                 <strong>{{ progressPercent }}%</strong>
-                <span>{{ detail.completed_run_count }}/{{ detail.schedule_times?.length || scheduleSlots.length }} 时段完成</span>
+                <span>{{ detail.completed_run_count }}/{{ detail.schedule_total_count ?? scheduleTotal }} 次完成</span>
               </div>
             </div>
 
@@ -324,6 +440,12 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
               </button>
               <button type="button" :class="{ active: detailTab === 'report' }" :disabled="detail.status !== 'ready'" @click="detailTab = 'report'">
                 <FileText :size="14" /> 诊断结论
+              </button>
+              <button type="button" :class="{ active: detailTab === 'queries' }" :disabled="detail.status !== 'ready'" @click="detailTab = 'queries'">
+                <Search :size="14" /> 语义词分析
+              </button>
+              <button type="button" :class="{ active: detailTab === 'sources' }" :disabled="detail.status !== 'ready'" @click="detailTab = 'sources'">
+                <BarChart3 :size="14" /> 引用信源
               </button>
               <button type="button" :class="{ active: detailTab === 'platforms' }" :disabled="!platformStats.length" @click="detailTab = 'platforms'">
                 <BarChart3 :size="14" /> 平台表现
@@ -335,8 +457,8 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
 
             <section v-if="detailTab === 'progress'" class="lead-panel">
               <div class="lead-panel-title">
-                <h3>三时段抓取计划</h3>
-                <p>每个时段对全部启用平台和检测问题各跑一次，完成后自动汇总结论。</p>
+                <h3>三天九次抓取计划</h3>
+                <p>连续 {{ scheduleDays }} 天、每天三个时段各抓一轮，九次全部完成后自动汇总结论。</p>
               </div>
               <div class="lead-timeline">
                 <article v-for="slot in scheduleTimeline" :key="slot.schedule_key" class="lead-slot" :class="slotClass(slot.state)">
@@ -345,7 +467,8 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
                     <span v-else>{{ slot.index }}</span>
                   </div>
                   <div class="lead-slot-body">
-                    <b>{{ slot.slot }} 时段</b>
+                    <b>第 {{ slot.dayOffset }} 天 · {{ slot.slot }}</b>
+                    <small>{{ slot.day }}</small>
                     <small v-if="slot.run">
                       {{ slot.run.prompt_count }} 问题 x {{ slot.run.platform_count }} 平台 · {{ runStatusLabels[slot.run.status] || slot.run.status }}
                     </small>
@@ -365,22 +488,182 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
               </div>
               <div v-if="detail.status !== 'ready'" class="lead-form-hint">
                 <Lightbulb :size="16" />
-                <span>诊断尚未完成，请等待三时段抓取结束或刷新进度。</span>
+                <span>诊断尚未完成，请等待九次抓取全部结束或刷新进度。</span>
               </div>
-              <div v-else class="lead-report-block">
-                <article>
-                  <span>整体评估</span>
-                  <p>{{ diagnosisBlock.sentiment_summary || '暂无摘要' }}</p>
-                </article>
-                <article v-if="highlights.length">
-                  <span>核心发现</span>
-                  <ul>
+              <div v-else class="lead-report-layout">
+                <section v-if="rankTrend.length" class="lead-report-section wide">
+                  <h4>平均排名趋势图</h4>
+                  <p class="lead-report-intro">品牌及竞品平均排名，数值越小表示 AI 推荐越靠前。</p>
+                  <div ref="rankTrendChartRef" class="lead-rank-trend-chart" />
+                </section>
+
+                <section v-if="brandCityRankings.length" class="lead-report-section wide">
+                  <h4>品牌区域排名</h4>
+                  <p class="lead-report-intro">按监测地区汇总的品牌与竞品平均排名、提及率。</p>
+                  <div
+                    v-for="block in brandCityRankings"
+                    :key="String(block.region_code || block.region_name)"
+                    class="lead-city-rank-block"
+                  >
+                    <h5>{{ block.region_name }} · 样本 {{ block.sample_count }}</h5>
+                    <div class="lead-query-grid head city-rank">
+                      <span>品牌</span><span>提及率</span><span>平均排名</span>
+                    </div>
+                    <div
+                      v-for="row in (block.rows as Array<Record<string, unknown>>)"
+                      :key="String(row.name)"
+                      class="lead-query-grid city-rank"
+                      :class="{ 'is-brand': row.is_brand, 'is-competitor': row.is_competitor }"
+                    >
+                      <span>{{ row.name }}</span>
+                      <span>{{ row.mention_rate }}%</span>
+                      <span :class="rankToneClass(row.avg_rank as number | null)">{{ formatRank(row.avg_rank as number | null) }}</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section v-if="executiveSummary || diagnosisBlock.sentiment_summary || highlights.length" class="lead-report-section wide">
+                  <h4>核心洞察</h4>
+                  <p class="lead-report-intro">基于多轮抓取、语义词矩阵与引用信源交叉验证。</p>
+                  <p v-if="executiveSummary || diagnosisBlock.sentiment_summary" class="lead-report-lead">
+                    {{ executiveSummary || diagnosisBlock.sentiment_summary }}
+                  </p>
+                  <ul v-if="highlights.length" class="lead-report-highlights">
                     <li v-for="(line, index) in highlights" :key="index">{{ line }}</li>
                   </ul>
-                </article>
-                <article><span>优势亮点</span><p>{{ diagnosisBlock.strength_points || '-' }}</p></article>
-                <article><span>待改善项</span><p>{{ diagnosisBlock.weakness_points || '-' }}</p></article>
-                <article class="wide"><span>GEO 优化建议</span><p>{{ diagnosisBlock.recommendation || '-' }}</p></article>
+                </section>
+
+                <section v-if="hasReportSections" class="lead-report-section wide lead-report-analysis">
+                  <h4>{{ analysisSectionTitle }}</h4>
+                  <p class="lead-report-intro">基于监测样本、竞品对标与引用信源交叉分析，形成可落地的优化路径。</p>
+                  <div
+                    v-for="(label, key) in sectionLabels"
+                    :key="key"
+                    v-show="reportSections[key]"
+                    class="lead-report-analysis-item"
+                  >
+                    <h5>{{ label }}</h5>
+                    <div class="lead-report-analysis-body">
+                      <p v-for="(para, index) in splitNarrativeParagraphs(reportSections[key])" :key="index">{{ para }}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section v-else-if="diagnosisBlock.strength_points || diagnosisBlock.weakness_points || diagnosisBlock.recommendation" class="lead-report-section wide lead-report-analysis">
+                  <h4>{{ analysisSectionTitle }}</h4>
+                  <div v-if="diagnosisBlock.strength_points" class="lead-report-analysis-item">
+                    <h5>优势亮点</h5>
+                    <div class="lead-report-analysis-body">
+                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.strength_points)" :key="`s-${index}`">{{ para }}</p>
+                    </div>
+                  </div>
+                  <div v-if="diagnosisBlock.weakness_points" class="lead-report-analysis-item">
+                    <h5>待改善项</h5>
+                    <div class="lead-report-analysis-body">
+                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.weakness_points)" :key="`w-${index}`">{{ para }}</p>
+                    </div>
+                  </div>
+                  <div v-if="diagnosisBlock.recommendation" class="lead-report-analysis-item">
+                    <h5>GEO 优化建议</h5>
+                    <div class="lead-report-analysis-body">
+                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.recommendation)" :key="`r-${index}`">{{ para }}</p>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </section>
+
+            <section v-else-if="detailTab === 'queries'" class="lead-panel">
+              <div class="lead-panel-title">
+                <h3>语义词排名与提及率</h3>
+                <p>按每个检测问题汇总品牌、竞品及头部机构的排名与提及表现。</p>
+              </div>
+              <div v-if="!promptAnalytics.length" class="lead-form-hint">
+                <Lightbulb :size="16" /><span>暂无分语义词数据。</span>
+              </div>
+              <div v-for="(block, index) in promptAnalytics" :key="String(block.prompt)" class="lead-query-block">
+                <header>
+                  <b>{{ block.prompt }}</b>
+                  <small>
+                    样本 {{ block.sample_count }} · 品牌提及率 {{ block.brand_mention_rate }}% · 平均排名 {{ formatRank(block.brand_avg_rank) }}
+                  </small>
+                </header>
+                <div v-if="(block.round_trend as Array<Record<string, unknown>>)?.length" class="lead-query-charts">
+                  <div class="lead-query-chart-card">
+                    <div class="lead-query-subtitle">问题{{ index + 1 }}趋势图</div>
+                    <div :ref="el => bindPromptTrendRef(index, el as Element | null)" class="lead-rank-trend-chart" />
+                  </div>
+                </div>
+                <div v-if="(block.mention_table as Array<Record<string, unknown>>)?.length" class="lead-query-chart-card">
+                  <div class="lead-query-subtitle">品牌提及率分析</div>
+                  <div :ref="el => bindPromptMentionRef(index, el as Element | null)" class="lead-mention-chart" />
+                </div>
+                <div v-if="(block.round_trend as Array<Record<string, unknown>>)?.length" class="lead-query-subtitle">品牌排名变化趋势</div>
+                <div v-if="(block.round_trend as Array<Record<string, unknown>>)?.length" class="lead-rank-change-grid head">
+                  <span>日期</span><span>{{ block.prompt }}</span>
+                </div>
+                <div
+                  v-for="row in (block.round_trend as Array<Record<string, unknown>> || [])"
+                  :key="String(row.schedule_key)"
+                  class="lead-rank-change-grid"
+                >
+                  <span>{{ row.schedule_label }}</span>
+                  <span class="lead-rank-cell" :class="rankToneClass(row.avg_rank)">{{ formatRank(row.avg_rank) }}</span>
+                </div>
+                <div v-if="(block.ranking_list as Array<Record<string, unknown>>)?.length" class="lead-query-subtitle">最近排名列表</div>
+                <div v-if="(block.ranking_list as Array<Record<string, unknown>>)?.length" class="lead-query-grid head">
+                  <span>品牌</span><span>分类</span><span>排名</span><span>标签</span>
+                </div>
+                <div
+                  v-for="row in (block.ranking_list as Array<Record<string, unknown>> || [])"
+                  :key="`${row.name}-${row.category}`"
+                  class="lead-query-grid"
+                  :class="{ 'is-brand': row.is_brand, 'is-competitor': row.is_competitor }"
+                >
+                  <b>{{ row.name }}</b>
+                  <span>{{ row.category || '默认分类' }}</span>
+                  <span>{{ formatRank(row.rank) }}</span>
+                  <span>{{ row.is_brand ? '目标品牌' : row.is_competitor ? '竞品' : '—' }}</span>
+                </div>
+                <div class="lead-query-subtitle">提及率统计</div>
+                <div class="lead-query-grid head mention">
+                  <span>品牌</span><span>提及次数</span><span>提及率</span><span>平均排名</span>
+                </div>
+                <div
+                  v-for="row in (block.mention_table as Array<Record<string, unknown>> || [])"
+                  :key="`m-${row.name}`"
+                  class="lead-query-grid mention"
+                  :class="{ 'is-brand': row.is_brand, 'is-competitor': row.is_competitor }"
+                >
+                  <b>{{ row.name }}</b>
+                  <span>{{ row.mention_count }}/{{ row.sample_count }}</span>
+                  <span>{{ row.mention_rate }}%</span>
+                  <span>{{ formatRank(row.avg_rank) }}</span>
+                </div>
+              </div>
+            </section>
+
+            <section v-else-if="detailTab === 'sources'" class="lead-panel">
+              <div class="lead-panel-title">
+                <h3>引用网站分析</h3>
+                <p>统计 AI 回答引用域名及与品牌提及的关联度。</p>
+              </div>
+              <div class="lead-form-hint">
+                <Lightbulb :size="16" />
+                <span>{{ sourceAnalysis.coverage_note || '暂无引用信源统计。' }}</span>
+              </div>
+              <div v-if="(sourceAnalysis.domain_stats as Array<Record<string, unknown>>)?.length" class="lead-query-grid head source">
+                <span>域名</span><span>引用次数</span><span>品牌相关</span><span>平台数</span>
+              </div>
+              <div
+                v-for="row in (sourceAnalysis.domain_stats as Array<Record<string, unknown>> || [])"
+                :key="String(row.domain)"
+                class="lead-query-grid source"
+              >
+                <b>{{ row.domain }}</b>
+                <span>{{ row.count }}</span>
+                <span>{{ row.brand_related_count }}</span>
+                <span>{{ (row.platforms as string[] | undefined)?.length || 0 }}</span>
               </div>
             </section>
 
@@ -411,6 +694,7 @@ function listProgress(item: { completed_run_count: number; schedule_times: strin
               <div class="lead-config-list">
                 <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
                 <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
+                <div><strong>监测地区</strong><span>{{ regionLabel(detail.region_code) }}</span></div>
                 <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>
                 <div v-if="detail.contact_note"><strong>销售备注</strong><span>{{ detail.contact_note }}</span></div>
                 <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>

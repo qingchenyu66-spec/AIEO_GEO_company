@@ -83,6 +83,65 @@ def upsert_monitor_alert_notification(db: Session, alert: dict[str, Any]) -> Sys
     return row
 
 
+def upsert_subtask_backfill_notification(
+    db: Session,
+    *,
+    subtask_id: str,
+    title: str,
+    message: str,
+    payload: dict[str, Any],
+) -> SystemNotification:
+    """单条失败子任务对应一条待补录通知（source_key 去重）。"""
+    source_key = f"subtask:backfill:{subtask_id}"
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message[:500]
+        existing.level = "warning"
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="snapshot_backfill",
+        level="warning",
+        title=title,
+        message=message[:500],
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def resolve_subtask_backfill_notification(db: Session, subtask_id: str) -> None:
+    """补录成功后移除待办通知。"""
+    source_key = f"subtask:backfill:{subtask_id}"
+    row = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+        )
+    )
+    if row is None:
+        return
+    db.delete(row)
+    db.commit()
+
+
 def push_monitor_alert_notification(alert: dict[str, Any]) -> SystemNotification | None:
     """将监控告警写入平台运营站内通知。"""
     db = SessionLocal()

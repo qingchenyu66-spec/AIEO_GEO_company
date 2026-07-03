@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.common import ApiResponse
 from app.services.competitor_analytics_service import build_competitor_compare_summary
+from app.services.monitor_service import customer_display_cutoff
 from app.services.sentiment_keyword_service import build_sentiment_keywords
 
 router = APIRouter(prefix="/analytics")
@@ -53,6 +54,8 @@ def wordcloud(
         if current.identity.tenant_id is None:
             return ApiResponse(data=[])
         tenant_id = current.identity.tenant_id
+        cutoff = customer_display_cutoff()
+        stmt = stmt.where(GeoMonitorSubtask.updated_at <= cutoff)
 
     if tenant_id:
         task_ids_sub = select(GeoMonitorTask.task_id).where(

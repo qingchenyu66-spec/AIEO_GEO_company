@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Any
 
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import get_brand_asset, list_competitors
+from app.services.monitor_service import customer_display_cutoff
 from app.core.platform_order import sort_platform_items
 from app.services.ranking_parser import (
     normalize_structured_rankings,
@@ -65,27 +66,59 @@ def _competitor_aliases(item: Any) -> list[Any]:
     return list(raw or [])
 
 
+def _brand_match_terms(asset: BrandAsset | None) -> list[str]:
+    if asset is None:
+        return []
+    terms: list[str] = []
+    for value in (asset.brand_name, asset.brand_short_name, asset.company_full_name):
+        text = str(value or "").strip()
+        if text and text not in terms:
+            terms.append(text)
+    return terms
+
+
 def _tracked_entities(asset: BrandAsset | None, competitors: list[Any]) -> list[dict[str, Any]]:
+    """仅返回本品牌与各竞品主名称；别名仅用于匹配推荐列表，不单独成系列。"""
     rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def add(name: str | None, *, is_brand: bool) -> None:
-        text = str(name or "").strip()
-        key = _normalize_name_key(text)
-        if not text or key in seen:
-            return
-        seen.add(key)
-        rows.append({"name": text, "is_brand": is_brand})
-
-    if asset is not None:
-        add(asset.brand_name, is_brand=True)
-        add(asset.brand_short_name, is_brand=False)
-        add(asset.company_full_name, is_brand=False)
+    brand_terms = _brand_match_terms(asset)
+    if brand_terms:
+        rows.append({
+            "name": brand_terms[0],
+            "is_brand": True,
+            "match_terms": brand_terms,
+        })
     for item in competitors:
-        add(_competitor_field(item, "name", "name"), is_brand=False)
+        name = str(_competitor_field(item, "name", "name") or "").strip()
+        if not name:
+            continue
+        terms = [name]
         for alias in _competitor_aliases(item):
-            add(str(alias or ""), is_brand=False)
+            text = str(alias or "").strip()
+            if text and text not in terms:
+                terms.append(text)
+        rows.append({"name": name, "is_brand": False, "match_terms": terms})
     return rows
+
+
+def _entity_match_stats(
+    entries: list[dict[str, Any]],
+    match_terms: list[str],
+    *,
+    mention_position: int | None = None,
+    is_brand: bool = False,
+) -> tuple[bool, float | None]:
+    rank: float | None = None
+    mentioned = False
+    for term in match_terms:
+        term_rank = _find_entity_rank(entries, term)
+        if term_rank is not None and (rank is None or term_rank < rank):
+            rank = term_rank
+        if _entity_mentioned_in_entries(entries, term):
+            mentioned = True
+    if is_brand and rank is None and mention_position is not None:
+        rank = float(mention_position)
+        mentioned = True
+    return mentioned, rank
 
 
 def _init_bucket(name: str, *, is_brand: bool) -> dict[str, Any]:
@@ -160,6 +193,26 @@ def _parse_platform_filters(platform: str | None, platforms: str | None = None) 
     return [item for item in parts if item and item.lower() != "all"]
 
 
+def _dedupe_preserve_order(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
+
+
+def _include_in_sentiment_leaderboard(row: dict[str, Any]) -> bool:
+    """情绪榜需有情绪样本；竞品若正负面均为 0%（全中立）则不展示。"""
+    if row["sentiment_sample"] <= 0:
+        return False
+    if row["is_brand"]:
+        return True
+    return row["positive_rate"] > 0 or row["negative_rate"] > 0
+
+
 def build_competitor_compare_summary(
     db: Session,
     current: CurrentSession,
@@ -188,12 +241,16 @@ def build_competitor_compare_summary(
     competitors = list_competitors(db, resolved_tenant_id)
     entities = _tracked_entities(asset, competitors)
     brand_display = (asset.brand_name if asset else None) or "本品牌"
-    brand_keys = {row["name"] for row in entities if row["is_brand"]}
-    if not brand_keys and asset and asset.brand_name:
-        brand_keys = {asset.brand_name}
 
-    range_end = datetime.now()
-    range_start = range_end - timedelta(days=max(1, min(days, 365)))
+    if current.identity.identity_type == "CUSTOMER":
+        range_end = customer_display_cutoff()
+        range_start = datetime.combine(
+            range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
+            time.min,
+        )
+    else:
+        range_end = datetime.now()
+        range_start = range_end - timedelta(days=max(1, min(days, 365)))
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
 
@@ -228,30 +285,6 @@ def build_competitor_compare_summary(
     sample_total = len(subtasks)
     prompt_options = sorted({str(item.prompt or "").strip() for item in subtasks if str(item.prompt or "").strip()})
 
-    display_names: dict[str, str] = {}
-    canonical_by_key: dict[str, str] = {}
-    for competitor in competitors:
-        canonical_by_key[_normalize_name_key(competitor.name)] = competitor.name
-        for alias in competitor.aliases_json or []:
-            canonical_by_key[_normalize_name_key(str(alias))] = competitor.name
-    if asset and asset.brand_name:
-        canonical_by_key[_normalize_name_key(asset.brand_name)] = brand_display
-
-    for entity in entities:
-        key = _normalize_name_key(entity["name"])
-        if entity["is_brand"]:
-            display_names[key] = brand_display
-        elif key in canonical_by_key:
-            display_names[key] = canonical_by_key[key]
-        elif key not in display_names:
-            display_names[key] = entity["name"]
-
-    def entity_display(entity: dict[str, Any]) -> str:
-        if entity["is_brand"]:
-            return brand_display
-        key = _normalize_name_key(entity["name"])
-        return display_names.get(key, entity["name"])
-
     global_buckets: dict[str, dict[str, Any]] = {}
     platform_buckets: dict[str, dict[str, dict[str, Any]]] = {}
     daily_samples: dict[str, int] = {}
@@ -281,39 +314,40 @@ def build_competitor_compare_summary(
         sentiment_label = _normalize_sentiment_label(item.sentiment)
 
         for entity in entities:
-            name = entity["name"]
             is_brand = entity["is_brand"]
-            rank = _find_entity_rank(entries, name)
-            mentioned = _entity_mentioned_in_entries(entries, name)
-            if is_brand and rank is None and item.mention_position is not None:
-                rank = float(item.mention_position)
-                mentioned = True
+            display_name = brand_display if is_brand else entity["name"]
+            match_terms = entity.get("match_terms") or [entity["name"]]
+            mentioned, rank = _entity_match_stats(
+                entries,
+                match_terms,
+                mention_position=item.mention_position,
+                is_brand=is_brand,
+            )
 
             if not mentioned and rank is None:
                 continue
 
             if is_brand:
                 if rank is not None and rank <= 1:
-                    bucket_for(None, name, is_brand)["first_mention_count"] += 1
-                    bucket_for(item.platform, name, is_brand)["first_mention_count"] += 1
+                    bucket_for(None, display_name, is_brand)["first_mention_count"] += 1
+                    bucket_for(item.platform, display_name, is_brand)["first_mention_count"] += 1
             elif rank is not None and rank <= 1:
-                bucket_for(None, name, is_brand)["first_mention_count"] += 1
-                bucket_for(item.platform, name, is_brand)["first_mention_count"] += 1
+                bucket_for(None, display_name, is_brand)["first_mention_count"] += 1
+                bucket_for(item.platform, display_name, is_brand)["first_mention_count"] += 1
 
             if day_key:
-                display_key = entity_display(entity)
                 day_map = daily_mentions.setdefault(day_key, {})
-                day_map[display_key] = day_map.get(display_key, 0) + 1
+                day_map[display_name] = day_map.get(display_name, 0) + 1
 
-            global_bucket = bucket_for(None, name, is_brand)
-            platform_bucket = bucket_for(item.platform, name, is_brand)
+            global_bucket = bucket_for(None, display_name, is_brand)
+            platform_bucket = bucket_for(item.platform, display_name, is_brand)
             for bucket in (global_bucket, platform_bucket):
                 bucket["mention_count"] += 1
                 if rank is not None:
                     bucket["rank_total"] += rank
                     bucket["rank_count"] += 1
 
-            if sentiment_label:
+            if sentiment_label and mentioned:
                 global_bucket["sentiment_sample"] += 1
                 if sentiment_label == "positive":
                     global_bucket["sentiment_positive"] += 1
@@ -322,13 +356,17 @@ def build_competitor_compare_summary(
                 else:
                     global_bucket["sentiment_neutral"] += 1
 
+    configured_names = _dedupe_preserve_order(
+        [brand_display] + [competitor.name for competitor in competitors],
+    )
     merged_global: dict[str, dict[str, Any]] = {}
     for bucket in global_buckets.values():
-        key = _normalize_name_key(bucket["name"])
-        display = display_names.get(key, bucket["name"])
+        display = bucket["name"]
+        if display not in configured_names:
+            continue
         target = merged_global.setdefault(
             display,
-            _init_bucket(display, is_brand=any(_names_match(display, b) for b in brand_keys)),
+            _init_bucket(display, is_brand=display == brand_display),
         )
         target["mention_count"] += bucket["mention_count"]
         target["first_mention_count"] += bucket["first_mention_count"]
@@ -339,18 +377,13 @@ def build_competitor_compare_summary(
         target["sentiment_negative"] += bucket["sentiment_negative"]
         target["sentiment_sample"] += bucket["sentiment_sample"]
 
-    if brand_display not in merged_global:
-        merged_global[brand_display] = _init_bucket(brand_display, is_brand=True)
-    for competitor in competitors:
-        if competitor.name not in merged_global:
-            merged_global[competitor.name] = _init_bucket(competitor.name, is_brand=False)
+    for name in configured_names:
+        if name not in merged_global:
+            merged_global[name] = _init_bucket(name, is_brand=name == brand_display)
 
     rows = [
-        _finalize_bucket(bucket, sample_total)
-        for bucket in sorted(
-            merged_global.values(),
-            key=lambda row: (-int(row["is_brand"]), -row["mention_count"], row["name"]),
-        )
+        _finalize_bucket(merged_global[name], sample_total)
+        for name in configured_names
     ]
     rows.sort(key=lambda row: (-row["mention_rate"], row["avg_rank"] if row["avg_rank"] is not None else 999))
 
@@ -366,25 +399,26 @@ def build_competitor_compare_summary(
         )
         merged_platform: dict[str, dict[str, Any]] = {}
         for bucket in entity_map.values():
-            key = _normalize_name_key(bucket["name"])
-            display = display_names.get(key, bucket["name"])
+            display = bucket["name"]
+            if display not in configured_names:
+                continue
             target = merged_platform.setdefault(
                 display,
-                _init_bucket(display, is_brand=any(_names_match(display, b) for b in brand_keys)),
+                _init_bucket(display, is_brand=display == brand_display),
             )
             target["mention_count"] += bucket["mention_count"]
             target["first_mention_count"] += bucket["first_mention_count"]
             target["rank_total"] += bucket["rank_total"]
             target["rank_count"] += bucket["rank_count"]
+        for name in configured_names:
+            if name not in merged_platform:
+                merged_platform[name] = _init_bucket(name, is_brand=name == brand_display)
         platform_rows.append({
             "platform": platform_code,
             "sample_count": platform_sample,
             "rows": [
-                _finalize_bucket(bucket, platform_sample)
-                for bucket in sorted(
-                    merged_platform.values(),
-                    key=lambda row: (-int(row["is_brand"]), -row["mention_count"], row["name"]),
-                )
+                _finalize_bucket(merged_platform[name], platform_sample)
+                for name in configured_names
             ],
         })
 
@@ -393,10 +427,7 @@ def build_competitor_compare_summary(
         datetime.fromisoformat(day).strftime("%m-%d")
         for day in sorted_days
     ]
-    trend_entities = sorted(
-        merged_global.values(),
-        key=lambda row: (-int(row["is_brand"]), -row["mention_count"], row["name"]),
-    )
+    trend_entities = [merged_global[name] for name in configured_names]
     mention_trend_series = []
     for bucket in trend_entities:
         name = bucket["name"]
@@ -439,7 +470,7 @@ def build_competitor_compare_summary(
                 "sentiment_sample": row["sentiment_sample"],
             }
             for row in rows
-            if row["is_brand"] or row["sentiment_sample"] > 0
+            if _include_in_sentiment_leaderboard(row)
         ],
         key=lambda item: (-item["positive_rate"], -int(item["is_brand"])),
     )

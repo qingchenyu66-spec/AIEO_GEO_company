@@ -40,6 +40,7 @@ const CompetitorAnalysisPage = defineAsyncComponent(() => import('./portal/pages
 const SourceAnalysisPage = defineAsyncComponent(() => import('./portal/pages/SourceAnalysisPage.vue'))
 const ReportCenterPage = defineAsyncComponent(() => import('./portal/pages/ReportCenterPage.vue'))
 const LeadDiagnosisPage = defineAsyncComponent(() => import('./portal/pages/LeadDiagnosisPage.vue'))
+const SnapshotBackfillOpsPage = defineAsyncComponent(() => import('./portal/pages/SnapshotBackfillOpsPage.vue'))
 const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
 const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
@@ -63,6 +64,7 @@ const isCompetitorPage = computed(() => ['customer.competitor', 'platform.compet
 const isSourcePage = computed(() => ['customer.sources', 'platform.sources'].includes(activeMenuCode.value))
 const isReportCenterPage = computed(() => ['customer.reports', 'platform.reports'].includes(activeMenuCode.value))
 const isLeadDiagnosisPage = computed(() => activeMenuCode.value === 'platform.lead_diagnosis')
+const isSnapshotBackfillPage = computed(() => activeMenuCode.value === 'platform.snapshot_backfill')
 const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
 const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
@@ -128,6 +130,7 @@ const pageSubtitle = computed(() => {
   if (isUserListPage.value) return '按公司、姓名、身份和状态筛选账号，支持编辑、禁用、重置密码和恢复'
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
+  if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 
@@ -205,6 +208,11 @@ function logout() {
 }
 
 watch(activeMenuCode, (newCode, oldCode) => {
+  if (newCode === 'platform.diagnosis' && oldCode !== 'platform.diagnosis') {
+    navigateToMenu('platform.competitor', true)
+    ElMessage.info('品牌诊断已并入「品牌洞察」，已为您跳转')
+    return
+  }
   if (oldCode === 'platform.audit' && newCode !== 'platform.audit') {
     brandAuditRef.value?.resetDetailMode?.()
   }
@@ -260,6 +268,7 @@ onMounted(() => {
     <SourceAnalysisPage v-else-if="isSourcePage" />
     <ReportCenterPage v-else-if="isReportCenterPage" :is-platform="isPlatform" />
     <LeadDiagnosisPage v-else-if="isLeadDiagnosisPage" />
+    <SnapshotBackfillOpsPage v-else-if="isSnapshotBackfillPage" />
     <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
     <KnowledgeBasePage v-else-if="isKnowledgePage" />
 

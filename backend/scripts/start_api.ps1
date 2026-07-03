@@ -32,5 +32,7 @@ Start-Sleep -Seconds 1
 
 $env:PYTHONPATH = $backendRoot
 Set-Location $backendRoot
+Write-Host "执行数据库迁移..."
+& $venvPython -m alembic upgrade head
 Write-Host "启动 uvicorn -> http://127.0.0.1:$Port"
 & $venvPython -m uvicorn app.main:app --host 127.0.0.1 --port $Port --reload --reload-dir app

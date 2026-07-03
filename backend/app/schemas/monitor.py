@@ -55,3 +55,29 @@ class MonitorTaskDetail(BaseModel):
 
     task: dict[str, Any]
     subtasks: list[dict[str, Any]]
+
+
+class SnapshotBackfillRequest(BaseModel):
+    """快照补录：分享链接 + 回答正文（可覆盖原有抓取结果）。"""
+
+    snapshot_url: str = Field(min_length=8, max_length=1000)
+    answer_content: str = Field(min_length=1)
+    mention_position: int | None = Field(default=None, ge=1, le=100)
+    sentiment: str | None = Field(default=None, max_length=32)
+    reference_urls: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SnapshotBackfillListSummary(BaseModel):
+    total: int = 0
+    pending: int = 0
+    overwrite: int = 0
+    shown: int = 0
+    offset: int = 0
+    limit: int = 50
+    has_more: bool = False
+    scan_capped: bool = False
+
+
+class SnapshotBackfillListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    summary: SnapshotBackfillListSummary

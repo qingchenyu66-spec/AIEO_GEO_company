@@ -14,6 +14,7 @@ export type WorkspaceCampusChartData = {
   top3Rate: number
   platformRankLabels: string[]
   platformRankValues: number[]
+  platformRankSamples: number[]
 }
 
 type ChartRefs = {
@@ -337,7 +338,12 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
       if (data.platformRankLabels.length) {
         const rows = [...data.platformRankLabels].reverse()
         const values = [...data.platformRankValues].reverse()
+        const samples = [...data.platformRankSamples].reverse()
         const hasManyRows = rows.length > 6
+        const formatPlatformLabel = (value: number, sampleCount: number) => {
+          if (sampleCount <= 0) return '待返回'
+          return `${value}%`
+        }
         platformChart.setOption({
           animationDuration: 1000,
           animationEasing: 'cubicOut' as const,
@@ -346,9 +352,11 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
             trigger: 'axis',
             axisPointer: { type: 'shadow' },
             formatter: (params: unknown) => {
-              const item = (params as Array<{ name: string; value: number }>)?.[0]
+              const item = (params as Array<{ name: string; value: number; dataIndex: number }>)?.[0]
               if (!item) return ''
-              return item.value > 0 ? `${item.name}<br/>品牌露出率：${item.value}%` : `${item.name}<br/>暂无返回样本`
+              const sampleCount = samples[item.dataIndex] ?? 0
+              if (sampleCount <= 0) return `${item.name}<br/>暂无返回样本`
+              return `${item.name}<br/>品牌露出率：${item.value}%<br/>样本数：${sampleCount}`
             },
           },
           xAxis: {
@@ -370,21 +378,33 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
             label: {
               show: true,
               position: 'right',
-              formatter: (params: { value: number }) => (params.value > 0 ? `${params.value}%` : '待返回'),
-              color: (params: { value: number }) => (params.value > 0 ? '#0f8d7f' : '#94a3b8'),
+              formatter: (params: { value: number; dataIndex: number }) => (
+                formatPlatformLabel(params.value, samples[params.dataIndex] ?? 0)
+              ),
+              color: (params: { value: number; dataIndex: number }) => {
+                const sampleCount = samples[params.dataIndex] ?? 0
+                if (sampleCount <= 0) return '#94a3b8'
+                return params.value > 0 ? '#0f8d7f' : '#c2410c'
+              },
               fontWeight: 700,
               fontSize: 11,
             },
             itemStyle: {
               borderRadius: [0, 6, 6, 0],
-              color: (params: { value: number }) => (
-                params.value > 0
-                  ? new graphic.LinearGradient(0, 0, 1, 0, [
-                    { offset: 0, color: '#2d6cdf' },
-                    { offset: 1, color: '#35d39b' },
+              color: (params: { value: number; dataIndex: number }) => {
+                const sampleCount = samples[params.dataIndex] ?? 0
+                if (sampleCount <= 0) return '#d9e2ef'
+                if (params.value <= 0) {
+                  return new graphic.LinearGradient(0, 0, 1, 0, [
+                    { offset: 0, color: '#f5d0c8' },
+                    { offset: 1, color: '#f0b6a8' },
                   ])
-                  : '#d9e2ef'
-              ),
+                }
+                return new graphic.LinearGradient(0, 0, 1, 0, [
+                  { offset: 0, color: '#2d6cdf' },
+                  { offset: 1, color: '#35d39b' },
+                ])
+              },
             },
             animationDelay: (idx: number) => idx * 80,
           }],

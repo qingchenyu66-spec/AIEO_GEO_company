@@ -144,8 +144,14 @@ const emit = defineEmits<{
       </header>
       <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
         <div v-if="!immersive" class="page-head">
-          <div><h1>{{ pageTitle }}</h1><p>{{ pageSubtitle }}</p></div>
-          <span class="live-status"><i></i> 数据服务正常</span>
+          <div class="page-head-main">
+            <h1>{{ pageTitle }}</h1>
+            <p>{{ pageSubtitle }}</p>
+          </div>
+          <div class="page-head-aside">
+            <div id="portal-page-head-extra" class="page-head-extra" />
+            <span class="live-status"><i></i> 数据服务正常</span>
+          </div>
         </div>
         <slot />
       </main>

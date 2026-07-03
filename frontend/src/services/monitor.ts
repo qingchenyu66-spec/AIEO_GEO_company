@@ -74,6 +74,18 @@ export interface MonitorSubtask {
   all_rankings: Array<Record<string, unknown>>
   amount: number | null
   updated_at?: string | null
+  tenant_name?: string | null
+  tenant_id?: number | null
+  source?: 'tenant_monitor' | 'lead_diagnosis' | string
+  monitor_keywords?: string | null
+  keyword_group?: string | null
+  schedule_label?: string | null
+  schedule_key?: string | null
+  schedule_source?: string | null
+  brand_name?: string | null
+  task_created_at?: string | null
+  needs_backfill?: boolean
+  has_answer?: boolean
 }
 
 export interface MonitorTaskDetail {
@@ -110,6 +122,11 @@ export interface MonitorSummary {
     questions?: string[]
     latest_time?: string | null
   }>
+  source_citation_trend?: {
+    start_at: string
+    end_at: string
+    points: Array<{ label: string; day_key: string; value: number }>
+  }
   daily_trend: Array<{ label: string; value: number }>
   daily_labels: string[]
   recent_tasks: Array<MonitorTask & { tenant_name?: string | null }>
@@ -159,6 +176,7 @@ export interface RankingMatrixCellSnapshot {
   prompt_intent?: 'ranking' | 'exposure'
   schedule_window_key?: string | null
   schedule_label?: string | null
+  schedule_source?: 'run' | 'inferred' | 'created_at' | 'lead_diagnosis' | null
   updated_at: string | null
   status: string
   page_screenshot: string | null
@@ -297,6 +315,7 @@ export interface WorkspaceSnapshot {
   brand_mentioned: boolean
   sentiment: string
   answer_excerpt: string
+  page_screenshot?: string | null
   updated_at: string | null
 }
 
@@ -318,6 +337,11 @@ export interface WorkspaceBrief {
   company_name: string | null
   start_at: string
   end_at: string
+  trend_start_at?: string
+  trend_end_at?: string
+  display_period?: string
+  display_day?: string | null
+  platform_period_label?: string | null
   latest_schedule: WorkspaceBriefSchedule | null
   previous_schedule?: WorkspaceBriefSchedule | null
   round_comparison?: WorkspaceRoundComparison
@@ -330,6 +354,12 @@ export interface WorkspaceBrief {
   top_sources: WorkspaceTopSource[]
   recent_snapshots: WorkspaceSnapshot[]
   alerts: WorkspaceAlert[]
+  health_score?: number
+  visibility_score?: number
+  rank_score?: number | null
+  competitor_score?: number | null
+  top_competitor_mention_rate?: number | null
+  competitor_lead_delta?: number | null
 }
 
 export async function createMonitorTask(payload: MonitorTaskCreatePayload): Promise<MonitorTask> {
@@ -362,8 +392,10 @@ export async function getMonitorTaskDetail(taskId: string): Promise<MonitorTaskD
   return response.data.data
 }
 
-export async function getMonitorSubtask(subtaskId: string): Promise<MonitorSubtask> {
-  const response = await http.get(`/v1/monitor/subtasks/${subtaskId}`)
+export async function getMonitorSubtask(subtaskId: string, options?: { include_ops?: boolean }): Promise<MonitorSubtask> {
+  const response = await http.get(`/v1/monitor/subtasks/${subtaskId}`, {
+    params: options?.include_ops ? { include_ops: true } : undefined,
+  })
   return response.data.data
 }
 

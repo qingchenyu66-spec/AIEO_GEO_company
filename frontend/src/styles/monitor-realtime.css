@@ -22,6 +22,16 @@
   gap: 10px 12px;
 }
 
+.realtime-customer-period {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(45, 108, 223, 0.08);
+  color: #2d6cdf;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .realtime-date-presets {
   display: inline-flex;
   padding: 3px;

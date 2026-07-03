@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Any
 
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, load_only
 from app.api.dependencies import CurrentSession
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import get_brand_asset
+from app.services.monitor_service import customer_display_cutoff
 from app.services.competitor_analytics_service import (
     _entity_mentioned_in_entries,
     _normalize_sentiment_label,
@@ -210,8 +211,15 @@ def build_sentiment_keywords(
 
     asset = get_brand_asset(db, resolved_tenant_id)
     brand_names = _brand_names(asset)
-    range_end = datetime.now()
-    range_start = range_end - timedelta(days=max(1, min(days, 365)))
+    if current.identity.identity_type == "CUSTOMER":
+        range_end = customer_display_cutoff()
+        range_start = datetime.combine(
+            range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
+            time.min,
+        )
+    else:
+        range_end = datetime.now()
+        range_start = range_end - timedelta(days=max(1, min(days, 365)))
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
 

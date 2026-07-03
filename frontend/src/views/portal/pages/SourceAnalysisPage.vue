@@ -23,6 +23,9 @@ const trendChartRef = ref<HTMLDivElement | null>(null)
 
 const {
   brandAsset,
+  isCustomerView,
+  customerPeriodLabel,
+  trendPeriodLabel,
   loading,
   datePreset,
   platformFilter,
@@ -63,7 +66,8 @@ const categoryOptions = [
     <header class="source-sticky-bar">
       <div class="source-sticky-inner">
         <div class="source-sticky-row">
-          <div class="source-date-presets">
+          <div v-if="isCustomerView" class="source-customer-period">{{ customerPeriodLabel }}</div>
+          <div v-else class="source-date-presets">
             <button
               v-for="preset in datePresets"
               :key="preset.value"
@@ -197,8 +201,9 @@ const categoryOptions = [
         <div class="source-panel-head">
           <div>
             <h3>引用趋势</h3>
-            <p>按最近检测日期统计新增引用次数</p>
+            <p>{{ isCustomerView ? '按检测日统计露出词信源引用次数' : '按检测日统计新增引用次数' }}</p>
           </div>
+          <span v-if="isCustomerView" class="source-customer-period">{{ trendPeriodLabel }}</span>
         </div>
         <div
           v-if="sourceTrendRows.some(item => item.value > 0)"

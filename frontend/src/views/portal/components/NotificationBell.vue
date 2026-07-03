@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Bell, CheckCheck } from '@lucide/vue'
 import {
   getNotifications,
@@ -13,6 +14,9 @@ import { extractErrorDetail } from '../../../utils/requestError'
 const emit = defineEmits<{
   openAlerts: []
 }>()
+
+const router = useRouter()
+const route = useRoute()
 
 const open = ref(false)
 const loading = ref(false)
@@ -78,6 +82,19 @@ async function handleRead(item: SystemNotification) {
   }
   if (item.category === 'celery_queue') {
     emit('openAlerts')
+    open.value = false
+    return
+  }
+  if (item.category === 'snapshot_backfill' && item.payload) {
+    const payload = item.payload
+    await router.push({
+      query: {
+        ...route.query,
+        menu: 'platform.snapshot_backfill',
+        subtask_id: String(payload.subtask_id || ''),
+        backfill: '1',
+      },
+    })
     open.value = false
   }
 }

@@ -1,14 +1,25 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
-import { updateSystemConfig } from '../../../services/management'
+import { withRetry } from '../../../composables/useRetry'
+import { getTenants, updateSystemConfig, type TenantInfo } from '../../../services/management'
+import { getOperationLogs, type OperationLogRecord } from '../../../services/ops'
+import {
+  previewScheduledMonitor,
+  runDueScheduledMonitor,
+  type ScheduledMonitorPreview,
+} from '../../../services/monitor'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
+
+const route = useRoute()
+const router = useRouter()
 
 const analytics = inject(PortalAnalyticsKey)!
 const {
@@ -25,7 +36,6 @@ const {
   loadingPlatformMatrix,
   loadPlatformMatrix,
   platformRanking,
-  operationLogs,
   systemConfigRows,
   loadPlatformSystemData,
   recentSubtasks,
@@ -65,6 +75,20 @@ const primaryPanelTitle = computed(() => {
 const editingConfigId = ref<number | null>(null)
 const editingConfigValue = ref('')
 const savingConfig = ref(false)
+
+const logFilterPanelRef = ref<HTMLElement | null>(null)
+const logDays = ref(7)
+const logActionType = ref('')
+const logKeyword = ref('')
+const logTenantId = ref<number | ''>('')
+const logLoading = ref(false)
+const logRows = ref<OperationLogRecord[]>([])
+const logTenants = ref<TenantInfo[]>([])
+
+const schedulePreview = ref<ScheduledMonitorPreview[]>([])
+const schedulePreviewLoading = ref(false)
+const scheduleRunLoading = ref(false)
+const scheduleTenantId = ref<number | ''>('')
 
 function isSecretConfigRow(row: { config_key: string; secret?: boolean }) {
   return row.secret || isSecretConfigKey(row.config_key)
@@ -118,6 +142,197 @@ async function saveConfigRow(row: { id: number; config_key: string; category?: s
   }
 }
 
+function navigateToMenu(menuCode: string) {
+  router.push({ path: route.path, query: { ...route.query, menu: menuCode } }).catch(() => undefined)
+}
+
+function formatLogTime(value: string) {
+  return value.replace('T', ' ').slice(0, 16)
+}
+
+function logContext(row: OperationLogRecord) {
+  return [
+    row.target_module,
+    row.tenant_id ? `企业ID ${row.tenant_id}` : '',
+    row.ip_address ? `IP ${row.ip_address}` : '',
+  ].filter(Boolean).join(' · ') || '平台操作'
+}
+
+async function loadOperationLogs() {
+  if (functionalPage.value.mode !== 'logs') return
+  logLoading.value = true
+  try {
+    logRows.value = await withRetry(() => getOperationLogs({
+      days: logDays.value,
+      action_type: logActionType.value.trim() || undefined,
+      keyword: logKeyword.value.trim() || undefined,
+      tenant_id: logTenantId.value === '' ? undefined : Number(logTenantId.value),
+    }))
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '操作日志加载失败')
+  } finally {
+    logLoading.value = false
+  }
+}
+
+function resetLogFilters() {
+  logDays.value = 7
+  logActionType.value = ''
+  logKeyword.value = ''
+  logTenantId.value = ''
+  void loadOperationLogs()
+}
+
+function exportLogsCsv() {
+  if (!logRows.value.length) {
+    ElMessage.warning('当前筛选结果为空，无法导出')
+    return
+  }
+  const header = ['时间', '操作人', '类型', '描述', '模块', '企业ID', 'IP', '风险']
+  const lines = logRows.value.map(row => [
+    formatLogTime(row.created_at),
+    row.operator_name,
+    row.action_type,
+    row.description,
+    row.target_module || '',
+    row.tenant_id ?? '',
+    row.ip_address || '',
+    row.risk_level,
+  ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+  const blob = new Blob([`\uFEFF${[header.join(','), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `operation-logs-${new Date().toISOString().slice(0, 10)}.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已导出 ${logRows.value.length} 条日志`)
+}
+
+function exportConfigsCsv() {
+  const rows = systemConfigRows.value
+  if (!rows.length) {
+    ElMessage.warning('暂无配置可导出')
+    return
+  }
+  const header = ['配置项', '键名', '当前值', '说明', '状态']
+  const lines = rows.map(row => [
+    row.config_name || row.config_key,
+    row.config_key,
+    maskedConfigValue(row.config_value, row.config_key, row.secret),
+    row.remark || row.scope || '平台运行配置',
+    row.status || '启用',
+  ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+  const blob = new Blob([`\uFEFF${[header.join(','), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `system-configs-${new Date().toISOString().slice(0, 10)}.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已导出 ${rows.length} 项配置`)
+}
+
+function focusLogFilters() {
+  logFilterPanelRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function loadSchedulePreview() {
+  schedulePreviewLoading.value = true
+  try {
+    schedulePreview.value = await withRetry(() => previewScheduledMonitor(
+      scheduleTenantId.value === '' ? null : Number(scheduleTenantId.value),
+    ))
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '调度预览失败')
+  } finally {
+    schedulePreviewLoading.value = false
+  }
+}
+
+async function runDueSchedule() {
+  scheduleRunLoading.value = true
+  try {
+    const result = await runDueScheduledMonitor({
+      tenant_id: scheduleTenantId.value === '' ? undefined : Number(scheduleTenantId.value),
+      force: true,
+      limit: 10,
+    })
+    ElMessage.success(`已触发 ${result.length} 个到期调度`)
+    await loadSchedulePreview()
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '调度执行失败')
+  } finally {
+    scheduleRunLoading.value = false
+  }
+}
+
+function handleAction(action: string) {
+  const mode = functionalPage.value.mode
+  if (action === '导出日志') {
+    exportLogsCsv()
+    return
+  }
+  if (action === '筛选操作') {
+    focusLogFilters()
+    return
+  }
+  if (action === '刷新状态') {
+    void loadPlatformMatrix(true)
+    return
+  }
+  if (action === '刷新配置' || action === '刷新日志') {
+    if (mode === 'logs') void loadOperationLogs()
+    else void loadPlatformSystemData()
+    return
+  }
+  if (action === '导出配置') {
+    exportConfigsCsv()
+    return
+  }
+  if (action === '操作日志') {
+    navigateToMenu('platform.logs')
+    return
+  }
+  if (action.includes('菜单')) {
+    emit('open-menu-config')
+    return
+  }
+  if (action.includes('刷新监控') || action === '查看规则') {
+    navigateToMenu('platform.alerts')
+    return
+  }
+  if (action.includes('快照') || action.includes('实时') || action.includes('历史任务')) {
+    navigateToMenu('customer.realtime')
+    return
+  }
+  if (action.includes('信源')) {
+    navigateToMenu(mode.startsWith('platform') ? 'platform.sources' : 'customer.sources')
+    return
+  }
+  if (action.includes('竞品') || action.includes('对比') || action.includes('洞察')) {
+    navigateToMenu(mode.startsWith('platform') ? 'platform.competitor' : 'customer.competitor')
+    return
+  }
+  if (action.includes('报告') || action.includes('PDF') || action.includes('Word')) {
+    navigateToMenu(mode.startsWith('platform') ? 'platform.reports' : 'customer.reports')
+    return
+  }
+  if (action.includes('知识') || action.includes('上传资料')) {
+    navigateToMenu('customer.knowledge')
+    return
+  }
+  if (action === '保存诊断' || action.includes('诊断报告')) {
+    navigateToMenu('platform.lead_diagnosis')
+    return
+  }
+  if (action.includes('补录') || action.includes('提交')) {
+    navigateToMenu('platform.snapshot_backfill')
+    return
+  }
+  ElMessage.info(`「${action}」请通过左侧菜单进入对应功能页`)
+}
+
 const diagnosisChartRef = ref<HTMLDivElement | null>(null)
 
 const { renderCharts } = usePortalCharts({
@@ -145,6 +360,30 @@ watch([
   diagnosisScore,
 ], refreshCharts, { deep: true })
 
+watch(() => functionalPage.value.mode, async (mode) => {
+  if (mode === 'logs' || mode === 'settings') {
+    if (!logTenants.value.length) {
+      try {
+        logTenants.value = await withRetry(() => getTenants())
+      } catch {
+        logTenants.value = []
+      }
+    }
+  }
+  if (mode === 'logs') {
+    await loadOperationLogs()
+  }
+  if (mode === 'settings' && settingsCategory.value === 'schedule') {
+    await loadSchedulePreview()
+  }
+}, { immediate: true })
+
+watch(settingsCategory, (category) => {
+  if (category === 'schedule' && functionalPage.value.mode === 'settings') {
+    void loadSchedulePreview()
+  }
+})
+
 onMounted(() => {
   refreshCharts()
   window.addEventListener('resize', refreshCharts)
@@ -157,6 +396,29 @@ onUnmounted(() => {
 
 <template>
   <section class="feature-page">
+    <article class="panel feature-hero">
+      <div>
+        <small>{{ functionalPage.subtitle }}</small>
+        <h2>{{ functionalPage.title }}</h2>
+        <div class="feature-kpi-row">
+          <span v-for="kpi in functionalPage.kpis" :key="kpi.label">
+            <b>{{ kpi.value }}</b>{{ kpi.label }}<em>{{ kpi.note }}</em>
+          </span>
+        </div>
+      </div>
+      <div v-if="functionalPage.actions.length" class="feature-actions">
+        <button
+          v-for="action in functionalPage.actions"
+          :key="action"
+          type="button"
+          class="ghost-link-btn"
+          @click="handleAction(action)"
+        >
+          {{ action }}
+        </button>
+      </div>
+    </article>
+
     <section class="feature-grid">
       <article class="panel feature-primary">
         <div class="panel-head">
@@ -199,12 +461,32 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="functionalPage.mode === 'logs'" class="ops-table">
-          <div class="settings-header-actions">
-            <button class="primary-btn small-btn" @click="loadPlatformSystemData">刷新日志</button>
+          <div ref="logFilterPanelRef" class="log-filter-bar">
+            <select v-model.number="logDays" title="时间范围">
+              <option :value="7">近 7 天</option>
+              <option :value="30">近 30 天</option>
+              <option :value="90">近 90 天</option>
+            </select>
+            <input v-model="logActionType" type="text" placeholder="操作类型" title="操作类型">
+            <input v-model="logKeyword" type="text" placeholder="描述关键词" title="描述关键词">
+            <select v-model="logTenantId" title="企业">
+              <option value="">全部企业</option>
+              <option v-for="tenant in logTenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option>
+            </select>
+            <button type="button" class="primary-btn small-btn" :disabled="logLoading" @click="loadOperationLogs">查询</button>
+            <button type="button" class="filter-reset-btn tiny-btn" :disabled="logLoading" @click="resetLogFilters">重置</button>
+            <button type="button" class="filter-reset-btn tiny-btn" :disabled="!logRows.length" @click="exportLogsCsv">导出 CSV</button>
           </div>
           <div class="ops-head ops-head-detailed"><span>时间</span><span>操作人</span><span>类型</span><span>描述</span><span>上下文</span><span>风险</span></div>
-          <div v-for="row in operationLogs" :key="row.join('-')" class="ops-row">
-            <span>{{ row[0] }}</span><b>{{ row[1] }}</b><span>{{ row[2] }}</span><em>{{ row[3] }}</em><span>{{ row[4] }}</span><i>{{ row[5] }}</i>
+          <div v-if="logLoading" class="mini-empty">加载中…</div>
+          <div v-else-if="!logRows.length" class="mini-empty">当前筛选条件下暂无日志。</div>
+          <div v-for="row in logRows" :key="row.id" class="ops-row">
+            <span>{{ formatLogTime(row.created_at) }}</span>
+            <b>{{ row.operator_name }}</b>
+            <span>{{ row.action_type }}</span>
+            <em>{{ row.description }}</em>
+            <span>{{ logContext(row) }}</span>
+            <i>{{ row.risk_level }}</i>
           </div>
         </div>
 
@@ -230,6 +512,27 @@ onUnmounted(() => {
           <div v-if="settingsCategory === 'menu'" class="settings-menu-panel">
             <p>菜单权限通过「菜单配置管理」维护，调整后立即作用于平台运营端与客户企业端导航。</p>
             <button class="primary-btn small-btn" @click="emit('open-menu-config')">打开菜单配置管理</button>
+          </div>
+
+          <div v-else-if="settingsCategory === 'schedule'" class="schedule-ops-panel">
+            <p>预览各企业定时监测将提交的问题与平台；「立即执行到期调度」会调用模力指数接口，请谨慎操作。</p>
+            <div class="schedule-ops-toolbar">
+              <select v-model="scheduleTenantId" title="企业">
+                <option value="">全部企业</option>
+                <option v-for="tenant in logTenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option>
+              </select>
+              <button type="button" class="primary-btn small-btn" :disabled="schedulePreviewLoading" @click="loadSchedulePreview">预览调度</button>
+              <button type="button" class="filter-reset-btn tiny-btn" :disabled="scheduleRunLoading" @click="runDueSchedule">立即执行到期调度</button>
+            </div>
+            <div v-if="schedulePreviewLoading" class="mini-empty">加载预览…</div>
+            <div v-else-if="!schedulePreview.length" class="mini-empty">当前无到期或待提交的调度任务。</div>
+            <div v-else class="schedule-preview-list">
+              <div v-for="(item, index) in schedulePreview.slice(0, 12)" :key="`${item.tenant_id}-${index}`" class="schedule-preview-row">
+                <b>{{ item.tenant_name }} · {{ item.brand_name }}</b>
+                <span>{{ item.prompt_count }} 个问题 · {{ item.platform_count || 0 }} 个平台</span>
+                <em>{{ item.schedule_times?.length ? `每日 ${item.schedule_times.join('、')}` : item.schedule_type }}</em>
+              </div>
+            </div>
           </div>
 
           <template v-else>

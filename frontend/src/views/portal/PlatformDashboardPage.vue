@@ -68,6 +68,12 @@ const kpiCards = computed(() => {
   ]
 })
 
+function todoTarget(type: string) {
+  if (type === 'renewal') return 'platform.audit'
+  if (type === 'failed_task' || type === 'snapshot_backfill') return 'platform.snapshot_backfill'
+  return 'customer.realtime'
+}
+
 const serviceRows = computed(() => {
   const counts = overview.value?.service_counts || {}
   return [
@@ -249,7 +255,7 @@ onUnmounted(() => {
           <Zap />
         </div>
         <div class="ops-todo-list">
-          <button v-for="item in overview?.todo_items || []" :key="item.type" @click="props.navigateTo(item.type === 'renewal' ? 'platform.audit' : 'customer.realtime')">
+          <button v-for="item in overview?.todo_items || []" :key="item.type" @click="props.navigateTo(todoTarget(item.type))">
             <span>{{ item.title }}</span>
             <b>{{ item.count }}</b>
             <ArrowRight />

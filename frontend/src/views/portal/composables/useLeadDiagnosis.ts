@@ -17,6 +17,7 @@ import {
 import { notifyOperationError } from '../../../utils/requestError'
 import { platformLabelMap } from '../portalMaps'
 import { formatDateTime } from '../portalUtils'
+import { regionOptions } from '../regionOptions'
 
 export const PROMPT_TEMPLATES = [
   { label: '产品推荐', value: '例如：XXX有哪些产品值得推荐？' },
@@ -27,6 +28,14 @@ export const PROMPT_TEMPLATES = [
 ]
 
 export const SCHEDULE_SLOTS = ['09:30', '14:30', '20:30']
+export const SCHEDULE_DAYS = 3
+export const SCHEDULE_TOTAL = SCHEDULE_DAYS * SCHEDULE_SLOTS.length
+
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
 
 export const RUN_STATUS_LABELS: Record<string, string> = {
   pending: '待提交',
@@ -36,7 +45,7 @@ export const RUN_STATUS_LABELS: Record<string, string> = {
   skipped: '已跳过',
 }
 
-export type DetailTab = 'progress' | 'report' | 'platforms' | 'config'
+export type DetailTab = 'progress' | 'report' | 'queries' | 'sources' | 'platforms' | 'config'
 
 export function useLeadDiagnosis() {
   const auth = useAuthStore()
@@ -59,8 +68,7 @@ export function useLeadDiagnosis() {
     brand_name: '',
     prompts: ['', '', '', '', ''],
     competitors: '',
-    contact_name: '',
-    contact_phone: '',
+    region_code: '',
     contact_note: '',
     start_immediately: true,
   })
@@ -81,9 +89,7 @@ export function useLeadDiagnosis() {
     return records.value.filter(item => {
       if (statusFilter.value && item.status !== statusFilter.value) return false
       if (!keyword) return true
-      return [item.brand_name, item.contact_name, item.contact_phone].some(
-        value => (value || '').toLowerCase().includes(keyword),
-      )
+      return (item.brand_name || '').toLowerCase().includes(keyword)
     })
   })
 
@@ -102,6 +108,35 @@ export function useLeadDiagnosis() {
   const highlights = computed(() => (
     (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.highlights as string[] || []
   ))
+  const reportSections = computed(() => (
+    (diagnosisResult.value?.report_sections as Record<string, string> | undefined) || {}
+  ))
+  const promptAnalytics = computed(() => (
+    (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.prompt_analytics as Array<Record<string, unknown>> || []
+  ))
+  const sourceAnalysis = computed(() => (
+    (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.source_analysis as Record<string, unknown> || {}
+  ))
+  const rankTrend = computed(() => (
+    (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.rank_trend as Array<Record<string, unknown>> || []
+  ))
+  const trackedEntities = computed(() => (
+    (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.tracked_entities as string[] || []
+  ))
+  const brandCityRankings = computed(() => (
+    (diagnosisResult.value?.monitor_snapshot as Record<string, unknown> | undefined)?.brand_city_rankings as Array<Record<string, unknown>> || []
+  ))
+  const executiveSummary = computed(() => (
+    (diagnosisResult.value?.ai_insights as Record<string, unknown> | undefined)?.executive_summary as string | undefined
+  ))
+  const hasReportSections = computed(() => (
+    Object.values(reportSections.value).some(value => String(value || '').trim())
+  ))
+
+  function regionLabel(code: string | null | undefined) {
+    if (!code) return '全部区域'
+    return regionOptions.find(item => item.code === code)?.name || code
+  }
 
   const filledPromptCount = computed(() => (
     createForm.value.prompts.map(item => item.trim()).filter(Boolean).length
@@ -110,27 +145,37 @@ export function useLeadDiagnosis() {
   const scheduleTimeline = computed(() => {
     const item = detail.value
     if (!item) return []
-    const dateKey = item.diagnosis_date.replace(/-/g, '')
     const slots = item.schedule_times?.length ? item.schedule_times : SCHEDULE_SLOTS
+    const days = item.schedule_days ?? SCHEDULE_DAYS
     const runMap = new Map((item.runs || []).map(run => [run.schedule_key, run]))
-    return slots.map((slot, index) => {
-      const hm = slot.replace(':', '')
-      const key = `${dateKey}-${hm}`
-      const run = runMap.get(key)
-      return {
-        index: index + 1,
-        slot,
-        schedule_key: key,
-        label: `${item.diagnosis_date} ${slot}`,
-        run,
-        state: run?.status || 'waiting',
+    const entries: ScheduleTimelineItem[] = []
+    let index = 0
+    for (let dayOffset = 0; dayOffset < days; dayOffset += 1) {
+      const dayDate = addDays(item.diagnosis_date, dayOffset)
+      const dateKey = dayDate.replace(/-/g, '')
+      for (const slot of slots) {
+        index += 1
+        const hm = slot.replace(':', '')
+        const key = `${dateKey}-${hm}`
+        const run = runMap.get(key)
+        entries.push({
+          index,
+          day: dayDate,
+          dayOffset: dayOffset + 1,
+          slot,
+          schedule_key: key,
+          label: `${dayDate} ${slot}`,
+          run,
+          state: run?.status || 'waiting',
+        })
       }
-    })
+    }
+    return entries
   })
 
   const progressPercent = computed(() => {
     if (!detail.value) return 0
-    const total = detail.value.schedule_times?.length || SCHEDULE_SLOTS.length
+    const total = detail.value.schedule_total_count ?? SCHEDULE_TOTAL
     return Math.round((detail.value.completed_run_count / total) * 100)
   })
 
@@ -202,8 +247,7 @@ export function useLeadDiagnosis() {
       brand_name: '',
       prompts: ['', '', '', '', ''],
       competitors: '',
-      contact_name: '',
-      contact_phone: '',
+      region_code: '',
       contact_note: '',
       start_immediately: true,
     }
@@ -255,13 +299,12 @@ export function useLeadDiagnosis() {
         brand_name: brand,
         prompts,
         competitors,
-        contact_name: createForm.value.contact_name.trim() || undefined,
-        contact_phone: createForm.value.contact_phone.trim() || undefined,
+        region_code: createForm.value.region_code.trim() || null,
         contact_note: createForm.value.contact_note.trim() || undefined,
         start_immediately: createForm.value.start_immediately,
       })
       closeCreatePanel()
-      ElMessage.success('诊断任务已创建，系统将按三时段自动抓取')
+      ElMessage.success('诊断任务已创建，系统将连续三天共九次自动抓取')
       await loadRecords()
       await selectRecord(created.id)
     } catch (error: unknown) {
@@ -338,8 +381,20 @@ export function useLeadDiagnosis() {
     diagnosisBlock,
     platformStats,
     highlights,
+    reportSections,
+    promptAnalytics,
+    sourceAnalysis,
+    rankTrend,
+    brandCityRankings,
+    trackedEntities,
+    executiveSummary,
+    hasReportSections,
+    regionOptions,
+    regionLabel,
     promptTemplates: PROMPT_TEMPLATES,
     scheduleSlots: SCHEDULE_SLOTS,
+    scheduleDays: SCHEDULE_DAYS,
+    scheduleTotal: SCHEDULE_TOTAL,
     runStatusLabels: RUN_STATUS_LABELS,
     statusLabels: LEAD_STATUS_LABELS,
     platformLabelMap,
@@ -363,6 +418,8 @@ export function useLeadDiagnosis() {
 
 export type ScheduleTimelineItem = {
   index: number
+  day: string
+  dayOffset: number
   slot: string
   schedule_key: string
   label: string

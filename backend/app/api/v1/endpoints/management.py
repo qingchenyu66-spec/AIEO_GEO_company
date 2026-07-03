@@ -23,7 +23,10 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
 from app.services.deepseek_balance_service import fetch_deepseek_balance
+from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
+from app.services.operation_log_service import write_operation_log
+from app.services.snapshot_backfill_service import list_snapshot_backfill_page
 from app.schemas.permission import (
     MenuConfigBatchItem,
     MenuConfigUpdateRequest,
@@ -198,18 +201,16 @@ def write_management_log(
     risk_level: str = "正常",
 ) -> OperationLog:
     """写入平台管理操作日志，和业务变更共用同一个数据库事务。"""
-    log = OperationLog(
-        operator_name=current.user.display_name or current.identity.identity_name or current.user.username,
-        action_type=action_type,
-        description=description[:500],
-        risk_level=risk_level,
+    return write_operation_log(
+        db,
+        current,
+        action_type,
+        description,
         target_module=target_module,
         target_id=target_id,
         tenant_id=tenant_id,
-        operator_user_id=current.user.id,
+        risk_level=risk_level,
     )
-    db.add(log)
-    return log
 
 
 def position_code_from_name(identity_type: str, name: str) -> str:
@@ -534,6 +535,8 @@ def management_overview(
         .limit(12)
     ))
     tenant_name_map = {tenant.id: tenant.name for tenant in tenants}
+    recent_task_slice = all_recent_tasks[:8]
+    lead_task_displays = lead_diagnosis_task_displays(db, [task.task_id for task in recent_task_slice])
 
     today_task_ids = [task.task_id for task in today_task_rows]
     today_cost = 0.0
@@ -616,6 +619,15 @@ def management_overview(
         todo_items.append({"type": "renewal", "title": "客户服务即将到期", "count": len(expiring_tenants), "level": "warning"})
     if failed_tasks:
         todo_items.append({"type": "failed_task", "title": "失败任务待处理", "count": len(failed_tasks), "level": "danger"})
+    backfill_summary = list_snapshot_backfill_page(db, pending_only=True, limit=1)
+    pending_backfill = int(backfill_summary.get("summary", {}).get("pending") or 0)
+    if pending_backfill:
+        todo_items.append({
+            "type": "snapshot_backfill",
+            "title": "快照待补录",
+            "count": pending_backfill,
+            "level": "warning",
+        })
     if running_tasks:
         todo_items.append({"type": "sync_task", "title": "任务结果待同步", "count": len(running_tasks), "level": "normal"})
     if today_schedule_failed:
@@ -656,8 +668,15 @@ def management_overview(
         "recent_tasks": [
             {
                 "task_id": task.task_id,
-                "tenant_name": tenant_name_map.get(task.tenant_id) or "未绑定企业",
-                "monitor_keywords": task.monitor_keywords,
+                "tenant_name": (
+                    lead_task_displays.get(task.task_id, {}).get("tenant_name")
+                    or tenant_name_map.get(task.tenant_id)
+                    or "未绑定企业"
+                ),
+                "monitor_keywords": (
+                    lead_task_displays.get(task.task_id, {}).get("monitor_keywords")
+                    or task.monitor_keywords
+                ),
                 "status": task.status,
                 "total_items": task.total_items,
                 "completed_items": task.completed_items,
@@ -665,7 +684,7 @@ def management_overview(
                 "created_at": task.created_at.isoformat(sep=" ", timespec="minutes"),
                 "last_error": task.last_error,
             }
-            for task in all_recent_tasks[:8]
+            for task in recent_task_slice
         ],
         "alerts": [
             {"title": "任务失败", "value": len(failed_tasks), "level": "danger" if failed_tasks else "normal"},

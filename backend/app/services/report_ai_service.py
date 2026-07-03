@@ -34,8 +34,7 @@ def enrich_report_narrative(
         "diagnosis_title": (existing_diagnosis or {}).get("diagnosis_title"),
     }
     highlights = rule_highlights
-    ai_insights: dict[str, Any] = {"source": "rule"}
-
+    ai_insights: dict[str, Any] = {}
     client = DeepseekClient()
     if not client.report_enabled:
         return highlights, diagnosis_block, ai_insights, kpis
@@ -54,16 +53,13 @@ def enrich_report_narrative(
             rule_highlights=rule_highlights,
         )
     except DeepseekApiError as exc:
-        logger.warning("DeepSeek 报告生成失败，回退规则模板：%s", exc)
-        ai_insights["source"] = "rule"
-        ai_insights["fallback_reason"] = str(exc)
+        logger.warning("报告智能撰写失败，回退规则模板：%s", exc)
         return highlights, diagnosis_block, ai_insights, kpis
 
     highlights = insights.get("highlights") or rule_highlights
     ai_insights = {
-        "source": "deepseek",
-        "model": client.model,
         "executive_summary": insights.get("executive_summary"),
+        "highlights": highlights,
     }
 
     for key in ("sentiment_summary", "strength_points", "weakness_points", "recommendation"):

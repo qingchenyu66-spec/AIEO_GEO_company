@@ -7,10 +7,11 @@ from app.core.database import Base
 
 
 DEFAULT_LEAD_SCHEDULE_TIMES = ["09:30", "14:30", "20:30"]
+LEAD_SCHEDULE_DAYS = 3
 
 
 class LeadDiagnosis(Base):
-    """售前线索诊断：不绑定正式企业，按日三时段抓取后汇总。"""
+    """售前线索诊断：不绑定正式企业，连续三天各三时段共九次抓取后汇总。"""
 
     __tablename__ = "geo_lead_diagnosis"
 
@@ -21,6 +22,7 @@ class LeadDiagnosis(Base):
     contact_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="销售备注")
     prompts_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="检测问题列表，最多5条")
     competitors_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="竞品名称列表")
+    region_code: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="监测地区编码，空值代表全部区域")
     schedule_times_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="每日抓取时段")
     diagnosis_date: Mapped[date] = mapped_column(Date, index=True, nullable=False, comment="诊断日期")
     status: Mapped[str] = mapped_column(

@@ -1,7 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
-import { getOperationLogs, getSystemConfigs, type OperationLogRecord, type SystemConfigRecord, type TenantInfo } from '../../../services/management'
+import { getSystemConfigs, type SystemConfigRecord, type TenantInfo } from '../../../services/management'
 import { getMonitorSummary, syncMonitorTask, type MonitorSummary } from '../../../services/monitor'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import { getPlatformMatrix, type PlatformMatrix } from '../../../services/platforms'
@@ -22,13 +22,6 @@ export const monitorSummaryMenuCodes = new Set([
 
 const terminalTaskStatuses = new Set(['completed', 'partial_completed', 'failed', 'stopped'])
 
-function cleanLogText(value: string | null | undefined, fallback = '历史编码异常记录，原文不可恢复') {
-  const text = String(value || '').trim()
-  if (!text) return '-'
-  const questionMarks = (text.match(/\?/g) || []).length
-  if (questionMarks >= 3 && questionMarks / Math.max(1, text.length) > 0.25) return fallback
-  return text
-}
 
 export const sourceCategoryLabels: Record<string, string> = {
   official: '官网/企业库',
@@ -73,9 +66,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const sourceStartDate = ref('')
   const sourceEndDate = ref('')
 
-  const operationLogRows = ref<OperationLogRecord[]>([])
   const systemConfigRows = ref<SystemConfigRecord[]>([])
-  let operationLogRefreshTimer: number | null = null
 
   const platformMatrix = ref<PlatformMatrix | null>(null)
   const loadingPlatformMatrix = ref(false)
@@ -165,19 +156,12 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   })
 
   const sourceTrendRows = computed(() => {
-    const now = new Date()
-    return Array.from({ length: 7 }).map((_, index) => {
-      const day = new Date(now)
-      day.setDate(now.getDate() - (6 - index))
-      const label = `${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
-      const value = sourceRanking.value.reduce((sum, source) => {
-        if (!source.latest_time) return sum
-        const sourceDate = new Date(source.latest_time)
-        const matched = sourceDate.getFullYear() === day.getFullYear() && sourceDate.getMonth() === day.getMonth() && sourceDate.getDate() === day.getDate()
-        return matched ? sum + source.count : sum
-      }, 0)
-      return { label, value }
-    })
+    const backendPoints = monitorSummary.value?.source_citation_trend?.points || []
+    if (backendPoints.length) {
+      const points = backendPoints.length > 7 ? backendPoints.slice(-7) : backendPoints
+      return points.map(point => ({ label: point.label, value: point.value }))
+    }
+    return []
   })
 
   const sourceStructureRows = computed(() => platformRanking.value.slice(0, 6).map(platform => {
@@ -289,15 +273,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       .slice(0, 6)
   })
 
-  const operationLogs = computed(() => operationLogRows.value.map(row => [
-    row.created_at,
-    cleanLogText(row.operator_name, '历史日志'),
-    cleanLogText(row.action_type, '编码异常'),
-    cleanLogText(row.description),
-    [row.target_module, row.tenant_id ? `企业ID ${row.tenant_id}` : '', row.ip_address ? `IP ${row.ip_address}` : ''].filter(Boolean).join(' · ') || '平台操作',
-    row.risk_level,
-  ]))
-
   const systemSettings = computed(() => systemConfigRows.value.map(row => {
     const isSecret = /key|token|secret|password/i.test(row.config_key)
     const value = isSecret && row.config_value ? `${row.config_value.slice(0, 4)}****${row.config_value.slice(-4)}` : row.config_value
@@ -390,7 +365,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     if (!isPlatform.value) return
     const code = activeMenuCode.value
     try {
-      if (code === 'platform.logs') operationLogRows.value = await withRetry(() => getOperationLogs())
       if (code === 'platform.settings') systemConfigRows.value = await withRetry(() => getSystemConfigs())
     } catch (error: unknown) {
       notifyError(error, '平台系统数据加载失败')
@@ -427,16 +401,10 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
         loadPlatformMatrix()
       }
     }, 30000)
-    operationLogRefreshTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && activeMenuCode.value === 'platform.logs') {
-        loadPlatformSystemData()
-      }
-    }, 15000)
   })
 
   onUnmounted(() => {
     if (monitorSummaryTimer) window.clearInterval(monitorSummaryTimer)
-    if (operationLogRefreshTimer) window.clearInterval(operationLogRefreshTimer)
     if (platformMatrixTimer) window.clearInterval(platformMatrixTimer)
   })
 
@@ -450,7 +418,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     sourceKeywordFilter,
     sourceStartDate,
     sourceEndDate,
-    operationLogRows,
     systemConfigRows,
     stats,
     chartTrend,
@@ -475,7 +442,6 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     negativeRate,
     sourceTotalCount,
     recentQuestionGroups,
-    operationLogs,
     systemSettings,
     functionalPage,
     sentimentPieRows,

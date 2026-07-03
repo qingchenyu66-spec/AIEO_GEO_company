@@ -26,6 +26,7 @@ export interface BrandKeywordGroup {
   id: number | null
   tenant_id?: number
   name?: string
+  display_name?: string
   monitor_keyword: string
   monitor_keywords?: string[]
   exposure_terms: string[]
@@ -63,11 +64,7 @@ export function findKeywordGroupBySelectValue(value: string, groups: BrandKeywor
 }
 
 export function keywordGroupFilterValue(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
-  const custom = (group.name || '').trim()
-  if (custom && !isGenericKeywordGroupName(custom)) return custom
-  const keywords = keywordGroupMonitorKeywords(group)
-  if (keywords.length === 1) return keywords[0]
-  return keywordGroupDisplayName(group, index)
+  return formatKeywordGroupLabel(group, index)
 }
 
 export function keywordGroupMonitorKeywords(group: BrandKeywordGroup): string[] {
@@ -89,9 +86,16 @@ function isGenericKeywordGroupName(name: string | null | undefined): boolean {
 }
 
 export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.sort_order ?? 0): string {
+  const displayName = (group.display_name || '').trim()
+  if (displayName && !isGenericKeywordGroupName(displayName)) return displayName
+
   const title = keywordGroupDisplayName(group, index)
   const keywords = keywordGroupMonitorKeywords(group)
-  if (!keywords.length) return title
+  if (!keywords.length) {
+    const primary = (group.monitor_keyword || '').trim()
+    if (primary) return truncateKeywordText(primary, 36)
+    return displayName || title
+  }
 
   const genericTitle = isGenericKeywordGroupName(group.name)
   if (keywords.length === 1) {

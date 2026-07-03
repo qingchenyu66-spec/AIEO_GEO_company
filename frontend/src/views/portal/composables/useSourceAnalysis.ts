@@ -3,6 +3,12 @@ import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getMonitorSummary, type MonitorSummary } from '../../../services/monitor'
+import { useAuthStore } from '../../../stores/auth'
+import {
+  customerDisplayPeriodLabel,
+  customerTrendPeriodLabel,
+  isBeforeCustomerCutoff,
+} from '../../../utils/customerMonitorDate'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { sortPlatformRows, sortPlatformTabs } from '../platformOrder'
@@ -45,11 +51,26 @@ function domainFromUrl(url: string) {
   }
 }
 
+function sliceTrendPoints<T extends { label: string; value: number }>(points: T[], days: number) {
+  if (!points.length || days >= points.length) return points
+  return points.slice(points.length - days)
+}
+
 export function useSourceAnalysis(options?: {
   structureChartRef?: Ref<HTMLDivElement | null>
   trendChartRef?: Ref<HTMLDivElement | null>
 }) {
   const analytics = inject(PortalAnalyticsKey)!
+  const auth = useAuthStore()
+  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
+  const trendPeriodLabel = computed(() => {
+    if (!isCustomerView.value) {
+      const days = datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14
+      return `近 ${days} 日引用趋势`
+    }
+    return customerTrendPeriodLabel(14)
+  })
   const brandAsset = analytics.brandAsset
 
   const loading = ref(false)
@@ -83,7 +104,7 @@ export function useSourceAnalysis(options?: {
     const dayMs = 86400000
     const rangeDays = datePreset.value === 'all' ? null : Number(datePreset.value)
     const rangeStart = rangeDays ? now - rangeDays * dayMs : null
-
+    const customerCutoff = isCustomerView.value
     return allSources.value.filter(source => {
       const platformMatched = platformFilter.value === 'all'
         || (source.platforms || []).includes(platformFilter.value)
@@ -91,7 +112,9 @@ export function useSourceAnalysis(options?: {
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
-      const dateMatched = !rangeStart || (sourceTime != null && sourceTime >= rangeStart)
+      const dateMatched = customerCutoff
+        ? isBeforeCustomerCutoff(source.latest_time)
+        : (!rangeStart || (sourceTime != null && sourceTime >= rangeStart))
       return platformMatched && categoryMatched && keywordMatched && dateMatched
         && (source.exposure_terms || []).length > 0
     }).sort((a, b) => b.count - a.count)
@@ -160,22 +183,17 @@ export function useSourceAnalysis(options?: {
   }))
 
   const sourceTrendRows = computed(() => {
-    const days = datePreset.value === 'all' ? 14 : Math.min(Number(datePreset.value), 14)
-    const now = new Date()
-    return Array.from({ length: days }).map((_, index) => {
-      const day = new Date(now)
-      day.setDate(now.getDate() - (days - 1 - index))
-      const label = `${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
-      const value = filteredSources.value.reduce((sum, source) => {
-        if (!source.latest_time) return sum
-        const sourceDate = new Date(source.latest_time)
-        const matched = sourceDate.getFullYear() === day.getFullYear()
-          && sourceDate.getMonth() === day.getMonth()
-          && sourceDate.getDate() === day.getDate()
-        return matched ? sum + source.count : sum
-      }, 0)
-      return { label, value }
-    })
+    const backendPoints = monitorSummary.value?.source_citation_trend?.points || []
+    if (backendPoints.length) {
+      const days = isCustomerView.value
+        ? 14
+        : (datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14)
+      return sliceTrendPoints(backendPoints, days).map(point => ({
+        label: point.label,
+        value: point.value,
+      }))
+    }
+    return []
   })
 
   const insight = computed(() => {
@@ -264,6 +282,9 @@ export function useSourceAnalysis(options?: {
 
   return {
     brandAsset,
+    isCustomerView,
+    customerPeriodLabel,
+    trendPeriodLabel,
     loading,
     datePreset,
     platformFilter,

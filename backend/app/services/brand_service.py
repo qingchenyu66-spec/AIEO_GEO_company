@@ -1,4 +1,5 @@
 from typing import Any
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,6 +53,15 @@ def default_keyword_group_name(index: int = 0, *, group_id: int | None = None) -
     return f"词组 {index + 1}"
 
 
+_GENERIC_KEYWORD_GROUP_NAME = re.compile(r"^词组(?:\s*\d+)?$")
+
+
+def is_generic_keyword_group_name(name: str | None) -> bool:
+    """未自定义命名的默认词组名，展示时应回退到监测关键词。"""
+    text = str(name or "").strip()
+    return not text or bool(_GENERIC_KEYWORD_GROUP_NAME.match(text))
+
+
 def keyword_group_name(group: BrandKeywordGroup | dict[str, Any] | None, index: int = 0) -> str:
     if group is None:
         return default_keyword_group_name(index)
@@ -98,11 +108,11 @@ def keyword_group_primary_keyword(group: BrandKeywordGroup | dict[str, Any] | No
 
 def keyword_group_display_label(group: BrandKeywordGroup | dict[str, Any] | None) -> str:
     name = keyword_group_name(group)
-    if name:
-        return name
     keywords = keyword_group_monitor_keywords(group)
+    if not is_generic_keyword_group_name(name):
+        return name
     if not keywords:
-        return ""
+        return name
     if len(keywords) == 1:
         return keywords[0]
     return f"{keywords[0]}等{len(keywords)}词"
@@ -131,7 +141,7 @@ def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
     """序列化监测词组。"""
     monitor_keywords = keyword_group_monitor_keywords(group)
     primary = monitor_keywords[0] if monitor_keywords else str(group.monitor_keyword or "").strip()
-    return {
+    payload = {
         "id": group.id,
         "tenant_id": group.tenant_id,
         "name": keyword_group_name(group),
@@ -141,24 +151,31 @@ def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
         "sort_order": group.sort_order,
         "status": group.status,
     }
+    payload["display_name"] = keyword_group_display_label(group)
+    return payload
 
 
 def ensure_keyword_group_payload(group: BrandKeywordGroup | dict[str, Any], index: int = 0) -> dict[str, Any]:
     """统一输出词组结构，确保 monitor_keywords 始终完整返回。"""
     if isinstance(group, BrandKeywordGroup):
-        return keyword_group_to_dict(group)
-    monitor_keywords = keyword_group_monitor_keywords(group)
-    primary = monitor_keywords[0] if monitor_keywords else str(group.get("monitor_keyword") or "").strip()
-    return {
-        "id": group.get("id"),
-        "tenant_id": group.get("tenant_id"),
-        "name": keyword_group_name(group, index),
-        "monitor_keyword": primary,
-        "monitor_keywords": monitor_keywords,
-        "exposure_terms": list(group.get("exposure_terms") or []),
-        "sort_order": group.get("sort_order", index),
-        "status": group.get("status", True),
-    }
+        payload = keyword_group_to_dict(group)
+    else:
+        monitor_keywords = keyword_group_monitor_keywords(group)
+        primary = monitor_keywords[0] if monitor_keywords else str(group.get("monitor_keyword") or "").strip()
+        payload = {
+            "id": group.get("id"),
+            "tenant_id": group.get("tenant_id"),
+            "name": keyword_group_name(group, index),
+            "monitor_keyword": primary,
+            "monitor_keywords": monitor_keywords,
+            "exposure_terms": list(group.get("exposure_terms") or []),
+            "sort_order": group.get("sort_order", index),
+            "status": group.get("status", True),
+        }
+    payload["display_name"] = keyword_group_display_label(
+        group if isinstance(group, BrandKeywordGroup) else payload
+    )
+    return payload
 
 
 def editable_keyword_groups(db: Session, tenant_id: int) -> list[BrandKeywordGroup | dict[str, Any]]:

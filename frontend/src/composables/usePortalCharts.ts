@@ -229,20 +229,36 @@ export function usePortalCharts(refs: PortalChartRefs) {
     if (mentionTrendChart) {
       const trend = data.mentionTrendSeries
       if (trend?.labels?.length && trend.series?.length) {
-        const palette = ['#2d6cdf', '#14a7c7', '#32c48d', '#8b5cf6', '#f97316', '#ef5da8', '#64748b', '#0f766e', '#f59e0b', '#06b6d4']
+        const palette = ['#2d6cdf', '#94a3b8', '#a8b4c4', '#b8c2d0', '#c8d0dc', '#d0d8e4']
         mentionTrendChart.setOption({
           color: palette,
-          grid: { left: 42, right: 18, top: trend.series.length > 5 ? 54 : 40, bottom: 28 },
-          tooltip: { trigger: 'axis', valueFormatter: (value: number) => `${value}%` },
+          grid: { left: 42, right: 18, top: trend.series.length > 4 ? 48 : 36, bottom: 28 },
+          tooltip: {
+            trigger: 'axis',
+            confine: true,
+            formatter: (params: unknown) => {
+              const items = (Array.isArray(params) ? params : [params]) as Array<{
+                axisValue?: string
+                marker?: string
+                seriesName?: string
+                value?: number
+              }>
+              if (!items.length) return ''
+              const header = items[0]?.axisValue || ''
+              const lines = [...items]
+                .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+                .map(item => `${item.marker || ''}${item.seriesName || ''}：${item.value ?? 0}%`)
+              return [header, ...lines].join('<br/>')
+            },
+          },
           legend: {
-            type: 'scroll',
+            type: 'plain',
             top: 0,
             left: 8,
             right: 8,
-            itemWidth: 12,
+            itemWidth: 14,
             itemHeight: 4,
-            pageIconSize: 9,
-            pageTextStyle: { color: '#58708f', fontSize: 10 },
+            itemGap: 14,
             textStyle: { color: '#58708f', fontSize: 11 },
           },
           xAxis: {
@@ -258,17 +274,30 @@ export function usePortalCharts(refs: PortalChartRefs) {
             axisLabel: { formatter: '{value}%', color: '#8aa0ba', fontSize: 11 },
             splitLine: { lineStyle: { color: '#eef2f7' } },
           },
-          series: trend.series.map(item => ({
+          series: trend.series.map((item, index) => ({
             name: item.name,
             type: 'line',
-            smooth: true,
-            symbolSize: 6,
+            smooth: 0.35,
+            showSymbol: item.is_brand,
+            symbolSize: item.is_brand ? 7 : 4,
+            z: item.is_brand ? 3 : 1,
             data: item.values,
-            lineStyle: { width: item.is_brand ? 3 : 2 },
+            lineStyle: {
+              width: item.is_brand ? 3 : 1.5,
+              type: item.is_brand ? 'solid' : 'dashed',
+              opacity: item.is_brand ? 1 : 0.82,
+            },
+            itemStyle: {
+              color: item.is_brand ? palette[0] : palette[Math.min(index, palette.length - 1)],
+            },
+            emphasis: {
+              focus: 'series',
+              lineStyle: { width: item.is_brand ? 3.5 : 2.5 },
+            },
             areaStyle: item.is_brand ? {
               color: new graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: 'rgba(54,207,201,.18)' },
-                { offset: 1, color: 'rgba(54,207,201,0)' },
+                { offset: 0, color: 'rgba(45,108,223,.14)' },
+                { offset: 1, color: 'rgba(45,108,223,0)' },
               ]),
             } : undefined,
           })),

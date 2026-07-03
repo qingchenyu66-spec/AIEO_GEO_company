@@ -1,15 +1,19 @@
-﻿import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getCompetitorCompare, getSentimentKeywords, type CompetitorCompareSummary, type SentimentKeywordItem, type SentimentKeywordsSummary } from '../../../services/analytics'
+import { useAuthStore } from '../../../stores/auth'
+import { customerDisplayPeriodLabel } from '../../../utils/customerMonitorDate'
 import { useSentimentWordCloud } from '../../../composables/useSentimentWordCloud'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { sortPlatformTabs } from '../platformOrder'
 
 export type CompetitorDatePreset = '7' | '30' | '90'
+
+const MENTION_TREND_FOCUS_COUNT = 8
 
 export type CompetitorLeaderboardRow = {
   name: string
@@ -40,6 +44,9 @@ export function useBrandInsights(options?: {
 }) {
   const route = useRoute()
   const router = useRouter()
+  const auth = useAuthStore()
+  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const analytics = inject(PortalAnalyticsKey)!
   const brandAsset = analytics.brandAsset
   const brandCompetitors = analytics.brandCompetitors
@@ -75,7 +82,7 @@ export function useBrandInsights(options?: {
     })
     const total = summary.value?.sample_total || 0
     return sortPlatformTabs([
-      { code: 'all', name: '鍏ㄩ儴骞冲彴', count: total },
+      { code: 'all', name: '全部平台', count: total },
       ...Array.from(counts.entries())
         .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count })),
     ])
@@ -110,6 +117,38 @@ export function useBrandInsights(options?: {
   const sampleTotal = computed(() => summary.value?.sample_total || 0)
   const configuredCount = computed(() => brandCompetitors.value.length || summary.value?.competitor_count || 0)
   const mentionTrendSeries = computed(() => summary.value?.mention_trends || { labels: [], series: [] })
+
+  const focusedMentionTrendSeries = computed(() => {
+    const trend = mentionTrendSeries.value
+    const labels = trend.labels || []
+    const allSeries = trend.series || []
+    if (!labels.length || !allSeries.length) {
+      return { labels, series: [], hidden_count: 0 }
+    }
+    const brand = allSeries.find(item => item.is_brand)
+    const competitors = allSeries
+      .filter(item => !item.is_brand)
+      .map(item => ({
+        ...item,
+        avg: item.values.length
+          ? item.values.reduce((sum, value) => sum + value, 0) / item.values.length
+          : 0,
+      }))
+      .sort((a, b) => b.avg - a.avg)
+    const focusLimit = Math.max(MENTION_TREND_FOCUS_COUNT, configuredCount.value)
+    const focused = [
+      ...(brand ? [brand] : []),
+      ...competitors.slice(0, focusLimit),
+    ]
+    return {
+      labels,
+      series: focused.map(({ name, is_brand, values }) => ({ name, is_brand, values })),
+      hidden_count: Math.max(0, allSeries.length - focused.length),
+    }
+  })
+
+  const mentionTrendHiddenCount = computed(() => focusedMentionTrendSeries.value.hidden_count || 0)
+
   const trendDayKeys = computed(() => summary.value?.trend_day_keys || [])
 
   const sentimentTrendRows = computed(() => {
@@ -261,7 +300,7 @@ export function useBrandInsights(options?: {
       positiveRate: brandSentimentRow.value?.positive_rate ?? 0,
       diagnosisScore: 0,
       competitorCompareRows: [],
-      mentionTrendSeries: mentionTrendSeries.value,
+      mentionTrendSeries: focusedMentionTrendSeries.value,
       sentimentTrendRows: sentimentTrendRows.value,
       sourceStructureRows: [],
       sourceTrendRows: [],
@@ -309,7 +348,13 @@ export function useBrandInsights(options?: {
   }
 
   watch([datePreset, selectedPlatforms, promptFilter], () => { void loadSummary() }, { deep: true })
-  watch([mentionTrendSeries, sentimentTrendRows, activeSentimentKeywords, sentimentKeywordTab, loading], () => {
+  watch(
+    () => brandCompetitors.value.map(item => `${item.id}:${item.name}`).join('|'),
+    (next, prev) => {
+      if (prev && next !== prev) void loadSummary()
+    },
+  )
+  watch([focusedMentionTrendSeries, sentimentTrendRows, activeSentimentKeywords, sentimentKeywordTab, loading], () => {
     void refreshCharts()
   }, { deep: true })
 
@@ -325,6 +370,8 @@ export function useBrandInsights(options?: {
   return {
     brandAsset,
     brandCompetitors,
+    isCustomerView,
+    customerPeriodLabel,
     datePreset,
     selectedPlatforms,
     promptFilter,
@@ -338,7 +385,8 @@ export function useBrandInsights(options?: {
     brandSentimentRow,
     sampleTotal,
     configuredCount,
-    mentionTrendSeries,
+    mentionTrendHiddenCount,
+    focusedMentionTrendSeries,
     sentimentTrendRows,
     sentimentKeywords,
     sentimentKeywordTab,

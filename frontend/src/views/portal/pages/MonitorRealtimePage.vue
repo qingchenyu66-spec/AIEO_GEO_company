@@ -33,6 +33,7 @@ const {
   filteredGroupedMonitorTasks,
   scheduleSourceLabel,
   isCustomerView,
+  customerPeriodLabel,
   displayScheduleLabel,
   refreshCurrentView,
   selectMonitorTask,
@@ -53,7 +54,7 @@ const {
   formatExposureLabel,
   formatKeywordGroupDetailHint,
   keywordGroupSelectValue,
-  keywordGroupDisplayName,
+  keywordGroupFilterValue,
   formatTaskTitle,
   taskPromptPreview,
   answerExcerpt,
@@ -126,16 +127,21 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
   <section class="monitor-page realtime-monitor-page">
     <header class="realtime-sticky-bar">
       <div class="realtime-sticky-inner">
-        <div class="realtime-date-presets">
-          <button type="button" :class="{ active: datePreset === '7d' }" @click="applyDatePreset('7d')">近 7 天</button>
-          <button type="button" :class="{ active: datePreset === '30d' }" @click="applyDatePreset('30d')">近 30 天</button>
-          <button type="button" :class="{ active: datePreset === 'custom' }" @click="datePreset = 'custom'">自定义</button>
+        <div v-if="isCustomerView" class="realtime-customer-period">
+          数据范围：{{ customerPeriodLabel }}
         </div>
-        <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
-          <input v-model="filters.startDate" type="date" @change="onCustomDateChange">
-          <span>至</span>
-          <input v-model="filters.endDate" type="date" @change="onCustomDateChange">
-        </div>
+        <template v-else>
+          <div class="realtime-date-presets">
+            <button type="button" :class="{ active: datePreset === '7d' }" @click="applyDatePreset('7d')">近 7 天</button>
+            <button type="button" :class="{ active: datePreset === '30d' }" @click="applyDatePreset('30d')">近 30 天</button>
+            <button type="button" :class="{ active: datePreset === 'custom' }" @click="datePreset = 'custom'">自定义</button>
+          </div>
+          <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
+            <input v-model="filters.startDate" type="date" @change="onCustomDateChange">
+            <span>至</span>
+            <input v-model="filters.endDate" type="date" @change="onCustomDateChange">
+          </div>
+        </template>
         <div class="realtime-sticky-filters">
           <select v-model="filters.platform">
             <option value="">全部平台</option>
@@ -151,7 +157,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
               :value="keywordGroupSelectValue(group, groupIndex)"
               :title="formatKeywordGroupDetailHint(group)"
             >
-              {{ keywordGroupDisplayName(group, groupIndex) }}
+              {{ keywordGroupFilterValue(group, groupIndex) }}
             </option>
           </select>
           <select v-model="filters.monitorKeyword" class="monitor-keyword-select" title="按监测问题筛选">
@@ -501,7 +507,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
             >
               <span class="realtime-drawer-snapshot-round">第 {{ index + 1 }} 轮</span>
               <span class="realtime-drawer-accordion-main">
-                <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}</strong>
+                <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}{{ scheduleSourceLabel(snapshot.schedule_source) }}</strong>
                 <small>
                   排名 {{ formatRank(snapshot.mention_position) }}
                   · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
