@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentSession, get_current_session
+from app.api.dependencies import CurrentSession, get_current_session, require_platform
 from app.core.database import get_db
 from app.models.platform import AlertThreshold, GeoPlatform
 from app.schemas.common import ApiResponse
@@ -32,11 +32,6 @@ router = APIRouter(prefix="/platforms")
 alert_router = APIRouter(prefix="/alerts")
 
 logger = logging.getLogger(__name__)
-
-
-def require_platform(current: CurrentSession) -> None:
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可访问")
 
 
 # ── 平台管理 ──────────────────────────────────────────────

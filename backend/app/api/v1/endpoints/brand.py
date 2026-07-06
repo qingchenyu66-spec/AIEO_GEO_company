@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentSession, get_current_session
+from app.api.dependencies import CurrentSession, get_current_session, require_platform
 from app.api.http_errors import raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.models.permission import Menu, UserIdentityMenu
@@ -22,12 +22,6 @@ from app.services.brand_service import (
 from app.services.tenant_scope import resolve_and_guard_tenant_id
 
 router = APIRouter(prefix="/brand")
-
-
-def require_platform(current: CurrentSession) -> None:
-    """只有平台运营端可以维护企业品牌资产和竞品库。"""
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可以维护企业配置")
 
 
 def require_any_update_permission(current: CurrentSession, db: Session, menu_codes: list[str]) -> None:
@@ -136,7 +130,7 @@ def remove_competitor(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """逻辑删除竞品。"""
-    require_platform(current)
+    require_platform(current, detail="仅平台运营端可以维护企业配置")
     try:
         delete_competitor(db, current, competitor_id, tenant_id)
     except Exception as exc:

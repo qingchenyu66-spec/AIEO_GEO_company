@@ -5,7 +5,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentSession, get_current_session
+from app.api.dependencies import CurrentSession, get_current_session, require_platform
 from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.core.celery_queue_monitor import format_celery_monitor_zh, get_queue_monitor_snapshot
@@ -72,11 +72,6 @@ from app.services.permission_service import (
 from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
 
 router = APIRouter(prefix="/management")
-
-
-def require_platform(current: CurrentSession) -> None:
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可访问")
 
 
 def is_sales_identity(db: Session, identity: UserIdentity) -> bool:

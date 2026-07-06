@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentSession, get_current_session
+from app.api.dependencies import CurrentSession, get_current_session, require_platform
 from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.diagnosis import BrandDiagnosis
@@ -18,11 +18,6 @@ from app.services.tenant_scope import (
 router = APIRouter(prefix="/diagnosis")
 
 _LIST_LIMIT = 200
-
-
-def require_platform(current: CurrentSession) -> None:
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可访问")
 
 
 @router.get("/records", response_model=ApiResponse[list[dict]])

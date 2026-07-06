@@ -17,35 +17,6 @@ export type GeoHttpRequestConfig = AxiosRequestConfig & {
   noCache?: boolean
 }
 
-interface CacheItem {
-  data: unknown
-  timestamp: number
-  url: string
-}
-
-const cache = new Map<string, CacheItem>()
-const CACHE_TTL = 5 * 60 * 1000
-
-function getCacheKey(config: { method?: string; url?: string; params?: unknown }): string {
-  const params = JSON.stringify(config.params || {})
-  return `${config.method}:${config.url}:${params}`
-}
-
-function isCacheable(config: { method?: string; url?: string; params?: unknown; noCache?: boolean }): boolean {
-  if (config.method !== 'get') return false
-  if (config.noCache) return false
-  if (config.url?.includes('/health')) return false
-  return true
-}
-
-function clearRelatedCache(urlPattern: string) {
-  for (const [key, item] of cache.entries()) {
-    if (item.url.includes(urlPattern)) {
-      cache.delete(key)
-    }
-  }
-}
-
 http.interceptors.request.use(
   (config) => {
     useLoadingStore().start()
@@ -99,46 +70,5 @@ http.interceptors.response.use(
   },
 )
 
-export function invalidateCache(urlPattern?: string) {
-  if (urlPattern) {
-    clearRelatedCache(urlPattern)
-  } else {
-    cache.clear()
-  }
-}
-
-export function getCacheStats() {
-  return {
-    size: cache.size,
-    items: Array.from(cache.values()).map(item => ({
-      url: item.url,
-      age: `${Math.round((Date.now() - item.timestamp) / 1000)}s`,
-    })),
-  }
-}
-
-export function getWithCache<T>(url: string, params?: unknown): Promise<T> {
-  if (!isCacheable({ method: 'get', url, params })) {
-    return http.get(url, { params }).then(response => response.data as T)
-  }
-
-  const cacheKey = getCacheKey({ method: 'get', url, params })
-  const cached = cache.get(cacheKey)
-
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return Promise.resolve(cached.data as T)
-  }
-
-  if (cached) {
-    cache.delete(cacheKey)
-  }
-
-  return http.get(url, { params }).then(response => {
-    cache.set(cacheKey, {
-      data: response.data,
-      timestamp: Date.now(),
-      url,
-    })
-    return response.data as T
-  })
-}
+/** 写操作后调用；客户端 GET 缓存已移除，保留 API 供 mutation 钩子使用。 */
+export function invalidateCache(_urlPattern?: string) {}

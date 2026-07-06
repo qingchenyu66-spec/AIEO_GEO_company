@@ -59,3 +59,12 @@ def get_current_session(
     if identity is None or not identity.user.status:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或身份已停用")
     return CurrentSession(user=identity.user, identity=identity)
+
+
+def require_platform(
+    current: CurrentSession,
+    *,
+    detail: str = "仅平台运营端可访问",
+) -> None:
+    if current.identity.identity_type != "PLATFORM":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)

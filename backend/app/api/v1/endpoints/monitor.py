@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import CurrentSession, get_current_session
+from app.api.dependencies import CurrentSession, get_current_session, require_platform
 from app.api.http_errors import molizhishu_upstream_error_detail, raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.core.read_cache import (
@@ -78,10 +78,7 @@ def _serialize_task_subtasks(db: Session, task, current: CurrentSession | None =
     ]
 
 
-def require_platform(current: CurrentSession) -> None:
-    """定时监测由平台运营端统一触发，客户侧只查看结果。"""
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可以执行定时监测任务")
+_MONITOR_PLATFORM_DETAIL = "仅平台运营端可以执行定时监测任务"
 
 
 @router.post("/tasks", response_model=ApiResponse[dict])
@@ -209,7 +206,7 @@ def monitor_snapshot_backfill_pending(
     db: Session = Depends(get_db),
 ) -> ApiResponse[SnapshotBackfillListResponse]:
     """运营端快照补录列表：可按企业、单日、来源、平台、关键词/词组筛选；默认含已有结果以便覆盖更正。"""
-    require_platform(current)
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     if tenant_id is None and not all_tenants:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -260,7 +257,7 @@ def monitor_subtask_snapshot_backfill(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """运营对子任务粘贴分享链接与回答正文；可覆盖原有抓取结果并重算排名。"""
-    require_platform(current)
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     try:
         require_snapshot_backfill_permission(db, current, "can_update")
     except PermissionError as exc:
@@ -325,7 +322,7 @@ def _resolve_schedule_tenant_scope(
     """销售账号未指定 tenant 时限定为负责企业；客户账号固定自身 tenant。"""
     if current.identity.identity_type == "CUSTOMER":
         return current.identity.tenant_id, None
-    require_platform(current)
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     owned = sales_owned_tenant_ids(db, current)
     if tenant_id is not None:
         ensure_sales_tenant_access(db, current, tenant_id)
