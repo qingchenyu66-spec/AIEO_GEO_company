@@ -9,7 +9,12 @@ $patterns = @(
     "celery_worker_default.cmd",
     "celery_beat.cmd",
     "celery_flower",
-    "start_flower.py"
+    "start_flower.py",
+    "GEO Celery Submit Worker",
+    "GEO Celery Sync Worker",
+    "GEO Celery Default Worker",
+    "GEO Celery Beat",
+    "GEO Celery Flower"
 )
 
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |

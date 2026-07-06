@@ -1,5 +1,6 @@
 import { nextTick, onUnmounted, ref, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
+import { loadEchartsRuntime } from '../utils/echartsLoader'
 import { platformLabelMap } from '../views/portal/portalMaps'
 import type { BrandInsightsTrends } from '../services/analytics'
 
@@ -38,45 +39,15 @@ export type PortalChartData = {
   }
 }
 
-type EchartsRuntime = {
-  init: typeof import('echarts/core').init
-  getInstanceByDom: typeof import('echarts/core').getInstanceByDom
-  graphic: typeof import('echarts/core').graphic
-}
+type EchartsRuntime = Awaited<ReturnType<typeof loadEchartsRuntime>>
 
 let echartsRuntime: EchartsRuntime | null = null
-let echartsLoadPromise: Promise<EchartsRuntime> | null = null
 
-async function loadEchartsRuntime(): Promise<EchartsRuntime> {
-  if (echartsRuntime) return echartsRuntime
-  if (!echartsLoadPromise) {
-    echartsLoadPromise = (async () => {
-      const [core, charts, components, renderers] = await Promise.all([
-        import('echarts/core'),
-        import('echarts/charts'),
-        import('echarts/components'),
-        import('echarts/renderers'),
-      ])
-      core.use([
-        charts.BarChart,
-        charts.GaugeChart,
-        charts.LineChart,
-        charts.PieChart,
-        components.GraphicComponent,
-        components.GridComponent,
-        components.LegendComponent,
-        components.TooltipComponent,
-        renderers.CanvasRenderer,
-      ])
-      echartsRuntime = {
-        init: core.init,
-        getInstanceByDom: core.getInstanceByDom,
-        graphic: core.graphic,
-      }
-      return echartsRuntime
-    })()
+async function ensureEchartsRuntime(): Promise<EchartsRuntime> {
+  if (!echartsRuntime) {
+    echartsRuntime = await loadEchartsRuntime('portal')
   }
-  return echartsLoadPromise
+  return echartsRuntime
 }
 
 export function usePortalCharts(refs: PortalChartRefs) {
@@ -93,11 +64,12 @@ export function usePortalCharts(refs: PortalChartRefs) {
   }
 
   async function renderCharts(data: PortalChartData) {
-    await loadEchartsRuntime()
+    await ensureEchartsRuntime()
     chartsReady.value = true
     await nextTick()
 
     const { graphic } = echartsRuntime!
+    if (!graphic) return
 
     const trendChart = getChart(refs.trend?.value ?? null)
     if (trendChart) {

@@ -372,9 +372,30 @@ export async function getMonitorTasks(): Promise<MonitorTask[]> {
   return response.data.data
 }
 
-export async function getMonitorSummary(): Promise<MonitorSummary> {
-  const response = await http.get('/v1/monitor/summary')
-  return response.data.data
+let monitorSummaryCache: { data: MonitorSummary; expiresAt: number } | null = null
+let monitorSummaryInflight: Promise<MonitorSummary> | null = null
+const MONITOR_SUMMARY_TTL_MS = 15_000
+
+export function invalidateMonitorSummaryCache() {
+  monitorSummaryCache = null
+}
+
+export async function getMonitorSummary(force = false): Promise<MonitorSummary> {
+  const now = Date.now()
+  if (!force && monitorSummaryCache && monitorSummaryCache.expiresAt > now) {
+    return monitorSummaryCache.data
+  }
+  if (!force && monitorSummaryInflight) {
+    return monitorSummaryInflight
+  }
+  monitorSummaryInflight = http.get('/v1/monitor/summary').then(response => {
+    const data = response.data.data as MonitorSummary
+    monitorSummaryCache = { data, expiresAt: Date.now() + MONITOR_SUMMARY_TTL_MS }
+    return data
+  }).finally(() => {
+    monitorSummaryInflight = null
+  })
+  return monitorSummaryInflight
 }
 
 export async function getRankingMatrix(params?: RankingMatrixQuery): Promise<RankingMatrix> {
@@ -401,6 +422,7 @@ export async function getMonitorSubtask(subtaskId: string, options?: { include_o
 
 export async function syncMonitorTask(taskId: string): Promise<MonitorTaskDetail> {
   const response = await http.post(`/v1/monitor/tasks/${taskId}/sync`)
+  invalidateMonitorSummaryCache()
   return response.data.data
 }
 

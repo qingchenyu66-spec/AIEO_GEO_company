@@ -35,8 +35,8 @@ export interface MenuInfo {
 }
 
 export interface AuthSession {
-  access_token: string
-  token_type: string
+  access_token?: string
+  token_type?: string
   user: UserInfo
   identity: IdentityInfo
   identities: IdentityInfo[]
@@ -69,4 +69,8 @@ export async function switchIdentityApi(identityId: number): Promise<AuthSession
 export async function meApi(): Promise<Omit<AuthSession, 'access_token' | 'token_type'>> {
   const response = await http.get('/v1/auth/me')
   return response.data.data
+}
+
+export async function logoutApi(): Promise<void> {
+  await http.post('/v1/auth/logout')
 }

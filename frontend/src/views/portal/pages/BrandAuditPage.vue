@@ -1,28 +1,25 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { inject, onMounted } from 'vue'
 import { HelpCircle } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
 import { keywordGroupMonitorKeywords } from '../../../services/brand'
+import { PortalNavigateKey } from '../injectionKeys'
 
 const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
 }>()
 
-const router = useRouter()
-const route = useRoute()
+const auth = useAuthStore()
+const portalNavigate = inject(PortalNavigateKey)!
 
 function navigateToReportCenter(reportId: number, tenantId: number) {
-  void router.push({
-    path: route.path,
-    query: {
-      ...route.query,
-      menu: 'platform.reports',
-      reportId: String(reportId),
-      tenantId: String(tenantId),
-    },
+  if (!auth.allowedMenus.some(menu => menu.menu_code === 'platform.reports')) return
+  portalNavigate('platform.reports', false, {
+    reportId: String(reportId),
+    tenantId: String(tenantId),
   })
 }
 

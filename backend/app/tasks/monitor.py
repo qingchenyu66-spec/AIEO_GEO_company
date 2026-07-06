@@ -9,15 +9,18 @@ from typing import Any
 from celery.exceptions import Ignore
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
+from sqlalchemy import select
 
 from app.celery_app import celery_app
 from app.core.celery_queue_monitor import clear_sync_live, record_beat_scan, set_sync_live
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.redis_client import delete_cache, get_redis_client, prefixed_key, redis_lock
+from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.services.lead_diagnosis_service import (
     enumerate_due_lead_runs,
     finalize_due_lead_diagnoses,
+    persist_lead_run_failure,
     submit_due_lead_run,
 )
 from app.services.molizhishu_client import MolizhishuApiError
@@ -31,6 +34,8 @@ from app.services.platform_session import load_platform_session
 from app.services.schedule_service import (
     DueScheduleGroup,
     enumerate_due_schedule_groups,
+    get_schedule_run,
+    persist_schedule_group_failure,
     submit_schedule_group as execute_schedule_group,
 )
 
@@ -70,6 +75,13 @@ def _clear_enqueued_mark(key: str) -> None:
     delete_cache(f"celery:enqueued:{key}")
 
 
+def _schedule_submit_task_id(group_key: str, *, is_retry: bool) -> str:
+    if not is_retry:
+        return f"submit-{group_key}"
+    bucket = datetime.now().strftime("%Y%m%d%H") + str(datetime.now().minute // 5)
+    return f"submit-{group_key}-r{bucket}"
+
+
 @celery_app.task(name="app.tasks.monitor.scan_due_schedules", ignore_result=True)
 def scan_due_schedules(max_prompts: int | None = None) -> dict[str, Any]:
     """Scan tenant schedules and enqueue one submit task per due keyword group."""
@@ -89,9 +101,11 @@ def scan_due_schedules(max_prompts: int | None = None) -> dict[str, Any]:
         skipped = 0
         try:
             for item in enumerate_due_schedule_groups(db, max_prompts=max_prompts):
+                existing = get_schedule_run(db, item.tenant_id, item.group_key)
+                is_retry = existing is not None and existing.status == "failed"
                 if _enqueue_task(
                     submit_schedule_group_task,
-                    task_id=f"submit-{item.group_key}",
+                    task_id=_schedule_submit_task_id(item.group_key, is_retry=is_retry),
                     kwargs={
                         "tenant_id": item.tenant_id,
                         "group_key": item.group_key,
@@ -114,7 +128,6 @@ def scan_due_schedules(max_prompts: int | None = None) -> dict[str, Any]:
 @celery_app.task(
     name="app.tasks.monitor.submit_schedule_group",
     bind=True,
-    autoretry_for=(MolizhishuApiError, OperationalError, TimeoutError),
     retry_backoff=True,
     retry_backoff_max=600,
     max_retries=3,
@@ -132,6 +145,7 @@ def submit_schedule_group_task(
         return {"status": "disabled", "schedule_key": group_key}
 
     db = SessionLocal()
+    current = None
     try:
         current = load_platform_session(db)
         item = DueScheduleGroup(
@@ -148,10 +162,40 @@ def submit_schedule_group_task(
     except Ignore:
         raise
     except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
-        logger.warning("submit_schedule_group retry tenant=%s key=%s error=%s", tenant_id, group_key, exc)
+        logger.warning(
+            "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
+            tenant_id,
+            group_key,
+            self.request.retries,
+            self.max_retries,
+            exc,
+        )
+        if self.request.retries >= self.max_retries:
+            created_by = current.user.id if current else None
+            persist_schedule_group_failure(
+                db,
+                tenant_id=tenant_id,
+                group_key=group_key,
+                error_message=str(exc),
+                created_by=created_by,
+            )
+            return {
+                "tenant_id": tenant_id,
+                "schedule_key": group_key,
+                "status": "failed",
+                "keyword": keyword,
+                "message": str(exc),
+            }
         raise self.retry(exc=exc)
     finally:
         db.close()
+
+
+def _lead_submit_task_id(lead_id: int, schedule_key: str, *, is_retry: bool) -> str:
+    if not is_retry:
+        return f"lead-submit-{lead_id}-{schedule_key}"
+    bucket = datetime.now().strftime("%Y%m%d%H") + str(datetime.now().minute // 5)
+    return f"lead-submit-{lead_id}-{schedule_key}-r{bucket}"
 
 
 @celery_app.task(name="app.tasks.monitor.scan_due_lead_diagnosis", ignore_result=True)
@@ -170,9 +214,16 @@ def scan_due_lead_diagnosis() -> dict[str, Any]:
         skipped = 0
         try:
             for item in enumerate_due_lead_runs(db):
+                existing = db.scalar(
+                    select(LeadDiagnosisRun).where(
+                        LeadDiagnosisRun.lead_diagnosis_id == item.lead_id,
+                        LeadDiagnosisRun.schedule_key == item.schedule_key,
+                    )
+                )
+                is_retry = existing is not None and existing.status == "failed"
                 if _enqueue_task(
                     submit_lead_diagnosis_run_task,
-                    task_id=f"lead-submit-{item.lead_id}-{item.schedule_key}",
+                    task_id=_lead_submit_task_id(item.lead_id, item.schedule_key, is_retry=is_retry),
                     kwargs={"lead_id": item.lead_id, "schedule_key": item.schedule_key},
                 ):
                     enqueued += 1
@@ -189,7 +240,6 @@ def scan_due_lead_diagnosis() -> dict[str, Any]:
 @celery_app.task(
     name="app.tasks.monitor.submit_lead_diagnosis_run",
     bind=True,
-    autoretry_for=(MolizhishuApiError, OperationalError, TimeoutError),
     retry_backoff=True,
     retry_backoff_max=600,
     max_retries=3,
@@ -209,7 +259,27 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
     except Ignore:
         raise
     except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
-        logger.warning("submit_lead_diagnosis_run retry lead=%s key=%s error=%s", lead_id, schedule_key, exc)
+        logger.warning(
+            "submit_lead_diagnosis_run retry lead=%s key=%s attempt=%s/%s error=%s",
+            lead_id,
+            schedule_key,
+            self.request.retries,
+            self.max_retries,
+            exc,
+        )
+        if self.request.retries >= self.max_retries:
+            persist_lead_run_failure(
+                db,
+                lead_id=lead_id,
+                schedule_key=schedule_key,
+                error_message=str(exc),
+            )
+            return {
+                "status": "failed",
+                "lead_id": lead_id,
+                "schedule_key": schedule_key,
+                "message": str(exc),
+            }
         raise self.retry(exc=exc)
     except PermissionError:
         logger.warning("submit_lead_diagnosis_run skipped lead=%s no platform session", lead_id)
@@ -273,7 +343,7 @@ def scan_pending_syncs(
                 live_payload = preview_map.get(task_id)
                 if live_payload:
                     sync_details.append({**live_payload, "phase": "queued"})
-                if not _mark_enqueued_once(f"sync:{task_id}", ttl_seconds=600):
+                if not _mark_enqueued_once(f"sync:{task_id}", ttl_seconds=300):
                     skipped += 1
                     continue
                 if _enqueue_task(

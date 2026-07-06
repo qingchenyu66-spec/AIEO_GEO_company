@@ -1,5 +1,7 @@
 """平台管理与预警阈值API。"""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.models.platform import AlertThreshold, GeoPlatform
 from app.schemas.common import ApiResponse
+from app.core.read_cache import CELERY_MONITOR_CACHE_TTL, celery_monitor_cache_key, get_or_build_json_cache
 from app.core.celery_queue_monitor import (
     format_celery_monitor_zh,
     get_queue_monitor_snapshot,
@@ -27,6 +30,8 @@ from app.services.platform_matrix_service import build_platform_matrix
 
 router = APIRouter(prefix="/platforms")
 alert_router = APIRouter(prefix="/alerts")
+
+logger = logging.getLogger(__name__)
 
 
 def require_platform(current: CurrentSession) -> None:
@@ -201,7 +206,19 @@ def alerts_celery_monitor(
 ) -> ApiResponse[dict]:
     """中文版 Celery 队列与 Worker 监控。"""
     require_platform(current)
-    return ApiResponse(data=format_celery_monitor_zh(get_queue_monitor_snapshot()))
+    try:
+        data = get_or_build_json_cache(
+            celery_monitor_cache_key(),
+            lambda: format_celery_monitor_zh(get_queue_monitor_snapshot()),
+            ttl_seconds=CELERY_MONITOR_CACHE_TTL,
+        )
+    except Exception as exc:
+        logger.exception("celery monitor snapshot failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="调度监控暂时不可用，请确认 Celery Worker 与 Redis 已启动",
+        ) from exc
+    return ApiResponse(data=data)
 
 
 @alert_router.put("/thresholds/{threshold_id}", response_model=ApiResponse[dict])

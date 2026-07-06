@@ -22,10 +22,11 @@ type PlatformAdminOptions = {
   isPlatform: ComputedRef<boolean>
   activeMenuCode: Ref<string>
   userMenuExpanded: Ref<boolean>
+  navigateToMenu: (menuCode: string, replace?: boolean, extraQuery?: Record<string, string>) => void
 }
 
 export function usePlatformAdmin(options: PlatformAdminOptions) {
-  const { auth, isPlatform, activeMenuCode, userMenuExpanded } = options
+  const { auth, isPlatform, activeMenuCode, userMenuExpanded, navigateToMenu } = options
 
   const assignable = useAssignableOptions()
 
@@ -74,8 +75,8 @@ export function usePlatformAdmin(options: PlatformAdminOptions) {
   }
 
   function goToUserCreate() {
-    activeMenuCode.value = USER_CREATE_MENU
     userMenuExpanded.value = true
+    navigateToMenu(USER_CREATE_MENU)
   }
 
   watch(activeMenuCode, userMgmt.loadUserManagement)

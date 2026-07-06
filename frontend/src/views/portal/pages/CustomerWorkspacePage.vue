@@ -13,6 +13,7 @@ import {
 const {
   brief,
   loading,
+  loadError,
   alertsExpanded,
   alertsSectionRef,
   alertsFocused,
@@ -27,6 +28,7 @@ const {
   openAlertTarget,
   openSnapshot,
   realtimeMenuName,
+  canOpenRealtime,
   formatDateTime,
   formatKpiDelta,
   kpiDeltaClass,
@@ -157,6 +159,11 @@ watch(showEmptyGuide, (empty) => {
       </div>
     </header>
 
+    <div v-if="loadError" class="ws-campus-error">
+      {{ loadError }}
+      <button type="button" class="ws-campus-ghost" @click="loadBrief">重试</button>
+    </div>
+
     <div v-if="loading && !brief" class="ws-campus-loading">
       <div v-for="n in 6" :key="n" class="ws-campus-skeleton" />
     </div>
@@ -170,7 +177,7 @@ watch(showEmptyGuide, (empty) => {
         <li>结果返回后，这里会展示健康分、平台表现与检测快照</li>
         <li>可先查看{{ realtimeMenuName }}页了解任务结构，或维护品牌/竞品配置</li>
       </ul>
-      <button type="button" class="ws-campus-primary" @click="navigateToMenu('customer.realtime')">
+      <button v-if="canOpenRealtime" type="button" class="ws-campus-primary" @click="navigateToMenu('customer.realtime')">
         <Search />
         查看{{ realtimeMenuName }}
       </button>
@@ -257,7 +264,7 @@ watch(showEmptyGuide, (empty) => {
         <div class="ws-campus-card-head">
           <h3>已购平台表现</h3>
           <span class="ws-campus-chip">{{ platformPeriodLabel }}</span>
-          <button type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
+          <button v-if="canOpenRealtime" type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
             查看{{ realtimeMenuName }}
           </button>
         </div>
@@ -285,7 +292,7 @@ watch(showEmptyGuide, (empty) => {
       <article class="ws-campus-card ws-campus-snapshot">
         <div class="ws-campus-card-head">
           <h3>最近检测快照</h3>
-          <button type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
+          <button v-if="canOpenRealtime" type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
             进入{{ realtimeMenuName }}
           </button>
         </div>

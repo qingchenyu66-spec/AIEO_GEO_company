@@ -1,10 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
-from app.core.http_rate_limit import enforce_login_rate_limit
+from app.core.auth_cookie import (
+    clear_auth_cookie,
+    clear_csrf_cookie,
+    generate_csrf_token,
+    set_auth_cookie,
+    set_csrf_cookie,
+)
+from app.core.config import settings
+from app.core.http_rate_limit import enforce_identity_select_rate_limit, enforce_login_rate_limit
 from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
@@ -50,15 +58,40 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
     }
 
 
+def public_session(session: dict) -> dict:
+    """浏览器 Cookie 模式下不在 JSON 中回传 token。"""
+    if not settings.auth_cookie_enabled or settings.auth_expose_token_in_body:
+        return session
+    return {key: value for key, value in session.items() if key not in {"access_token", "token_type"}}
+
+
+def _attach_session_cookie(response: Response, session: dict | None) -> None:
+    if not settings.auth_cookie_enabled or not session:
+        return
+    token = session.get("access_token")
+    if token:
+        set_auth_cookie(response, token)
+        if settings.auth_csrf_enabled:
+            set_csrf_cookie(response, generate_csrf_token())
+
+
+def _clear_session_cookies(response: Response) -> None:
+    clear_auth_cookie(response)
+    clear_csrf_cookie(response)
+
+
 @router.post("/login", response_model=ApiResponse[dict])
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> ApiResponse[dict]:
     enforce_login_rate_limit(request)
     result = authenticate(db, payload.username, payload.password)
     if result is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")
     user, identities = result
+    db.commit()
     if len(identities) == 1:
-        return ApiResponse(data={"requires_identity_selection": False, "session": session_payload(db, user, identities[0], identities)})
+        session = session_payload(db, user, identities[0], identities)
+        _attach_session_cookie(response, session)
+        return ApiResponse(data={"requires_identity_selection": False, "session": public_session(session)})
     return ApiResponse(data={
         "requires_identity_selection": True,
         "ticket": create_identity_ticket(user),
@@ -68,7 +101,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 
 @router.post("/select-identity", response_model=ApiResponse[dict])
-def select_identity(payload: IdentitySelectRequest, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+def select_identity(payload: IdentitySelectRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    enforce_identity_select_rate_limit(request)
     try:
         claims = decode_token(payload.ticket)
     except ValueError as exc:
@@ -84,7 +118,15 @@ def select_identity(payload: IdentitySelectRequest, db: Session = Depends(get_db
     if user is None or identity is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权使用该身份")
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
-    return ApiResponse(data=session_payload(db, user, identity, identities))
+    session = session_payload(db, user, identity, identities)
+    _attach_session_cookie(response, session)
+    return ApiResponse(data=public_session(session))
+
+
+@router.post("/logout", response_model=ApiResponse[dict])
+def logout(response: Response, current: CurrentSession = Depends(get_current_session)) -> ApiResponse[dict]:
+    _clear_session_cookies(response)
+    return ApiResponse(data={"ok": True})
 
 
 @router.get("/me", response_model=ApiResponse[dict])
@@ -103,6 +145,7 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
 @router.post("/switch-identity", response_model=ApiResponse[dict])
 def switch_identity(
     payload: IdentitySwitchRequest,
+    response: Response,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -119,4 +162,6 @@ def switch_identity(
     if identity is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权使用该身份")
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
-    return ApiResponse(data=session_payload(db, current.user, identity, identities))
+    session = session_payload(db, current.user, identity, identities)
+    _attach_session_cookie(response, session)
+    return ApiResponse(data=public_session(session))

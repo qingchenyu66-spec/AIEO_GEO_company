@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export interface PlatformInfo {
   id: number
@@ -249,7 +249,7 @@ export async function getAlertThresholds(scope: 'business' | 'technical' | 'all'
 }
 
 export async function getCeleryMonitor(): Promise<CeleryMonitorData> {
-  const response = await http.get('/v1/alerts/celery-monitor')
+  const response = await http.get('/v1/alerts/celery-monitor', { silentError: true, timeout: 60000 } as GeoHttpRequestConfig)
   return response.data.data
 }
 

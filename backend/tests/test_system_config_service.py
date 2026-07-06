@@ -12,6 +12,8 @@ from app.services.system_config_service import (
     bootstrap_system_configs,
     coerce_config_value,
     list_system_configs,
+    mask_secret_value,
+    serialize_config_row,
     update_system_config,
 )
 
@@ -54,3 +56,18 @@ def test_list_system_configs_filters_category(db_session):
     secrets = list_system_configs(db_session, category="secrets")
     assert secrets
     assert all(item["category"] == "secrets" for item in secrets)
+
+
+def test_mask_secret_value():
+    assert mask_secret_value("abcd1234") == "ab****34"
+    assert mask_secret_value("") == ""
+
+
+def test_serialize_config_row_masks_secret(db_session):
+    bootstrap_system_configs(db_session)
+    row = db_session.query(SystemConfig).filter_by(config_key="molizhishu_token").one()
+    row.config_value = "secret-token-value"
+    payload = serialize_config_row(row)
+    assert payload["secret"] is True
+    assert "secret-token-value" not in payload["config_value"]
+    assert "****" in payload["config_value"]

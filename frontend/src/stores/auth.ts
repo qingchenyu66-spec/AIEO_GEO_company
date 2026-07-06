@@ -1,17 +1,22 @@
 import { defineStore } from 'pinia'
 import {
-  loginApi, meApi, selectIdentityApi, switchIdentityApi,
+  loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi,
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
 
 const STORAGE_KEY = 'geo-auth-session'
+
+function stripToken(session: AuthSession): AuthSession {
+  const { access_token: _token, token_type: _type, ...rest } = session
+  return rest as AuthSession
+}
 
 function readSession(): AuthSession | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const session = JSON.parse(raw)
-    if (!session || !session.access_token || !session.identity) {
+    if (!session || !session.identity) {
       localStorage.removeItem(STORAGE_KEY)
       return null
     }
@@ -31,14 +36,14 @@ export const useAuthStore = defineStore('auth', {
     pendingIdentities: [] as IdentityInfo[],
   }),
   getters: {
-    isLoggedIn: (state) => Boolean(state.session?.access_token),
+    isLoggedIn: (state) => Boolean(state.session?.identity),
     portalPath: (state) => state.session?.identity.identity_type === 'PLATFORM' ? '/platform' : '/customer',
     allowedMenus: (state) => state.session?.menus || [],
   },
   actions: {
     saveSession(session: AuthSession) {
       this.session = session
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripToken(session)))
       this.pendingTicket = ''
       this.pendingUser = null
       this.pendingIdentities = []
@@ -62,15 +67,16 @@ export const useAuthStore = defineStore('auth', {
       this.saveSession(session)
     },
     async refreshSession() {
-      if (!this.session?.access_token) return
+      if (!this.session?.identity) return
       const latest = await meApi()
-      this.saveSession({
-        ...latest,
-        access_token: this.session.access_token,
-        token_type: this.session.token_type,
-      })
+      this.saveSession(latest)
     },
-    logout() {
+    async logout() {
+      try {
+        await logoutApi()
+      } catch {
+        // 401 时仍清理本地态
+      }
       this.session = null
       this.pendingTicket = ''
       this.pendingIdentities = []

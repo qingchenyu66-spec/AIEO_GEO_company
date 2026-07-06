@@ -44,7 +44,13 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="app-shell portal-shell" :class="{ 'portal-fullscreen': fullscreen }">
+  <div
+    class="app-shell portal-shell"
+    :class="{
+      'portal-fullscreen': fullscreen,
+      'portal-sidebar-expanded': userMenuExpanded,
+    }"
+  >
     <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
         <div class="brand-mark">G</div>
@@ -58,25 +64,28 @@ const emit = defineEmits<{
           <small>{{ portalIdentitySubtitle }}</small>
         </span>
       </div>
-      <nav class="nav">
+      <nav class="nav" aria-label="主导航">
         <template v-for="menu in menus" :key="menu.menu_code">
           <template v-if="menu.menu_code === 'platform.users'">
             <button
               type="button"
               class="nav-item nav-parent"
               :class="{ active: activeMenuCode.startsWith('platform.users') || activeMenuCode === POSITION_MENU, expanded: userMenuExpanded }"
+              :aria-expanded="userMenuExpanded"
+              aria-controls="portal-user-submenu"
               @click="emit('toggleUserSubmenu')"
             >
-              <component :is="menuIcon(menu)" class="nav-icon" />
+              <component :is="menuIcon(menu)" class="nav-icon" aria-hidden="true" />
               <span>{{ menu.menu_name }}</span>
-              <ChevronDown class="nav-caret" />
+              <ChevronDown class="nav-caret" aria-hidden="true" />
             </button>
-            <div v-if="userMenuExpanded" class="sub-nav">
+            <div v-if="userMenuExpanded" id="portal-user-submenu" class="sub-nav" role="group" aria-label="用户管理子菜单">
               <button
                 v-if="hasUserCreateMenu"
                 type="button"
                 class="sub-nav-item"
                 :class="{ active: activeMenuCode === USER_CREATE_MENU }"
+                :aria-current="activeMenuCode === USER_CREATE_MENU ? 'page' : undefined"
                 @click="emit('setMenuCode', USER_CREATE_MENU)"
               >用户新增</button>
               <button
@@ -84,6 +93,7 @@ const emit = defineEmits<{
                 type="button"
                 class="sub-nav-item"
                 :class="{ active: activeMenuCode === USER_LIST_MENU }"
+                :aria-current="activeMenuCode === USER_LIST_MENU ? 'page' : undefined"
                 @click="emit('setMenuCode', USER_LIST_MENU)"
               >用户列表</button>
               <button
@@ -91,6 +101,7 @@ const emit = defineEmits<{
                 type="button"
                 class="sub-nav-item"
                 :class="{ active: activeMenuCode === POSITION_MENU }"
+                :aria-current="activeMenuCode === POSITION_MENU ? 'page' : undefined"
                 @click="emit('setMenuCode', POSITION_MENU)"
               >职位管理</button>
             </div>
@@ -100,9 +111,10 @@ const emit = defineEmits<{
             type="button"
             class="nav-item"
             :class="{ active: menu.menu_code === activeMenuCode }"
+            :aria-current="menu.menu_code === activeMenuCode ? 'page' : undefined"
             @click="emit('selectMenu', menu)"
           >
-            <component :is="menuIcon(menu)" class="nav-icon" />
+            <component :is="menuIcon(menu)" class="nav-icon" aria-hidden="true" />
             <span>{{ menu.menu_name }}</span>
           </button>
         </template>

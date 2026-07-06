@@ -10,6 +10,7 @@ import {
 import { USER_LIST_MENU } from '../constants'
 import { managementErrorMessage } from '../managementErrorMessage'
 import { createEmptyIdentityForm, createUserCreateForm, type UserIdentityForm } from '../permissionGroups'
+import { generateInitialPassword } from '../../../utils/password'
 import type { AssignableOptions } from './useAssignableOptions'
 
 type UserManagementOptions = {
@@ -40,7 +41,7 @@ export function useUserManagement(options: UserManagementOptions) {
   const editingUser = ref<ManagedUser | null>(null)
   const editDialog = ref(false)
   const passwordDialog = ref(false)
-  const resetPassword = ref('Geo@2026')
+  const resetPassword = ref(generateInitialPassword())
   const userFilters = reactive({
     keyword: '',
     tenant_id: null as number | null,
@@ -231,7 +232,7 @@ export function useUserManagement(options: UserManagementOptions) {
 
   function openPasswordDialog(user: ManagedUser) {
     editingUser.value = user
-    resetPassword.value = 'Geo@2026'
+    resetPassword.value = generateInitialPassword()
     passwordDialog.value = true
   }
 

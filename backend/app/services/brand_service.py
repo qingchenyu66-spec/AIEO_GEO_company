@@ -10,6 +10,7 @@ from app.core.platform_order import sort_platform_codes
 from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
+from app.services.tenant_scope import ensure_sales_tenant_access
 
 
 def resolve_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int:
@@ -21,6 +22,11 @@ def resolve_tenant_id(current: CurrentSession, requested_tenant_id: int | None) 
     if requested_tenant_id is None:
         raise ValueError("平台端需要指定企业")
     return requested_tenant_id
+
+
+def _guard_tenant_write(db: Session, current: CurrentSession, tenant_id: int) -> None:
+    ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
 
 
 def ensure_tenant(db: Session, tenant_id: int) -> Tenant:
@@ -244,7 +250,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
     """新增或更新企业品牌资产。"""
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
-    ensure_tenant(db, tenant_id)
+    _guard_tenant_write(db, current, tenant_id)
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         asset = BrandAsset(
@@ -299,7 +305,7 @@ def list_competitors(db: Session, tenant_id: int) -> list[BrandCompetitor]:
 def save_competitor(db: Session, payload: CompetitorSaveRequest, current: CurrentSession, competitor_id: int | None = None) -> BrandCompetitor:
     """新增或更新竞品。"""
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
-    ensure_tenant(db, tenant_id)
+    _guard_tenant_write(db, current, tenant_id)
     competitor = None
     if competitor_id is not None:
         competitor = db.scalar(
@@ -329,6 +335,7 @@ def save_competitor(db: Session, payload: CompetitorSaveRequest, current: Curren
 def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, tenant_id: int | None = None) -> None:
     """逻辑删除竞品。"""
     resolved_tenant_id = resolve_tenant_id(current, tenant_id)
+    _guard_tenant_write(db, current, resolved_tenant_id)
     competitor = db.scalar(
         select(BrandCompetitor).where(
             BrandCompetitor.id == competitor_id,

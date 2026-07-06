@@ -13,6 +13,16 @@ const data = ref<CeleryMonitorData | null>(null)
 const loading = ref(false)
 const errorText = ref('')
 let timer: number | undefined
+let refreshDelayMs = props.refreshSeconds * 1000
+let loadInFlight = false
+
+function scheduleNextRefresh() {
+  if (timer) window.clearTimeout(timer)
+  if (!props.autoRefresh) return
+  timer = window.setTimeout(() => {
+    void loadMonitor().finally(scheduleNextRefresh)
+  }, refreshDelayMs)
+}
 
 const checkedAtText = computed(() => {
   const raw = data.value?.checked_at
@@ -88,15 +98,24 @@ function beatStatusClass(status: string) {
 }
 
 async function loadMonitor() {
+  if (loadInFlight || document.visibilityState === 'hidden') return
+  loadInFlight = true
   loading.value = true
   errorText.value = ''
   try {
     data.value = await getCeleryMonitor()
+    refreshDelayMs = props.refreshSeconds * 1000
   } catch (error: unknown) {
     const detail = extractErrorDetail(error)
-    errorText.value = detail.includes('Not Found') ? '监控接口未就绪，请重启后端服务后再刷新。' : detail
+    errorText.value = detail.includes('Not Found') || detail.includes('404')
+      ? '监控接口未就绪，请重启后端服务后再刷新。'
+      : detail.includes('503') || detail.includes('暂时不可用')
+        ? '调度监控暂不可用，请确认 Celery Worker 与 Redis 已启动。'
+        : detail || '监控加载失败，将稍后自动重试。'
+    refreshDelayMs = Math.min(120_000, Math.max(refreshDelayMs * 2, props.refreshSeconds * 2000))
   } finally {
     loading.value = false
+    loadInFlight = false
   }
 }
 
@@ -107,16 +126,11 @@ function statusClass(level: string) {
 }
 
 onMounted(() => {
-  void loadMonitor()
-  if (props.autoRefresh) {
-    timer = window.setInterval(() => {
-      void loadMonitor()
-    }, props.refreshSeconds * 1000)
-  }
+  void loadMonitor().finally(scheduleNextRefresh)
 })
 
 onUnmounted(() => {
-  if (timer) window.clearInterval(timer)
+  if (timer) window.clearTimeout(timer)
 })
 </script>
 

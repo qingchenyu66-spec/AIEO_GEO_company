@@ -8,6 +8,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { customerDisplayPeriodLabel } from '../../../utils/customerMonitorDate'
 import { useSentimentWordCloud } from '../../../composables/useSentimentWordCloud'
 import { PortalAnalyticsKey } from '../injectionKeys'
+import { resolveRealtimeMenu } from '../portalNavigation'
 import { platformLabelMap } from '../portalMaps'
 import { sortPlatformTabs } from '../platformOrder'
 
@@ -204,12 +205,23 @@ export function useBrandInsights(options?: {
     return trendDayKeys.value[index]
   }
 
+  const platformTenantId = computed(() => {
+    if (isCustomerView.value) return undefined
+    const raw = route.query.tenant_id
+    const text = Array.isArray(raw) ? raw[0] : raw
+    const parsed = Number(text)
+    if (Number.isFinite(parsed)) return parsed
+    return brandAsset.value?.tenant_id
+  })
+
   function drillDownToRealtime(options?: { platform?: string; prompt?: string; dayLabel?: string }) {
+    const target = resolveRealtimeMenu(!isCustomerView.value, platformTenantId.value ?? null)
     const query: Record<string, string> = {
       ...Object.fromEntries(
         Object.entries(route.query).filter(([, value]) => value != null).map(([key, value]) => [key, String(value)]),
       ),
-      menu: 'customer.realtime',
+      menu: target.menu,
+      ...target.query,
     }
     delete query.task_id
     delete query.subtask_id
@@ -235,7 +247,7 @@ export function useBrandInsights(options?: {
       ...Object.fromEntries(
         Object.entries(route.query).filter(([, value]) => value != null).map(([key, value]) => [key, String(value)]),
       ),
-      menu: 'customer.realtime',
+      menu: isCustomerView.value ? 'customer.realtime' : 'platform.snapshot_backfill',
       view: 'matrix',
       task_id: item.task_id,
       subtask_id: item.subtask_id,
@@ -271,6 +283,7 @@ export function useBrandInsights(options?: {
         days: days.value,
         platforms: selectedPlatforms.value.length ? selectedPlatforms.value.join(',') : undefined,
         prompt: promptFilter.value || undefined,
+        tenant_id: platformTenantId.value,
       }
       const compareData = await withRetry(() => getCompetitorCompare(params))
       if (version !== loadVersion) return

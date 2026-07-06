@@ -11,10 +11,8 @@ import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 import { sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 
 export const monitorSummaryMenuCodes = new Set([
-  'platform.dashboard',
   'platform.diagnosis',
   'platform.reports',
-  'customer.workspace',
   'customer.diagnosis',
   'customer.reports',
   'platform.models',
@@ -106,14 +104,20 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     const known = monitorSummary.value?.platform_stats || []
     const purchasedCodes = brandAsset.value?.monitored_platforms?.length ? brandAsset.value.monitored_platforms : []
     const codes = sortPlatformCodes(purchasedCodes.length ? purchasedCodes : known.map(item => item.platform))
-    return codes.map((code, index) => {
+    return codes.map((code) => {
       const row = known.find(item => item.platform === code)
+      const total = row?.total ?? 0
+      const completed = row?.completed ?? 0
+      let status = '待接入'
+      if (total > 0 && completed >= total) status = '已返回'
+      else if (completed > 0) status = '部分返回'
+      else if (total > 0) status = '监测中'
       return {
         code,
         name: platformLabelMap[code] || code,
         rate: row?.mention_rate ?? 0,
-        total: row?.total ?? 0,
-        status: row?.completed ? '已返回' : index < 5 ? '监测中' : '待接入',
+        total,
+        status,
       }
     })
   })
@@ -204,8 +208,8 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const monitorKeywordTooltip = computed(() => monitorKeywordList.value.length ? monitorKeywordList.value.join('、') : '当前企业暂未配置监控词')
 
   const statTooltipMap = computed<Record<string, string>>(() => ({
-    总检测次数: '计算方式：监测问题数 × 已购买模型平台数。每个平台回答一个问题，计为 1 条检测结果。',
-    品牌曝光率: '计算方式：已返回结果中提及品牌的数量 ÷ 已返回结果总量 × 100%。任务同步过程中会按最新返回结果重新计算。',
+    总检测次数: '已入库的子任务总数（各平台 × 各问题的实际返回条数）。',
+    品牌曝光率: '已返回结果中，品牌在推荐列表里被提及的占比。与工作台「露出率」口径一致时数值应接近。',
     平均推荐排名: '计算方式：所有已提及品牌结果的排名位置求平均。数值越小，说明推荐位置越靠前。',
     监控词: `当前监控词：${monitorKeywordTooltip.value}`,
   }))
@@ -333,16 +337,17 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       if (syncRemote) {
         const synced = await syncPendingTasksFromSummary(summary)
         if (synced) {
-          monitorSummary.value = await withRetry(() => getMonitorSummary())
+          monitorSummary.value = await withRetry(() => getMonitorSummary(true))
         }
       }
     } catch (error: unknown) {
       const now = Date.now()
-      if (!monitorSummary.value && now - lastSummaryErrorAt > 120000) {
-        ElMessage.warning(`首页数据暂时加载较慢，已保留当前页面：${errorMessage(error)}`)
+      if (!monitorSummary.value) {
+        notifyError(error, '监测汇总加载失败')
         lastSummaryErrorAt = now
-      } else {
-        console.warn('首页真实数据加载失败', error)
+      } else if (now - lastSummaryErrorAt > 120000) {
+        ElMessage.warning(`监测汇总刷新失败，当前显示的可能是旧数据：${errorMessage(error)}`)
+        lastSummaryErrorAt = now
       }
     } finally {
       loadingSummary.value = false

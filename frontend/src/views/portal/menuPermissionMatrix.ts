@@ -4,6 +4,7 @@ import {
   USER_CREATE_CUSTOMER_MENU,
   USER_CREATE_PLATFORM_MENU,
   USER_LIST_MENU,
+  hiddenPlatformMenus,
 } from './constants'
 import { permissionGroupKey, permissionGroupNote, permissionGroupTitle } from './permissionGroups'
 
@@ -29,13 +30,10 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
 
   'platform.competitor': ['can_export'],
   'platform.sources': ['can_export'],
-  'platform.diagnosis': ['can_export'],
   'platform.lead_diagnosis': ['can_export', 'can_create'],
   'platform.snapshot_backfill': ['can_export', 'can_update'],
   'platform.reports': ['can_export', 'can_create', 'can_update'],
 
-  'platform.plans': ['can_export'],
-  'platform.admins': ['can_export'],
   'platform.models': ['can_export'],
   'platform.alerts': ['can_export', 'can_update'],
   'platform.logs': ['can_export'],
@@ -82,6 +80,7 @@ export type MenuGrantState = Record<number, MenuGrantFlags>
 export const ROUTE_ONLY_MENU_CODES = new Set(['platform.audit', 'platform.users'])
 
 const HIDDEN_ASSIGNABLE = new Set([
+  ...hiddenPlatformMenus,
   'customer.assets',
   'customer.batch',
   'customer.geo',

@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     secret_key: str
     access_token_expire_minutes: int = 480
     identity_ticket_expire_minutes: int = 30
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+    auth_cookie_enabled: bool = True
+    auth_csrf_enabled: bool = True
+    auth_expose_token_in_body: bool = False
 
     database_host: str = "127.0.0.1"
     database_port: int = 3306
@@ -51,6 +56,8 @@ class Settings(BaseSettings):
     celery_queue_submit_critical: int = 150
     celery_queue_sync_warning: int = 100
     celery_queue_sync_critical: int = 300
+    celery_pending_sync_task_warning: int = 80
+    celery_pending_sync_task_critical: int = 200
 
     flower_enabled: bool = True
     flower_port: int = 5555
@@ -59,6 +66,9 @@ class Settings(BaseSettings):
 
     monitor_webhook_url: str = ""
     monitor_alert_cooldown_seconds: int = 900
+
+    trusted_hosts: list[str] = ["127.0.0.1", "localhost"]
+    expose_openapi_in_production: bool = False
 
     cors_origins: list[str] = []
     molizhishu_base_url: str = "https://business-api.molizhishu.com/api/business/monitor"
@@ -89,6 +99,22 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("trusted_hosts", mode="before")
+    @classmethod
+    def parse_trusted_hosts(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @property
+    def is_production(self) -> bool:
+        return str(self.app_env or "").lower() in {"production", "prod"}
+
+    @property
+    def allow_credentials_with_wildcard_cors(self) -> bool:
+        origins = self.cors_origins or []
+        return "*" in origins
 
     @property
     def database_url(self) -> str:

@@ -1,34 +1,78 @@
+"""Health check endpoints."""
+
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import CurrentSession, get_current_session
 from app.core.celery_health import celery_health
 from app.core.celery_queue_monitor import get_queue_monitor_snapshot
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.redis_client import redis_health
 from app.schemas.common import ApiResponse
+from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 from app.services.system_service import check_database
 
 router = APIRouter()
 
 
-@router.get("/health", response_model=ApiResponse[dict])
-def health_check(db: Session = Depends(get_db)) -> ApiResponse[dict]:
+def _molizhishu_health(*, public: bool = False) -> dict:
+    if not settings.molizhishu_token.strip():
+        return {"configured": False, "status": "skipped", "detail": "未配置 MOLIZHISHU_TOKEN"}
+    try:
+        payload = MolizhishuClient().ping()
+        balance = (payload.get("data") or {}).get("currentBalance")
+        result = {"configured": True, "status": "ready", "detail": "模力指数 API 可连接"}
+        if not public:
+            result["balance"] = balance
+        return result
+    except MolizhishuApiError:
+        return {"configured": True, "status": "error", "detail": "模力指数 API 连接异常"}
+    except Exception:
+        return {"configured": True, "status": "error", "detail": "模力指数探测失败"}
+
+
+def _public_health_payload(db: Session) -> dict:
+    database_ready = check_database(db)
+    return {
+        "service": settings.app_name,
+        "api": "ready" if database_ready else "degraded",
+        "database": "ready" if database_ready else "unavailable",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+def _detailed_health_payload(db: Session) -> dict:
     database_ready = check_database(db)
     redis_status = redis_health()
     celery_status = celery_health()
     queue_snapshot = get_queue_monitor_snapshot() if settings.celery_enabled else None
-    return ApiResponse(
-        data={
-            "service": settings.app_name,
-            "environment": settings.app_env,
-            "api": "ready",
-            "database": "ready" if database_ready else "unavailable",
-            "redis": redis_status,
-            "celery": celery_status,
-            "celery_queues": queue_snapshot,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-    )
+    return {
+        "service": settings.app_name,
+        "environment": settings.app_env,
+        "api": "ready",
+        "database": "ready" if database_ready else "unavailable",
+        "redis": redis_status,
+        "celery": celery_status,
+        "molizhishu": _molizhishu_health(public=False),
+        "celery_queues": queue_snapshot,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+@router.get("/health", response_model=ApiResponse[dict])
+def health_check(db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    """公开存活探测：不含余额、队列、环境等敏感信息。"""
+    return ApiResponse(data=_public_health_payload(db))
+
+
+@router.get("/health/ops", response_model=ApiResponse[dict])
+def health_check_ops(
+    db: Session = Depends(get_db),
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """运营详细健康检查（需登录）。"""
+    del current
+    return ApiResponse(data=_detailed_health_payload(db))

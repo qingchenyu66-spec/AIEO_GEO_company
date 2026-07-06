@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, Sparkles, WalletCards, Zap } from '@lucide/vue'
 import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
 import { getDeepseekBalance, getMolizhishuBalance, type DeepseekBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
+import { initChart, type ECharts } from '../../utils/echartsLoader'
 import { sortPlatformRows } from './platformOrder'
 
 const props = defineProps<{
@@ -19,7 +19,7 @@ const deepseekBalance = ref<DeepseekBalance | null>(null)
 const loading = ref(false)
 const errorText = ref('')
 const taskCompletionChartRef = ref<HTMLDivElement | null>(null)
-let taskCompletionChart: echarts.ECharts | null = null
+let taskCompletionChart: ECharts | null = null
 
 const platformStats = computed(() => sortPlatformRows(overview.value?.platform_stats || []))
 
@@ -70,8 +70,10 @@ const kpiCards = computed(() => {
 
 function todoTarget(type: string) {
   if (type === 'renewal') return 'platform.audit'
-  if (type === 'failed_task' || type === 'snapshot_backfill') return 'platform.snapshot_backfill'
-  return 'customer.realtime'
+  if (type === 'failed_task') return 'platform.alerts'
+  if (type === 'snapshot_backfill') return 'platform.snapshot_backfill'
+  if (type === 'schedule_failed' || type === 'sync_task' || type === 'celery_queue') return 'platform.alerts'
+  return 'platform.alerts'
 }
 
 const serviceRows = computed(() => {
@@ -143,9 +145,11 @@ async function loadOverview() {
   }
 }
 
-function renderTaskCompletionChart() {
+async function renderTaskCompletionChart() {
   if (!taskCompletionChartRef.value) return
-  if (!taskCompletionChart) taskCompletionChart = echarts.init(taskCompletionChartRef.value)
+  if (!taskCompletionChart) {
+    taskCompletionChart = await initChart(taskCompletionChartRef.value, 'dashboard')
+  }
   taskCompletionChart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}<br />{c}%' },
     color: ['#2d6cdf', '#34c49a'],
@@ -177,7 +181,7 @@ function resizeTaskCompletionChart() {
   taskCompletionChart?.resize()
 }
 
-watch([taskRate, taskSuccessRate], () => nextTick(renderTaskCompletionChart))
+watch([taskRate, taskSuccessRate], () => { void nextTick(renderTaskCompletionChart) })
 
 onMounted(async () => {
   await loadOverview()
@@ -361,7 +365,7 @@ onUnmounted(() => {
         <div class="ops-shortcuts">
           <button @click="props.navigateTo('platform.audit')">企业管理</button>
           <button @click="props.navigateTo('platform.users.create')">新增用户</button>
-          <button @click="props.navigateTo('customer.realtime')">查看任务</button>
+          <button @click="props.navigateTo('platform.alerts')">查看任务</button>
           <button @click="props.navigateTo('platform.logs')">操作日志</button>
         </div>
       </article>

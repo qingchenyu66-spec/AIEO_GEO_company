@@ -5,7 +5,9 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-geo_redis_dev}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-geo_redis_dev}"]
 
   api:
     build:
@@ -16,9 +18,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
       SCHEDULE_TOLERANCE_MINUTES: "60"
       MOLIZHISHU_SUBMIT_RATE_PER_MINUTE: "30"
       MOLIZHISHU_SYNC_RATE_PER_MINUTE: "60"
@@ -38,9 +40,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
     depends_on:
       - redis
 
@@ -53,9 +55,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
     depends_on:
       - redis
 
@@ -68,9 +70,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
     depends_on:
       - redis
 
@@ -83,9 +85,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
     depends_on:
       - redis
 
@@ -98,9 +100,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
     depends_on:
       - redis
 
@@ -108,14 +110,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A app.celery_app flower --port=5555 --address=0.0.0.0 --loglevel=info
+    command: python scripts/start_flower.py
     env_file:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
       FLOWER_URL: http://127.0.0.1:5555
     depends_on:
       - redis

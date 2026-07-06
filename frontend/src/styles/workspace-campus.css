@@ -726,6 +726,19 @@
 }
 .ws-campus-empty .ws-campus-primary { margin: 0 auto; }
 
+.ws-campus-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 14px;
+}
+
 .ws-campus-loading {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

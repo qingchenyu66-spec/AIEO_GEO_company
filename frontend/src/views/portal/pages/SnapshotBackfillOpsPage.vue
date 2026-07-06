@@ -172,7 +172,10 @@ async function fetchPage(offset: number, append: boolean) {
   } else {
     items.value = result.items
   }
-  listSummary.value = result.summary
+  listSummary.value = {
+    ...result.summary,
+    scan_capped: Boolean(result.summary.scan_capped),
+  }
 }
 
 async function loadItems() {

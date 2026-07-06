@@ -6,12 +6,15 @@ from pydantic import BaseModel, Field, HttpUrl
 MonitorMode = Literal["standard", "reasoning", "search", "reasoning_search"]
 ScreenshotMode = Literal[0, 1, 2]
 
+# 模力指数快速模式。本系统统一使用快速模式，避免专家/深度模式造成耗时和费用不可控。
+FAST_MONITOR_MODE: MonitorMode = "standard"
+
 
 class PlatformConfig(BaseModel):
     """提交给模力指数的平台配置。"""
 
     platform: str = Field(min_length=2, max_length=50)
-    mode: MonitorMode = "standard"
+    mode: MonitorMode = FAST_MONITOR_MODE
     screenshot: ScreenshotMode = 1
 
 

@@ -1,7 +1,10 @@
+import logging
 import re
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
+
+from kombu.exceptions import OperationalError
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
@@ -13,7 +16,7 @@ from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
-from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
+from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.brand_service import (
     _is_industry_monitor_keyword,
@@ -30,8 +33,9 @@ from app.services.brand_service import (
     molizhishu_brand_payload,
     molizhishu_monitor_terms,
 )
-from app.services.molizhishu_client import MolizhishuClient
+from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
+from app.services.tenant_scope import assert_monitor_task_access, ensure_sales_tenant_access, sales_owned_tenant_ids
 from app.services.schedule_context import (
     prompt_monitor_intent,
     lead_diagnosis_runs_for_tasks,
@@ -43,6 +47,20 @@ from app.services.schedule_context import (
 
 TERMINAL_STATUSES = {"completed", "partial_completed", "failed", "stopped"}
 NON_TERMINAL_STATUSES = {"pending", "processing", "running", "queued"}
+_TRANSIENT_SYNC_ERRORS = (MolizhishuApiError, TimeoutError, OperationalError)
+logger = logging.getLogger(__name__)
+
+
+def _apply_remote_task_counts(task: GeoMonitorTask, status_data: dict[str, Any]) -> None:
+    """合并远端进度；0 是合法值，不能用 or 保留旧数。"""
+    mapping = (
+        ("totalItems", "total_items"),
+        ("completedItems", "completed_items"),
+        ("failedItems", "failed_items"),
+    )
+    for remote_key, attr in mapping:
+        if remote_key in status_data and status_data[remote_key] is not None:
+            setattr(task, attr, status_data[remote_key])
 
 
 def customer_display_cutoff(now: datetime | None = None) -> datetime:
@@ -154,7 +172,7 @@ def list_pending_monitor_task_ids(
                 ),
             )
         )
-    stmt = stmt.order_by(GeoMonitorTask.updated_at.asc(), GeoMonitorTask.id.asc()).limit(limit)
+    stmt = stmt.order_by(GeoMonitorTask.updated_at.desc(), GeoMonitorTask.id.desc()).limit(limit)
     return list(db.scalars(stmt))
 
 
@@ -163,7 +181,7 @@ def _platform_display_names() -> dict[str, str]:
 
     return {
         str(item.get("code") or ""): str(item.get("name") or item.get("code") or "")
-        for item in get_supported_platform_catalog()
+        for item in get_supported_platform_catalog(force_refresh=False)
     }
 
 
@@ -347,7 +365,12 @@ def _reconcile_task_progress(task: GeoMonitorTask) -> None:
     if not subtasks:
         return
     terminal_count = sum(1 for item in subtasks if item.status in TERMINAL_STATUSES)
-    abnormal_count = sum(1 for item in subtasks if item.status in {"failed", "stopped"} or item.error_message)
+    abnormal_count = sum(
+        1
+        for item in subtasks
+        if item.status in {"failed", "stopped"}
+        or (item.error_message and not item.answer_content)
+    )
     success_count = sum(1 for item in subtasks if item.status in {"completed", "partial_completed"} or item.answer_content)
     task.total_items = task.total_items or len(subtasks)
     task.completed_items = max(task.completed_items or 0, terminal_count)
@@ -457,7 +480,7 @@ def _build_submit_payload(
     ]
     request_body: dict[str, Any] = {
         "prompts": payload.prompts,
-        "platforms": [item.model_dump() for item in platform_items],
+        "platforms": [_fast_platform_payload(item) for item in platform_items],
     }
     final_monitor_keywords = monitor_keywords or payload.monitor_keywords
     final_aliases = monitor_keyword_aliases if monitor_keyword_aliases is not None else payload.monitor_keyword_aliases
@@ -474,6 +497,13 @@ def _build_submit_payload(
     if callback_url:
         request_body["callbackUrl"] = callback_url
     return request_body
+
+
+def _fast_platform_payload(item: PlatformConfig) -> dict[str, Any]:
+    """统一提交为模力指数快速模式，避免前端或旧配置传入专家/深度模式。"""
+    data = item.model_dump()
+    data["mode"] = FAST_MONITOR_MODE
+    return data
 
 
 def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonitorSubtask:
@@ -520,7 +550,7 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
     return subtask
 
 
-def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current: CurrentSession) -> GeoMonitorTask:
+def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current: CurrentSession, *, auto_commit: bool = True) -> GeoMonitorTask:
     """提交模力指数任务并保存主任务与初始子任务。"""
     tenant_id = _effective_tenant_id(current, payload.tenant_id)
     if tenant_id is None:
@@ -528,6 +558,7 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise ValueError("所属企业不存在")
+    ensure_sales_tenant_access(db, current, tenant_id)
     _validate_tenant_service_available(tenant)
     default_monitor_keywords, default_aliases, competitors = molizhishu_brand_payload(db, tenant_id)
     monitor_keywords = payload.monitor_keywords or default_monitor_keywords
@@ -556,7 +587,7 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
         completed_items=data.get("completedItems") or 0,
         failed_items=data.get("failedItems") or 0,
         prompts_json=payload.prompts,
-        platforms_json=[item.model_dump() for item in payload.platforms],
+        platforms_json=request_body["platforms"],
         region_code_json=payload.region_code,
         callback_url=data.get("callbackUrl"),
         poll_url=data.get("pollUrl"),
@@ -566,8 +597,11 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     db.add(task)
     for subtask in data.get("subTaskList") or []:
         _upsert_subtask(db, task_id, subtask)
-    db.commit()
-    db.refresh(task)
+    if auto_commit:
+        db.commit()
+        db.refresh(task)
+    else:
+        db.flush()
     return task
 
 
@@ -577,6 +611,7 @@ def submit_standalone_monitor_task(
     payload: MonitorTaskCreateRequest,
     created_by: int | None = None,
     tenant_id: int | None = None,
+    auto_commit: bool = True,
 ) -> GeoMonitorTask:
     """提交不依赖企业服务的监测任务（用于售前诊断等场景）。"""
     monitor_keywords = payload.monitor_keywords
@@ -606,7 +641,7 @@ def submit_standalone_monitor_task(
         completed_items=data.get("completedItems") or 0,
         failed_items=data.get("failedItems") or 0,
         prompts_json=payload.prompts,
-        platforms_json=[item.model_dump() for item in payload.platforms],
+        platforms_json=request_body["platforms"],
         region_code_json=payload.region_code,
         callback_url=data.get("callbackUrl"),
         poll_url=data.get("pollUrl"),
@@ -616,8 +651,11 @@ def submit_standalone_monitor_task(
     db.add(task)
     for subtask in data.get("subTaskList") or []:
         _upsert_subtask(db, task_id, subtask)
-    db.commit()
-    db.refresh(task)
+    if auto_commit:
+        db.commit()
+        db.refresh(task)
+    else:
+        db.flush()
     return task
 
 
@@ -626,7 +664,13 @@ def list_monitor_tasks(db: Session, current: CurrentSession) -> list[GeoMonitorT
     stmt = select(GeoMonitorTask).where(GeoMonitorTask.deleted.is_(False)).order_by(GeoMonitorTask.id.desc())
     if current.identity.identity_type == "CUSTOMER":
         stmt = stmt.where(GeoMonitorTask.tenant_id == current.identity.tenant_id)
-    return list(db.scalars(stmt))
+    else:
+        owned_ids = sales_owned_tenant_ids(db, current)
+        if owned_ids is not None:
+            if not owned_ids:
+                return []
+            stmt = stmt.where(GeoMonitorTask.tenant_id.in_(owned_ids))
+    return list(db.scalars(stmt.limit(200)))
 
 
 def _build_source_citation_trend(
@@ -650,6 +694,29 @@ def _build_source_citation_trend(
         "start_at": datetime.combine(range_start.date(), time.min).isoformat(),
         "end_at": datetime.combine(end, time.max).isoformat(),
         "points": points,
+    }
+
+
+def _empty_monitor_summary(current: CurrentSession) -> dict[str, Any]:
+    return {
+        "scope": current.identity.identity_type,
+        "tenant_id": current.identity.tenant_id,
+        "tenant_count": 0,
+        "task_count": 0,
+        "subtask_count": 0,
+        "completed_count": 0,
+        "mention_rate": 0.0,
+        "avg_rank": 0.0,
+        "platform_count": 0,
+        "sentiment_counts": {"正面": 0, "中性": 0, "负面": 0, "未知": 0},
+        "platform_stats": [],
+        "source_stats": [],
+        "source_citation_trend": {"start_at": None, "end_at": None, "points": []},
+        "daily_trend": [],
+        "daily_labels": [],
+        "recent_tasks": [],
+        "recent_subtasks": [],
+        "summary_task_limit": 0,
     }
 
 
@@ -700,8 +767,18 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     )
     if current.identity.identity_type == "CUSTOMER":
         stmt = stmt.where(GeoMonitorTask.tenant_id == current.identity.tenant_id)
+    else:
+        owned_ids = sales_owned_tenant_ids(db, current)
+        if owned_ids is not None:
+            if not owned_ids:
+                return _empty_monitor_summary(current)
+            stmt = stmt.where(GeoMonitorTask.tenant_id.in_(owned_ids))
     tasks = list(db.scalars(stmt).unique())
-    tenant_rows = list(db.scalars(select(Tenant).where(Tenant.deleted.is_(False))))
+    owned_ids = sales_owned_tenant_ids(db, current)
+    tenant_stmt = select(Tenant).where(Tenant.deleted.is_(False))
+    if owned_ids is not None:
+        tenant_stmt = tenant_stmt.where(Tenant.id.in_(owned_ids))
+    tenant_rows = list(db.scalars(tenant_stmt))
     tenant_map = {item.id: item.name for item in tenant_rows}
     tenant_ids = [task.tenant_id for task in tasks if task.tenant_id]
     asset_rows = list(db.scalars(select(BrandAsset).where(BrandAsset.tenant_id.in_(tenant_ids), BrandAsset.deleted.is_(False)))) if tenant_ids else []
@@ -768,6 +845,26 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
             "avg_rank": round(bucket["rank_total"] / bucket["rank_count"], 1) if bucket["rank_count"] else None,
         })
     platform_stats = sort_platform_items(platform_stats)
+    summary_tenant_ids = [task.tenant_id for task in tasks if task.tenant_id]
+    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
+        summary_tenant_ids = [current.identity.tenant_id]
+    elif owned_ids is not None:
+        summary_tenant_ids = owned_ids
+
+    from app.services.monitor_stats_service import (
+        aggregate_daily_mention_trend,
+        aggregate_platform_stats,
+        has_daily_stats,
+    )
+
+    if has_daily_stats(db, summary_tenant_ids or None):
+        stat_platform_stats = aggregate_platform_stats(
+            db,
+            tenant_ids=summary_tenant_ids or None,
+            since=(datetime.now().date() - timedelta(days=30)),
+        )
+        if stat_platform_stats:
+            platform_stats = sort_platform_items(stat_platform_stats)
 
     source_map: dict[str, dict[str, Any]] = {}
     source_daily_counts: dict[str, int] = {}
@@ -838,14 +935,25 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     )
 
     today = datetime.now().date()
+    trend_end_day = customer_display_cutoff().date() if current.identity.identity_type == "CUSTOMER" else today
     day_labels = []
     daily_trend = []
     trend_offsets = range(7, 0, -1) if current.identity.identity_type == "CUSTOMER" else range(6, -1, -1)
-    for offset in trend_offsets:
-        day = today - timedelta(days=offset)
-        value = sum(1 for item in mentioned if item.updated_at and item.updated_at.date() == day)
-        day_labels.append(day.strftime("%m-%d"))
-        daily_trend.append({"label": day.strftime("%m-%d"), "value": value})
+    stat_trend = aggregate_daily_mention_trend(
+        db,
+        tenant_ids=summary_tenant_ids or None,
+        days=len(list(trend_offsets)),
+        end_day=trend_end_day,
+    ) if has_daily_stats(db, summary_tenant_ids or None) else []
+    if stat_trend:
+        daily_trend = [{"label": p["label"], "value": p["value"]} for p in stat_trend]
+        day_labels = [p["label"] for p in stat_trend]
+    else:
+        for offset in trend_offsets:
+            day = today - timedelta(days=offset)
+            value = sum(1 for item in mentioned if item.updated_at and item.updated_at.date() == day)
+            day_labels.append(day.strftime("%m-%d"))
+            daily_trend.append({"label": day.strftime("%m-%d"), "value": value})
 
     recent_tasks = [serialize_task(task) | {"tenant_name": tenant_map.get(task.tenant_id)} for task in tasks[:8]]
     recent_pairs = sorted(
@@ -894,6 +1002,7 @@ def get_monitor_task(db: Session, task_id: str, current: CurrentSession) -> GeoM
     task = db.scalar(stmt)
     if task is None:
         raise ValueError("任务不存在或无权访问")
+    assert_monitor_task_access(db, current, task.tenant_id)
     return task
 
 
@@ -913,6 +1022,8 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
     subtask = db.scalar(stmt)
     if subtask is None:
         raise ValueError("子任务不存在或无权访问")
+    if subtask.task is not None:
+        assert_monitor_task_access(db, current, subtask.task.tenant_id)
     if current.identity.identity_type == "CUSTOMER":
         task = subtask.task
         if task is None:
@@ -937,9 +1048,7 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
         status_response = client.get_task_status(task_id)
         status_data = status_response.get("data") or {}
         task.status = status_data.get("status") or task.status
-        task.total_items = status_data.get("totalItems") or task.total_items
-        task.completed_items = status_data.get("completedItems") or task.completed_items
-        task.failed_items = status_data.get("failedItems") or task.failed_items
+        _apply_remote_task_counts(task, status_data)
         task.remote_created_at = status_data.get("createdAt") or task.remote_created_at
         task.remote_completed_at = status_data.get("completedAt") or task.remote_completed_at
         for subtask in status_data.get("subTaskList") or []:
@@ -948,9 +1057,7 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
             result_response = client.get_task_result(task_id)
             result_data = result_response.get("data") or {}
             task.status = result_data.get("status") or task.status
-            task.total_items = result_data.get("totalItems") or task.total_items
-            task.completed_items = result_data.get("completedItems") or task.completed_items
-            task.failed_items = result_data.get("failedItems") or task.failed_items
+            _apply_remote_task_counts(task, result_data)
             for subtask in result_data.get("subTaskList") or []:
                 _upsert_subtask(db, task_id, subtask)
         task.last_error = None
@@ -959,11 +1066,20 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
 
         notify_failed_subtasks_for_task(db, task)
     except Exception as exc:
-        task.last_error = str(exc)
-        db.commit()
+        if not isinstance(exc, _TRANSIENT_SYNC_ERRORS):
+            task.last_error = str(exc)
+            db.commit()
         raise
     db.commit()
     invalidate_monitor_summary_cache(task.tenant_id)
+    try:
+        from app.services.monitor_stats_service import refresh_stats_for_task
+
+        refresh_stats_for_task(db, task_id)
+        db.commit()
+    except Exception as exc:
+        logger.warning("refresh_stats_for_task failed task_id=%s error=%s", task_id, exc)
+        db.rollback()
     return get_monitor_task(db, task_id, current)
 
 
@@ -1853,7 +1969,7 @@ def ranking_matrix(
     if selected_platform:
         stmt = stmt.where(GeoMonitorSubtask.platform == selected_platform)
 
-    subtasks = list(db.scalars(stmt.limit(5000)))
+    subtasks = list(db.scalars(stmt.limit(2000)))
     legacy_group_filter = str(monitor_group or keyword or "").strip()
     scoped_group = str(keyword_group or "").strip()
     scoped_monitor = str(monitor_keyword or "").strip()
@@ -2270,7 +2386,9 @@ def _workspace_competitor_score(
         }
     from app.services.competitor_analytics_service import build_competitor_compare_summary
 
-    summary = build_competitor_compare_summary(db, current, tenant_id=tenant_id, days=7)
+    summary = build_competitor_compare_summary(
+        db, current, tenant_id=tenant_id, days=7, subtask_limit=150,
+    )
     if int(summary.get("sample_total") or 0) <= 0:
         return {
             "competitor_score": None,
@@ -2314,6 +2432,28 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
     purchased_platforms = sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
     purchased_set = set(purchased_platforms)
 
+    from app.services.monitor_stats_service import (
+        has_daily_stats,
+        list_daily_stats_for_tenant,
+        platform_bucket_from_stat_rows,
+        workspace_kpi_trends_from_stats,
+        workspace_metrics_from_stat_rows,
+    )
+
+    use_daily_stats = has_daily_stats(db, [tenant_id])
+    daily_stat_by_day: dict[str, list] = {}
+    if use_daily_stats:
+        for row in list_daily_stats_for_tenant(
+            db,
+            tenant_id,
+            since=(trend_start - timedelta(days=45)).date(),
+            until=range_end.date(),
+        ):
+            daily_stat_by_day.setdefault(row.stat_date.isoformat(), []).append(row)
+
+    lookback_start = trend_start - timedelta(days=21 if use_daily_stats else 45)
+    subtask_limit = 100 if use_daily_stats else 400
+
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
@@ -2330,7 +2470,6 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
                 GeoMonitorSubtask.platform,
                 GeoMonitorSubtask.prompt,
                 GeoMonitorSubtask.status,
-                GeoMonitorSubtask.answer_content,
                 GeoMonitorSubtask.mention_context,
                 GeoMonitorSubtask.page_screenshot,
                 GeoMonitorSubtask.reference_list_json,
@@ -2345,13 +2484,13 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             GeoMonitorTask.tenant_id == tenant_id,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
             or_(
-                GeoMonitorSubtask.updated_at >= trend_start - timedelta(days=45),
-                GeoMonitorTask.created_at >= trend_start - timedelta(days=45),
+                GeoMonitorSubtask.updated_at >= lookback_start,
+                GeoMonitorTask.created_at >= lookback_start,
             ),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
     )
-    subtasks = list(db.scalars(stmt.limit(3000)))
+    subtasks = list(db.scalars(stmt.limit(subtask_limit)))
     if purchased_set:
         subtasks = [item for item in subtasks if item.platform in purchased_set]
 
@@ -2402,7 +2541,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             "brand_rank": brand_rank,
             "brand_mentioned": brand_mentioned,
             "sentiment": sentiment_label,
-            "answer_excerpt": _answer_excerpt(item.answer_content, 100),
+            "answer_excerpt": _answer_excerpt(item.mention_context, 100),
             "page_screenshot": item.page_screenshot,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         }
@@ -2454,11 +2593,27 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
     }
 
     visible_days = _workspace_visible_day_keys(daily_ranking, daily_exposure, cutoff=range_end)
+    if use_daily_stats and daily_stat_by_day:
+        stat_days = sorted(
+            day
+            for day, rows in daily_stat_by_day.items()
+            if date.fromisoformat(day) <= range_end.date()
+            and sum(int(item.completed_count or 0) for item in rows) > 0
+        )
+        if stat_days:
+            visible_days = stat_days
     if visible_days:
         latest_day = visible_days[-1]
         latest_ranking_rows = daily_ranking.get(latest_day, [])
         latest_exposure_rows = daily_exposure.get(latest_day, [])
         display_metrics = _round_metrics_from_rows(latest_ranking_rows, latest_exposure_rows)
+        if use_daily_stats and daily_stat_by_day.get(latest_day):
+            stat_metrics = workspace_metrics_from_stat_rows(daily_stat_by_day[latest_day])
+            stat_metrics["top3_rate"] = display_metrics["top3_rate"]
+            stat_metrics["negative_count"] = display_metrics["negative_count"]
+            stat_metrics["negative_rate"] = display_metrics["negative_rate"]
+            stat_metrics["exposure_sample_count"] = display_metrics["exposure_sample_count"]
+            display_metrics = stat_metrics
         latest_label = _workspace_day_label(latest_day)
         latest_schedule = {
             "schedule_window_key": latest_day,
@@ -2472,6 +2627,13 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
             previous_ranking_rows = daily_ranking.get(previous_day, [])
             previous_exposure_rows = daily_exposure.get(previous_day, [])
             previous_metrics = _round_metrics_from_rows(previous_ranking_rows, previous_exposure_rows)
+            if use_daily_stats and previous_day and daily_stat_by_day.get(previous_day):
+                stat_prev = workspace_metrics_from_stat_rows(daily_stat_by_day[previous_day])
+                stat_prev["top3_rate"] = previous_metrics["top3_rate"]
+                stat_prev["negative_count"] = previous_metrics["negative_count"]
+                stat_prev["negative_rate"] = previous_metrics["negative_rate"]
+                stat_prev["exposure_sample_count"] = previous_metrics["exposure_sample_count"]
+                previous_metrics = stat_prev
             previous_schedule = {
                 "schedule_window_key": previous_day,
                 "schedule_label": f"{_workspace_day_label(previous_day)} 监测",
@@ -2514,6 +2676,10 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
     previous_platform_stats = _platform_stats_from_ranking_rows(
         daily_ranking.get(previous_day, []) if previous_day else []
     )
+    if use_daily_stats and latest_day and daily_stat_by_day.get(latest_day):
+        latest_platform_stats = platform_bucket_from_stat_rows(daily_stat_by_day[latest_day])
+        if previous_day and daily_stat_by_day.get(previous_day):
+            previous_platform_stats = platform_bucket_from_stat_rows(daily_stat_by_day[previous_day])
     platform_highlights = [
         _platform_highlight_entry(
             code,
@@ -2522,7 +2688,11 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         )
         for code in purchased_platforms
     ]
-    kpi_trends = _build_workspace_kpi_trends(daily_ranking, daily_exposure, trend_start, trend_end)
+    kpi_trends = (
+        workspace_kpi_trends_from_stats(db, tenant_id, trend_start, trend_end)
+        if use_daily_stats and daily_stat_by_day
+        else _build_workspace_kpi_trends(daily_ranking, daily_exposure, trend_start, trend_end)
+    )
 
     latest_day_source_map: dict[str, dict[str, Any]] = {}
     for item in subtasks:
@@ -2590,11 +2760,13 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
                 "level": "warn",
                 "message": f"较上一轮，负面样本增加 {neg_delta} 条。",
             })
+    platform_names = _platform_display_names()
     for highlight in platform_highlights:
         if highlight["sample_count"] == 0 and highlight["platform"] in purchased_set:
+            label = platform_names.get(highlight["platform"], highlight["platform"])
             alerts.append({
                 "level": "info",
-                "message": f"平台 {highlight['platform']} 截至昨日暂无推荐类返回，请确认监测配置。",
+                "message": f"平台 {label} 截至昨日暂无推荐类返回，请确认监测配置。",
             })
 
     plan = schedule_plan_summary(asset)

@@ -153,10 +153,18 @@ function matrixCellRankClass(rank: number | null | undefined) {
   return 'rank-low'
 }
 
-export function useMonitorRealtime(tenantId: number | null = null) {
+export function useMonitorRealtime(externalTenantId: number | null = null) {
   const route = useRoute()
   const router = useRouter()
   const auth = useAuthStore()
+  const tenantId = computed(() => {
+    if (auth.session?.identity?.identity_type === 'CUSTOMER') return null
+    if (externalTenantId != null) return externalTenantId
+    const raw = route.query.tenant_id
+    const text = Array.isArray(raw) ? raw[0] : raw
+    const parsed = Number(text)
+    return Number.isFinite(parsed) ? parsed : null
+  })
   const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
   const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const monitorTasks = ref<MonitorTask[]>([])
@@ -592,7 +600,7 @@ export function useMonitorRealtime(tenantId: number | null = null) {
 
   async function loadBrandAssetData() {
     try {
-      const response = await withRetry(() => getBrandAsset(tenantId))
+      const response = await withRetry(() => getBrandAsset(tenantId.value))
       brandAsset.value = response.asset
       brandCompetitors.value = response.competitors
     } catch (error: unknown) {

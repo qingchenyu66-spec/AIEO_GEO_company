@@ -9,9 +9,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.core.config import settings  # noqa: E402
+from app.core.security_baseline import validate_flower_auth  # noqa: E402
 
 
 def main() -> int:
+    validate_flower_auth(strict=True)
     python = ROOT / ".venv" / "Scripts" / "python.exe"
     if not python.exists():
         python = Path(sys.executable)

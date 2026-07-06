@@ -71,6 +71,7 @@ export interface OperationLogRecord {
   ip_address: string | null
   target_module?: string | null
   tenant_id?: number | null
+  tenant_name?: string | null
   created_at: string
 }
 

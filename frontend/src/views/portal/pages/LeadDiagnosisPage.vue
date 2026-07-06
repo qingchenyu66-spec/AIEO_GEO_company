@@ -17,7 +17,7 @@ import {
   TimerReset,
   Zap,
 } from '@lucide/vue'
-import * as echarts from 'echarts'
+import { initChart, type ECharts } from '../../../utils/echartsLoader'
 import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
 import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
@@ -117,11 +117,11 @@ function listProgress(item: { completed_run_count: number; schedule_total_count?
 }
 
 const rankTrendChartRef = ref<HTMLElement | null>(null)
-let rankTrendChart: echarts.ECharts | null = null
+let rankTrendChart: ECharts | null = null
 const promptTrendRefs = new Map<number, HTMLElement>()
 const promptMentionRefs = new Map<number, HTMLElement>()
-const promptTrendCharts = new Map<number, echarts.ECharts>()
-const promptMentionCharts = new Map<number, echarts.ECharts>()
+const promptTrendCharts = new Map<number, ECharts>()
+const promptMentionCharts = new Map<number, ECharts>()
 
 function bindPromptTrendRef(index: number, el: Element | null) {
   if (el instanceof HTMLElement) promptTrendRefs.set(index, el)
@@ -131,9 +131,11 @@ function bindPromptMentionRef(index: number, el: Element | null) {
   if (el instanceof HTMLElement) promptMentionRefs.set(index, el)
 }
 
-function renderRankTrendChart() {
+async function renderRankTrendChart() {
   if (!rankTrendChartRef.value || !rankTrend.value.length || !detail.value) return
-  if (!rankTrendChart) rankTrendChart = echarts.init(rankTrendChartRef.value)
+  if (!rankTrendChart) {
+    rankTrendChart = await initChart(rankTrendChartRef.value, 'diagnosis')
+  }
   const entities = trackedEntities.value.length
     ? trackedEntities.value
     : [detail.value.brand_name, ...(detail.value.competitors || [])].filter(Boolean).slice(0, 4)
@@ -170,14 +172,14 @@ async function renderPromptCharts() {
     ? trackedEntities.value
     : [brand, ...(detail.value.competitors || [])].filter(Boolean).slice(0, 4)
 
-  promptAnalytics.value.forEach((block, index) => {
+  for (const [index, block] of promptAnalytics.value.entries()) {
     const roundTrend = (block.round_trend as Array<Record<string, unknown>> | undefined) || []
     const mentionTable = (block.mention_table as Array<Record<string, unknown>> | undefined) || []
     const trendEl = promptTrendRefs.get(index)
     if (trendEl && roundTrend.length) {
       let chart = promptTrendCharts.get(index)
       if (!chart) {
-        chart = echarts.init(trendEl)
+        chart = await initChart(trendEl, 'diagnosis')
         promptTrendCharts.set(index, chart)
       }
       renderEntityRankTrendChart(chart, roundTrend, brand, entities as string[])
@@ -186,12 +188,12 @@ async function renderPromptCharts() {
     if (mentionEl && mentionTable.length) {
       let chart = promptMentionCharts.get(index)
       if (!chart) {
-        chart = echarts.init(mentionEl)
+        chart = await initChart(mentionEl, 'diagnosis')
         promptMentionCharts.set(index, chart)
       }
       renderMentionRateBarChart(chart, mentionTable)
     }
-  })
+  }
 }
 
 watch([detailTab, rankTrend, trackedEntities, selectedId], async () => {
@@ -200,7 +202,7 @@ watch([detailTab, rankTrend, trackedEntities, selectedId], async () => {
     return
   }
   await nextTick()
-  renderRankTrendChart()
+  await renderRankTrendChart()
 }, { deep: true })
 
 watch([detailTab, promptAnalytics, trackedEntities, selectedId], () => {

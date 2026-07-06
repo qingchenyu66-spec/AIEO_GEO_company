@@ -1,4 +1,5 @@
 import type { IdentityType, MenuInfo } from '../../services/auth'
+import { generateInitialPassword } from '../../utils/password'
 import { POSITION_MENU } from './constants'
 
 export function permissionGroupTitle(type: IdentityType, key: string) {
@@ -51,7 +52,7 @@ export function permissionGroupKey(menu: MenuInfo) {
   if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
   if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
-  if (['platform.plans', 'platform.admins', 'platform.models', 'platform.alerts', 'platform.logs', 'platform.settings'].includes(menu.menu_code)) return 'system'
+  if (['platform.models', 'platform.alerts', 'platform.logs', 'platform.settings'].includes(menu.menu_code)) return 'system'
   return 'other'
 }
 
@@ -126,7 +127,7 @@ export function createUserCreateForm() {
   const base = createEmptyIdentityForm()
   return {
     username: '',
-    password: 'Geo@2026',
+    password: generateInitialPassword(),
     display_name: base.display_name,
     identity_types: base.identity_types,
     identity_configs: base.identity_configs,

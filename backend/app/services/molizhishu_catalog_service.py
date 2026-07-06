@@ -34,7 +34,7 @@ _FALLBACK_CATALOG: list[dict[str, Any]] = sort_catalog_items([
 _lock = threading.Lock()
 _cache: dict[str, Any] = {
     "catalog": [dict(item) for item in _FALLBACK_CATALOG],
-    "fetched_at": None,
+    "fetched_at": datetime.now(),
     "source": "fallback",
     "source_url": MOLIZHISHU_PLATFORM_DOC_URL,
 }
@@ -70,7 +70,7 @@ def _parse_platform_rows(html: str) -> list[dict[str, Any]]:
 
 
 def _fetch_doc_catalog(url: str) -> list[dict[str, Any]]:
-    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+    with httpx.Client(timeout=3.0, follow_redirects=True) as client:
         response = client.get(url, headers={"Accept": "text/html,application/json"})
         response.raise_for_status()
     catalog = _parse_platform_rows(response.text)
@@ -88,7 +88,7 @@ def refresh_platform_catalog(*, force: bool = False) -> dict[str, Any]:
             and fetched_at is not None
             and isinstance(fetched_at, datetime)
             and datetime.now() - fetched_at < CACHE_TTL
-            and _cache.get("source") == "molizhishu_doc"
+            and _cache.get("catalog")
         ):
             return dict(_cache)
 
@@ -114,6 +114,10 @@ def refresh_platform_catalog(*, force: bool = False) -> dict[str, Any]:
     if last_error is not None:
         logger.error("[molizhishu] platform catalog refresh failed, using cache/fallback: %s", last_error)
     with _lock:
+        _cache.setdefault("catalog", [dict(item) for item in _FALLBACK_CATALOG])
+        _cache["fetched_at"] = datetime.now()
+        _cache.setdefault("source", "fallback")
+        _cache.setdefault("source_url", MOLIZHISHU_PLATFORM_DOC_URL)
         return dict(_cache)
 
 

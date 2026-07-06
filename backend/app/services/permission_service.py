@@ -6,6 +6,7 @@ from app.models.user_identity import UserIdentity
 from app.schemas.permission import MenuInfo
 from app.services.menu_permission_service import (
     get_identity_menus as build_identity_menus,
+    is_retired_menu_code,
     replace_identity_menus_from_position,
 )
 
@@ -16,11 +17,15 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
 def list_menus_by_identity_type(db: Session, identity_type: str) -> list[Menu]:
     """按身份类型读取可配置菜单，用于新增用户时勾选权限。"""
-    return list(db.scalars(
-        select(Menu)
-        .where(Menu.identity_type == identity_type, Menu.status.is_(True), Menu.deleted.is_(False))
-        .order_by(Menu.sort_order.asc(), Menu.id.asc())
-    ))
+    return [
+        menu
+        for menu in db.scalars(
+            select(Menu)
+            .where(Menu.identity_type == identity_type, Menu.status.is_(True), Menu.deleted.is_(False))
+            .order_by(Menu.sort_order.asc(), Menu.id.asc())
+        )
+        if not is_retired_menu_code(menu.menu_code)
+    ]
 
 
 def list_roles_by_identity_type(db: Session, identity_type: str) -> list[Role]:

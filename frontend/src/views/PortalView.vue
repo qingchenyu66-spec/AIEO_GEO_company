@@ -14,7 +14,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey, WorkspaceFullscreenKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -23,6 +23,7 @@ import {
   POSITION_MENU,
   hiddenCustomerMenus,
   hiddenEnterprisePermissionMenus,
+  hiddenPlatformMenus,
   hiddenUserPermissionMenus,
   normalizeMenuCode,
 } from './portal/constants'
@@ -51,12 +52,14 @@ const router = useRouter()
 const route = useRoute()
 const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
-const { activeMenuCode, navigateToMenu } = usePortalMenu(router, route, defaultMenuCode)
+const allowedMenuCodes = computed(() => auth.allowedMenus.map(item => item.menu_code))
+const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(router, route, defaultMenuCode, allowedMenuCodes)
+provide(PortalNavigateKey, navigateToMenu)
 const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU)
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => auth.allowedMenus
-  .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code)))
+  .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code)))
 const userManagementMenu = computed(() => menus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
@@ -85,7 +88,7 @@ watch(activeMenuCode, code => {
 const brandAsset = ref<BrandAsset | null>(null)
 const brandCompetitors = ref<BrandCompetitor[]>([])
 
-const platformAdmin = usePlatformAdmin({ auth, isPlatform, activeMenuCode, userMenuExpanded })
+const platformAdmin = usePlatformAdmin({ auth, isPlatform, activeMenuCode, userMenuExpanded, navigateToMenu })
 provide(PlatformAdminKey, platformAdmin)
 
 const {
@@ -131,8 +134,17 @@ const pageSubtitle = computed(() => {
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
   if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
+  if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
+  if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
+
+function parseRouteTenantId(): number | null {
+  const raw = route.query.tenant_id
+  const text = Array.isArray(raw) ? raw[0] : raw
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
 
 async function loadBrandAssetData() {
   try {
@@ -141,7 +153,7 @@ async function loadBrandAssetData() {
       if (!tenants.value.length) {
         tenants.value = await withRetry(() => getTenants())
       }
-      tenantId = tenants.value[0]?.id ?? null
+      tenantId = parseRouteTenantId() ?? tenants.value[0]?.id ?? null
       if (!tenantId) {
         brandAsset.value = null
         brandCompetitors.value = []
@@ -185,7 +197,7 @@ function toggleUserSubmenu() {
 
 function ensureActiveMenuAllowed() {
   const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
-  if (!allowedCodes.includes(activeMenuCode.value)) {
+  if (isMenuBlocked(activeMenuCode.value) || !allowedCodes.includes(activeMenuCode.value)) {
     navigateToMenu(normalizeMenuCode(auth.allowedMenus[0]?.menu_code || ''), true)
   }
   userMenuExpanded.value = activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU
@@ -218,6 +230,11 @@ watch(activeMenuCode, (newCode, oldCode) => {
   }
   if (!isBrandAssetPage.value && !isRealtimeMonitorPage.value) {
     loadBrandAssetData()
+  }
+})
+watch(() => route.query.tenant_id, () => {
+  if (isPlatform.value && !isBrandAssetPage.value) {
+    void loadBrandAssetData()
   }
 })
 onMounted(refreshMenusFromServer)

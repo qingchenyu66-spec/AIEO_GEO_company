@@ -16,6 +16,8 @@ T = TypeVar("T")
 MANAGEMENT_OVERVIEW_CACHE_KEY = "management:overview:v1"
 MANAGEMENT_OVERVIEW_CACHE_TTL = 30
 MONITOR_SUMMARY_CACHE_TTL = 20
+WORKSPACE_BRIEF_CACHE_TTL = 45
+CELERY_MONITOR_CACHE_TTL = 20
 CACHE_BUILD_LOCK_TTL = 45
 CACHE_BUILD_WAIT_SECONDS = 3.0
 CACHE_BUILD_POLL_INTERVAL = 0.15
@@ -23,6 +25,14 @@ CACHE_BUILD_POLL_INTERVAL = 0.15
 
 def monitor_summary_cache_key(identity_type: str, tenant_key: str | int) -> str:
     return f"monitor:summary:v3:{identity_type}:{tenant_key}"
+
+
+def workspace_brief_cache_key(tenant_id: int) -> str:
+    return f"monitor:workspace-brief:v1:{tenant_id}"
+
+
+def celery_monitor_cache_key() -> str:
+    return "celery:monitor:panel:v1"
 
 
 def get_or_build_json_cache(
@@ -89,8 +99,9 @@ def invalidate_management_overview_cache() -> None:
 
 
 def invalidate_dashboard_caches(tenant_id: int | None = None) -> None:
-    """补录/同步后清理运营总览与监测摘要缓存。"""
+    """补录/同步后清理运营总览、监测摘要与工作台简报缓存。"""
     invalidate_management_overview_cache()
     if tenant_id is not None:
         delete_cache(monitor_summary_cache_key("CUSTOMER", tenant_id))
+        delete_cache(workspace_brief_cache_key(tenant_id))
     delete_cache(monitor_summary_cache_key("PLATFORM", "platform"))

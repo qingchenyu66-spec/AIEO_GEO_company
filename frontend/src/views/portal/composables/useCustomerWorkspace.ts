@@ -1,7 +1,8 @@
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { PortalNavigateKey } from '../injectionKeys'
 import { withRetry } from '../../../composables/useRetry'
-import { notifyOperationError } from '../../../utils/requestError'
+import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
 import { customerDisplayPeriodLabel, customerTrendPeriodLabel } from '../../../utils/customerMonitorDate'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import { useAuthStore } from '../../../stores/auth'
@@ -243,8 +244,10 @@ export function useCustomerWorkspace() {
   const router = useRouter()
   const route = useRoute()
   const auth = useAuthStore()
+  const portalNavigate = inject(PortalNavigateKey, null)
   const brief = ref<WorkspaceBrief | null>(null)
   const loading = ref(false)
+  const loadError = ref('')
   const alertsExpanded = ref(false)
   const alertsSectionRef = ref<HTMLElement | null>(null)
   const alertsFocused = ref(false)
@@ -252,6 +255,8 @@ export function useCustomerWorkspace() {
   const realtimeMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
   ))
+  const hasMenu = (menuCode: string) => auth.allowedMenus.some(menu => menu.menu_code === menuCode)
+  const canOpenRealtime = computed(() => hasMenu('customer.realtime'))
 
   const heroTone = computed(() => resolveHeroTone(brief.value))
   const statusBadge = computed(() => {
@@ -267,7 +272,7 @@ export function useCustomerWorkspace() {
   ))
   const primaryAction = computed(() => {
     const action = brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
-    if (!action) return null
+    if (!action || !hasMenu(action.menu)) return null
     const menuName = auth.allowedMenus.find(menu => menu.menu_code === action.menu)?.menu_name
     return {
       ...action,
@@ -536,7 +541,7 @@ export function useCustomerWorkspace() {
         tone: '',
         menu: 'customer.competitor',
       },
-    ]
+    ].filter(item => hasMenu(item.menu))
   })
 
   const showTodoStrip = computed(() => (
@@ -547,16 +552,22 @@ export function useCustomerWorkspace() {
 
   async function loadBrief() {
     loading.value = true
+    loadError.value = ''
     try {
       brief.value = await withRetry(() => getWorkspaceBrief())
     } catch (error: unknown) {
       notifyOperationError(error, '工作台数据加载失败')
+      loadError.value = extractErrorDetail(error)
     } finally {
       loading.value = false
     }
   }
 
   function navigateToMenu(menuCode: string) {
+    if (portalNavigate) {
+      portalNavigate(menuCode)
+      return
+    }
     router.push({ path: route.path, query: { ...route.query, menu: menuCode } }).catch(() => undefined)
   }
 
@@ -580,10 +591,13 @@ export function useCustomerWorkspace() {
   }
 
   function openAlertTarget(alert: WorkspaceAlert) {
-    navigateToMenu(alertTargetMenu(alert))
+    const menu = alertTargetMenu(alert)
+    if (!hasMenu(menu)) return
+    navigateToMenu(menu)
   }
 
   function openSnapshot(snapshot: WorkspaceSnapshot) {
+    if (!hasMenu('customer.realtime')) return
     const nextQuery: Record<string, string | string[]> = { ...route.query, menu: 'customer.realtime' }
     if (snapshot.task_id) nextQuery.task_id = snapshot.task_id
     nextQuery.subtask_id = snapshot.subtask_id
@@ -602,6 +616,7 @@ export function useCustomerWorkspace() {
   return {
     brief,
     loading,
+    loadError,
     alertsExpanded,
     alertsSectionRef,
     alertsFocused,
@@ -620,6 +635,7 @@ export function useCustomerWorkspace() {
     openSnapshot,
     alertTargetMenu,
     realtimeMenuName,
+    canOpenRealtime,
     formatDateTime,
     formatRank,
     formatExposureLabel,

@@ -5,11 +5,19 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.diagnosis import BrandDiagnosis
 from app.schemas.common import ApiResponse
+from app.services.tenant_scope import (
+    guard_tenant_resource_access,
+    resolve_and_guard_tenant_id,
+    sales_owned_tenant_ids,
+)
 
 router = APIRouter(prefix="/diagnosis")
+
+_LIST_LIMIT = 200
 
 
 def require_platform(current: CurrentSession) -> None:
@@ -28,13 +36,26 @@ def list_diagnosis(
         select(BrandDiagnosis)
         .where(BrandDiagnosis.deleted.is_(False))
         .order_by(BrandDiagnosis.id.desc())
+        .limit(_LIST_LIMIT)
     )
     if current.identity.identity_type == "CUSTOMER":
         if current.identity.tenant_id is None:
             return ApiResponse(data=[])
         stmt = stmt.where(BrandDiagnosis.tenant_id == current.identity.tenant_id)
-    elif tenant_id:
-        stmt = stmt.where(BrandDiagnosis.tenant_id == tenant_id)
+    else:
+        owned = sales_owned_tenant_ids(db, current)
+        if owned is not None:
+            if not owned:
+                return ApiResponse(data=[])
+            stmt = stmt.where(BrandDiagnosis.tenant_id.in_(owned))
+        elif tenant_id:
+            try:
+                resolved = resolve_and_guard_tenant_id(db, current, tenant_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            stmt = stmt.where(BrandDiagnosis.tenant_id == resolved)
     rows = list(db.scalars(stmt))
     return ApiResponse(data=[
         {
@@ -63,8 +84,17 @@ def create_diagnosis(
 ) -> ApiResponse[dict]:
     """运营创建品牌诊断。"""
     require_platform(current)
+    raw_tenant_id = payload.get("tenant_id", current.identity.tenant_id)
+    if raw_tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定企业")
+    try:
+        tenant_id = resolve_and_guard_tenant_id(db, current, int(raw_tenant_id))
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     record = BrandDiagnosis(
-        tenant_id=payload.get("tenant_id", current.identity.tenant_id),
+        tenant_id=tenant_id,
         created_by_user_id=current.user.id,
         diagnosis_title=payload.get("diagnosis_title", "品牌诊断"),
         health_score=payload.get("health_score", 80),
@@ -94,8 +124,14 @@ def get_diagnosis_detail(
     record = db.scalar(select(BrandDiagnosis).where(BrandDiagnosis.id == record_id, BrandDiagnosis.deleted.is_(False)))
     if record is None:
         raise HTTPException(status_code=404, detail="诊断记录不存在")
-    if current.identity.identity_type == "CUSTOMER" and record.tenant_id != current.identity.tenant_id:
-        raise HTTPException(status_code=403, detail="无权查看")
+    if current.identity.identity_type == "CUSTOMER":
+        if record.tenant_id != current.identity.tenant_id:
+            raise HTTPException(status_code=403, detail="无权查看")
+    else:
+        try:
+            guard_tenant_resource_access(db, current, record.tenant_id)
+        except Exception as exc:
+            raise_read_endpoint_error(exc, context="diagnosis.detail")
     return ApiResponse(data={
         "id": record.id,
         "tenant_id": record.tenant_id,

@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
 import { Bell, CheckCheck } from '@lucide/vue'
 import {
   getNotifications,
@@ -10,13 +9,13 @@ import {
   type SystemNotification,
 } from '../../../services/notifications'
 import { extractErrorDetail } from '../../../utils/requestError'
+import { PortalNavigateKey } from '../injectionKeys'
 
 const emit = defineEmits<{
   openAlerts: []
 }>()
 
-const router = useRouter()
-const route = useRoute()
+const portalNavigate = inject(PortalNavigateKey)!
 
 const open = ref(false)
 const loading = ref(false)
@@ -87,13 +86,9 @@ async function handleRead(item: SystemNotification) {
   }
   if (item.category === 'snapshot_backfill' && item.payload) {
     const payload = item.payload
-    await router.push({
-      query: {
-        ...route.query,
-        menu: 'platform.snapshot_backfill',
-        subtask_id: String(payload.subtask_id || ''),
-        backfill: '1',
-      },
+    portalNavigate('platform.snapshot_backfill', false, {
+      subtask_id: String(payload.subtask_id || ''),
+      backfill: '1',
     })
     open.value = false
   }

@@ -4,15 +4,57 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
-from app.services.brand_service import ensure_tenant
+from app.models.permission import Position
+from app.models.tenant import Tenant
+from app.models.user_identity import UserIdentity
 from app.services.menu_permission_service import has_identity_menu_permission
 
 logger = logging.getLogger(__name__)
 
 ANALYTICS_READ_MENU = "platform.competitor"
+
+
+def ensure_tenant(db: Session, tenant_id: int) -> Tenant:
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError("企业不存在")
+    return tenant
+
+
+def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
+    if identity.identity_type != "PLATFORM" or identity.position_id is None:
+        return False
+    position = db.scalar(
+        select(Position).where(
+            Position.id == identity.position_id,
+            Position.deleted.is_(False),
+        )
+    )
+    if position is None:
+        return False
+    return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+
+
+def ensure_sales_tenant_access(db: Session, current: CurrentSession, tenant_id: int) -> None:
+    """销售身份只能访问归属本账号的企业。"""
+    if current.identity.identity_type != "PLATFORM":
+        return
+    if not is_sales_identity(db, current.identity):
+        return
+    tenant = db.scalar(
+        select(Tenant).where(
+            Tenant.id == tenant_id,
+            Tenant.deleted.is_(False),
+        )
+    )
+    if tenant is None:
+        raise ValueError("企业不存在")
+    if tenant.owner_user_id != current.user.id:
+        raise PermissionError("当前账号无权访问该企业数据")
 
 
 def resolve_analytics_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int:
@@ -34,10 +76,11 @@ def ensure_platform_tenant_read_access(
     menu_code: str = ANALYTICS_READ_MENU,
     action: str = "can_export",
 ) -> None:
-    """平台端按企业读数据：校验企业存在 + 菜单查看权限，并记审计日志。"""
+    """平台端按企业读数据：校验企业存在 + 销售归属 + 菜单查看权限，并记审计日志。"""
     if current.identity.identity_type != "PLATFORM":
         return
     ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
     if not has_identity_menu_permission(db, current.identity.id, menu_code, action):
         raise PermissionError("当前账号没有该数据范围的查看权限")
     logger.info(
@@ -60,3 +103,47 @@ def resolve_and_guard_analytics_tenant(
     tenant_id = resolve_analytics_tenant_id(current, requested_tenant_id)
     ensure_platform_tenant_read_access(db, current, tenant_id, menu_code=menu_code)
     return tenant_id
+
+
+def assert_monitor_task_access(db: Session, current: CurrentSession, tenant_id: int | None) -> None:
+    """监测任务读路径：客户绑定租户；平台销售仅看名下企业。"""
+    if tenant_id is None:
+        return
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id != tenant_id:
+            raise PermissionError("无权访问该企业监测数据")
+        return
+    ensure_sales_tenant_access(db, current, tenant_id)
+
+
+def resolve_and_guard_tenant_id(
+    db: Session,
+    current: CurrentSession,
+    requested_tenant_id: int | None,
+) -> int:
+    """解析 tenant_id 并校验企业存在 + 销售归属（平台/客户通用入口）。"""
+    tenant_id = resolve_analytics_tenant_id(current, requested_tenant_id)
+    ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
+    return tenant_id
+
+
+def guard_tenant_resource_access(db: Session, current: CurrentSession, tenant_id: int) -> None:
+    """按资源 tenant_id 校验销售归属（file/report/diagnosis 等）。"""
+    ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
+
+
+def sales_owned_tenant_ids(db: Session, current: CurrentSession) -> list[int] | None:
+    """销售返回名下企业 ID 列表；非销售平台身份返回 None（不限制）。"""
+    if current.identity.identity_type != "PLATFORM":
+        return None
+    if not is_sales_identity(db, current.identity):
+        return None
+    rows = db.scalars(
+        select(Tenant.id).where(
+            Tenant.deleted.is_(False),
+            Tenant.owner_user_id == current.user.id,
+        )
+    )
+    return list(rows)

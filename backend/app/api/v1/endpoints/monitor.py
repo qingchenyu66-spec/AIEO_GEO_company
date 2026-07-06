@@ -1,18 +1,20 @@
 from datetime import date, datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.exc import SQLAlchemyError
+from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
-from app.api.http_errors import raise_read_endpoint_error
+from app.api.http_errors import molizhishu_upstream_error_detail, raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.core.read_cache import (
     MANAGEMENT_OVERVIEW_CACHE_KEY,
     MANAGEMENT_OVERVIEW_CACHE_TTL,
     MONITOR_SUMMARY_CACHE_TTL,
+    WORKSPACE_BRIEF_CACHE_TTL,
     get_or_build_json_cache,
     monitor_summary_cache_key,
+    workspace_brief_cache_key,
 )
 from app.schemas.common import ApiResponse
 from app.schemas.monitor import (
@@ -42,6 +44,7 @@ from app.services.snapshot_backfill_service import (
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.menu_permission_service import require_snapshot_backfill_permission
+from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
 from app.services.schedule_context import schedule_plan_summary, schedule_runs_for_tasks
 from app.services.schedule_service import preview_scheduled_tasks, run_due_scheduled_tasks
 
@@ -92,10 +95,13 @@ def create_monitor_task(
         task = submit_monitor_task(db, payload, current)
     except MolizhishuApiError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except (ValueError, SQLAlchemyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=molizhishu_upstream_error_detail(exc),
+        ) from exc
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise_write_endpoint_error(exc, context="monitor.create_task")
     return ApiResponse(data=serialize_task(task))
 
 
@@ -159,8 +165,8 @@ def monitor_ranking_matrix(
             exposure_term=exposure_term,
             limit_rows=limit_rows,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.ranking_matrix")
     return ApiResponse(data=data)
 
 
@@ -170,11 +176,18 @@ def monitor_workspace_brief(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Return customer workspace morning briefing with intent-aware KPIs."""
+    if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="运营工作台简报仅支持客户企业账号")
+    cache_key = workspace_brief_cache_key(current.identity.tenant_id)
     try:
-        data = workspace_brief(db, current)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return ApiResponse(data=data)
+        data = get_or_build_json_cache(
+            cache_key,
+            lambda: workspace_brief(db, current),
+            ttl_seconds=WORKSPACE_BRIEF_CACHE_TTL,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.workspace_brief")
 
 
 @router.get("/snapshot-backfill/pending", response_model=ApiResponse[SnapshotBackfillListResponse])
@@ -206,9 +219,27 @@ def monitor_snapshot_backfill_pending(
         require_snapshot_backfill_permission(db, current, "can_export")
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    owned = sales_owned_tenant_ids(db, current)
+    scoped_tenant_ids: list[int] | None = None
+    if owned is not None:
+        if not owned:
+            return ApiResponse(data=SnapshotBackfillListResponse.model_validate({
+                "items": [], "summary": {"pending": 0, "total": 0}, "total": 0, "offset": offset, "limit": limit,
+            }))
+        if tenant_id is not None:
+            try:
+                ensure_sales_tenant_access(db, current, tenant_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        elif all_tenants:
+            scoped_tenant_ids = owned
+            tenant_id = None
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定 tenant_id")
     payload = list_snapshot_backfill_page(
         db,
         tenant_id=tenant_id,
+        tenant_ids=scoped_tenant_ids,
         detect_date=on_date,
         source=source,
         platform=platform,
@@ -263,6 +294,8 @@ def monitor_subtask_detail(
     try:
         subtask = get_monitor_subtask(db, subtask_id, current)
         task = get_monitor_task(db, subtask.task_id, current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
@@ -284,6 +317,24 @@ def monitor_subtask_detail(
     return ApiResponse(data={**display, **ops_meta})
 
 
+def _resolve_schedule_tenant_scope(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int | None,
+) -> tuple[int | None, list[int] | None]:
+    """销售账号未指定 tenant 时限定为负责企业；客户账号固定自身 tenant。"""
+    if current.identity.identity_type == "CUSTOMER":
+        return current.identity.tenant_id, None
+    require_platform(current)
+    owned = sales_owned_tenant_ids(db, current)
+    if tenant_id is not None:
+        ensure_sales_tenant_access(db, current, tenant_id)
+        return tenant_id, None
+    if owned is not None:
+        return None, owned
+    return None, None
+
+
 @router.get("/scheduled/preview", response_model=ApiResponse[list[dict]])
 def scheduled_monitor_preview(
     tenant_id: int | None = None,
@@ -292,11 +343,16 @@ def scheduled_monitor_preview(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """预览企业定时监测会提交的问题和模型平台，不调用模力指数接口。"""
-    if current.identity.identity_type == "CUSTOMER":
-        tenant_id = current.identity.tenant_id
-    else:
-        require_platform(current)
-    return ApiResponse(data=preview_scheduled_tasks(db, tenant_id=tenant_id, max_prompts=max_prompts))
+    try:
+        scoped_tenant_id, scoped_tenant_ids = _resolve_schedule_tenant_scope(db, current, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return ApiResponse(data=preview_scheduled_tasks(
+        db,
+        tenant_id=scoped_tenant_id,
+        tenant_ids=scoped_tenant_ids,
+        max_prompts=max_prompts,
+    ))
 
 
 @router.post("/scheduled/run-due", response_model=ApiResponse[list[dict]])
@@ -309,12 +365,32 @@ def scheduled_monitor_run_due(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """执行到期的企业定时监测任务；force=true 用于人工立即执行一次。"""
-    require_platform(current)
     try:
-        result = run_due_scheduled_tasks(db, current, tenant_id=tenant_id, limit=limit, max_prompts=max_prompts, force=force)
+        scoped_tenant_id, scoped_tenant_ids = _resolve_schedule_tenant_scope(db, current, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    try:
+        result = run_due_scheduled_tasks(
+            db,
+            current,
+            tenant_id=scoped_tenant_id,
+            tenant_ids=scoped_tenant_ids,
+            limit=limit,
+            max_prompts=max_prompts,
+            force=force,
+        )
     except MolizhishuApiError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=molizhishu_upstream_error_detail(exc),
+        ) from exc
+    except (OperationalError, TimeoutError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="任务队列暂时不可用，请稍后重试",
+        ) from exc
     return ApiResponse(data=result)
 
 
@@ -327,6 +403,8 @@ def monitor_task_detail(
     """查询本地任务详情；这里不请求模力指数远端接口。"""
     try:
         task = get_monitor_task(db, task_id, current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
@@ -346,8 +424,13 @@ def monitor_task_sync(
     """手动同步远端任务状态和已完成结果；只有这个接口会主动请求 status/result。"""
     try:
         task = sync_monitor_task(db, task_id, current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except MolizhishuApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=molizhishu_upstream_error_detail(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task, current)})

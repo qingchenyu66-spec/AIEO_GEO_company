@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '../../../stores/auth'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { withRetry } from '../../../composables/useRetry'
 import { getTenants, updateSystemConfig, type TenantInfo } from '../../../services/management'
@@ -11,15 +11,16 @@ import {
   runDueScheduledMonitor,
   type ScheduledMonitorPreview,
 } from '../../../services/monitor'
-import { PortalAnalyticsKey } from '../injectionKeys'
+import { PortalAnalyticsKey, PortalNavigateKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
 
-const route = useRoute()
-const router = useRouter()
+const auth = useAuthStore()
+const isPlatformView = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
+const portalNavigate = inject(PortalNavigateKey)!
 
 const analytics = inject(PortalAnalyticsKey)!
 const {
@@ -67,9 +68,13 @@ const primaryPanelTitle = computed(() => {
   if (mode === 'diagnosis') return '品牌健康分'
   if (mode === 'report') return '报告预览'
   if (mode === 'platforms') return '模型平台状态'
-  if (mode === 'logs') return '操作日志'
-  if (mode === 'settings') return '系统配置'
+  if (mode === 'logs' || mode === 'settings') return ''
   return '检测明细'
+})
+
+const showFeatureHero = computed(() => {
+  const mode = functionalPage.value.mode
+  return mode !== 'logs' && mode !== 'settings'
 })
 
 const editingConfigId = ref<number | null>(null)
@@ -83,6 +88,9 @@ const logKeyword = ref('')
 const logTenantId = ref<number | ''>('')
 const logLoading = ref(false)
 const logRows = ref<OperationLogRecord[]>([])
+const logTotal = ref(0)
+const logPage = ref(1)
+const logPageSize = ref(20)
 const logTenants = ref<TenantInfo[]>([])
 
 const schedulePreview = ref<ScheduledMonitorPreview[]>([])
@@ -143,7 +151,7 @@ async function saveConfigRow(row: { id: number; config_key: string; category?: s
 }
 
 function navigateToMenu(menuCode: string) {
-  router.push({ path: route.path, query: { ...route.query, menu: menuCode } }).catch(() => undefined)
+  portalNavigate(menuCode)
 }
 
 function formatLogTime(value: string) {
@@ -153,21 +161,28 @@ function formatLogTime(value: string) {
 function logContext(row: OperationLogRecord) {
   return [
     row.target_module,
-    row.tenant_id ? `企业ID ${row.tenant_id}` : '',
+    row.tenant_name || '',
     row.ip_address ? `IP ${row.ip_address}` : '',
   ].filter(Boolean).join(' · ') || '平台操作'
 }
 
-async function loadOperationLogs() {
+const logTotalPages = computed(() => Math.max(1, Math.ceil(logTotal.value / logPageSize.value)))
+
+async function loadOperationLogs(page = logPage.value) {
   if (functionalPage.value.mode !== 'logs') return
   logLoading.value = true
   try {
-    logRows.value = await withRetry(() => getOperationLogs({
+    const result = await withRetry(() => getOperationLogs({
       days: logDays.value,
       action_type: logActionType.value.trim() || undefined,
       keyword: logKeyword.value.trim() || undefined,
       tenant_id: logTenantId.value === '' ? undefined : Number(logTenantId.value),
+      page,
+      page_size: logPageSize.value,
     }))
+    logRows.value = result.items
+    logTotal.value = result.total
+    logPage.value = result.page
   } catch (error: unknown) {
     ElMessage.error(error instanceof Error ? error.message : '操作日志加载失败')
   } finally {
@@ -175,38 +190,79 @@ async function loadOperationLogs() {
   }
 }
 
+function changeLogPage(page: number) {
+  if (page < 1 || page > logTotalPages.value || page === logPage.value) return
+  void loadOperationLogs(page)
+}
+
+function handleLogPageSizeChange() {
+  logPage.value = 1
+  void loadOperationLogs(1)
+}
+
+function searchOperationLogs() {
+  logPage.value = 1
+  void loadOperationLogs(1)
+}
+
 function resetLogFilters() {
   logDays.value = 7
   logActionType.value = ''
   logKeyword.value = ''
   logTenantId.value = ''
-  void loadOperationLogs()
+  logPage.value = 1
+  void loadOperationLogs(1)
 }
 
-function exportLogsCsv() {
-  if (!logRows.value.length) {
-    ElMessage.warning('当前筛选结果为空，无法导出')
-    return
+async function exportLogsCsv() {
+  logLoading.value = true
+  try {
+    const rows: OperationLogRecord[] = []
+    const pageSize = 100
+    let page = 1
+    let total = 0
+    do {
+      const result = await getOperationLogs({
+        days: logDays.value,
+        action_type: logActionType.value.trim() || undefined,
+        keyword: logKeyword.value.trim() || undefined,
+        tenant_id: logTenantId.value === '' ? undefined : Number(logTenantId.value),
+        page,
+        page_size: pageSize,
+      })
+      rows.push(...result.items)
+      total = result.total
+      page += 1
+    } while (rows.length < total)
+
+    if (!rows.length) {
+      ElMessage.warning('当前筛选结果为空，无法导出')
+      return
+    }
+    const header = ['时间', '操作人', '类型', '描述', '模块', '企业', 'IP', '风险']
+    const lines = rows.map(row => [
+      formatLogTime(row.created_at),
+      row.operator_name,
+      row.action_type,
+      row.description,
+      row.target_module || '',
+      row.tenant_name || '',
+      row.ip_address || '',
+      row.risk_level,
+    ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    const blob = new Blob([`\uFEFF${[header.join(','), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `operation-logs-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success(`已导出 ${rows.length} 条日志`)
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '日志导出失败')
+  } finally {
+    logLoading.value = false
   }
-  const header = ['时间', '操作人', '类型', '描述', '模块', '企业ID', 'IP', '风险']
-  const lines = logRows.value.map(row => [
-    formatLogTime(row.created_at),
-    row.operator_name,
-    row.action_type,
-    row.description,
-    row.target_module || '',
-    row.tenant_id ?? '',
-    row.ip_address || '',
-    row.risk_level,
-  ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-  const blob = new Blob([`\uFEFF${[header.join(','), ...lines].join('\n')}`], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `operation-logs-${new Date().toISOString().slice(0, 10)}.csv`
-  anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success(`已导出 ${logRows.value.length} 条日志`)
 }
 
 function exportConfigsCsv() {
@@ -303,19 +359,19 @@ function handleAction(action: string) {
     return
   }
   if (action.includes('快照') || action.includes('实时') || action.includes('历史任务')) {
-    navigateToMenu('customer.realtime')
+    navigateToMenu(isPlatformView.value ? 'platform.audit' : 'customer.realtime')
     return
   }
   if (action.includes('信源')) {
-    navigateToMenu(mode.startsWith('platform') ? 'platform.sources' : 'customer.sources')
+    navigateToMenu(isPlatformView.value ? 'platform.sources' : 'customer.sources')
     return
   }
   if (action.includes('竞品') || action.includes('对比') || action.includes('洞察')) {
-    navigateToMenu(mode.startsWith('platform') ? 'platform.competitor' : 'customer.competitor')
+    navigateToMenu(isPlatformView.value ? 'platform.competitor' : 'customer.competitor')
     return
   }
   if (action.includes('报告') || action.includes('PDF') || action.includes('Word')) {
-    navigateToMenu(mode.startsWith('platform') ? 'platform.reports' : 'customer.reports')
+    navigateToMenu(isPlatformView.value ? 'platform.reports' : 'customer.reports')
     return
   }
   if (action.includes('知识') || action.includes('上传资料')) {
@@ -396,7 +452,7 @@ onUnmounted(() => {
 
 <template>
   <section class="feature-page">
-    <article class="panel feature-hero">
+    <article v-if="showFeatureHero" class="panel feature-hero">
       <div>
         <small>{{ functionalPage.subtitle }}</small>
         <h2>{{ functionalPage.title }}</h2>
@@ -421,7 +477,7 @@ onUnmounted(() => {
 
     <section class="feature-grid">
       <article class="panel feature-primary">
-        <div class="panel-head">
+        <div v-if="primaryPanelTitle" class="panel-head">
           <h2>{{ primaryPanelTitle }}</h2>
         </div>
 
@@ -473,9 +529,9 @@ onUnmounted(() => {
               <option value="">全部企业</option>
               <option v-for="tenant in logTenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option>
             </select>
-            <button type="button" class="primary-btn small-btn" :disabled="logLoading" @click="loadOperationLogs">查询</button>
+            <button type="button" class="primary-btn small-btn" :disabled="logLoading" @click="searchOperationLogs">查询</button>
             <button type="button" class="filter-reset-btn tiny-btn" :disabled="logLoading" @click="resetLogFilters">重置</button>
-            <button type="button" class="filter-reset-btn tiny-btn" :disabled="!logRows.length" @click="exportLogsCsv">导出 CSV</button>
+            <button type="button" class="filter-reset-btn tiny-btn" :disabled="logLoading || !logTotal" @click="exportLogsCsv">导出 CSV</button>
           </div>
           <div class="ops-head ops-head-detailed"><span>时间</span><span>操作人</span><span>类型</span><span>描述</span><span>上下文</span><span>风险</span></div>
           <div v-if="logLoading" class="mini-empty">加载中…</div>
@@ -487,6 +543,18 @@ onUnmounted(() => {
             <em>{{ row.description }}</em>
             <span>{{ logContext(row) }}</span>
             <i>{{ row.risk_level }}</i>
+          </div>
+          <div v-if="logTotal > 0" class="log-pagination">
+            <span class="log-pagination-meta">共 {{ logTotal }} 条，第 {{ logPage }} / {{ logTotalPages }} 页</span>
+            <div class="log-pagination-actions">
+              <select v-model.number="logPageSize" :disabled="logLoading" title="每页条数" @change="handleLogPageSizeChange">
+                <option :value="20">20 条/页</option>
+                <option :value="50">50 条/页</option>
+                <option :value="100">100 条/页</option>
+              </select>
+              <button type="button" class="filter-reset-btn tiny-btn" :disabled="logLoading || logPage <= 1" @click="changeLogPage(logPage - 1)">上一页</button>
+              <button type="button" class="filter-reset-btn tiny-btn" :disabled="logLoading || logPage >= logTotalPages" @click="changeLogPage(logPage + 1)">下一页</button>
+            </div>
           </div>
         </div>
 

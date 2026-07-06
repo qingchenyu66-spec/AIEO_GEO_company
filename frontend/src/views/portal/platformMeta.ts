@@ -22,13 +22,13 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'doubao',
     name: '豆包',
     accent: '#ff7a45',
-    icon: '/platform-icons/doubao.svg',
+    icon: '/platform-icons/doubao.png',
   },
   doubao_mobile: {
     code: 'doubao_mobile',
     name: '豆包移动版',
     accent: '#ff7a45',
-    icon: '/platform-icons/doubao.svg',
+    icon: '/platform-icons/doubao.png',
   },
   yuanbao: {
     code: 'yuanbao',
@@ -40,7 +40,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'kimi',
     name: 'Kimi',
     accent: '#111827',
-    icon: '/platform-icons/kimi.svg',
+    icon: '/platform-icons/kimi.png',
   },
   qianwen: {
     code: 'qianwen',
@@ -52,7 +52,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'quark',
     name: '夸克',
     accent: '#0b57d0',
-    icon: '/platform-icons/quark.svg',
+    icon: '/platform-icons/quark.png',
   },
   baiduai: {
     code: 'baiduai',

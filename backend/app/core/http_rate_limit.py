@@ -32,6 +32,20 @@ def enforce_login_rate_limit(request: Request) -> None:
         ) from exc
 
 
+def enforce_identity_select_rate_limit(request: Request) -> None:
+    try:
+        acquire_rate_limit(
+            "auth:select-identity",
+            client_ip(request),
+            settings.http_login_rate_per_minute,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="身份选择尝试过于频繁，请稍后再试",
+        ) from exc
+
+
 def enforce_overview_rate_limit(request: Request, current: CurrentSession) -> None:
     key = f"{current.identity.id}:{client_ip(request)}"
     try:

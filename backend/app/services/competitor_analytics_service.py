@@ -217,6 +217,7 @@ def build_competitor_compare_summary(
     platforms: str | None = None,
     days: int = 30,
     prompt: str | None = None,
+    subtask_limit: int = 5000,
 ) -> dict[str, Any]:
     resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
 
@@ -264,7 +265,7 @@ def build_competitor_compare_summary(
     if prompt_filter:
         stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
 
-    subtasks = list(db.scalars(stmt.limit(5000)))
+    subtasks = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))))
     sample_total = len(subtasks)
     prompt_options = sorted({str(item.prompt or "").strip() for item in subtasks if str(item.prompt or "").strip()})
 

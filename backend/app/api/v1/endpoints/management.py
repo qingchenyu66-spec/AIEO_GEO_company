@@ -32,7 +32,8 @@ from app.schemas.common import ApiResponse
 from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
-from app.services.operation_log_service import write_operation_log
+from app.services.operation_log_service import tenant_names_by_id, write_operation_log
+from app.services.operation_log_labels import humanize_action_type, humanize_description, humanize_target_module
 from app.services.snapshot_backfill_service import list_snapshot_backfill_page
 from app.schemas.permission import (
     MenuConfigBatchItem,
@@ -68,6 +69,7 @@ from app.services.permission_service import (
     list_positions_by_identity_type,
     list_roles_by_identity_type,
 )
+from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
 
 router = APIRouter(prefix="/management")
 
@@ -89,6 +91,31 @@ def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
     if position is None:
         return False
     return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+
+
+def guard_sales_tenant(db: Session, current: CurrentSession, tenant_id: int) -> None:
+    try:
+        ensure_sales_tenant_access(db, current, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+def require_system_config_access(
+    db: Session,
+    current: CurrentSession,
+    *,
+    category: str | None = None,
+    for_update: bool = False,
+) -> None:
+    action = "can_update" if for_update else "can_export"
+    if not has_identity_menu_permission(db, current.identity.id, "platform.settings", action):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问系统配置")
+    if is_sales_identity(db, current.identity):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="销售账号无权访问系统配置")
+    if category == "secrets" and is_sales_identity(db, current.identity):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问密钥配置")
 
 
 def has_identity_menu_permission(db: Session, identity_id: int, menu_code: str, action: str = "can_create") -> bool:
@@ -181,19 +208,34 @@ def clean_log_text(value: str | None, fallback: str) -> str:
     return value or fallback
 
 
-def operation_log_to_dict(item: OperationLog) -> dict:
+def operation_log_to_dict(item: OperationLog, *, tenant_name: str | None = None) -> dict:
     garbled = any(is_garbled_log_text(text) for text in [item.operator_name, item.action_type, item.description, item.risk_level])
     return {
         "id": item.id,
         "operator_name": clean_log_text(item.operator_name, "历史日志" if garbled else "系统"),
-        "action_type": clean_log_text(item.action_type, "编码异常" if garbled else "系统操作"),
-        "description": clean_log_text(item.description, "该条历史日志在早期编码异常时写入，原文不可恢复"),
+        "action_type": humanize_action_type(item.action_type),
+        "description": clean_log_text(
+            humanize_description(item.description),
+            "该条历史日志在早期编码异常时写入，原文不可恢复",
+        ),
         "risk_level": clean_log_text(item.risk_level, "历史记录" if garbled else "普通"),
         "ip_address": item.ip_address,
-        "target_module": item.target_module,
+        "target_module": humanize_target_module(item.target_module, description=item.description),
         "tenant_id": item.tenant_id,
+        "tenant_name": tenant_name,
         "created_at": item.created_at.isoformat(sep=" ", timespec="minutes"),
     }
+
+
+def operation_logs_to_dicts(db: Session, rows: list[OperationLog]) -> list[dict]:
+    name_map = tenant_names_by_id(db, [item.tenant_id for item in rows])
+    return [
+        operation_log_to_dict(
+            item,
+            tenant_name=name_map.get(item.tenant_id) if item.tenant_id else None,
+        )
+        for item in rows
+    ]
 
 
 def write_management_log(
@@ -444,8 +486,19 @@ def management_operation_logs(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    rows = db.scalars(select(OperationLog).order_by(OperationLog.id.desc()).limit(100))
-    return ApiResponse(data=[operation_log_to_dict(item) for item in rows])
+    stmt = select(OperationLog).order_by(OperationLog.id.desc()).limit(100)
+    owned = sales_owned_tenant_ids(db, current)
+    if owned is not None:
+        if not owned:
+            return ApiResponse(data=[])
+        stmt = stmt.where(
+            or_(
+                OperationLog.tenant_id.in_(owned),
+                OperationLog.tenant_id.is_(None),
+            )
+        )
+    rows = db.scalars(stmt)
+    return ApiResponse(data=operation_logs_to_dicts(db, rows))
 
 
 @router.get("/celery-monitor", response_model=ApiResponse[dict])
@@ -464,6 +517,7 @@ def management_system_configs(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    require_system_config_access(db, current, category=category)
     if category and category not in {"secrets", "schedule", "cache_queue"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的配置分类")
     return ApiResponse(data=list_system_configs(db, category=category))
@@ -477,6 +531,7 @@ def management_update_system_config(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    require_system_config_access(db, current, for_update=True)
     new_value = payload.get("config_value")
     if new_value is None or not str(new_value).strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="配置值不能为空")
@@ -489,7 +544,7 @@ def management_update_system_config(
         db,
         current,
         "系统配置",
-        f"更新配置 {data['config_key']}",
+        f"修改系统配置「{data['config_name']}」：更新 {data['config_key']} 参数值",
         target_module="系统配置",
         target_id=config_id,
         risk_level="关注",
@@ -507,10 +562,14 @@ def management_overview(
     """平台运营总览聚合接口，避免首页多接口聚合导致加载慢。"""
     require_platform(current)
     enforce_overview_rate_limit(request, current)
+    owned_tenant_ids = sales_owned_tenant_ids(db, current)
+    cache_key = MANAGEMENT_OVERVIEW_CACHE_KEY
+    if owned_tenant_ids is not None:
+        cache_key = f"{MANAGEMENT_OVERVIEW_CACHE_KEY}:sales:{current.user.id}"
     try:
         data = get_or_build_json_cache(
-            MANAGEMENT_OVERVIEW_CACHE_KEY,
-            lambda: _build_management_overview(db),
+            cache_key,
+            lambda: _build_management_overview(db, tenant_ids=owned_tenant_ids),
             ttl_seconds=MANAGEMENT_OVERVIEW_CACHE_TTL,
         )
         return ApiResponse(data=data)
@@ -518,13 +577,60 @@ def management_overview(
         raise_read_endpoint_error(exc, context="management.overview")
 
 
-def _build_management_overview(db: Session) -> dict:
+def _empty_management_overview() -> dict:
+    return {
+        "kpis": {
+            "today_tasks": 0,
+            "today_completed_tasks": 0,
+            "today_failed_tasks": 0,
+            "today_cost": 0,
+            "active_tenants": 0,
+            "expiring_tenants": 0,
+            "api_success_rate": 0,
+        },
+        "service_counts": {"active": 0, "pending": 0, "expired": 0, "manual_stopped": 0, "canceled": 0, "stopped": 0},
+        "expiring_tenants": [],
+        "platform_stats": [],
+        "cost_ranking": [],
+        "quota_overview": {
+            "used_amount": 0,
+            "today_amount": 0,
+            "estimated_month_amount": 0,
+            "total_subtasks": 0,
+            "avg_cost_per_subtask": 0,
+        },
+        "customer_data": {
+            "tenant_total": 0,
+            "active_tenants": 0,
+            "task_total": 0,
+            "subtask_total": 0,
+            "mention_rate": 0,
+            "source_count": 0,
+        },
+        "recent_tasks": [],
+        "alerts": [],
+        "todo_items": [],
+        "operation_logs": [],
+        "system_health": [],
+        "celery_queues": {},
+        "molizhishu_balance": fetch_molizhishu_balance(),
+        "deepseek_balance": fetch_deepseek_balance(),
+    }
+
+
+def _build_management_overview(db: Session, tenant_ids: list[int] | None = None) -> dict:
+    if tenant_ids is not None and not tenant_ids:
+        return _empty_management_overview()
+
     today = date.today()
     tomorrow = today + timedelta(days=1)
     thirty_days_later = today + timedelta(days=30)
     terminal_statuses = {"completed", "partial_completed", "failed", "stopped"}
 
-    tenants = list(db.scalars(select(Tenant).where(Tenant.deleted.is_(False))))
+    tenant_stmt = select(Tenant).where(Tenant.deleted.is_(False))
+    if tenant_ids is not None:
+        tenant_stmt = tenant_stmt.where(Tenant.id.in_(tenant_ids))
+    tenants = list(db.scalars(tenant_stmt))
     service_counts = {"active": 0, "pending": 0, "expired": 0, "manual_stopped": 0, "canceled": 0, "stopped": 0}
     expiring_tenants: list[dict] = []
     for tenant in tenants:
@@ -538,19 +644,23 @@ def _build_management_overview(db: Session) -> dict:
                 "days_left": (tenant.service_end_date - today).days,
             })
 
-    today_task_rows = list(db.scalars(
-        select(GeoMonitorTask).where(
-            GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.created_at >= datetime.combine(today, datetime.min.time()),
-            GeoMonitorTask.created_at < datetime.combine(tomorrow, datetime.min.time()),
-        )
-    ))
-    all_recent_tasks = list(db.scalars(
+    today_task_stmt = select(GeoMonitorTask).where(
+        GeoMonitorTask.deleted.is_(False),
+        GeoMonitorTask.created_at >= datetime.combine(today, datetime.min.time()),
+        GeoMonitorTask.created_at < datetime.combine(tomorrow, datetime.min.time()),
+    )
+    if tenant_ids is not None:
+        today_task_stmt = today_task_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    today_task_rows = list(db.scalars(today_task_stmt))
+    recent_task_stmt = (
         select(GeoMonitorTask)
         .where(GeoMonitorTask.deleted.is_(False))
         .order_by(GeoMonitorTask.created_at.desc())
         .limit(12)
-    ))
+    )
+    if tenant_ids is not None:
+        recent_task_stmt = recent_task_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    all_recent_tasks = list(db.scalars(recent_task_stmt))
     tenant_name_map = {tenant.id: tenant.name for tenant in tenants}
     recent_task_slice = all_recent_tasks[:8]
     lead_task_displays = lead_diagnosis_task_displays(db, [task.task_id for task in recent_task_slice])
@@ -562,7 +672,7 @@ def _build_management_overview(db: Session) -> dict:
             select(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0)).where(GeoMonitorSubtask.task_id.in_(today_task_ids))
         ) or 0)
 
-    platform_rows = db.execute(
+    platform_stmt = (
         select(
             GeoMonitorSubtask.platform,
             func.count(GeoMonitorSubtask.id),
@@ -570,7 +680,13 @@ def _build_management_overview(db: Session) -> dict:
             func.sum(case((GeoMonitorSubtask.status == "failed", 1), else_=0)),
             func.coalesce(func.sum(GeoMonitorSubtask.amount), 0),
         )
-        .group_by(GeoMonitorSubtask.platform)
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .where(GeoMonitorTask.deleted.is_(False))
+    )
+    if tenant_ids is not None:
+        platform_stmt = platform_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    platform_rows = db.execute(
+        platform_stmt.group_by(GeoMonitorSubtask.platform)
         .order_by(func.count(GeoMonitorSubtask.id).desc())
         .limit(12)
     ).all()
@@ -586,11 +702,15 @@ def _build_management_overview(db: Session) -> dict:
         for row in platform_rows
     ])
 
-    cost_rank_rows = db.execute(
+    cost_rank_stmt = (
         select(GeoMonitorTask.tenant_id, func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
         .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == GeoMonitorTask.task_id)
         .where(GeoMonitorTask.deleted.is_(False))
-        .group_by(GeoMonitorTask.tenant_id)
+    )
+    if tenant_ids is not None:
+        cost_rank_stmt = cost_rank_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    cost_rank_rows = db.execute(
+        cost_rank_stmt.group_by(GeoMonitorTask.tenant_id)
         .order_by(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0).desc())
         .limit(8)
     ).all()
@@ -599,9 +719,24 @@ def _build_management_overview(db: Session) -> dict:
         for row in cost_rank_rows
     ]
     total_cost = round(sum(row["cost"] for row in cost_ranking), 4)
-    total_subtasks = int(db.scalar(select(func.count(GeoMonitorSubtask.id))) or 0)
-    mentioned_subtasks = int(db.scalar(select(func.count(GeoMonitorSubtask.id)).where(GeoMonitorSubtask.mention_position.isnot(None))) or 0)
-    source_count = int(db.scalar(select(func.count(GeoMonitorSubtask.id)).where(GeoMonitorSubtask.reference_list_json.isnot(None))) or 0)
+    total_subtasks_stmt = select(func.count(GeoMonitorSubtask.id)).join(
+        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
+    ).where(GeoMonitorTask.deleted.is_(False))
+    mentioned_subtasks_stmt = select(func.count(GeoMonitorSubtask.id)).join(
+        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
+    ).where(GeoMonitorTask.deleted.is_(False), GeoMonitorSubtask.mention_position.isnot(None))
+    source_count_stmt = select(func.count(GeoMonitorSubtask.id)).join(
+        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
+    ).where(GeoMonitorTask.deleted.is_(False), GeoMonitorSubtask.reference_list_json.isnot(None))
+    task_total_stmt = select(func.count(GeoMonitorTask.id)).where(GeoMonitorTask.deleted.is_(False))
+    if tenant_ids is not None:
+        total_subtasks_stmt = total_subtasks_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+        mentioned_subtasks_stmt = mentioned_subtasks_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+        source_count_stmt = source_count_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+        task_total_stmt = task_total_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    total_subtasks = int(db.scalar(total_subtasks_stmt) or 0)
+    mentioned_subtasks = int(db.scalar(mentioned_subtasks_stmt) or 0)
+    source_count = int(db.scalar(source_count_stmt) or 0)
     mention_rate = round((mentioned_subtasks / max(1, total_subtasks)) * 100, 1)
     quota_overview = {
         "used_amount": total_cost,
@@ -613,30 +748,45 @@ def _build_management_overview(db: Session) -> dict:
     customer_data = {
         "tenant_total": len(tenants),
         "active_tenants": service_counts.get("active", 0),
-        "task_total": int(db.scalar(select(func.count(GeoMonitorTask.id)).where(GeoMonitorTask.deleted.is_(False))) or 0),
+        "task_total": int(db.scalar(task_total_stmt) or 0),
         "subtask_total": total_subtasks,
         "mention_rate": mention_rate,
         "source_count": source_count,
     }
 
-    schedule_rows = list(db.scalars(
+    schedule_stmt = (
         select(GeoMonitorScheduleRun)
         .where(GeoMonitorScheduleRun.created_at >= datetime.combine(today, datetime.min.time()))
         .order_by(GeoMonitorScheduleRun.created_at.desc())
         .limit(20)
-    ))
+    )
+    if tenant_ids is not None:
+        schedule_stmt = schedule_stmt.where(GeoMonitorScheduleRun.tenant_id.in_(tenant_ids))
+    schedule_rows = list(db.scalars(schedule_stmt))
     today_schedule_failed = sum(1 for row in schedule_rows if row.status == "failed")
     today_schedule_submitted = sum(1 for row in schedule_rows if row.status == "submitted")
 
-    recent_logs = list(db.scalars(select(OperationLog).order_by(OperationLog.created_at.desc()).limit(8)))
-    failed_tasks = [task for task in all_recent_tasks if task.status in {"failed", "stopped"} or task.failed_items or task.last_error]
+    log_stmt = select(OperationLog).order_by(OperationLog.created_at.desc()).limit(8)
+    if tenant_ids is not None:
+        log_stmt = log_stmt.where(OperationLog.tenant_id.in_(tenant_ids))
+    recent_logs = list(db.scalars(log_stmt))
+    failed_tasks = [
+        task
+        for task in all_recent_tasks
+        if task.status in {"failed", "stopped"} or (task.failed_items or 0) > 0
+    ]
     running_tasks = [task for task in all_recent_tasks if task.status not in terminal_statuses]
     todo_items = []
     if expiring_tenants:
         todo_items.append({"type": "renewal", "title": "客户服务即将到期", "count": len(expiring_tenants), "level": "warning"})
     if failed_tasks:
         todo_items.append({"type": "failed_task", "title": "失败任务待处理", "count": len(failed_tasks), "level": "danger"})
-    backfill_summary = list_snapshot_backfill_page(db, pending_only=True, limit=1)
+    backfill_summary = list_snapshot_backfill_page(
+        db,
+        tenant_ids=tenant_ids,
+        pending_only=True,
+        limit=1,
+    )
     pending_backfill = int(backfill_summary.get("summary", {}).get("pending") or 0)
     if pending_backfill:
         todo_items.append({
@@ -712,7 +862,7 @@ def _build_management_overview(db: Session) -> dict:
             {"title": "同步队列", "value": sync_backlog, "level": "danger" if sync_backlog >= queue_snapshot.get("queues", {}).get("sync", {}).get("critical_threshold", 300) else "warning" if sync_backlog >= queue_snapshot.get("queues", {}).get("warning_threshold", 100) else "normal"},
         ],
         "todo_items": todo_items,
-        "operation_logs": [operation_log_to_dict(row) for row in recent_logs],
+        "operation_logs": operation_logs_to_dicts(db, recent_logs),
         "system_health": [
             {"name": "API 服务", "status": "正常", "detail": "FastAPI 已运行"},
             {"name": "数据库", "status": "正常", "detail": "MySQL 可连接"},
@@ -768,9 +918,15 @@ def management_update_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
+
+    old_name = tenant.name
+    old_code = tenant.code
+    old_start = tenant.service_start_date
+    old_end = tenant.service_end_date
 
     validate_service_period(payload.service_start_date, payload.service_end_date)
     name = payload.name.strip()
@@ -798,7 +954,25 @@ def management_update_tenant(
         if tenant.status:
             tenant.stopped_at = None
             tenant.stopped_by = None
-    write_management_log(db, current, "企业修改", f"修改企业资料：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
+    changes: list[str] = []
+    if old_name != name:
+        changes.append(f"名称「{old_name}」→「{name}」")
+    if old_code != code:
+        changes.append(f"编码「{old_code}」→「{code}」")
+    if old_start != payload.service_start_date:
+        changes.append("调整服务开始日期")
+    if old_end != payload.service_end_date:
+        changes.append("调整服务结束日期")
+    detail = "；".join(changes) if changes else "更新企业服务状态"
+    write_management_log(
+        db,
+        current,
+        "企业修改",
+        f"修改企业「{name}」：{detail}",
+        target_module="企业管理",
+        target_id=tenant.id,
+        tenant_id=tenant.id,
+    )
     db.commit()
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant))
@@ -811,6 +985,7 @@ def management_stop_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
@@ -851,6 +1026,7 @@ def management_restore_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
@@ -891,6 +1067,8 @@ def management_users(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    if tenant_id is not None:
+        guard_sales_tenant(db, current, tenant_id)
     users = list_managed_users(
         db,
         current.user,

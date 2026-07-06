@@ -7,6 +7,7 @@ from app.core.read_cache import (
     get_or_build_json_cache,
     invalidate_dashboard_caches,
     monitor_summary_cache_key,
+    workspace_brief_cache_key,
 )
 
 
@@ -51,4 +52,5 @@ def test_invalidate_dashboard_caches_deletes_summary_and_overview() -> None:
 
     assert MANAGEMENT_OVERVIEW_CACHE_KEY in deleted
     assert monitor_summary_cache_key("CUSTOMER", 6) in deleted
+    assert workspace_brief_cache_key(6) in deleted
     assert monitor_summary_cache_key("PLATFORM", "platform") in deleted

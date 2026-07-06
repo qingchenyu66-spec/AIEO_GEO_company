@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -71,6 +71,26 @@ class GeoMonitorSubtask(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="本地更新时间")
 
     task: Mapped[GeoMonitorTask] = relationship(back_populates="subtasks")
+
+
+class GeoMonitorDailyStat(Base):
+    """企业 × 日期 × 平台的监测预聚合统计。"""
+
+    __tablename__ = "geo_monitor_daily_stat"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "stat_date", "platform", name="uk_geo_monitor_daily_stat"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False)
+    stat_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    mentioned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rank_sum: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rank_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class GeoMonitorCallbackEvent(Base):

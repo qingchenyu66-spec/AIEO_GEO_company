@@ -79,7 +79,7 @@ def _queue_length(client, queue_name: str) -> int:
 def _inspect_snapshot() -> tuple[dict[str, list], dict[str, list], dict[str, Any]]:
     from app.celery_app import celery_app
 
-    inspect = celery_app.control.inspect(timeout=1.5)
+    inspect = celery_app.control.inspect(timeout=0.4)
     return inspect.active() or {}, inspect.reserved() or {}, inspect.stats() or {}
 
 
@@ -165,14 +165,17 @@ def _collect_runtime_tasks() -> dict[str, Any]:
     }
 
 
-def _worker_stats() -> dict[str, Any]:
-    runtime = _collect_runtime_tasks()
+def _worker_stats_from_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
     return {
         "workers_online": runtime.get("workers_online", 0),
         "active_tasks": runtime.get("active_count", 0),
         "reserved_tasks": runtime.get("reserved_count", 0),
         "worker_names": runtime.get("worker_names", []),
     }
+
+
+def _worker_stats() -> dict[str, Any]:
+    return _worker_stats_from_runtime(_collect_runtime_tasks())
 
 
 def record_beat_scan(task_key: str, result: dict[str, Any]) -> None:
@@ -379,11 +382,13 @@ def collect_queue_stats() -> dict[str, Any]:
                 "critical_threshold": _threshold(name, "critical"),
             }
 
-    worker_stats = _worker_stats()
+    runtime = _collect_runtime_tasks()
+    worker_stats = _worker_stats_from_runtime(runtime)
     snapshot = {
         "checked_at": datetime.now(UTC).isoformat(),
         "queues": queues,
         "workers": worker_stats,
+        "runtime": runtime,
         "flower_url": settings.flower_url if settings.flower_enabled else None,
     }
     snapshot["alerts"] = evaluate_queue_alerts(snapshot, persist=False)
@@ -428,6 +433,40 @@ def evaluate_queue_alerts(snapshot: dict[str, Any] | None = None, *, persist: bo
                 "threshold": 0,
             }
         )
+
+    if settings.celery_enabled:
+        from app.core.database import SessionLocal
+        from app.services.monitor_service import list_pending_monitor_task_ids
+
+        db = SessionLocal()
+        try:
+            pending_sync_tasks = len(
+                list_pending_monitor_task_ids(db, limit=500, terminal_grace_hours=24)
+            )
+        finally:
+            db.close()
+        if pending_sync_tasks >= settings.celery_pending_sync_task_critical:
+            alerts.append(
+                {
+                    "queue": "pending_sync",
+                    "level": "critical",
+                    "title": "待同步监测任务积压严重",
+                    "message": f"仍有 {pending_sync_tasks} 个监测任务等待同步，客户侧进度可能长时间不更新",
+                    "queued": pending_sync_tasks,
+                    "threshold": settings.celery_pending_sync_task_critical,
+                }
+            )
+        elif pending_sync_tasks >= settings.celery_pending_sync_task_warning:
+            alerts.append(
+                {
+                    "queue": "pending_sync",
+                    "level": "warning",
+                    "title": "待同步监测任务积压预警",
+                    "message": f"仍有 {pending_sync_tasks} 个监测任务等待同步",
+                    "queued": pending_sync_tasks,
+                    "threshold": settings.celery_pending_sync_task_warning,
+                }
+            )
 
     if persist:
         _persist_alert_snapshot(snapshot, alerts)
@@ -505,7 +544,7 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
         )
 
     workers = snapshot.get("workers") or {}
-    runtime = _collect_runtime_tasks()
+    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else _collect_runtime_tasks()
     beat_history = _get_beat_history()
     runtime_rows = [
         *(runtime.get("active") or []),

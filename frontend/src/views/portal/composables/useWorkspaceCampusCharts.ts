@@ -1,5 +1,6 @@
 import { nextTick, onUnmounted, ref, watch, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
+import { loadEchartsRuntime } from '../../../utils/echartsLoader'
 
 export type WorkspaceCampusChartData = {
   trendLabels: string[]
@@ -27,44 +28,15 @@ type ChartRefs = {
   platformRank: Ref<HTMLDivElement | null>
 }
 
-type EchartsRuntime = {
-  init: typeof import('echarts/core').init
-  getInstanceByDom: typeof import('echarts/core').getInstanceByDom
-  graphic: typeof import('echarts/core').graphic
-}
+type EchartsRuntime = Awaited<ReturnType<typeof loadEchartsRuntime>>
 
 let echartsRuntime: EchartsRuntime | null = null
-let echartsLoadPromise: Promise<EchartsRuntime> | null = null
 
-async function loadEchartsRuntime(): Promise<EchartsRuntime> {
-  if (echartsRuntime) return echartsRuntime
-  if (!echartsLoadPromise) {
-    echartsLoadPromise = (async () => {
-      const [core, charts, components, renderers] = await Promise.all([
-        import('echarts/core'),
-        import('echarts/charts'),
-        import('echarts/components'),
-        import('echarts/renderers'),
-      ])
-      core.use([
-        charts.BarChart,
-        charts.LineChart,
-        charts.GaugeChart,
-        charts.PieChart,
-        components.GridComponent,
-        components.LegendComponent,
-        components.TooltipComponent,
-        renderers.CanvasRenderer,
-      ])
-      echartsRuntime = {
-        init: core.init,
-        getInstanceByDom: core.getInstanceByDom,
-        graphic: core.graphic,
-      }
-      return echartsRuntime
-    })()
+async function ensureEchartsRuntime(): Promise<EchartsRuntime> {
+  if (!echartsRuntime) {
+    echartsRuntime = await loadEchartsRuntime('portal')
   }
-  return echartsLoadPromise
+  return echartsRuntime
 }
 
 function campusGaugeOption(
@@ -140,11 +112,12 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
   }
 
   async function renderCharts(data: WorkspaceCampusChartData) {
-    await loadEchartsRuntime()
+    await ensureEchartsRuntime()
     chartsReady.value = true
     await nextTick()
 
     const { graphic } = echartsRuntime!
+    if (!graphic) return
 
     const trendChart = getChart(refs.trend.value)
     if (trendChart) {

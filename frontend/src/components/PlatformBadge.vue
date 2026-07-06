@@ -42,7 +42,8 @@ function onIconError() {
       class="platform-badge__icon"
       :src="meta.icon"
       :alt="displayLabel"
-      loading="lazy"
+      :loading="iconOnly ? 'eager' : 'lazy'"
+      decoding="async"
       @error="onIconError"
     />
     <span v-if="showLabel && !iconOnly" class="platform-badge__label">{{ displayLabel }}</span>

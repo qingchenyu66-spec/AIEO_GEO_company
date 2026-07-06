@@ -7,7 +7,10 @@ from passlib.context import CryptContext
 from app.core.config import settings
 
 ALGORITHM = "HS256"
-password_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+password_context = CryptContext(
+    schemes=["argon2", "pbkdf2_sha256"],
+    deprecated=["pbkdf2_sha256"],
+)
 
 
 def hash_password(password: str) -> str:
@@ -16,6 +19,10 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     return password_context.verify(password, password_hash)
+
+
+def password_needs_rehash(password_hash: str) -> bool:
+    return password_context.needs_update(password_hash)
 
 
 def create_token(subject: int, scope: str, expires_minutes: int, **claims: Any) -> str:
@@ -35,4 +42,3 @@ def decode_token(token: str) -> dict[str, Any]:
         return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
     except JWTError as exc:
         raise ValueError("登录状态无效或已过期") from exc
-

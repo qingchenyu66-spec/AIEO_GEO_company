@@ -15,9 +15,10 @@ from app.models.diagnosis import BrandDiagnosis
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.models.report import GeoReport
 from app.models.tenant import Tenant
-from app.services.brand_service import active_keyword_groups, brand_exposure_terms, get_brand_asset, list_competitors
+from app.services.brand_service import active_keyword_groups, brand_exposure_terms, ensure_tenant, get_brand_asset, list_competitors
 from app.services.monitor_service import TERMINAL_STATUSES, _is_valid_citation_source, _matched_source_keywords
 from app.services.report_ai_service import enrich_report_narrative
+from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
 
 REPORT_TYPE_LABELS = {
     "diagnosis": "企业诊断",
@@ -294,15 +295,22 @@ def list_reports(db: Session, current: CurrentSession) -> list[dict[str, Any]]:
     tenant_scope: int | None = None
     if current.identity.identity_type == "CUSTOMER":
         tenant_scope = current.identity.tenant_id
-    stmt = select(GeoReport).where(GeoReport.deleted.is_(False)).order_by(desc(GeoReport.id))
+    stmt = select(GeoReport).where(GeoReport.deleted.is_(False)).order_by(desc(GeoReport.id)).limit(200)
     if tenant_scope:
         stmt = stmt.where(GeoReport.tenant_id == tenant_scope)
         stmt = stmt.where(GeoReport.status == "published")
+    else:
+        owned = sales_owned_tenant_ids(db, current)
+        if owned is not None:
+            if not owned:
+                return []
+            stmt = stmt.where(GeoReport.tenant_id.in_(owned))
     rows = list(db.scalars(stmt))
+    tenant_ids = {row.tenant_id for row in rows if row.tenant_id}
     tenant_map = {
         item.id: item.name
-        for item in db.scalars(select(Tenant).where(Tenant.deleted.is_(False)))
-    }
+        for item in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids), Tenant.deleted.is_(False)))
+    } if tenant_ids else {}
     return [_serialize_report_row(row, tenant_map.get(row.tenant_id)) for row in rows]
 
 
@@ -316,6 +324,8 @@ def get_report_detail(db: Session, report_id: int, current: CurrentSession) -> d
             raise ValueError("无权查看")
         if report.status != "published":
             raise ValueError("报告不存在")
+    else:
+        guard_tenant_resource_access(db, current, report.tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     payload = _serialize_report_row(report, tenant.name if tenant else None)
     brand_name = str((report.report_content_json or {}).get("brand_name") or _tenant_brand_name(db, report.tenant_id))
@@ -333,6 +343,8 @@ def generate_report(db: Session, payload: dict[str, Any], current: CurrentSessio
     if not tenant_id:
         raise ValueError("请指定企业")
     tenant_id = int(tenant_id)
+    ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
 
     diagnosis = db.scalar(
         select(BrandDiagnosis)
@@ -422,6 +434,7 @@ def update_report(db: Session, report_id: int, payload: dict[str, Any], current:
     report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
     if report is None:
         raise ValueError("报告不存在")
+    guard_tenant_resource_access(db, current, report.tenant_id)
 
     if payload.get("report_title"):
         report.report_title = str(payload["report_title"]).strip() or report.report_title
@@ -468,6 +481,7 @@ def publish_report(db: Session, report_id: int, current: CurrentSession) -> dict
     report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
     if report is None:
         raise ValueError("报告不存在")
+    guard_tenant_resource_access(db, current, report.tenant_id)
     report.status = "published"
     db.commit()
     db.refresh(report)

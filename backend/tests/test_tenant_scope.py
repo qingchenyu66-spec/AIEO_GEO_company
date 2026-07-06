@@ -1,68 +1,72 @@
-"""Tests for analytics tenant scope."""
+"""Unit tests for tenant scope sales access guards."""
+
+from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from app.api.dependencies import CurrentSession
 from app.services.tenant_scope import (
-    ensure_platform_tenant_read_access,
-    resolve_analytics_tenant_id,
-    resolve_and_guard_analytics_tenant,
+    assert_monitor_task_access,
+    ensure_sales_tenant_access,
+    resolve_and_guard_tenant_id,
 )
 
 
-def _session(identity_type: str, tenant_id: int | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        identity=SimpleNamespace(identity_type=identity_type, tenant_id=tenant_id),
+def _sales_current(user_id: int = 1) -> CurrentSession:
+    user = SimpleNamespace(id=user_id, display_name="销售甲")
+    identity = SimpleNamespace(
+        id=10,
+        identity_type="PLATFORM",
+        position_id=99,
+        identity_name="销售甲",
+        tenant_id=None,
     )
+    return CurrentSession(user=user, identity=identity)
 
 
-def test_resolve_analytics_tenant_id_customer_uses_identity() -> None:
-    current = _session("CUSTOMER", 6)
-    assert resolve_analytics_tenant_id(current, None) == 6
-    assert resolve_analytics_tenant_id(current, 99) == 6
-
-
-def test_resolve_analytics_tenant_id_customer_without_tenant_raises() -> None:
-    current = _session("CUSTOMER", None)
-    with pytest.raises(ValueError, match="未绑定企业"):
-        resolve_analytics_tenant_id(current, None)
-
-
-def test_resolve_analytics_tenant_id_platform_requires_tenant() -> None:
-    current = _session("PLATFORM", None)
-    with pytest.raises(ValueError, match="需要指定企业"):
-        resolve_analytics_tenant_id(current, None)
-    assert resolve_analytics_tenant_id(current, 6) == 6
-
-
-def test_ensure_platform_tenant_read_access_skips_customer() -> None:
-    current = _session("CUSTOMER", 6)
+def _sales_db(*, tenant_id: int, owner_user_id: int) -> MagicMock:
     db = MagicMock()
-    ensure_platform_tenant_read_access(db, current, 6)
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    tenant = SimpleNamespace(id=tenant_id, owner_user_id=owner_user_id, deleted=False)
+    db.scalar.side_effect = [tenant, position, tenant]
+    return db
 
 
-def test_ensure_platform_tenant_read_access_requires_menu() -> None:
-    current = _session("PLATFORM", None)
-    current.user = SimpleNamespace(id=1)
-    current.identity.id = 9
+def test_sales_can_access_owned_tenant():
     db = MagicMock()
-    with (
-        patch("app.services.tenant_scope.ensure_tenant"),
-        patch("app.services.tenant_scope.has_identity_menu_permission", return_value=False),
-    ):
-        with pytest.raises(PermissionError, match="查看权限"):
-            ensure_platform_tenant_read_access(db, current, 6)
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    tenant = SimpleNamespace(id=7, owner_user_id=1, deleted=False)
+    db.scalar.side_effect = [position, tenant]
+    ensure_sales_tenant_access(db, _sales_current(user_id=1), 7)
 
 
-def test_resolve_and_guard_analytics_tenant_platform() -> None:
-    current = _session("PLATFORM", None)
-    current.user = SimpleNamespace(id=1)
-    current.identity.id = 9
+def test_sales_cannot_access_foreign_tenant():
     db = MagicMock()
-    with (
-        patch("app.services.tenant_scope.ensure_tenant"),
-        patch("app.services.tenant_scope.has_identity_menu_permission", return_value=True),
-    ):
-        assert resolve_and_guard_analytics_tenant(db, current, 6) == 6
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    tenant = SimpleNamespace(id=8, owner_user_id=2, deleted=False)
+    db.scalar.side_effect = [position, tenant]
+    with pytest.raises(PermissionError):
+        ensure_sales_tenant_access(db, _sales_current(user_id=1), 8)
+
+
+def test_sales_monitor_task_guard():
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    tenant = SimpleNamespace(id=8, owner_user_id=2, deleted=False)
+    db.scalar.side_effect = [position, tenant]
+    with pytest.raises(PermissionError):
+        assert_monitor_task_access(db, _sales_current(user_id=1), 8)
+
+
+def test_resolve_and_guard_tenant_id():
+    db = _sales_db(tenant_id=7, owner_user_id=1)
+    assert resolve_and_guard_tenant_id(db, _sales_current(user_id=1), 7) == 7
+
+
+def test_resolve_and_guard_rejects_foreign():
+    db = _sales_db(tenant_id=8, owner_user_id=2)
+    with pytest.raises(PermissionError):
+        resolve_and_guard_tenant_id(db, _sales_current(user_id=1), 8)

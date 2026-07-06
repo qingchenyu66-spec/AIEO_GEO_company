@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
-from app.core.security import create_token, verify_password
+from app.core.security import create_token, password_needs_rehash, hash_password, verify_password
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 
@@ -23,6 +23,9 @@ def authenticate(db: Session, username: str, password: str) -> tuple[User, list[
     user = get_user_by_username(db, username)
     if user is None or not verify_password(password, user.password_hash):
         return None
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.flush()
     identities = active_identities(user)
     if not identities:
         return None

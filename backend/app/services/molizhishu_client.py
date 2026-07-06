@@ -1,8 +1,10 @@
+import json
 import logging
+import platform
+import shutil
+import subprocess
 import time
 from typing import Any
-
-import httpx
 
 from app.core.config import settings
 from app.core.rate_limiter import acquire_molizhishu_rate_limit
@@ -17,6 +19,71 @@ class MolizhishuApiError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.response = response or {}
+
+
+def _curl_exe_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json_body: dict[str, Any] | None,
+    timeout: float,
+) -> tuple[int, str]:
+    curl_bin = shutil.which("curl") or shutil.which("curl.exe")
+    if not curl_bin:
+        raise MolizhishuApiError("未找到 curl，可安装 curl 或 curl_cffi 以调用模力指数 API")
+    cmd = [curl_bin, "-sS", "-m", str(max(1, int(timeout))), "-X", method.upper(), "-w", "\n__HTTP_CODE__:%{http_code}"]
+    for key, value in headers.items():
+        cmd.extend(["-H", f"{key}: {value}"])
+    if json_body is not None:
+        cmd.extend(["-H", "Content-Type: application/json", "-d", json.dumps(json_body, ensure_ascii=False)])
+    cmd.append(url)
+    completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "curl failed").strip()
+        raise MolizhishuApiError(f"模力指数网络错误：{detail[:500]}")
+    body = completed.stdout
+    marker = "\n__HTTP_CODE__:"
+    if marker in body:
+        text, _, code_text = body.rpartition(marker)
+        return int(code_text.strip() or "0"), text
+    return 200, body
+
+
+def _http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json_body: dict[str, Any] | None,
+    timeout: float,
+) -> tuple[int, str]:
+    """Windows 优先 curl.exe（Schannel）；其他环境优先 curl_cffi，再 httpx。"""
+    if platform.system().lower() == "windows":
+        return _curl_exe_request(method, url, headers=headers, json_body=json_body, timeout=timeout)
+
+    try:
+        from curl_cffi import requests as curl_requests
+
+        response = curl_requests.request(
+            method,
+            url,
+            headers=headers,
+            json=json_body,
+            timeout=timeout,
+            impersonate="chrome",
+        )
+        return response.status_code, response.text
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.warning("curl_cffi request failed, fallback to httpx: %s", exc)
+
+    import httpx
+
+    with httpx.Client(timeout=timeout) as client:
+        response = client.request(method, url, headers=headers, json=json_body)
+    return response.status_code, response.text
 
 
 class MolizhishuClient:
@@ -64,18 +131,22 @@ class MolizhishuClient:
         http_status: int | None = None
         payload: dict[str, Any] | None = None
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.request(method, url, headers=self._headers(), json=json_body)
-            http_status = response.status_code
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:1000]
-            raise MolizhishuApiError(f"模力指数 HTTP 错误：{exc.response.status_code} {body}") from exc
-        except httpx.HTTPError as exc:
-            raise MolizhishuApiError(f"模力指数网络错误：{exc}") from exc
+            http_status, body_text = _http_request(
+                method,
+                url,
+                headers=self._headers(),
+                json_body=json_body,
+                timeout=self.timeout,
+            )
+            if http_status >= 400:
+                raise MolizhishuApiError(f"模力指数 HTTP 错误：{http_status} {body_text[:1000]}")
+            payload = json.loads(body_text)
+        except MolizhishuApiError:
+            raise
         except ValueError as exc:
             raise MolizhishuApiError("模力指数响应不是合法 JSON") from exc
+        except Exception as exc:
+            raise MolizhishuApiError(f"模力指数网络错误：{exc}") from exc
         finally:
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.info(
@@ -110,3 +181,7 @@ class MolizhishuClient:
             source="local-api:molizhishu-balance",
             base_url=self.api_root,
         )
+
+    def ping(self) -> dict[str, Any]:
+        """连通性探测：查询账户余额。"""
+        return self.get_account_balance()

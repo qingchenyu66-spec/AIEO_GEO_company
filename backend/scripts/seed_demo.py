@@ -19,10 +19,10 @@ PLATFORM_MENUS = [
      False),
     ("platform.users.create.customer", "新增客户企业端用户", "/platform/users/create/customer", "Building2", 312,
      False),
-    ("platform.diagnosis", "品牌诊断", "/platform/diagnosis", "ClipboardCheck", 39, True),
+    ("platform.diagnosis", "品牌诊断", "/platform/diagnosis", "ClipboardCheck", 39, False),
     ("platform.reports", "报告中心", "/platform/reports", "FileBarChart", 38, True),
-    ("platform.plans", "套餐额度", "/platform/plans", "SlidersHorizontal", 40, True),
-    ("platform.admins", "管理员账号", "/platform/admins", "UserCog", 50, True),
+    ("platform.plans", "套餐额度", "/platform/plans", "SlidersHorizontal", 40, False),
+    ("platform.admins", "管理员账号", "/platform/admins", "UserCog", 50, False),
     ("platform.models", "模型平台", "/platform/models", "Database", 60, True),
     ("platform.alerts", "预警阈值", "/platform/alerts", "BellRing", 70, True),
     ("platform.logs", "操作日志", "/platform/logs", "Activity", 80, True),
@@ -201,12 +201,12 @@ def seed_menu_configs(db) -> None:
         ("platform.users", "用户管理", "PLATFORM", 30, True, "Users", "/platform/users", "账号和权限管理"),
         ("platform.users.create", "用户新增", "PLATFORM", 31, True, "Users", "/platform/users/create", "创建新用户"),
         ("platform.users.list", "用户列表", "PLATFORM", 32, True, "Users", "/platform/users/list", "查看用户列表"),
-        ("platform.diagnosis", "品牌诊断", "PLATFORM", 39, True, "ClipboardCheck", "/platform/diagnosis",
-         "AI 生成诊断报告"),
+        ("platform.diagnosis", "品牌诊断", "PLATFORM", 39, False, "ClipboardCheck", "/platform/diagnosis",
+         "AI 生成诊断报告（已下线，请使用售前诊断）"),
         ("platform.reports", "报告中心", "PLATFORM", 38, True, "FileBarChart", "/platform/reports",
          "运营端生成、预览并导出客户报告"),
-        ("platform.plans", "套餐额度", "PLATFORM", 40, True, "SlidersHorizontal", "/platform/plans", "套餐管理"),
-        ("platform.admins", "管理员账号", "PLATFORM", 50, True, "UserCog", "/platform/admins", "管理员管理"),
+        ("platform.plans", "套餐额度", "PLATFORM", 40, False, "SlidersHorizontal", "/platform/plans", "已下线"),
+        ("platform.admins", "管理员账号", "PLATFORM", 50, False, "UserCog", "/platform/admins", "已下线"),
         ("platform.models", "模型平台", "PLATFORM", 60, True, "Database", "/platform/models", "模型配置"),
         ("platform.alerts", "预警阈值", "PLATFORM", 70, True, "BellRing", "/platform/alerts", "告警设置"),
         ("platform.logs", "操作日志", "PLATFORM", 80, True, "Activity", "/platform/logs", "系统审计日志"),
@@ -262,10 +262,14 @@ def main() -> None:
                                   data_scope="TENANT", description="客户企业端只读展示和报表查看")
 
         platform_menus = [upsert_menu(db, identity_type="PLATFORM", item=item) for item in PLATFORM_MENUS]
-        customer_menus = [upsert_menu(db, identity_type="CUSTOMER", item=item) for item in CUSTOMER_MENUS]
-        bind_role_menus(db, platform_role, platform_menus)
-        bind_role_menus(db, platform_operator_role, [
+        active_platform_menus = [
             menu for menu in platform_menus
+            if menu.menu_code not in {"platform.plans", "platform.admins", "platform.diagnosis"}
+        ]
+        customer_menus = [upsert_menu(db, identity_type="CUSTOMER", item=item) for item in CUSTOMER_MENUS]
+        bind_role_menus(db, platform_role, active_platform_menus)
+        bind_role_menus(db, platform_operator_role, [
+            menu for menu in active_platform_menus
             if
             menu.menu_code in {"platform.dashboard", "platform.users", "platform.users.create", "platform.users.list",
                                "platform.users.create.customer", "platform.logs"}
@@ -288,7 +292,7 @@ def main() -> None:
 
         for identity in db.scalars(
                 select(UserIdentity).where(UserIdentity.identity_type == "PLATFORM", UserIdentity.deleted.is_(False))):
-            grant_identity_menus(db, identity, platform_menus, writable=True)
+            grant_identity_menus(db, identity, active_platform_menus, writable=True)
         for identity in db.scalars(
                 select(UserIdentity).where(UserIdentity.identity_type == "CUSTOMER", UserIdentity.deleted.is_(False))):
             grant_identity_menus(db, identity, customer_menus, writable=False)

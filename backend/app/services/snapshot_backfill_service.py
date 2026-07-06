@@ -203,6 +203,22 @@ def apply_snapshot_backfill(
     subtask = get_monitor_subtask(db, subtask_id, current)
     task = get_monitor_task(db, subtask.task_id, current)
 
+    previous_stat_date = None
+    if task.tenant_id:
+        from app.services.monitor_stats_service import _detect_stat_date
+        from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
+
+        schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        lead_run = lead_diagnosis_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        asset = get_brand_asset(db, task.tenant_id)
+        previous_stat_date = _detect_stat_date(
+            subtask,
+            task,
+            schedule_run=schedule_run,
+            lead_run=lead_run,
+            asset=asset,
+        )
+
     url = validate_snapshot_url(snapshot_url, platform=subtask.platform)
     content = (answer_content or "").strip()
     if not content:
@@ -278,9 +294,17 @@ def apply_snapshot_backfill(
         run.error_message = None
 
     db.commit()
+    from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
     if task.tenant_id:
+        refresh_stats_after_subtask_backfill(
+            db,
+            task=task,
+            subtask=subtask,
+            previous_stat_date=previous_stat_date,
+        )
+        db.commit()
         invalidate_monitor_summary_cache(task.tenant_id)
     else:
         invalidate_monitor_summary_cache()
@@ -513,6 +537,7 @@ def list_snapshot_backfill_page(
     db: Session,
     *,
     tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
     detect_date: date | None = None,
     source: str | None = None,
     platform: str | None = None,
@@ -529,10 +554,12 @@ def list_snapshot_backfill_page(
         .where(GeoMonitorTask.deleted.is_(False))
         .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorSubtask.updated_at.desc())
     )
-    scan_cap = max(limit * 50, 5000) if tenant_id is None else None
+    scan_cap = max(limit * 50, 5000) if tenant_id is None and not tenant_ids else None
     if scan_cap is not None:
         stmt = stmt.limit(scan_cap)
-    if tenant_id is not None:
+    if tenant_ids:
+        stmt = stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    elif tenant_id is not None:
         stmt = stmt.where(GeoMonitorTask.tenant_id == tenant_id)
     platform_code = str(platform or "").strip()
     if platform_code:

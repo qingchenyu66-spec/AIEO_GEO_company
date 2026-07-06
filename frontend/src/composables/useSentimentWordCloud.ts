@@ -1,38 +1,22 @@
 import { nextTick, onUnmounted, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
 import type { SentimentKeywordItem } from '../services/analytics'
+import { loadEchartsRuntime } from '../utils/echartsLoader'
 
 type WordCloudPolarity = 'positive' | 'negative'
 
 const POSITIVE_COLORS = ['#36cfc9', '#58ddb0', '#5b8ff9', '#49d8b7', '#73d13d', '#40a9ff']
 const NEGATIVE_COLORS = ['#ff7875', '#ff9c6e', '#ffc069', '#ff6b7d', '#f759ab', '#ffa940']
 
-type EchartsRuntime = {
-  init: typeof import('echarts/core').init
-  getInstanceByDom: typeof import('echarts/core').getInstanceByDom
-}
+type EchartsRuntime = Awaited<ReturnType<typeof loadEchartsRuntime>>
 
 let echartsRuntime: EchartsRuntime | null = null
-let echartsLoadPromise: Promise<EchartsRuntime> | null = null
 
-async function loadWordCloudRuntime(): Promise<EchartsRuntime> {
-  if (echartsRuntime) return echartsRuntime
-  if (!echartsLoadPromise) {
-    echartsLoadPromise = (async () => {
-      const [core, renderers] = await Promise.all([
-        import('echarts/core'),
-        import('echarts/renderers'),
-        import('echarts-wordcloud'),
-      ])
-      core.use([renderers.CanvasRenderer])
-      echartsRuntime = {
-        init: core.init,
-        getInstanceByDom: core.getInstanceByDom,
-      }
-      return echartsRuntime
-    })()
+async function ensureWordCloudRuntime(): Promise<EchartsRuntime> {
+  if (!echartsRuntime) {
+    echartsRuntime = await loadEchartsRuntime('wordcloud')
   }
-  return echartsLoadPromise
+  return echartsRuntime
 }
 
 function pickColor(polarity: WordCloudPolarity) {
@@ -58,7 +42,7 @@ export function useSentimentWordCloud(
   }
 
   async function render(items: SentimentKeywordItem[], polarity: WordCloudPolarity) {
-    await loadWordCloudRuntime()
+    await ensureWordCloudRuntime()
     await nextTick()
     const chart = getChart()
     if (!chart) return

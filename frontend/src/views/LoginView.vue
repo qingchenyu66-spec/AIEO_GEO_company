@@ -8,6 +8,7 @@ import {
 } from '@lucide/vue'
 import { notifyOperationError } from '../utils/requestError'
 import { useAuthStore } from '../stores/auth'
+import PlatformBadge from '../components/PlatformBadge.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -26,12 +27,14 @@ function identityDisplayName(identity: { position_name?: string | null; identity
   return identity.position_name || identity.identity_name || '登录身份'
 }
 const platforms = [
-  { name: 'DeepSeek', mark: 'D', tone: 'deepseek' },
-  { name: '豆包', mark: '豆', tone: 'doubao' },
-  { name: 'Kimi', mark: 'K', tone: 'kimi' },
-  { name: '百度 AI+', mark: '百', tone: 'baidu' },
-  { name: '通义千问', mark: '千', tone: 'qianwen' },
-  { name: '元宝', mark: '元', tone: 'yuanbao' },
+  { code: 'doubao', name: '豆包', mark: '豆', tone: 'doubao' },
+  { code: 'baiduai', name: '百度 AI+', mark: '百', tone: 'baidu' },
+  { code: 'deepseek', name: 'DeepSeek', mark: 'D', tone: 'deepseek' },
+  { code: 'weibo_zhisou', name: '微博智搜', mark: '微', tone: 'weibo' },
+  { code: 'yuanbao', name: '元宝', mark: '元', tone: 'yuanbao' },
+  { code: 'qianwen', name: '通义千问', mark: '千', tone: 'qianwen' },
+  { code: 'quark', name: '夸克', mark: '夸', tone: 'quark' },
+  { code: 'kimi', name: 'Kimi', mark: 'K', tone: 'kimi' },
 ]
 const capabilities = [
   [SearchCheck, '品牌曝光'],
@@ -57,7 +60,7 @@ async function submitLogin() {
     }
   } catch (error: any) {
     if (error?.response?.status === 401 && error?.config?.url?.includes('/auth/login')) return
-    notifyOperationError(error, '登录失败')
+    notifyOperationError(error, '暂时无法登录，请检查网络后重试')
   } finally {
     loading.value = false
   }
@@ -107,11 +110,17 @@ async function enterWithIdentity() {
           <div class="orbit-platforms">
             <div
               v-for="(platform, index) in platforms"
-              :key="platform.name"
+              :key="platform.code"
               class="platform-node"
               :class="[`platform-node-${index + 1}`, `platform-node-${platform.tone}`]"
             >
-              <span class="platform-icon">{{ platform.mark }}</span>
+              <PlatformBadge
+                :code="platform.code"
+                size="lg"
+                icon-only
+                :show-label="false"
+                class="auth-orbit-badge"
+              />
               <span class="platform-label"><i></i>{{ platform.name }}</span>
             </div>
           </div>
@@ -128,16 +137,21 @@ async function enterWithIdentity() {
     <section class="auth-form-side">
       <div class="auth-orbit"><Boxes /></div>
       <form class="auth-form" @submit.prevent="submitLogin">
-        <div class="auth-heading"><span>欢迎回来</span><h2>GEO Monitor</h2><i></i></div>
+        <div class="auth-heading">
+          <span>统一登录入口</span>
+          <h2>登录 GEO Monitor</h2>
+          <p>根据账号权限进入平台运营端或客户企业端</p>
+          <i></i>
+        </div>
 
         <label class="auth-label" for="username">账号</label>
         <div class="auth-input"><UserRound /><input id="username" v-model="form.username" autocomplete="username" placeholder="请输入账号" /></div>
 
         <label class="auth-label" for="password">密码</label>
-        <div class="auth-input"><LockKeyhole /><input id="password" v-model="form.password" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" /><button type="button" title="显示或隐藏密码" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" /><Eye v-else /></button></div>
+        <div class="auth-input"><LockKeyhole /><input id="password" v-model="form.password" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" /><button type="button" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-label="showPassword ? '隐藏密码' : '显示密码'" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" /><Eye v-else /></button></div>
 
         <div class="auth-options"><label><input v-model="form.remember" type="checkbox" /> 记住账号</label><button type="button">忘记密码</button></div>
-        <button class="auth-submit" type="submit" :disabled="loading"><span>{{ loading ? '正在验证...' : '登录系统' }}</span><ArrowRight /></button>
+        <button class="auth-submit" type="submit" :disabled="loading"><span v-if="loading" class="auth-submit-spinner" aria-hidden="true"></span><span>{{ loading ? '正在验证' : '登录系统' }}</span><ArrowRight v-if="!loading" /></button>
       </form>
     </section>
 

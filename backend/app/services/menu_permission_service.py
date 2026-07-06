@@ -33,6 +33,17 @@ REPORT_MENU_BY_IDENTITY = {
     "CUSTOMER": "customer.reports",
 }
 
+# 已下线平台菜单：保留 sys_menu 记录便于历史审计，但不展示、不可分配权限
+RETIRED_PLATFORM_MENU_CODES = frozenset({
+    "platform.plans",
+    "platform.admins",
+    "platform.diagnosis",
+})
+
+
+def is_retired_menu_code(menu_code: str) -> bool:
+    return menu_code in RETIRED_PLATFORM_MENU_CODES
+
 # 与前端 menuPermissionMatrix 对齐：各菜单允许的动作
 MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.dashboard": frozenset({"can_export"}),
@@ -49,8 +60,6 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.lead_diagnosis": frozenset({"can_export", "can_create"}),
     "platform.snapshot_backfill": frozenset({"can_export", "can_update"}),
     "platform.reports": frozenset({"can_export", "can_create", "can_update"}),
-    "platform.plans": frozenset({"can_export"}),
-    "platform.admins": frozenset({"can_export"}),
     "platform.models": frozenset({"can_export"}),
     "platform.alerts": frozenset({"can_export", "can_update"}),
     "platform.logs": frozenset({"can_export"}),
@@ -71,6 +80,8 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
 
 
 def _allowed_actions_for_menu(menu_code: str, identity_type: str) -> frozenset[str]:
+    if is_retired_menu_code(menu_code):
+        return frozenset()
     if menu_code in MENU_ALLOWED_ACTIONS:
         return MENU_ALLOWED_ACTIONS[menu_code]
     if menu_code.startswith("platform.audit."):
@@ -256,6 +267,7 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
             by_code[parent_code] = merge_grant_flags(by_code.get(parent_code), synthesized)
 
     items = list(by_code.values())
+    items = [item for item in items if not is_retired_menu_code(item.menu_code)]
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
 
@@ -269,6 +281,8 @@ def position_menu_grants(db: Session, position_id: int) -> list[MenuGrantItem]:
     ).all()
     grants: list[MenuGrantItem] = []
     for grant, menu in rows:
+        if is_retired_menu_code(menu.menu_code):
+            continue
         if not grant_has_access(
             can_create=grant.can_create,
             can_update=grant.can_update,
@@ -326,6 +340,8 @@ def sync_position_menu_grants(
             if item.menu_id not in valid_menu_ids:
                 continue
             menu_code = menu_code_map.get(item.menu_id, "")
+            if is_retired_menu_code(menu_code):
+                continue
             flags = sanitize_menu_grant_flags(
                 menu_code,
                 identity_type,

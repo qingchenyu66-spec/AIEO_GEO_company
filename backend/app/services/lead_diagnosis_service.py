@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Iterator
 
 from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
+
+from kombu.exceptions import OperationalError
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
@@ -16,17 +19,36 @@ from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCH
 from app.core.masking import mask_phone
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
-from app.schemas.monitor import CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
+from app.schemas.monitor import FAST_MONITOR_MODE, CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, build_rule_report_sections
 from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
+from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
 from app.services.report_export_service import build_report_export
 
 ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
+LEAD_RUN_STALE_MINUTES = 10
 LEAD_DIAGNOSIS_TASK_SUBTITLE = "售前诊断"
+
+
+def lead_run_blocks_due(run: LeadDiagnosisRun | None, *, now: datetime | None = None) -> bool:
+    """非 failed 的运行记录在 stale 窗口内视为占用该时段。"""
+    if run is None:
+        return False
+    if run.status == "failed":
+        return False
+    if run.status in {"completed", "skipped"}:
+        return True
+    if run.status in {"pending", "submitted", "running"}:
+        now = now or datetime.now()
+        updated = run.updated_at or run.created_at
+        if updated and now - updated < timedelta(minutes=LEAD_RUN_STALE_MINUTES):
+            return True
+        return False
+    return True
 
 
 def lead_diagnosis_task_displays(db: Session, task_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -116,7 +138,7 @@ def _all_platform_configs() -> list[PlatformConfig]:
     )
     if not codes:
         raise ValueError("未配置可提交的 AI 监测平台")
-    return [PlatformConfig(platform=code) for code in codes]
+    return [PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1) for code in codes]
 
 
 def _competitor_payload(names: list[str]) -> list[CompetitorBrand]:
@@ -273,7 +295,7 @@ def _is_slot_due(
     scheduled = datetime.combine(day, slot_time)
     if now < scheduled:
         return False
-    return now <= scheduled + timedelta(minutes=tolerance_minutes) or now >= scheduled
+    return now <= scheduled + timedelta(minutes=tolerance_minutes)
 
 
 def enumerate_due_lead_runs(
@@ -295,7 +317,11 @@ def enumerate_due_lead_runs(
     for lead in db.scalars(stmt):
         if lead.diagnosis_date > now.date():
             continue
-        existing_keys = {run.schedule_key for run in (lead.runs or [])}
+        existing_keys = {
+            run.schedule_key
+            for run in (lead.runs or [])
+            if lead_run_blocks_due(run, now=now)
+        }
         for day, slot, schedule_key, schedule_label in _iter_schedule_plan(lead):
             if schedule_key in existing_keys:
                 continue
@@ -312,6 +338,7 @@ def submit_due_lead_run(
     force: bool = False,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
+    now = datetime.now()
     lead = db.scalar(
         select(LeadDiagnosis)
         .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
@@ -326,7 +353,11 @@ def submit_due_lead_run(
     if schedule_key:
         due_items = [item for item in due_items if item.schedule_key == schedule_key]
     if not due_items and force:
-        existing_keys = {run.schedule_key for run in (lead.runs or [])}
+        existing_keys = {
+            run.schedule_key
+            for run in (lead.runs or [])
+            if lead_run_blocks_due(run, now=now)
+        }
         for _day, _slot, key, label in _iter_schedule_plan(lead):
             if schedule_key and key != schedule_key:
                 continue
@@ -338,12 +369,34 @@ def submit_due_lead_run(
         return {"status": "skipped", "message": "当前没有可提交的抓取窗口"}
 
     item = due_items[0]
-    if db.scalar(
+    existing_run = db.scalar(
         select(LeadDiagnosisRun).where(
             LeadDiagnosisRun.lead_diagnosis_id == lead.id,
             LeadDiagnosisRun.schedule_key == item.schedule_key,
         )
-    ):
+    )
+    if existing_run is not None and existing_run.task_id:
+        linked_task = db.scalar(
+            select(GeoMonitorTask).where(
+                GeoMonitorTask.task_id == existing_run.task_id,
+                GeoMonitorTask.deleted.is_(False),
+            )
+        )
+        if linked_task is not None:
+            terminal_failed = linked_task.status in {"failed", "stopped"} and not (linked_task.completed_items or 0)
+            if not terminal_failed:
+                if existing_run.status != "submitted":
+                    existing_run.status = "submitted"
+                    existing_run.error_message = None
+                    db.commit()
+                return {
+                    "status": "submitted",
+                    "schedule_key": existing_run.schedule_key,
+                    "task_id": existing_run.task_id,
+                    "message": None,
+                }
+            existing_run.task_id = None
+    if existing_run is not None and lead_run_blocks_due(existing_run):
         return {"status": "skipped", "message": "该时段已提交"}
 
     platforms = _all_platform_configs()
@@ -354,32 +407,78 @@ def submit_due_lead_run(
         platforms=platforms,
         region_code=_lead_region_codes(lead),
     )
-    run = LeadDiagnosisRun(
-        lead_diagnosis_id=lead.id,
-        schedule_key=item.schedule_key,
-        schedule_label=item.schedule_label,
-        status="pending",
-        prompt_count=len(request.prompts),
-        platform_count=len(platforms),
-    )
-    db.add(run)
+    if existing_run is not None and existing_run.status == "failed":
+        run = existing_run
+        run.status = "pending"
+        run.error_message = None
+        run.task_id = None
+        run.prompt_count = len(request.prompts)
+        run.platform_count = len(platforms)
+    else:
+        run = LeadDiagnosisRun(
+            lead_diagnosis_id=lead.id,
+            schedule_key=item.schedule_key,
+            schedule_label=item.schedule_label,
+            status="pending",
+            prompt_count=len(request.prompts),
+            platform_count=len(platforms),
+        )
+        db.add(run)
     db.flush()
 
     try:
-        task = submit_standalone_monitor_task(db, payload=request, created_by=current.user.id)
+        task = submit_standalone_monitor_task(
+            db,
+            payload=request,
+            created_by=current.user.id,
+            auto_commit=False,
+        )
         run.task_id = task.task_id
         run.status = "submitted"
         lead.status = "collecting"
+        db.commit()
+        db.refresh(task)
+    except (MolizhishuApiError, TimeoutError, OperationalError, SQLAlchemyError):
+        db.rollback()
+        raise
     except Exception as exc:
+        db.rollback()
         run.status = "failed"
         run.error_message = str(exc)
-    db.commit()
+        db.commit()
     return {
         "status": run.status,
         "schedule_key": run.schedule_key,
         "task_id": run.task_id,
         "message": run.error_message,
     }
+
+
+def persist_lead_run_failure(
+    db: Session,
+    *,
+    lead_id: int,
+    schedule_key: str,
+    error_message: str,
+) -> None:
+    run = db.scalar(
+        select(LeadDiagnosisRun).where(
+            LeadDiagnosisRun.lead_diagnosis_id == lead_id,
+            LeadDiagnosisRun.schedule_key == schedule_key,
+        )
+    )
+    if run is None:
+        run = LeadDiagnosisRun(
+            lead_diagnosis_id=lead_id,
+            schedule_key=schedule_key,
+            status="failed",
+            error_message=error_message,
+        )
+        db.add(run)
+    else:
+        run.status = "failed"
+        run.error_message = error_message
+    db.commit()
 
 
 def _task_map(db: Session, lead: LeadDiagnosis) -> dict[str, GeoMonitorTask]:

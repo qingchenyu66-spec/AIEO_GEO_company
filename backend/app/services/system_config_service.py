@@ -297,17 +297,29 @@ def _serialize_env_value(value: Any) -> str:
     return str(value)
 
 
-def serialize_config_row(row: SystemConfig) -> dict[str, Any]:
+def mask_secret_value(raw: str | None) -> str:
+    text = str(raw or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "****"
+    return f"{text[:2]}****{text[-2:]}"
+
+
+def serialize_config_row(row: SystemConfig, *, reveal_secrets: bool = False) -> dict[str, Any]:
     meta = CONFIG_REGISTRY.get(row.config_key)
+    is_secret = bool(meta.secret if meta else False)
+    raw_value = row.config_value
+    display_value = raw_value if (reveal_secrets or not is_secret) else mask_secret_value(raw_value)
     return {
         "id": row.id,
         "config_key": row.config_key,
         "config_name": meta.label if meta else row.config_key,
-        "config_value": row.config_value,
+        "config_value": display_value,
         "category": meta.category if meta else row.scope,
         "scope": meta.category if meta else row.scope,
         "value_type": meta.value_type if meta else "str",
-        "secret": meta.secret if meta else False,
+        "secret": is_secret,
         "status": "启用" if row.status else "停用",
         "remark": meta.description if meta else row.description,
         "updated_at": row.updated_at.isoformat(sep=" ", timespec="minutes"),

@@ -49,8 +49,10 @@ def test_ops_logs_supports_filters() -> None:
         params={"days": 30, "keyword": "企业"},
     )
     assert response.status_code == 200, response.text
-    rows = response.json()["data"]
-    assert isinstance(rows, list)
+    payload = response.json()["data"]
+    assert isinstance(payload["items"], list)
+    assert "total" in payload
+    assert payload["page"] == 1
 
 
 def test_subtask_detail_include_ops_respects_export_permission() -> None:

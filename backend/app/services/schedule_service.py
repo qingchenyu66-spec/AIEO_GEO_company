@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any, Iterator
 
+from kombu.exceptions import OperationalError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -9,10 +10,11 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
 from app.models.brand import BrandAsset, BrandCompetitor
-from app.models.monitor import GeoMonitorScheduleRun
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
 from app.models.tenant import Tenant
-from app.schemas.monitor import MonitorTaskCreateRequest, PlatformConfig
+from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
 from app.services.brand_service import active_keyword_groups, keyword_group_monitor_keywords, molizhishu_monitor_terms
+from app.services.molizhishu_client import MolizhishuApiError
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
 from app.services.platform_matrix_service import prepare_daily_platform_matrix_before_submit
@@ -20,6 +22,9 @@ from app.services.platform_matrix_service import prepare_daily_platform_matrix_b
 
 DEFAULT_DAILY_WINDOW_START = time(hour=9, minute=30)
 DEFAULT_DAILY_WINDOW_END = time(hour=20, minute=30)
+SCHEDULE_RUN_SUCCESS_STATUSES = frozenset({"submitted"})
+SCHEDULE_RUN_STALE_RUNNING_MINUTES = 10
+_SCHEDULE_TRANSIENT_ERRORS = (MolizhishuApiError, TimeoutError, OperationalError)
 
 
 @dataclass(frozen=True)
@@ -35,10 +40,69 @@ def _keyword_group_suffix(group: dict[str, Any]) -> str:
     return str(group.get("id") or group.get("sort_order", 0))
 
 
+def get_schedule_run(db: Session, tenant_id: int, group_key: str) -> GeoMonitorScheduleRun | None:
+    return db.scalar(
+        select(GeoMonitorScheduleRun).where(
+            GeoMonitorScheduleRun.tenant_id == tenant_id,
+            GeoMonitorScheduleRun.schedule_key == group_key,
+        )
+    )
+
+
+def schedule_run_blocks_due(existing: GeoMonitorScheduleRun | None, *, now: datetime | None = None) -> bool:
+    """已成功提交或仍在执行中的调度窗口不再重复入队；failed 允许重试。"""
+    if existing is None:
+        return False
+    if existing.status in SCHEDULE_RUN_SUCCESS_STATUSES:
+        return True
+    if existing.status == "running":
+        now = now or datetime.now()
+        stale_after = timedelta(minutes=SCHEDULE_RUN_STALE_RUNNING_MINUTES)
+        updated_at = existing.updated_at or existing.created_at
+        if updated_at and now - updated_at < stale_after:
+            return True
+    return False
+
+
+def persist_schedule_group_failure(
+    db: Session,
+    *,
+    tenant_id: int,
+    group_key: str,
+    error_message: str,
+    prompt_count: int = 0,
+    platform_count: int = 0,
+    created_by: int | None = None,
+) -> GeoMonitorScheduleRun:
+    existing = get_schedule_run(db, tenant_id, group_key)
+    if existing is None:
+        run = GeoMonitorScheduleRun(
+            tenant_id=tenant_id,
+            schedule_key=group_key,
+            status="failed",
+            prompt_count=prompt_count,
+            platform_count=platform_count,
+            error_message=error_message,
+            created_by=created_by,
+        )
+        db.add(run)
+    else:
+        run = existing
+        run.status = "failed"
+        run.error_message = error_message
+        run.prompt_count = prompt_count
+        run.platform_count = platform_count
+        if created_by is not None:
+            run.created_by = created_by
+    db.commit()
+    return run
+
+
 def enumerate_due_schedule_groups(
     db: Session,
     *,
     tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
     max_prompts: int = 50,
     force: bool = False,
     now: datetime | None = None,
@@ -46,7 +110,11 @@ def enumerate_due_schedule_groups(
     """Yield due tenant keyword-group jobs without submitting them."""
     now = now or datetime.now()
     stmt = _active_asset_stmt()
-    if tenant_id:
+    if tenant_ids is not None:
+        if not tenant_ids:
+            return
+        stmt = stmt.where(BrandAsset.tenant_id.in_(tenant_ids))
+    elif tenant_id:
         stmt = stmt.where(BrandAsset.tenant_id == tenant_id)
     for asset in db.scalars(stmt):
         schedule_key = matched_schedule_key(asset, now, force=force, tolerance_minutes=settings.schedule_tolerance_minutes)
@@ -56,12 +124,7 @@ def enumerate_due_schedule_groups(
         per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
         for group in keyword_groups:
             group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}"
-            if db.scalar(
-                select(GeoMonitorScheduleRun).where(
-                    GeoMonitorScheduleRun.tenant_id == asset.tenant_id,
-                    GeoMonitorScheduleRun.schedule_key == group_key,
-                )
-            ):
+            if schedule_run_blocks_due(get_schedule_run(db, asset.tenant_id, group_key), now=now):
                 continue
             yield DueScheduleGroup(
                 tenant_id=asset.tenant_id,
@@ -93,12 +156,7 @@ def submit_schedule_group(
             "keyword": item.keyword,
             "message": "企业品牌资产不存在或未启用",
         }
-    if db.scalar(
-        select(GeoMonitorScheduleRun).where(
-            GeoMonitorScheduleRun.tenant_id == item.tenant_id,
-            GeoMonitorScheduleRun.schedule_key == item.group_key,
-        )
-    ):
+    if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -136,15 +194,54 @@ def submit_schedule_group(
         max_prompts=item.max_prompts,
         keyword_group=keyword_group,
     )
-    run = GeoMonitorScheduleRun(
-        tenant_id=item.tenant_id,
-        schedule_key=item.group_key,
-        status="running",
-        prompt_count=len(payload.prompts),
-        platform_count=len(payload.platforms),
-        created_by=current.user.id,
-    )
-    db.add(run)
+    existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
+    if existing_run is not None and existing_run.task_id:
+        linked_task = db.scalar(
+            select(GeoMonitorTask).where(
+                GeoMonitorTask.task_id == existing_run.task_id,
+                GeoMonitorTask.deleted.is_(False),
+            )
+        )
+        if linked_task is not None:
+            terminal_failed = linked_task.status in {"failed", "stopped"} and not (linked_task.completed_items or 0)
+            if not terminal_failed:
+                if existing_run.status != "submitted":
+                    existing_run.status = "submitted"
+                    existing_run.error_message = None
+                    db.commit()
+                return {
+                    "tenant_id": item.tenant_id,
+                    "schedule_key": item.group_key,
+                    "status": "submitted",
+                    "keyword": item.keyword,
+                    "task": serialize_task(linked_task),
+                }
+            existing_run.task_id = None
+            existing_run.status = "running"
+            existing_run.error_message = None
+            run = existing_run
+        else:
+            existing_run.task_id = None
+            existing_run.status = "running"
+            existing_run.error_message = None
+            run = existing_run
+    elif existing_run is not None and existing_run.status == "failed":
+        run = existing_run
+        run.status = "running"
+        run.error_message = None
+        run.task_id = None
+        run.prompt_count = len(payload.prompts)
+        run.platform_count = len(payload.platforms)
+    else:
+        run = GeoMonitorScheduleRun(
+            tenant_id=item.tenant_id,
+            schedule_key=item.group_key,
+            status="running",
+            prompt_count=len(payload.prompts),
+            platform_count=len(payload.platforms),
+            created_by=current.user.id,
+        )
+        db.add(run)
     try:
         db.flush()
         if not payload.prompts:
@@ -156,10 +253,11 @@ def submit_schedule_group(
             tenant_id=item.tenant_id,
             schedule_key=item.group_key,
         )
-        task = submit_monitor_task(db, payload, current)
+        task = submit_monitor_task(db, payload, current, auto_commit=False)
         run.task_id = task.task_id
         run.status = "submitted"
         db.commit()
+        db.refresh(task)
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -167,19 +265,20 @@ def submit_schedule_group(
             "keyword": item.keyword,
             "task": serialize_task(task),
         }
-    except (IntegrityError, ValueError, RuntimeError) as exc:
+    except _SCHEDULE_TRANSIENT_ERRORS:
         db.rollback()
-        failed = GeoMonitorScheduleRun(
+        raise
+    except (IntegrityError, ValueError) as exc:
+        db.rollback()
+        persist_schedule_group_failure(
+            db,
             tenant_id=item.tenant_id,
-            schedule_key=item.group_key,
-            status="failed",
+            group_key=item.group_key,
+            error_message=str(exc),
             prompt_count=len(payload.prompts),
             platform_count=len(payload.platforms),
-            error_message=str(exc),
             created_by=current.user.id,
         )
-        db.add(failed)
-        db.commit()
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -290,7 +389,7 @@ def build_scheduled_payload(
 ) -> MonitorTaskCreateRequest:
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
     platforms = [
-        PlatformConfig(platform=code, mode="standard", screenshot=1)
+        PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
         for code in filter_submittable_platforms(asset.monitored_platforms_json)
     ]
     monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
@@ -304,9 +403,19 @@ def build_scheduled_payload(
     )
 
 
-def preview_scheduled_tasks(db: Session, *, tenant_id: int | None = None, max_prompts: int = 50) -> list[dict[str, Any]]:
+def preview_scheduled_tasks(
+    db: Session,
+    *,
+    tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
+    max_prompts: int = 50,
+) -> list[dict[str, Any]]:
     stmt = _active_asset_stmt()
-    if tenant_id:
+    if tenant_ids is not None:
+        if not tenant_ids:
+            return []
+        stmt = stmt.where(BrandAsset.tenant_id.in_(tenant_ids))
+    elif tenant_id:
         stmt = stmt.where(BrandAsset.tenant_id == tenant_id)
     tenant_map = {item.id: item.name for item in db.scalars(select(Tenant).where(Tenant.deleted.is_(False)))}
     result: list[dict[str, Any]] = []
@@ -316,7 +425,7 @@ def preview_scheduled_tasks(db: Session, *, tenant_id: int | None = None, max_pr
         group_count = max(1, len(keyword_groups))
         per_group_max_prompts = max(1, max_prompts // group_count)
         platforms = [
-            PlatformConfig(platform=code, mode="standard", screenshot=1)
+            PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
             for code in filter_submittable_platforms(asset.monitored_platforms_json)
         ]
         platform_count = len(platforms)
@@ -362,6 +471,7 @@ def run_due_scheduled_tasks(
     current: CurrentSession,
     *,
     tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
     limit: int = 10,
     max_prompts: int = 50,
     force: bool = False,
@@ -371,6 +481,7 @@ def run_due_scheduled_tasks(
     for item in enumerate_due_schedule_groups(
         db,
         tenant_id=tenant_id,
+        tenant_ids=tenant_ids,
         max_prompts=max_prompts,
         force=force,
         now=now,

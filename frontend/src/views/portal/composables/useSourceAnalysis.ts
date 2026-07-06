@@ -1,8 +1,7 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
-import { getMonitorSummary, type MonitorSummary } from '../../../services/monitor'
+import type { MonitorSummary } from '../../../services/monitor'
 import { useAuthStore } from '../../../stores/auth'
 import {
   customerDisplayPeriodLabel,
@@ -74,7 +73,7 @@ export function useSourceAnalysis(options?: {
   const brandAsset = analytics.brandAsset
 
   const loading = ref(false)
-  const monitorSummary = ref<MonitorSummary | null>(null)
+  const monitorSummary = analytics.monitorSummary
   const datePreset = ref<SourceDatePreset>('30')
   const platformFilter = ref('all')
   const categoryFilter = ref<'all' | SourceCategory>('all')
@@ -214,7 +213,7 @@ export function useSourceAnalysis(options?: {
   async function loadSummary() {
     loading.value = true
     try {
-      monitorSummary.value = await withRetry(() => getMonitorSummary())
+      await analytics.loadMonitorSummary()
     } catch (error: unknown) {
       ElMessage.error(`信源数据加载失败：${errorMessage(error)}`)
     } finally {

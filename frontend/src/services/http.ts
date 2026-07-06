@@ -1,14 +1,21 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useLoadingStore } from '../stores/loading'
+import { readCsrfToken } from '../utils/csrf'
 
 export const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json;charset=utf-8',
   },
 })
+
+export type GeoHttpRequestConfig = AxiosRequestConfig & {
+  silentError?: boolean
+  noCache?: boolean
+}
 
 interface CacheItem {
   data: unknown
@@ -43,14 +50,10 @@ http.interceptors.request.use(
   (config) => {
     useLoadingStore().start()
 
-    const raw = localStorage.getItem('geo-auth-session')
-    if (raw) {
-      try {
-        const session = JSON.parse(raw)
-        if (session.access_token) config.headers.Authorization = `Bearer ${session.access_token}`
-      } catch {
-        localStorage.removeItem('geo-auth-session')
-      }
+    const method = (config.method || 'get').toLowerCase()
+    if (!['get', 'head', 'options'].includes(method)) {
+      const csrf = readCsrfToken()
+      if (csrf) config.headers['X-CSRF-Token'] = csrf
     }
 
     return config
@@ -86,7 +89,9 @@ http.interceptors.response.use(
     }
 
     if (!hasResponse) {
-      ElMessage.error(error.message || '网络异常，请检查连接后重试')
+      if (!(error.config as { silentError?: boolean } | undefined)?.silentError) {
+        ElMessage.error(error.message || '网络异常，请检查连接后重试')
+      }
       return Promise.reject(error)
     }
 
