@@ -14,7 +14,7 @@ class LeadDiagnosisCreateRequest(BaseModel):
     contact_name: str | None = Field(default=None, max_length=60)
     contact_phone: str | None = Field(default=None, max_length=30)
     contact_note: str | None = Field(default=None, max_length=500)
-    region_code: str | None = Field(default=None, max_length=20)
+    region_codes: list[str] = Field(default_factory=list, max_length=34)
     diagnosis_date: date | None = None
     start_immediately: bool = False
 
@@ -33,13 +33,12 @@ class LeadDiagnosisCreateRequest(BaseModel):
     def normalize_competitors(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
 
-    @field_validator("region_code")
+    @field_validator("region_codes")
     @classmethod
-    def normalize_region_code(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        return cleaned or None
+    def normalize_region_codes(cls, value: list[str]) -> list[str]:
+        from app.core.region_catalog import normalize_region_codes as normalize_codes
+
+        return normalize_codes(value)
 
 
 class LeadDiagnosisUpdateRequest(BaseModel):

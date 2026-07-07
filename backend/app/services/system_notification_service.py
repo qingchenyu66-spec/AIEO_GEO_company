@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Integer, Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -39,6 +39,30 @@ def _notification_query_for_user(
         .exists()
     )
     return stmt
+
+
+def _apply_notification_visibility_filter(
+    stmt: Select[tuple[SystemNotification]],
+    *,
+    user_id: int,
+    can_review_approvals: bool,
+) -> Select[tuple[SystemNotification]]:
+    """审批类通知按角色过滤：待办仅审批人可见，结果仅提交人可见。"""
+    restricted = ("operation_approval", "operation_approval_result")
+    clauses = [SystemNotification.category.not_in(restricted)]
+    if can_review_approvals:
+        clauses.append(SystemNotification.category == "operation_approval")
+    requester_id_expr = func.cast(
+        func.json_unquote(func.json_extract(SystemNotification.payload_json, "$.requester_user_id")),
+        Integer,
+    )
+    clauses.append(
+        and_(
+            SystemNotification.category == "operation_approval_result",
+            requester_id_expr == user_id,
+        )
+    )
+    return stmt.where(or_(*clauses))
 
 
 def upsert_monitor_alert_notification(db: Session, alert: dict[str, Any]) -> SystemNotification | None:
@@ -127,6 +151,139 @@ def upsert_subtask_backfill_notification(
     return row
 
 
+def upsert_approval_pending_notification(
+    db: Session,
+    *,
+    approval_id: int,
+    summary: str,
+    requester_user_id: int,
+    requester_name: str | None,
+    module_label: str,
+) -> SystemNotification:
+    """销售提交审批后，通知运营/管理员处理。"""
+    name = (requester_name or "").strip() or "销售"
+    title = "待审批操作"
+    message = f"{name} 提交了「{summary}」，请及时处理"
+    source_key = f"approval:pending:{approval_id}"
+    payload = {
+        "approval_id": approval_id,
+        "summary": summary,
+        "module_label": module_label,
+        "requester_user_id": requester_user_id,
+        "requester_name": name,
+        "menu_code": "platform.approvals",
+    }
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message[:500]
+        existing.level = "warning"
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="operation_approval",
+        level="warning",
+        title=title,
+        message=message[:500],
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def resolve_approval_pending_notification(db: Session, approval_id: int) -> None:
+    """审批处理完成后移除待办通知。"""
+    source_key = f"approval:pending:{approval_id}"
+    row = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+        )
+    )
+    if row is None:
+        return
+    db.delete(row)
+    db.commit()
+
+
+def upsert_approval_result_notification(
+    db: Session,
+    *,
+    approval_id: int,
+    status: str,
+    summary: str,
+    requester_user_id: int,
+    reviewer_name: str | None = None,
+    review_comment: str | None = None,
+) -> SystemNotification:
+    """审批通过/驳回后通知提交人。"""
+    approved = status == "approved"
+    status_label = "已通过" if approved else "已驳回"
+    title = f"审批{status_label}"
+    message = f"您提交的「{summary}」{status_label}"
+    if not approved and review_comment:
+        message += f"：{review_comment.strip()}"
+    elif approved and reviewer_name:
+        message += f"（审核人：{reviewer_name.strip()}）"
+    source_key = f"approval:result:{approval_id}"
+    payload = {
+        "approval_id": approval_id,
+        "status": status,
+        "summary": summary,
+        "requester_user_id": requester_user_id,
+        "menu_code": "platform.approvals",
+    }
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+    level = "info" if approved else "warning"
+    if existing is not None:
+        existing.title = title
+        existing.message = message[:500]
+        existing.level = level
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="operation_approval_result",
+        level=level,
+        title=title,
+        message=message[:500],
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def resolve_subtask_backfill_notification(db: Session, subtask_id: str) -> None:
     """补录成功后移除待办通知。"""
     source_key = f"subtask:backfill:{subtask_id}"
@@ -163,12 +320,20 @@ def list_notifications_for_user(
     tenant_id: int | None,
     unread_only: bool = False,
     limit: int = 20,
+    can_review_approvals: bool = False,
 ) -> list[dict[str, Any]]:
     stmt = _notification_query_for_user(
         user_id=user_id,
         identity_type=identity_type,
         tenant_id=tenant_id,
-    ).order_by(SystemNotification.created_at.desc()).limit(max(1, min(limit, 100)))
+    )
+    if identity_type == "PLATFORM":
+        stmt = _apply_notification_visibility_filter(
+            stmt,
+            user_id=user_id,
+            can_review_approvals=can_review_approvals,
+        )
+    stmt = stmt.order_by(SystemNotification.created_at.desc()).limit(max(1, min(limit, 100)))
 
     cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=NOTIFICATION_RETENTION_DAYS)
     stmt = stmt.where(SystemNotification.created_at >= cutoff)
@@ -201,24 +366,33 @@ def count_unread_notifications(
     user_id: int,
     identity_type: str,
     tenant_id: int | None,
+    can_review_approvals: bool = False,
 ) -> int:
     audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
     cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=NOTIFICATION_RETENTION_DAYS)
-    stmt = select(func.count()).select_from(SystemNotification).where(
+    visible_ids = select(SystemNotification.id).where(
         SystemNotification.audience_type == audience,
         SystemNotification.created_at >= cutoff,
     )
     if audience == "CUSTOMER":
-        stmt = stmt.where(SystemNotification.tenant_id == tenant_id)
+        visible_ids = visible_ids.where(SystemNotification.tenant_id == tenant_id)
     else:
-        stmt = stmt.where(SystemNotification.tenant_id.is_(None))
+        visible_ids = visible_ids.where(SystemNotification.tenant_id.is_(None))
+        visible_ids = _apply_notification_visibility_filter(
+            visible_ids,
+            user_id=user_id,
+            can_review_approvals=can_review_approvals,
+        )
 
     read_subq = (
         select(SystemNotificationRead.notification_id)
         .where(SystemNotificationRead.user_id == user_id)
         .scalar_subquery()
     )
-    stmt = stmt.where(SystemNotification.id.not_in(read_subq))
+    stmt = select(func.count()).select_from(SystemNotification).where(
+        SystemNotification.id.in_(visible_ids),
+        SystemNotification.id.not_in(read_subq),
+    )
     return int(db.scalar(stmt) or 0)
 
 
@@ -245,6 +419,7 @@ def mark_all_notifications_read(
     user_id: int,
     identity_type: str,
     tenant_id: int | None,
+    can_review_approvals: bool = False,
 ) -> int:
     unread = list_notifications_for_user(
         db,
@@ -253,6 +428,7 @@ def mark_all_notifications_read(
         tenant_id=tenant_id,
         unread_only=True,
         limit=100,
+        can_review_approvals=can_review_approvals,
     )
     count = 0
     for item in unread:

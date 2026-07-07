@@ -1,0 +1,294 @@
+"""审批通过后回放执行各业务操作。"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, UTC
+from typing import Any
+
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import CurrentSession
+from app.models.approval import OperationApproval
+from app.models.diagnosis import BrandDiagnosis
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.models.user_identity import UserIdentity
+from app.schemas.brand import BrandAssetSaveRequest
+from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
+from app.schemas.permission import (
+    TenantCreateRequest,
+    TenantUpdateRequest,
+    UserCreateRequest,
+    UserUpdateRequest,
+)
+from app.services.brand_service import save_brand_asset
+from app.services.lead_diagnosis_service import create_lead_diagnosis, submit_due_lead_run, update_lead_diagnosis
+from app.services.management_service import (
+    _tenant_code_from_name,
+    create_managed_user,
+    update_managed_user,
+)
+from app.services.report_service import generate_report, publish_report, update_report
+from app.services.tenant_scope import resolve_and_guard_tenant_id
+
+
+def _payload(record: OperationApproval) -> dict[str, Any]:
+    raw = record.payload_json or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _service_status_from_period(start: date | None, end: date | None) -> bool:
+    if end and end < date.today():
+        return False
+    return True
+
+
+def _requester_actor(db: Session, record: OperationApproval) -> tuple[User, UserIdentity]:
+    user = db.get(User, record.requester_user_id)
+    identity = db.get(UserIdentity, record.requester_identity_id)
+    if user is None or identity is None or identity.deleted or not identity.status:
+        raise ValueError("申请人账号或身份不可用，无法回放执行")
+    if identity.user_id != user.id:
+        raise ValueError("审批单申请人身份不匹配")
+    return user, identity
+
+
+def execute_approval(db: Session, current: CurrentSession, record: OperationApproval) -> dict[str, Any]:
+    key = record.operation_key
+    data = _payload(record)
+    handlers = {
+        "management.user.create": _exec_user_create,
+        "management.user.update": _exec_user_update,
+        "management.tenant.create": _exec_tenant_create,
+        "management.tenant.update": _exec_tenant_update,
+        "management.tenant.delete": _exec_tenant_delete,
+        "management.tenant.restore": _exec_tenant_restore,
+        "brand.asset.upsert": _exec_brand_asset,
+        "reports.generate": _exec_report_generate,
+        "reports.update": _exec_report_update,
+        "reports.publish": _exec_report_publish,
+        "diagnosis.record.create": _exec_diagnosis_create,
+        "lead_diagnosis.create": _exec_lead_create,
+        "lead_diagnosis.update": _exec_lead_update,
+        "lead_diagnosis.submit_run": _exec_lead_submit_run,
+    }
+    handler = handlers.get(key)
+    if handler is None:
+        raise ValueError(f"未支持的操作类型：{key}")
+    return handler(db, current, record, data)
+
+
+def _exec_user_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    requester, requester_identity = _requester_actor(db, record)
+    payload = UserCreateRequest.model_validate(data.get("body") or data)
+    user = create_managed_user(
+        db,
+        payload,
+        requester,
+        requester_identity,
+        commit=False,
+    )
+    db.flush()
+    return {"id": user.id, "username": user.username, "display_name": user.display_name}
+
+
+def _exec_user_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    requester, requester_identity = _requester_actor(db, record)
+    user_id = int(data.get("user_id") or record.target_id or 0)
+    payload = UserUpdateRequest.model_validate(data.get("body") or data)
+    user = update_managed_user(
+        db,
+        user_id,
+        payload,
+        requester,
+        requester_identity,
+        commit=False,
+    )
+    db.flush()
+    return {"id": user.id, "username": user.username, "display_name": user.display_name}
+
+
+def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    payload = TenantCreateRequest.model_validate(data.get("body") or data)
+    name = payload.name.strip()
+    code = (payload.code or _tenant_code_from_name(name)).strip()
+    exists = db.scalar(select(Tenant).where(or_(Tenant.name == name, Tenant.code == code), Tenant.deleted.is_(False)))
+    if exists is not None:
+        raise ValueError("企业名称或企业编码已存在")
+    tenant = Tenant(
+        name=name,
+        code=code,
+        owner_user_id=record.requester_user_id,
+        service_start_date=payload.service_start_date,
+        service_end_date=payload.service_end_date,
+        status=_service_status_from_period(payload.service_start_date, payload.service_end_date),
+        stop_reason="expired" if payload.service_end_date and payload.service_end_date < date.today() else None,
+    )
+    db.add(tenant)
+    db.flush()
+    return {"id": tenant.id, "name": tenant.name, "code": tenant.code}
+
+
+def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = int(data.get("tenant_id") or record.target_id or 0)
+    payload = TenantUpdateRequest.model_validate(data.get("body") or data)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError("企业不存在")
+    name = payload.name.strip()
+    code = (payload.code or tenant.code or _tenant_code_from_name(name)).strip()
+    exists = db.scalar(
+        select(Tenant).where(
+            or_(Tenant.name == name, Tenant.code == code),
+            Tenant.id != tenant_id,
+            Tenant.deleted.is_(False),
+        )
+    )
+    if exists is not None:
+        raise ValueError("企业名称或企业编码已存在")
+    tenant.name = name
+    tenant.code = code
+    tenant.service_start_date = payload.service_start_date
+    tenant.service_end_date = payload.service_end_date
+    period_status = _service_status_from_period(payload.service_start_date, payload.service_end_date)
+    if tenant.stop_reason in {"manual", "canceled"}:
+        tenant.status = False
+    else:
+        tenant.status = period_status
+        tenant.stop_reason = "expired" if payload.service_end_date and payload.service_end_date < date.today() else None
+        if tenant.status:
+            tenant.stopped_at = None
+            tenant.stopped_by = None
+    db.flush()
+    return {"id": tenant.id, "name": tenant.name}
+
+
+def _exec_tenant_delete(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    from app.models.user_identity import UserIdentity
+
+    tenant_id = int(data.get("tenant_id") or record.target_id or 0)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError("企业不存在")
+    tenant.status = False
+    tenant.stop_reason = "canceled" if tenant.service_start_date and tenant.service_start_date > date.today() else "manual"
+    tenant.stopped_at = datetime.now(UTC)
+    tenant.stopped_by = current.user.id
+    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id, UserIdentity.deleted.is_(False))))
+    affected_user_ids: set[int] = set()
+    for identity in identities:
+        identity.status = False
+        identity.deleted = True
+        affected_user_ids.add(identity.user_id)
+    for user_id in affected_user_ids:
+        active_identity = db.scalar(
+            select(UserIdentity.id).where(
+                UserIdentity.user_id == user_id,
+                UserIdentity.status.is_(True),
+                UserIdentity.deleted.is_(False),
+            )
+        )
+        if active_identity is None:
+            user = db.get(User, user_id)
+            if user:
+                user.status = False
+    db.flush()
+    return {"id": tenant.id, "status": tenant.status}
+
+
+def _exec_tenant_restore(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    from app.models.user_identity import UserIdentity
+
+    tenant_id = int(data.get("tenant_id") or record.target_id or 0)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError("企业不存在")
+    if tenant.service_end_date and tenant.service_end_date < date.today():
+        raise ValueError("服务已到期，请先延长服务期限后再恢复")
+    tenant.status = _service_status_from_period(tenant.service_start_date, tenant.service_end_date)
+    tenant.stop_reason = None
+    tenant.stopped_at = None
+    tenant.stopped_by = None
+    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id)))
+    restored_user_ids: set[int] = set()
+    for identity in identities:
+        identity.status = True
+        identity.deleted = False
+        restored_user_ids.add(identity.user_id)
+    for user_id in restored_user_ids:
+        user = db.get(User, user_id)
+        if user and not user.deleted:
+            user.status = True
+    db.flush()
+    return {"id": tenant.id, "status": tenant.status}
+
+
+def _exec_brand_asset(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    payload = BrandAssetSaveRequest.model_validate(data.get("body") or data)
+    asset = save_brand_asset(db, payload, current)
+    return {"tenant_id": asset.tenant_id, "brand_name": asset.brand_name}
+
+
+def _exec_report_generate(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    body = data.get("body") or data
+    return generate_report(db, body, current)
+
+
+def _exec_report_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    report_id = int(data.get("report_id") or record.target_id or 0)
+    body = data.get("body") or data
+    return update_report(db, report_id, body, current)
+
+
+def _exec_report_publish(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    report_id = int(data.get("report_id") or record.target_id or 0)
+    return publish_report(db, report_id, current)
+
+
+def _exec_diagnosis_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    body = data.get("body") or data
+    raw_tenant_id = body.get("tenant_id", record.tenant_id)
+    if raw_tenant_id is None:
+        raise ValueError("请指定企业")
+    tenant_id = resolve_and_guard_tenant_id(db, current, int(raw_tenant_id))
+    record_obj = BrandDiagnosis(
+        tenant_id=tenant_id,
+        created_by_user_id=record.requester_user_id,
+        diagnosis_title=body.get("diagnosis_title", "品牌诊断"),
+        health_score=body.get("health_score", 80),
+        sentiment_summary=body.get("sentiment_summary"),
+        strength_points=body.get("strength_points"),
+        weakness_points=body.get("weakness_points"),
+        recommendation=body.get("recommendation"),
+        diagnosis_platforms_json=body.get("diagnosis_platforms", ["doubao_mobile", "deepseek"]),
+        diagnosis_keywords_json=body.get("diagnosis_keywords", []),
+        reference_count=body.get("reference_count", 0),
+        monitor_data_summary=body.get("monitor_data_summary"),
+        status="published",
+    )
+    db.add(record_obj)
+    db.flush()
+    return {"id": record_obj.id, "diagnosis_title": record_obj.diagnosis_title}
+
+
+def _exec_lead_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    payload = LeadDiagnosisCreateRequest.model_validate(data.get("body") or data)
+    return create_lead_diagnosis(db, current, payload)
+
+
+def _exec_lead_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    lead_id = int(data.get("lead_id") or record.target_id or 0)
+    payload = LeadDiagnosisUpdateRequest.model_validate(data.get("body") or data)
+    return update_lead_diagnosis(db, current, lead_id, payload)
+
+
+def _exec_lead_submit_run(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    lead_id = int(data.get("lead_id") or record.target_id or 0)
+    return submit_due_lead_run(
+        db,
+        current,
+        lead_id,
+        schedule_key=data.get("schedule_key"),
+        force=bool(data.get("force")),
+    )

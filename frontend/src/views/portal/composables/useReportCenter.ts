@@ -15,6 +15,7 @@ import {
   type ReportExportFormat,
 } from '../../../services/reports'
 import type { TenantInfo } from '../../../services/management'
+import { stripReportCompanyPrefix } from '../portalUtils'
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -111,7 +112,9 @@ export function useReportCenter(options: UseReportCenterOptions) {
     return {
       total: rows.length,
       publishedCount,
-      latestTitle: latest?.report_title || null,
+      latestTitle: latest
+        ? (options.isPlatform() ? latest.report_title : displayReportTitle(latest))
+        : null,
       latestHealth: latest?.health_score ?? null,
       avgHealth: healthAvg,
     }
@@ -126,6 +129,28 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const previewSources = computed(() => previewSnapshot.value.top_sources || [])
   const previewAiInsights = computed(() => previewContent.value?.ai_insights || null)
   const isDeepseekReport = computed(() => previewAiInsights.value?.source === 'deepseek')
+
+  function reportCompanyNames(item?: { tenant_name?: string | null } | null) {
+    return [
+      previewContent.value?.brand_name,
+      item?.tenant_name,
+      selectedReport.value?.tenant_name,
+    ]
+  }
+
+  function displayReportTitle(item: Pick<ReportListItem, 'report_title' | 'tenant_name'>) {
+    if (options.isPlatform()) return item.report_title
+    return stripReportCompanyPrefix(item.report_title, reportCompanyNames(item))
+  }
+
+  const heroTitle = computed(() => {
+    if (options.isPlatform()) {
+      return previewContent.value?.brand_name || selectedReport.value?.tenant_name || 'GEO 监测报告'
+    }
+    return selectedReport.value?.report_type_label
+      || reportDetail.value?.report_type_label
+      || 'GEO 监测报告'
+  })
 
   function syncEditFormFromDetail(detail: ReportDetail | null) {
     const content = detail?.report_content
@@ -344,6 +369,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
     previewSources,
     previewAiInsights,
     isDeepseekReport,
+    heroTitle,
+    displayReportTitle,
     loadReports,
     selectReport,
     handleSaveDraft,

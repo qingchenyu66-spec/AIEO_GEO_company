@@ -45,6 +45,8 @@ const {
   tenantFilter,
   reportTypeOptions,
   heroMetrics,
+  heroTitle,
+  displayReportTitle,
   canEditSelected,
   canExportReport,
   previewContent,
@@ -106,7 +108,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <input
             v-model="keywordFilter"
             class="report-search-input"
-            placeholder="搜索报告标题、企业或摘要"
+            placeholder="搜索报告标题或摘要"
           />
 
           <div v-if="isPlatform" class="report-sticky-filters">
@@ -135,7 +137,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <FileBarChart />
           {{ pageMenuName }} · 监测交付
         </span>
-        <h2>{{ previewContent?.brand_name || selectedReport?.tenant_name || 'GEO 监测报告' }}</h2>
+        <h2>{{ heroTitle }}</h2>
         <p>
           汇总 AI 平台监测结果、品牌诊断与信源引用，形成可交付的结构化报告。
           {{ isPlatform ? '请在「企业管理」为企业生成报告，编辑确认后发布；客户仅可查看已发布报告。' : '此处展示运营已发布的报告，支持在线预览、导出 PDF/Word 与打印。' }}
@@ -185,7 +187,7 @@ function diagnosisTitleText(title: string | null | undefined) {
             @click="selectReport(item.id)"
           >
             <div class="report-card-top">
-              <b>{{ item.report_title }}</b>
+              <b>{{ displayReportTitle(item) }}</b>
               <span v-if="item.health_score != null" class="report-score-chip">{{ item.health_score }} 分</span>
             </div>
             <div class="report-card-meta">
@@ -271,7 +273,7 @@ function diagnosisTitleText(title: string | null | undefined) {
               <span class="report-badge status">{{ reportDetail.status_label || reportDetail.status }}</span>
               <span v-if="previewContent?.period_label" class="report-badge type">{{ previewContent.period_label }}</span>
             </div>
-            <h2>{{ reportDetail.report_title }}</h2>
+            <h2>{{ isPlatform ? reportDetail.report_title : displayReportTitle(reportDetail) }}</h2>
             <p v-if="previewAiInsights?.executive_summary" class="report-executive-summary">{{ previewAiInsights.executive_summary }}</p>
             <p>{{ reportDetail.data_summary }}</p>
           </div>

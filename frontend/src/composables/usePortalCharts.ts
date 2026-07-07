@@ -29,6 +29,7 @@ export type PortalChartData = {
   competitorRankRows?: Array<{ name: string; rank: number; is_brand?: boolean }>
   sourceStructureRows: Array<{
     platform: string
+    total?: number
     categories: Array<{ type: string; value: number }>
   }>
   sourceTrendRows: Array<{ label: string; value: number }>
@@ -390,6 +391,8 @@ export function usePortalCharts(refs: PortalChartRefs) {
     const sourceStructureChart = getChart(refs.sourceStructure?.value ?? null)
     if (sourceStructureChart) {
       const categoryKeys = Object.keys(data.sourceCategoryLabels)
+      const rows = data.sourceStructureRows
+      const legendLabels = Object.values(data.sourceCategoryLabels)
       sourceStructureChart.setOption({
         color: ['#326fea', '#20b8c9', '#35c58f', '#f0b84e', '#9b7ae7'],
         grid: { left: 88, right: 46, top: 18, bottom: 34 },
@@ -397,27 +400,46 @@ export function usePortalCharts(refs: PortalChartRefs) {
           trigger: 'axis',
           axisPointer: { type: 'shadow' },
           formatter: (params: unknown) => {
-            const rows = params as Array<{ name: string; marker: string; seriesName: string; value: number }>
-            return `${rows?.[0]?.name || ''}<br/>${rows.map(item => `${item.marker}${item.seriesName}：${item.value}%`).join('<br/>')}`
+            const items = params as Array<{ name: string; marker: string; seriesName: string; value: number }>
+            const name = items?.[0]?.name || ''
+            const hasData = rows.find(row => (platformLabelMap[row.platform] || row.platform) === name)?.total
+            if (!hasData) return `${name}<br/>暂无含露出词的信源引用`
+            return `${name}<br/>${items
+              .filter(item => item.seriesName !== '暂无引用' && item.value > 0)
+              .map(item => `${item.marker}${item.seriesName}：${item.value}%`)
+              .join('<br/>')}`
           },
         },
-        legend: { bottom: 0, itemWidth: 22, itemHeight: 5, textStyle: { color: '#526b89' } },
+        legend: { bottom: 0, itemWidth: 22, itemHeight: 5, textStyle: { color: '#526b89' }, data: legendLabels },
         xAxis: { type: 'value', max: 100, show: false },
         yAxis: {
           type: 'category',
-          data: data.sourceStructureRows.map(item => platformLabelMap[item.platform] || item.platform),
+          data: rows.map(item => platformLabelMap[item.platform] || item.platform),
           axisTick: { show: false },
           axisLine: { show: false },
           axisLabel: { color: '#55708f', fontWeight: 700 },
         },
-        series: categoryKeys.map(type => ({
-          name: data.sourceCategoryLabels[type],
-          type: 'bar',
-          stack: 'source',
-          barWidth: 16,
-          data: data.sourceStructureRows.map(row => row.categories.find(item => item.type === type)?.value || 0),
-          itemStyle: { borderRadius: type === categoryKeys[categoryKeys.length - 1] ? [0, 8, 8, 0] : 0 },
-        })),
+        series: [
+          {
+            name: '暂无引用',
+            type: 'bar',
+            stack: 'source',
+            barWidth: 16,
+            data: rows.map(row => (row.total ?? 0) > 0 ? 0 : 100),
+            itemStyle: { color: '#e8edf3', borderRadius: [0, 8, 8, 0] },
+          },
+          ...categoryKeys.map((type, index) => ({
+            name: data.sourceCategoryLabels[type],
+            type: 'bar',
+            stack: 'source',
+            barWidth: 16,
+            data: rows.map(row => {
+              if ((row.total ?? 0) === 0) return 0
+              return row.categories.find(item => item.type === type)?.value || 0
+            }),
+            itemStyle: { borderRadius: index === categoryKeys.length - 1 ? [0, 8, 8, 0] : 0 },
+          })),
+        ],
       })
     }
 

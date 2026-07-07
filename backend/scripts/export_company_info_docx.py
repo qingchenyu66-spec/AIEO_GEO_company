@@ -25,6 +25,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.services.brand_service import asset_to_dict, competitor_to_dict, list_keyword_groups
+from app.core.region_catalog import region_display_labels
 from app.api.v1.endpoints.management import tenant_service_state
 
 PLATFORM_LABELS: dict[str, str] = {
@@ -190,7 +191,7 @@ def build_company_doc(db, tenant: Tenant) -> Document:
                 ("品牌主词", asset_data["brand_name"]),
                 ("品牌简称", asset_data["brand_short_name"] or "未设置"),
                 ("官网 / 主站", asset_data["official_url"] or "未设置"),
-                ("监测地区", asset_data["region_code"] or "全部区域"),
+                ("监测地区", region_display_labels(asset_data.get("region_codes") or []) or "全部区域"),
                 ("品牌说明", asset_data["description"] or "未填写"),
             ],
         )

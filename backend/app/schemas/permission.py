@@ -130,6 +130,12 @@ class TenantUpdateRequest(BaseModel):
     status: bool = True
 
 
+class TenantTransferOwnerRequest(BaseModel):
+    """平台运营/管理员将企业归属转移给销售。"""
+
+    owner_user_id: int = Field(ge=1, description="目标销售用户 ID")
+
+
 class ManagedUserInfo(BaseModel):
     """用户管理列表展示数据。"""
 

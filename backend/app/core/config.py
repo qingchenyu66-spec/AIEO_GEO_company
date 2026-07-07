@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     celery_scan_submit_max_prompts: int = 50
     celery_sync_batch_limit: int = 500
     celery_sync_terminal_grace_hours: int = 24
+    celery_inspect_timeout_seconds: float = 1.5
 
     schedule_tolerance_minutes: int = 60
     molizhishu_submit_rate_per_minute: int = 30
@@ -83,7 +84,7 @@ class Settings(BaseSettings):
     deepseek_sentiment_keyword_enabled: bool = True
     deepseek_report_enabled: bool = True
     deepseek_knowledge_parse_enabled: bool = True
-    deepseek_knowledge_auto_parse_on_upload: bool = True
+    deepseek_knowledge_auto_parse_on_upload: bool = False
     deepseek_knowledge_parse_max_chars: int = 12000
 
     model_config = SettingsConfigDict(

@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
-from app.core.redis_client import delete_cache, get_json_cache, redis_lock, set_json_cache
+from app.core.redis_client import delete_cache, delete_cache_pattern, get_json_cache, redis_lock, set_json_cache
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,14 @@ def monitor_summary_cache_key(identity_type: str, tenant_key: str | int) -> str:
     return f"monitor:summary:v3:{identity_type}:{tenant_key}"
 
 
-def workspace_brief_cache_key(tenant_id: int) -> str:
-    return f"monitor:workspace-brief:v1:{tenant_id}"
+def workspace_brief_cache_key(
+    tenant_id: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> str:
+    start_key = start_date or "default"
+    end_key = end_date or "default"
+    return f"monitor:workspace-brief:v2:{tenant_id}:{start_key}:{end_key}"
 
 
 def celery_monitor_cache_key() -> str:
@@ -104,4 +110,5 @@ def invalidate_dashboard_caches(tenant_id: int | None = None) -> None:
     if tenant_id is not None:
         delete_cache(monitor_summary_cache_key("CUSTOMER", tenant_id))
         delete_cache(workspace_brief_cache_key(tenant_id))
+        delete_cache_pattern(f"monitor:workspace-brief:v2:{tenant_id}:*")
     delete_cache(monitor_summary_cache_key("PLATFORM", "platform"))

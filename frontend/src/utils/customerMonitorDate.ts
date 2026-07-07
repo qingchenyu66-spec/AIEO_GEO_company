@@ -63,6 +63,57 @@ export function customerTrendPeriodLabel(lookbackDays = 7, date = new Date()) {
   return `近${lookbackDays}日 ${startDate} ~ ${endDate}`
 }
 
+export type WorkspaceTrendPreset = '7d' | 'month' | 'quarter' | 'year' | 'custom'
+
+export function workspaceTrendDateRange(
+  preset: WorkspaceTrendPreset,
+  customStart?: string,
+  customEnd?: string,
+  date = new Date(),
+) {
+  const endDate = customerDisplayCutoffDate(date)
+  const end = new Date(`${endDate}T00:00:00`)
+
+  if (preset === '7d') {
+    return customerDisplayDateRange(7, date)
+  }
+  if (preset === 'month') {
+    const start = new Date(end.getFullYear(), end.getMonth(), 1)
+    return { startDate: formatLocalDate(start), endDate }
+  }
+  if (preset === 'quarter') {
+    const quarterStartMonth = Math.floor(end.getMonth() / 3) * 3
+    const start = new Date(end.getFullYear(), quarterStartMonth, 1)
+    return { startDate: formatLocalDate(start), endDate }
+  }
+  if (preset === 'year') {
+    const start = new Date(end.getFullYear(), 0, 1)
+    return { startDate: formatLocalDate(start), endDate }
+  }
+  return {
+    startDate: customStart || customerDisplayDateRange(7, date).startDate,
+    endDate: customEnd || endDate,
+  }
+}
+
+export function formatCompactDateRange(startDate: string, endDate: string) {
+  if (!startDate || !endDate) return ''
+  if (startDate === endDate) return startDate.slice(5)
+  const [sy, sm, sd] = startDate.split('-')
+  const [ey, em, ed] = endDate.split('-')
+  if (sy === ey) return `${sm}-${sd} ~ ${em}-${ed}`
+  return `${startDate} ~ ${endDate}`
+}
+
+export function workspaceTrendPeriodLabel(
+  preset: WorkspaceTrendPreset,
+  startDate: string,
+  endDate: string,
+) {
+  void preset
+  return formatCompactDateRange(startDate, endDate)
+}
+
 export function isBeforeCustomerCutoff(isoTime: string | null | undefined, date = new Date()) {
   if (!isoTime) return false
   const cutoffEnd = new Date(`${customerDisplayCutoffDate(date)}T23:59:59.999`)

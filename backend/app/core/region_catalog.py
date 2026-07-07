@@ -45,3 +45,33 @@ def region_display_name(region_code: str | None) -> str:
     if not code:
         return "全部区域"
     return REGION_NAME_BY_CODE.get(code, code)
+
+
+def normalize_region_codes(codes: list[str] | None) -> list[str]:
+    """去重并过滤非法省级编码。"""
+    if not codes:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in codes:
+        code = str(raw or "").strip()
+        if not code or code in seen or code not in REGION_NAME_BY_CODE:
+            continue
+        seen.add(code)
+        result.append(code)
+    return result
+
+
+def region_display_labels(codes: list[str] | None) -> str:
+    normalized = normalize_region_codes(codes)
+    if not normalized:
+        return "全部区域"
+    return "、".join(region_display_name(code) for code in normalized)
+
+
+def region_submission_targets(codes: list[str] | None) -> list[str | None]:
+    """模力单次任务仅支持 1 个 regionCode；多省时按省拆任务。空列表表示不限地区。"""
+    normalized = normalize_region_codes(codes)
+    if not normalized:
+        return [None]
+    return list(normalized)

@@ -105,7 +105,9 @@ async def save_knowledge_file(
 
 
 def delete_knowledge_file(db: Session, current: CurrentSession, file_id: int) -> None:
-    """逻辑删除知识库文件；客户只能删除本企业文件。"""
+    """逻辑删除知识库文件；客户侧不允许删除，仅平台运营可删。"""
+    if current.identity.identity_type == "CUSTOMER":
+        raise ValueError("客户侧不允许删除知识库资料")
     record = db.scalar(
         select(KnowledgeFile).where(KnowledgeFile.id == file_id, KnowledgeFile.deleted.is_(False))
     )
@@ -163,3 +165,25 @@ def assert_knowledge_file_access(db: Session, current: CurrentSession, file_id: 
         raise ValueError("文件不存在")
     _assert_knowledge_record_access(db, current, record)
     return record
+
+
+def resolve_knowledge_file_path(db: Session, current: CurrentSession, file_id: int) -> tuple[KnowledgeFile, Path]:
+    """返回已通过权限校验的文件记录与磁盘路径。"""
+    record = assert_knowledge_file_access(db, current, file_id)
+    file_path = _safe_file_path(record.storage_path)
+    if not file_path.exists():
+        raise ValueError("文件不存在于存储目录")
+    return record, file_path
+
+
+def knowledge_file_media_type(record: KnowledgeFile) -> str:
+    if record.content_type:
+        return record.content_type
+    mapping = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "md": "text/markdown; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+    }
+    return mapping.get(str(record.file_ext or "").lower(), "application/octet-stream")

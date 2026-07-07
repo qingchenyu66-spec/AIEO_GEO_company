@@ -48,6 +48,15 @@ const pendingSyncDetails = computed(() => data.value?.pending_sync_details || []
 const syncLive = computed(() => data.value?.sync_live || null)
 const expandedBeatRows = ref<Record<string, boolean>>({})
 
+const schedulerInsightClass = computed(() => {
+  const insights = data.value?.ops_insights
+  if (!insights) return ''
+  if (insights.scheduler_ok === true) return 'is-ok'
+  if (insights.scheduler_status === '未启用') return 'is-muted'
+  if (insights.scheduler_status === '需关注') return 'is-warn'
+  return 'is-bad'
+})
+
 function platformStatusClass(item: { pending?: number; processing?: number; failed?: number }) {
   if ((item.failed || 0) > 0) return 'is-critical'
   if ((item.pending || 0) > 0) return 'is-warning'
@@ -162,12 +171,12 @@ onUnmounted(() => {
     </div>
 
     <div v-if="data?.ops_insights" class="celery-insights-grid">
-      <section class="celery-insight-card">
+      <section class="celery-insight-card" :class="schedulerInsightClass">
         <Gauge />
         <div>
           <span>调度服务</span>
           <strong>{{ data.ops_insights.scheduler_status }}</strong>
-          <small>提交与同步进程需同时在线</small>
+          <small>{{ data.ops_insights.scheduler_detail || '提交与同步队列需有 Worker 消费' }}</small>
         </div>
       </section>
       <section class="celery-insight-card">

@@ -35,7 +35,7 @@ BUSINESS_METRIC_LABELS: dict[str, str] = {
     "ranking_drop": "排名下滑",
     "negative_rate": "负面占比",
     "task_failure_rate": "任务失败率",
-    "molizhishu_balance": "模力账户余额",
+    "molizhishu_balance": "账户余额",
 }
 
 TECHNICAL_METRIC_LABELS: dict[str, str] = {
@@ -76,11 +76,217 @@ def _queue_length(client, queue_name: str) -> int:
         return 0
 
 
-def _inspect_snapshot() -> tuple[dict[str, list], dict[str, list], dict[str, Any]]:
+_RUNTIME_INSPECT_CACHE: dict[str, Any] | None = None
+_RUNTIME_INSPECT_CACHE_AT = 0.0
+_RUNTIME_INSPECT_CACHE_TTL_SECONDS = 10.0
+
+
+def _worker_role_from_name(worker_name: str) -> str:
+    """Celery -n 形如 submit@HOST；取 @ 前缀比子串匹配更稳。"""
+    prefix = str(worker_name or "").split("@", 1)[0].strip().lower()
+    if prefix in {"submit", "sync", "default", "beat"}:
+        return prefix
+    lowered = worker_name.lower()
+    if "submit" in lowered:
+        return "submit"
+    if "sync" in lowered:
+        return "sync"
+    return "default"
+
+
+def _coverage_from_worker_names(worker_names: list[str]) -> dict[str, Any]:
+    submit_workers = sum(1 for name in worker_names if _worker_role_from_name(name) == "submit")
+    sync_workers = sum(1 for name in worker_names if _worker_role_from_name(name) == "sync")
+    return {
+        "submit_workers": submit_workers,
+        "sync_workers": sync_workers,
+        "has_submit_queue": submit_workers > 0,
+        "has_sync_queue": sync_workers > 0,
+    }
+
+
+def _probe_celery_runtime() -> dict[str, Any]:
+    """一次并行 inspect：ping + active_queues + active/reserved，减少 Windows 上重复超时。"""
+    from concurrent.futures import ThreadPoolExecutor
+
     from app.celery_app import celery_app
 
-    inspect = celery_app.control.inspect(timeout=0.4)
-    return inspect.active() or {}, inspect.reserved() or {}, inspect.stats() or {}
+    probe_timeout = max(2.0, float(settings.celery_inspect_timeout_seconds or 1.5))
+    inspect = celery_app.control.inspect(timeout=probe_timeout)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        ping_future = pool.submit(lambda: celery_app.control.ping(timeout=probe_timeout) or [])
+        queues_future = pool.submit(lambda: inspect.active_queues() or {})
+        active_future = pool.submit(lambda: inspect.active() or {})
+        reserved_future = pool.submit(lambda: inspect.reserved() or {})
+        ping_rows = ping_future.result()
+        active_queues = queues_future.result()
+        active_map = active_future.result()
+        reserved_map = reserved_future.result()
+
+    ping_names = {
+        name
+        for item in ping_rows
+        if isinstance(item, dict)
+        for name in item
+    }
+    worker_names = sorted(set(active_queues.keys()) | ping_names)
+
+    queue_names: set[str] = set()
+    submit_workers = 0
+    sync_workers = 0
+    for worker, queues in active_queues.items():
+        for queue in queues or []:
+            if not isinstance(queue, dict):
+                continue
+            name = str(queue.get("name") or "").strip()
+            if not name:
+                continue
+            queue_names.add(name)
+            if name == "submit":
+                submit_workers += 1
+            elif name == "sync":
+                sync_workers += 1
+
+    name_coverage = _coverage_from_worker_names(worker_names)
+    has_submit = "submit" in queue_names or name_coverage["has_submit_queue"]
+    has_sync = "sync" in queue_names or name_coverage["has_sync_queue"]
+    if submit_workers == 0 and name_coverage["submit_workers"] > 0:
+        submit_workers = name_coverage["submit_workers"]
+    if sync_workers == 0 and name_coverage["sync_workers"] > 0:
+        sync_workers = name_coverage["sync_workers"]
+
+    stats = {name: {} for name in ping_names}
+
+    return {
+        "active_map": active_map,
+        "reserved_map": reserved_map,
+        "stats": stats,
+        "worker_names": worker_names,
+        "workers_online": len(worker_names),
+        "submit_workers": submit_workers,
+        "sync_workers": sync_workers,
+        "has_submit_queue": has_submit,
+        "has_sync_queue": has_sync,
+        "queue_names": sorted(queue_names),
+        "inspect_queues_ok": bool(active_queues),
+    }
+
+
+def _inspect_snapshot() -> tuple[dict[str, list], dict[str, list], dict[str, Any]]:
+    """兼容旧调用；内部走统一 probe。"""
+    probe = _probe_celery_runtime()
+    return probe["active_map"], probe["reserved_map"], probe["stats"]
+
+
+def _inspect_worker_coverage(timeout: float | None = None) -> dict[str, Any]:
+    """兼容旧调用；内部走统一 probe。"""
+    del timeout
+    probe = _probe_celery_runtime()
+    return {
+        "worker_names": probe["worker_names"],
+        "workers_online": probe["workers_online"],
+        "submit_workers": probe["submit_workers"],
+        "sync_workers": probe["sync_workers"],
+        "has_submit_queue": probe["has_submit_queue"],
+        "has_sync_queue": probe["has_sync_queue"],
+        "queue_names": probe["queue_names"],
+        "inspect_queues_ok": probe["inspect_queues_ok"],
+    }
+
+
+def _scheduling_appears_healthy(beat_history: list[dict[str, Any]] | None) -> bool:
+    """Beat 近期有成功扫描时，说明调度实际在跑（inspect 在 Windows 上可能误报）。"""
+    if not beat_history:
+        return False
+    now = datetime.now(UTC)
+    for item in beat_history[:12]:
+        checked_raw = str(item.get("checked_at") or "")
+        if not checked_raw:
+            continue
+        try:
+            checked_at = datetime.fromisoformat(checked_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if (now - checked_at).total_seconds() > 900:
+            continue
+        if item.get("task_key") not in BEAT_TASK_KEYS:
+            continue
+        if str(item.get("status") or "") in {"ok", "locked"}:
+            return True
+    return False
+
+
+def _build_scheduler_insight(
+    runtime: dict[str, Any],
+    *,
+    beat_history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    workers_online = int(runtime.get("workers_online") or 0)
+    submit_workers = int(runtime.get("submit_workers") or 0)
+    sync_workers = int(runtime.get("sync_workers") or 0)
+    has_submit = bool(runtime.get("has_submit_queue"))
+    has_sync = bool(runtime.get("has_sync_queue"))
+
+    if not settings.celery_enabled:
+        return {
+            "scheduler_ok": None,
+            "scheduler_status": "未启用",
+            "scheduler_detail": "Celery 调度未开启",
+            "workers_online": 0,
+            "submit_workers": 0,
+            "sync_workers": 0,
+        }
+
+    if workers_online == 0:
+        return {
+            "scheduler_ok": False,
+            "scheduler_status": "离线",
+            "scheduler_detail": "未检测到 Worker，请运行 backend\\scripts\\start_celery.ps1 -Role all",
+            "workers_online": 0,
+            "submit_workers": 0,
+            "sync_workers": 0,
+        }
+
+    if has_submit and has_sync:
+        return {
+            "scheduler_ok": True,
+            "scheduler_status": "正常",
+            "scheduler_detail": f"{workers_online} 个进程在线 · 提交/同步已就绪",
+            "workers_online": workers_online,
+            "submit_workers": submit_workers,
+            "sync_workers": sync_workers,
+        }
+
+    if workers_online > 0 and _scheduling_appears_healthy(beat_history):
+        missing: list[str] = []
+        if not has_submit:
+            missing.append("提交")
+        if not has_sync:
+            missing.append("同步")
+        hint = f"（探测未确认{'/'.join(missing)}进程，Beat 扫描正常）" if missing else ""
+        return {
+            "scheduler_ok": True,
+            "scheduler_status": "正常",
+            "scheduler_detail": f"调度运行中 · {workers_online} 进程在线{hint}",
+            "workers_online": workers_online,
+            "submit_workers": submit_workers,
+            "sync_workers": sync_workers,
+        }
+
+    hints: list[str] = []
+    if not has_submit:
+        hints.append("未检测到提交进程")
+    if not has_sync:
+        hints.append("未检测到同步进程")
+    return {
+        "scheduler_ok": False,
+        "scheduler_status": "需关注",
+        "scheduler_detail": f"{' · '.join(hints)}（{workers_online} 进程在线）",
+        "workers_online": workers_online,
+        "submit_workers": submit_workers,
+        "sync_workers": sync_workers,
+    }
 
 
 def _task_detail_text(name: str, kwargs: dict[str, Any]) -> str:
@@ -136,13 +342,46 @@ def _format_runtime_task(task: dict[str, Any], worker: str, phase: str) -> dict[
 
 
 def _collect_runtime_tasks() -> dict[str, Any]:
+    global _RUNTIME_INSPECT_CACHE, _RUNTIME_INSPECT_CACHE_AT
+
     if not settings.celery_enabled:
-        return {"active": [], "reserved": [], "active_count": 0, "reserved_count": 0}
+        return {
+            "active": [],
+            "reserved": [],
+            "active_count": 0,
+            "reserved_count": 0,
+            "workers_online": 0,
+            "worker_names": [],
+        }
+
+    now = time.time()
+    if (
+        _RUNTIME_INSPECT_CACHE is not None
+        and now - _RUNTIME_INSPECT_CACHE_AT < _RUNTIME_INSPECT_CACHE_TTL_SECONDS
+    ):
+        return _RUNTIME_INSPECT_CACHE
+
     try:
-        active_map, reserved_map, stats = _inspect_snapshot()
+        probe = _probe_celery_runtime()
     except Exception as exc:
         logger.debug("Celery inspect unavailable: %s", exc)
-        return {"active": [], "reserved": [], "active_count": 0, "reserved_count": 0}
+        return {
+            "active": [],
+            "reserved": [],
+            "active_count": 0,
+            "reserved_count": 0,
+            "workers_online": 0,
+            "worker_names": [],
+            "submit_workers": 0,
+            "sync_workers": 0,
+            "has_submit_queue": False,
+            "has_sync_queue": False,
+            "queue_names": [],
+        }
+
+    active_map = probe["active_map"]
+    reserved_map = probe["reserved_map"]
+    stats = probe["stats"]
 
     active_rows: list[dict[str, Any]] = []
     reserved_rows: list[dict[str, Any]] = []
@@ -155,14 +394,22 @@ def _collect_runtime_tasks() -> dict[str, Any]:
 
     active_rows.sort(key=lambda row: row.get("started_at") or "", reverse=True)
     reserved_rows.sort(key=lambda row: (row.get("label") or "", row.get("worker") or ""))
-    return {
+    result = {
         "active": active_rows[:20],
         "reserved": reserved_rows[:20],
         "active_count": len(active_rows),
         "reserved_count": len(reserved_rows),
-        "workers_online": len(stats),
-        "worker_names": sorted(stats.keys()),
+        "workers_online": probe["workers_online"] or len(stats),
+        "worker_names": probe["worker_names"] or sorted(stats.keys()),
+        "submit_workers": probe["submit_workers"],
+        "sync_workers": probe["sync_workers"],
+        "has_submit_queue": probe["has_submit_queue"],
+        "has_sync_queue": probe["has_sync_queue"],
+        "queue_names": probe["queue_names"],
     }
+    _RUNTIME_INSPECT_CACHE = result
+    _RUNTIME_INSPECT_CACHE_AT = now
+    return result
 
 
 def _worker_stats_from_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
@@ -293,18 +540,10 @@ def _collect_ops_insights(beat_history: list[dict[str, Any]], runtime: dict[str,
         if item.get("task_key") == "app.tasks.monitor.scan_due_schedules" and last_due_scan is None:
             last_due_scan = item
 
-    workers_online = int(runtime.get("workers_online") or 0)
-    submit_workers = sum(
-        1 for name in (runtime.get("worker_names") or []) if "submit" in str(name).lower()
-    )
-    sync_workers = sum(
-        1 for name in (runtime.get("worker_names") or []) if "sync" in str(name).lower()
-    )
-    scheduler_ok = workers_online > 0 and submit_workers > 0 and sync_workers > 0
+    scheduler = _build_scheduler_insight(runtime, beat_history=beat_history)
 
     return {
-        "scheduler_ok": scheduler_ok,
-        "scheduler_status": "正常" if scheduler_ok else "异常",
+        **scheduler,
         "pending_sync_tasks": pending_sync_count,
         "today_scan_count": today_scans,
         "today_enqueued_tasks": today_enqueued,
@@ -320,6 +559,13 @@ def _collect_ops_insights(beat_history: list[dict[str, Any]], runtime: dict[str,
 
 def is_business_metric_type(metric_type: str) -> bool:
     return not str(metric_type or "").startswith(TECHNICAL_METRIC_PREFIXES)
+
+
+def threshold_display_name(metric_type: str, threshold_name: str | None) -> str:
+    name = str(threshold_name or "").strip()
+    if metric_type == "molizhishu_balance":
+        return name.replace("模力账户余额", "账户余额")
+    return name
 
 
 def business_metric_label(metric_type: str) -> str:
@@ -544,7 +790,7 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
         )
 
     workers = snapshot.get("workers") or {}
-    runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else _collect_runtime_tasks()
+    runtime = _collect_runtime_tasks()
     beat_history = _get_beat_history()
     runtime_rows = [
         *(runtime.get("active") or []),
@@ -593,10 +839,10 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
 
 
 def _worker_role_label(worker_name: str) -> str:
-    lowered = worker_name.lower()
-    if "submit" in lowered:
+    role = _worker_role_from_name(worker_name)
+    if role == "submit":
         return "提交进程"
-    if "sync" in lowered:
+    if role == "sync":
         return "同步进程"
     return "调度进程"
 

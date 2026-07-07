@@ -9,6 +9,7 @@ from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.diagnosis import BrandDiagnosis
 from app.schemas.common import ApiResponse
+from app.services.approval_service import queue_or_run
 from app.services.tenant_scope import (
     guard_tenant_resource_access,
     resolve_and_guard_tenant_id,
@@ -88,25 +89,44 @@ def create_diagnosis(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    record = BrandDiagnosis(
-        tenant_id=tenant_id,
-        created_by_user_id=current.user.id,
-        diagnosis_title=payload.get("diagnosis_title", "品牌诊断"),
-        health_score=payload.get("health_score", 80),
-        sentiment_summary=payload.get("sentiment_summary"),
-        strength_points=payload.get("strength_points"),
-        weakness_points=payload.get("weakness_points"),
-        recommendation=payload.get("recommendation"),
-        diagnosis_platforms_json=payload.get("diagnosis_platforms", ["doubao_mobile", "deepseek"]),
-        diagnosis_keywords_json=payload.get("diagnosis_keywords", []),
-        reference_count=payload.get("reference_count", 0),
-        monitor_data_summary=payload.get("monitor_data_summary"),
-        status="published",
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return ApiResponse(data={"id": record.id, "diagnosis_title": record.diagnosis_title})
+
+    def _execute():
+        record = BrandDiagnosis(
+            tenant_id=tenant_id,
+            created_by_user_id=current.user.id,
+            diagnosis_title=payload.get("diagnosis_title", "品牌诊断"),
+            health_score=payload.get("health_score", 80),
+            sentiment_summary=payload.get("sentiment_summary"),
+            strength_points=payload.get("strength_points"),
+            weakness_points=payload.get("weakness_points"),
+            recommendation=payload.get("recommendation"),
+            diagnosis_platforms_json=payload.get("diagnosis_platforms", ["doubao_mobile", "deepseek"]),
+            diagnosis_keywords_json=payload.get("diagnosis_keywords", []),
+            reference_count=payload.get("reference_count", 0),
+            monitor_data_summary=payload.get("monitor_data_summary"),
+            status="published",
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return {"id": record.id, "diagnosis_title": record.diagnosis_title}
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="diagnosis.record.create",
+            module="diagnosis",
+            action="create",
+            summary=f"创建品牌诊断：{payload.get('diagnosis_title', '品牌诊断')}",
+            payload={"body": payload},
+            tenant_id=tenant_id,
+            executor=_execute,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=result)
 
 
 @router.get("/records/{record_id}", response_model=ApiResponse[dict])

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.region_catalog import normalize_region_codes
 
 
 class BrandKeywordGroupSaveRequest(BaseModel):
@@ -9,6 +11,7 @@ class BrandKeywordGroupSaveRequest(BaseModel):
     monitor_keyword: str | None = Field(default=None, max_length=150)
     monitor_keywords: list[str] = Field(default_factory=list)
     exposure_terms: list[str] = Field(default_factory=list)
+    platforms: list[str] = Field(default_factory=list)
     sort_order: int = 0
     status: bool = True
 
@@ -25,7 +28,12 @@ class BrandAssetSaveRequest(BaseModel):
     product_keywords: list[str] = Field(default_factory=list)
     monitored_platforms: list[str] = Field(default_factory=list)
     keyword_groups: list[BrandKeywordGroupSaveRequest] = Field(default_factory=list)
-    region_code: str | None = Field(default=None, max_length=20)
+    region_codes: list[str] = Field(default_factory=list, max_length=34)
+
+    @field_validator("region_codes")
+    @classmethod
+    def validate_region_codes(cls, value: list[str]) -> list[str]:
+        return normalize_region_codes(value)
     official_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
     schedule_type: str = Field(default="daily_times", pattern="^(daily_times|fixed_times|weekly|monthly)$")

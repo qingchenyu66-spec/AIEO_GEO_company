@@ -3,6 +3,7 @@ import { inject, onMounted } from 'vue'
 import { HelpCircle } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
 import { keywordGroupMonitorKeywords } from '../../../services/brand'
@@ -27,7 +28,6 @@ const {
   platformLabelMap,
   formatPlatformLabels,
   supportedPlatforms,
-  regionOptions,
   enterpriseDetailMode,
   enterpriseDetailTab,
   enterpriseInfoDialog,
@@ -38,6 +38,15 @@ const {
   enterpriseFilters,
   tenantDialog,
   tenantForm,
+  tenantTransferDialog,
+  tenantTransferTarget,
+  tenantTransferOwnerId,
+  tenantSalesOwners,
+  loadingTenantSalesOwners,
+  transferringTenantOwner,
+  canTransferTenantOwner,
+  canFilterBySales,
+  tenantSalesFilterOptions,
   knowledgeFiles,
   loadingKnowledgeFiles,
   competitorRows,
@@ -57,6 +66,7 @@ const {
   canRestoreTenantService,
   stopTenantActionLabel,
   tenantServicePeriod,
+  tenantOwnerLabel,
   editingGroupIndex,
   keywordGroupDisplayName,
   startEditGroupName,
@@ -80,10 +90,22 @@ const {
   submitTenant,
   removeTenant,
   restoreTenantService,
+  openTenantTransferDialog,
+  submitTenantTransfer,
   addCompetitorTag,
   removeCompetitorRow,
   formatFileSize,
   resetDetailMode,
+  knowledgePreviewVisible,
+  knowledgePreviewFile,
+  knowledgePreviewText,
+  knowledgePreviewLoading,
+  knowledgePreviewError,
+  canDeleteKnowledgeFiles,
+  previewKnowledgeFile,
+  closeKnowledgePreview,
+  downloadKnowledgeFileItem,
+  removeKnowledgeFile,
   reportDialog,
   reportDialogTenant,
   reportGenerating,
@@ -117,7 +139,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </div>
       </div>
       <div class="enterprise-filter-bar">
-        <label>
+        <label class="enterprise-filter-keyword">
           <span>企业名称</span>
           <input v-model="enterpriseFilters.keyword" placeholder="输入企业名称 / 编码筛选" />
         </label>
@@ -131,28 +153,57 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             <option value="stopped">已停止服务</option>
           </select>
         </label>
-        <button class="filter-reset-btn" @click="enterpriseFilters.keyword = ''; enterpriseFilters.expiry = 'active'">重置</button>
+        <label v-if="canFilterBySales">
+          <span>归属销售</span>
+          <select v-model="enterpriseFilters.owner_user_id">
+            <option value="all">全部销售</option>
+            <option value="none">未指定</option>
+            <option v-for="owner in tenantSalesFilterOptions" :key="owner.id" :value="owner.id">{{ owner.name }}</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          class="enterprise-filter-reset"
+          @click="enterpriseFilters.keyword = ''; enterpriseFilters.expiry = 'active'; enterpriseFilters.owner_user_id = 'all'"
+        >
+          重置
+        </button>
+      </div>
+      <div class="enterprise-list-summary">
+        <span>共 {{ filteredTenants.length }} 家企业</span>
+        <span v-if="loadingBrand">列表刷新中…</span>
       </div>
       <div class="enterprise-table">
-        <div v-for="tenant in filteredTenants" :key="tenant.id" class="enterprise-row" :class="{ stopped: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">
+        <div
+          v-for="tenant in filteredTenants"
+          :key="tenant.id"
+          class="enterprise-row"
+          :class="{ stopped: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }"
+        >
           <div class="enterprise-main">
             <b>{{ tenant.name }}</b>
             <small>{{ tenantServicePeriod(tenant) }}</small>
           </div>
           <div class="enterprise-metrics">
-            <span><small>监测企业</small><b>{{ tenant.name }}</b></span>
-            <span><small>服务状态</small><b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b></span>
-            <span><small>自动监测</small><b>每日 3 次</b></span>
+            <span>
+              <small>服务状态</small>
+              <b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b>
+            </span>
+            <span>
+              <small>自动监测</small>
+              <b>每日 3 次</b>
+            </span>
           </div>
           <div class="enterprise-actions">
-            <button class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
-            <button class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
-            <button v-if="canGenerateEnterpriseReport" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
-            <button v-if="canStopTenantService(tenant)" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
-            <button v-else-if="canRestoreTenantService(tenant)" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
+            <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+            <button type="button" class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+            <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
+            <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
+            <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
+            <button v-else-if="canRestoreTenantService(tenant)" type="button" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
           </div>
         </div>
-        <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty">暂无符合筛选条件的企业。</div>
+        <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty enterprise-empty">暂无符合筛选条件的企业。</div>
       </div>
     </article>
 
@@ -179,7 +230,13 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <span>企业状态</span>
           <div class="readonly-status" :class="{ stopped: !enterpriseFormServiceActive }">{{ enterpriseFormServiceLabel }}</div>
         </label>
-        <label class="region-field"><span>服务地区</span><select v-model="brandForm.region_code" :disabled="!canEditEnterpriseTab('profile')"><option v-for="region in regionOptions" :key="region.code" :value="region.code">{{ region.name }}</option></select></label>
+        <label class="region-field form-field-full">
+          <span>服务地区</span>
+          <RegionMultiSelect
+            v-model="brandForm.region_codes"
+            :disabled="!canEditEnterpriseTab('profile')"
+          />
+        </label>
         <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
       </div>
       <div v-if="enterpriseDetailTab === 'profile' && canEditEnterpriseTab('profile')" class="section-save-actions keyword-save-actions">
@@ -189,7 +246,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <div class="panel-head">
           <div>
             <h2>监测词组配置</h2>
-            <p>一个词组可配置多个监测关键词，每个关键词绑定多个露出词。<strong>监测关键词即检测问题</strong>，系统不再套用模板生成；<strong>露出词</strong>用于在 AI 推荐列表中匹配品牌排名。提交检测时以品牌简称为监控主词，露出词作为别名传给模力指数。</p>
+            <p>一个词组可配置多个监测关键词、多个露出词，并<strong>单独选择监测平台</strong>。<strong>监测关键词即检测问题</strong>，系统不再套用模板生成；<strong>露出词</strong>用于在 AI 推荐列表中匹配品牌排名。定时任务按各词组勾选的平台提交检测。</p>
           </div>
           <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" @click="addKeywordGroup">新增词组</button>
         </div>
@@ -269,6 +326,20 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   />
                 </div>
               </div>
+              <div class="keyword-field keyword-group-platform-field">
+                <span class="keyword-field-label">监测平台（{{ (group.platforms || []).length }}）</span>
+                <div class="platform-check-grid compact">
+                  <label v-for="platform in supportedPlatforms" :key="`${index}-${platform.code}`" class="platform-check">
+                    <input
+                      v-model="group.platforms"
+                      type="checkbox"
+                      :value="platform.code"
+                      :disabled="!canEditEnterpriseTab('keywords')"
+                    />
+                    <PlatformBadge :code="platform.code" size="sm" />
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
           <div v-if="!keywordGroupRows.length" class="mini-empty">暂无监测词组，请先新增一个。</div>
@@ -277,43 +348,15 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测词配置已保存')">保存监测词配置</button>
         </div>
       </section>
-      <section v-if="enterpriseDetailTab === 'platforms'" class="schedule-box">
-        <div class="panel-head">
-          <div>
-            <h2 class="title-with-help">
-              购买模型与监测范围
-              <el-tooltip placement="top" effect="light" content="每个监测关键词即一次检测问题，再乘以勾选的平台数生成子任务。排名矩阵按露出词在推荐列表中的位置展示。">
-                <HelpCircle />
-              </el-tooltip>
-            </h2>
-            <p>后续定时任务只提交这里勾选的平台，每家企业可以不同。</p>
-          </div>
-          <div class="section-save-actions">
-            <span>{{ brandForm.monitored_platforms.length }} 个平台</span>
-            <button v-if="canEditEnterpriseTab('platforms')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('平台配置已保存')">保存平台配置</button>
-          </div>
-        </div>
-        <div class="platform-check-grid">
-          <label v-for="platform in supportedPlatforms" :key="platform.code" class="platform-check">
-            <input v-model="brandForm.monitored_platforms" type="checkbox" :value="platform.code" :disabled="!canEditEnterpriseTab('platforms')" />
-            <PlatformBadge :code="platform.code" size="sm" />
-          </label>
-        </div>
-      </section>
       <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">
         <div class="panel-head">
-          <div><h2>自动监测计划</h2><p>用于后续调度器按企业配置自动提交检测任务。</p></div>
+          <div><h2>自动监测计划</h2><p>每天在下方配置的时间点自动提交检测任务。</p></div>
           <button v-if="canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
-        </div>
-        <div class="schedule-type-grid">
-          <label><input v-model="brandForm.schedule_type" type="radio" value="daily_times" :disabled="!canEditEnterpriseTab('schedule')" /><span>每天</span></label>
-          <label><input v-model="brandForm.schedule_type" type="radio" value="weekly" :disabled="!canEditEnterpriseTab('schedule')" /><span>每周</span></label>
-          <label><input v-model="brandForm.schedule_type" type="radio" value="monthly" :disabled="!canEditEnterpriseTab('schedule')" /><span>每月</span></label>
         </div>
         <div class="brand-form-grid">
           <div class="schedule-time-picker">
             <div class="schedule-time-title">
-              <span>执行时间</span>
+              <span>每日执行时间</span>
               <button v-if="canEditEnterpriseTab('schedule')" class="filter-reset-btn" @click="addScheduleTime">新增时间</button>
             </div>
             <div class="schedule-time-list">
@@ -322,10 +365,8 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                 <button v-if="canEditEnterpriseTab('schedule')" class="danger-text-btn" @click="removeScheduleTime(index)">删除</button>
               </div>
             </div>
-            <div v-if="!brandForm.schedule_times.length" class="mini-empty compact-empty">暂无执行时间，请点击“新增时间”配置。</div>
+            <div v-if="!brandForm.schedule_times.length" class="mini-empty compact-empty">暂无执行时间，请点击「新增时间」配置。</div>
           </div>
-          <label v-if="brandForm.schedule_type === 'weekly'"><span>每周执行日</span><select v-model="brandForm.schedule_weekdays" :disabled="!canEditEnterpriseTab('schedule')" multiple><option :value="1">周一</option><option :value="2">周二</option><option :value="3">周三</option><option :value="4">周四</option><option :value="5">周五</option><option :value="6">周六</option><option :value="7">周日</option></select></label>
-          <label v-if="brandForm.schedule_type === 'monthly'"><span>每月执行日期</span><textarea v-model="brandForm.schedule_month_days_text" :disabled="!canEditEnterpriseTab('schedule')" rows="3" placeholder="一行一个，例如 1、15、28"></textarea></label>
         </div>
       </section>
     </article>
@@ -351,14 +392,29 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </article>
       <article v-if="enterpriseDetailTab === 'files'" class="panel competitor-panel">
         <div class="panel-head">
-          <div><h2>客户上传文件</h2><p>查看当前企业从客户端上传的 PDF、Word、Markdown 或 TXT 原文件记录。</p></div>
+          <div><h2>客户上传文件</h2><p>查看、预览、下载或删除当前企业从客户端上传的资料文件。</p></div>
           <span>{{ knowledgeFiles.length }} 个文件</span>
         </div>
         <div class="knowledge-files">
           <div v-if="loadingKnowledgeFiles" class="mini-empty">文件列表加载中...</div>
-          <div v-for="file in knowledgeFiles" :key="file.id">
-            <b>{{ file.original_name }}</b>
-            <span>{{ file.file_ext.toUpperCase() }} · {{ formatFileSize(file.file_size) }} · 已上传</span>
+          <div v-for="file in knowledgeFiles" :key="file.id" class="knowledge-file-row">
+            <div class="knowledge-file-main">
+              <b>{{ file.original_name }}</b>
+              <span>{{ file.file_ext.toUpperCase() }} · {{ formatFileSize(file.file_size) }} · 已上传</span>
+            </div>
+            <div class="knowledge-file-actions">
+              <button type="button" class="filter-reset-btn tiny-btn" @click="previewKnowledgeFile(file)">预览</button>
+              <button type="button" class="filter-reset-btn tiny-btn" @click="downloadKnowledgeFileItem(file)">下载</button>
+              <button
+                v-if="canDeleteKnowledgeFiles"
+                type="button"
+                class="danger-text-btn"
+                :disabled="loadingKnowledgeFiles"
+                @click="removeKnowledgeFile(file)"
+              >
+                删除
+              </button>
+            </div>
           </div>
           <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">该企业暂未上传文件。</div>
         </div>
@@ -373,6 +429,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <p>{{ enterpriseInfoTenant ? tenantServicePeriod(enterpriseInfoTenant) : '-' }}</p>
           <div class="info-grid">
             <span><small>服务状态</small><b>{{ enterpriseInfoTenant ? tenantServiceLabel(enterpriseInfoTenant) : '-' }}</b></span>
+            <span><small>归属销售</small><b>{{ enterpriseInfoTenant ? tenantOwnerLabel(enterpriseInfoTenant) : '-' }}</b></span>
             <span><small>官网</small><b>{{ enterpriseInfoAsset?.official_url || '-' }}</b></span>
             <span><small>购买模型</small><b>{{ formatPlatformLabels(enterpriseInfoAsset?.monitored_platforms || [], platformLabelMap) || '-' }}</b></span>
           </div>
@@ -396,6 +453,28 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="knowledgePreviewVisible"
+      width="760px"
+      :title="knowledgePreviewFile?.original_name || '文件预览'"
+      @closed="closeKnowledgePreview"
+    >
+      <div v-if="knowledgePreviewLoading" class="mini-empty">预览加载中...</div>
+      <div v-else-if="knowledgePreviewError" class="mini-empty">{{ knowledgePreviewError }}</div>
+      <pre v-else-if="knowledgePreviewText" class="knowledge-preview-body">{{ knowledgePreviewText }}</pre>
+      <div v-else class="mini-empty">暂无可预览的文本内容，可尝试下载原文件查看。</div>
+      <template #footer>
+        <button class="plain-btn" @click="closeKnowledgePreview">关闭</button>
+        <button
+          v-if="knowledgePreviewFile"
+          class="filter-reset-btn"
+          @click="downloadKnowledgeFileItem(knowledgePreviewFile)"
+        >
+          下载原文件
+        </button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="reportDialog" width="520px" title="生成报告">
       <p v-if="reportDialogTenant" class="report-dialog-hint">为「{{ reportDialogTenant.name }}」生成监测报告，生成后可编辑并发布，客户仅可查看已发布报告。</p>
       <div class="form-grid password-grid">
@@ -414,6 +493,29 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <button class="plain-btn" @click="reportDialog = false">取消</button>
         <button class="primary-btn" :disabled="reportGenerating" @click="submitEnterpriseReport">
           {{ reportGenerating ? '生成中…' : '生成报告' }}
+        </button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="tenantTransferDialog" width="520px" title="转移归属销售">
+      <p v-if="tenantTransferTarget" class="report-dialog-hint">
+        将「{{ tenantTransferTarget.name }}」的归属销售从「{{ tenantOwnerLabel(tenantTransferTarget) }}」转移给其他销售账号。转移后原销售将无法访问该企业。
+      </p>
+      <div class="form-grid password-grid">
+        <label class="form-field-full">
+          <span>目标销售</span>
+          <select v-model.number="tenantTransferOwnerId" :disabled="loadingTenantSalesOwners || transferringTenantOwner">
+            <option disabled :value="null">{{ loadingTenantSalesOwners ? '销售列表加载中…' : '请选择销售账号' }}</option>
+            <option v-for="owner in tenantSalesOwners" :key="owner.id" :value="owner.id">
+              {{ owner.display_name }}（{{ owner.username }}）
+            </option>
+          </select>
+        </label>
+      </div>
+      <template #footer>
+        <button class="plain-btn" @click="tenantTransferDialog = false">取消</button>
+        <button class="primary-btn" :disabled="loadingTenantSalesOwners || transferringTenantOwner" @click="submitTenantTransfer">
+          {{ transferringTenantOwner ? '提交中…' : '确认转移' }}
         </button>
       </template>
     </el-dialog>

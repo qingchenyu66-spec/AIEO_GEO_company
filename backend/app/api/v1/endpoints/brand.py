@@ -19,6 +19,7 @@ from app.services.brand_service import (
     save_brand_asset,
     save_competitor,
 )
+from app.services.approval_service import queue_or_run
 from app.services.tenant_scope import resolve_and_guard_tenant_id
 
 router = APIRouter(prefix="/brand")
@@ -72,21 +73,36 @@ def upsert_brand_asset(
         "platform.audit",
         "platform.audit.profile",
         "platform.audit.keywords",
-        "platform.audit.models",
         "platform.audit.schedule",
     ])
-    try:
+    tenant_id = payload.tenant_id
+
+    def _execute():
         asset = save_brand_asset(db, payload, current)
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         competitors = list_competitors(db, asset.tenant_id)
+        return {
+            "tenant_id": asset.tenant_id,
+            "asset": asset_to_dict(asset, keyword_groups),
+            "competitors": [competitor_to_dict(item) for item in competitors],
+        }
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="brand.asset.upsert",
+            module="brand",
+            action="update",
+            summary=f"保存企业配置：{payload.company_full_name or payload.brand_name}",
+            payload={"body": payload.model_dump(mode="json")},
+            tenant_id=tenant_id,
+            executor=_execute,
+        )
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="brand.upsert")
-    return ApiResponse(data={
-        "tenant_id": asset.tenant_id,
-        "asset": asset_to_dict(asset, keyword_groups),
-        "competitors": [competitor_to_dict(item) for item in competitors],
-    })
+    return ApiResponse(data=result)
 
 
 @router.post("/competitors", response_model=ApiResponse[dict])

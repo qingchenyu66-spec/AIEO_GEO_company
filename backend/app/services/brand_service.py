@@ -7,6 +7,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.dependencies import CurrentSession
 from app.core.platform_order import sort_platform_codes
+from app.core.region_catalog import normalize_region_codes
 from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
@@ -124,6 +125,38 @@ def keyword_group_display_label(group: BrandKeywordGroup | dict[str, Any] | None
     return f"{keywords[0]}等{len(keywords)}词"
 
 
+def keyword_group_platforms(
+    group: BrandKeywordGroup | dict[str, Any] | None,
+    asset: BrandAsset | None = None,
+) -> list[str]:
+    """词组绑定的监测平台；无配置时回退企业级平台范围（兼容旧数据）。"""
+    if group is None:
+        return sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+    if isinstance(group, BrandKeywordGroup):
+        raw = list(group.platforms_json or [])
+    else:
+        raw = list(group.get("platforms") or [])
+    codes = sort_platform_codes(_dedupe([str(code or "").strip() for code in raw if str(code or "").strip()]))
+    if codes:
+        return codes
+    return sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+
+
+def tenant_purchased_platforms(db: Session, tenant_id: int, asset: BrandAsset | None = None) -> list[str]:
+    """企业已购/可用平台：优先汇总各启用词组平台。"""
+    asset = asset or get_brand_asset(db, tenant_id)
+    if asset is None:
+        return []
+    union: set[str] = set()
+    for group in list_keyword_groups(db, tenant_id):
+        if not group.status or group.deleted:
+            continue
+        union.update(keyword_group_platforms(group, asset))
+    if union:
+        return sort_platform_codes(list(union))
+    return sort_platform_codes(list(asset.monitored_platforms_json or []))
+
+
 def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
     """旧数据没有词组表时，用旧字段临时拼出一组可用关系。"""
     monitor_keywords = _dedupe([asset.company_full_name, asset.brand_name, asset.brand_short_name, *(asset.monitor_keywords_json or [])])
@@ -137,6 +170,7 @@ def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
             "monitor_keyword": keyword,
             "monitor_keywords": [keyword],
             "exposure_terms": aliases if index == 0 else [keyword],
+            "platforms": sort_platform_codes(list(asset.monitored_platforms_json or [])),
             "sort_order": index,
             "status": True,
         })
@@ -154,6 +188,7 @@ def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
         "monitor_keyword": primary,
         "monitor_keywords": monitor_keywords,
         "exposure_terms": group.exposure_terms_json or [],
+        "platforms": keyword_group_platforms(group),
         "sort_order": group.sort_order,
         "status": group.status,
     }
@@ -175,6 +210,7 @@ def ensure_keyword_group_payload(group: BrandKeywordGroup | dict[str, Any], inde
             "monitor_keyword": primary,
             "monitor_keywords": monitor_keywords,
             "exposure_terms": list(group.get("exposure_terms") or []),
+            "platforms": keyword_group_platforms(group, asset=None),
             "sort_order": group.get("sort_order", index),
             "status": group.get("status", True),
         }
@@ -228,6 +264,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
                 monitor_keyword=primary,
                 monitor_keywords_json=list(keywords),
                 exposure_terms_json=_dedupe(item.exposure_terms or keywords),
+                platforms_json=sort_platform_codes(_dedupe(item.platforms or [])),
             )
             db.add(group)
         group.brand_asset_id = asset.id
@@ -237,6 +274,9 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         flag_modified(group, "monitor_keywords_json")
         group.exposure_terms_json = _dedupe(item.exposure_terms or keywords)
         flag_modified(group, "exposure_terms_json")
+        platforms = sort_platform_codes(_dedupe(item.platforms or []))
+        group.platforms_json = platforms
+        flag_modified(group, "platforms_json")
         group.sort_order = item.sort_order if item.sort_order is not None else index
         group.status = item.status
         group.deleted = False
@@ -245,6 +285,20 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
     for group_id, group in existing.items():
         if group_id not in seen_ids:
             group.deleted = True
+
+    union_platforms: list[str] = []
+    for item in db.scalars(
+        select(BrandKeywordGroup).where(
+            BrandKeywordGroup.tenant_id == asset.tenant_id,
+            BrandKeywordGroup.deleted.is_(False),
+            BrandKeywordGroup.status.is_(True),
+        )
+    ):
+        union_platforms.extend(keyword_group_platforms(item))
+    if union_platforms:
+        asset.monitored_platforms_json = sort_platform_codes(_dedupe(union_platforms))
+    elif payload.monitored_platforms:
+        asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
 
 
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
@@ -273,8 +327,9 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     asset.monitor_keywords_json = _dedupe([payload.brand_name, payload.brand_short_name, *payload.monitor_keywords, *payload.product_keywords])
     asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
     asset.product_keywords_json = []
-    asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
-    asset.region_code = payload.region_code.strip() if payload.region_code else None
+    if not payload.keyword_groups:
+        asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
+    asset.region_codes_json = normalize_region_codes(payload.region_codes)
     asset.official_url = payload.official_url
     asset.description = payload.description
     asset.schedule_type = payload.schedule_type
@@ -370,7 +425,7 @@ def asset_to_dict(
         "product_keywords": asset.product_keywords_json,
         "monitored_platforms": sort_platform_codes(asset.monitored_platforms_json),
         "keyword_groups": normalized_groups,
-        "region_code": asset.region_code,
+        "region_codes": normalize_region_codes(asset.region_codes_json or []),
         "official_url": asset.official_url,
         "description": asset.description,
         "schedule_type": asset.schedule_type,

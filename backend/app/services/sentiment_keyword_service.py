@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta, time
+from datetime import date, datetime, timedelta, time
 from typing import Any
 
 from sqlalchemy import select
@@ -15,11 +15,11 @@ from app.api.dependencies import CurrentSession
 from app.core.chinese_stop_words import SENTIMENT_STOP_WORDS
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import get_brand_asset
-from app.services.monitor_service import customer_display_cutoff
 from app.services.competitor_analytics_service import (
     _entity_mentioned_in_entries,
     _normalize_sentiment_label,
     _parse_platform_filters,
+    resolve_analytics_date_range,
 )
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
@@ -192,6 +192,8 @@ def build_sentiment_keywords(
     platform: str | None = None,
     platforms: str | None = None,
     days: int = 30,
+    start_date: date | None = None,
+    end_date: date | None = None,
     prompt: str | None = None,
     limit: int = 80,
 ) -> dict[str, Any]:
@@ -199,15 +201,12 @@ def build_sentiment_keywords(
 
     asset = get_brand_asset(db, resolved_tenant_id)
     brand_names = _brand_names(asset)
-    if current.identity.identity_type == "CUSTOMER":
-        range_end = customer_display_cutoff()
-        range_start = datetime.combine(
-            range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
-            time.min,
-        )
-    else:
-        range_end = datetime.now()
-        range_start = range_end - timedelta(days=max(1, min(days, 365)))
+    range_start, range_end = resolve_analytics_date_range(
+        current,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
 

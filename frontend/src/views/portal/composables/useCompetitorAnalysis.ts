@@ -5,7 +5,12 @@ import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getCompetitorCompare, getSentimentKeywords, type CompetitorCompareSummary, type SentimentKeywordItem, type SentimentKeywordsSummary } from '../../../services/analytics'
 import { useAuthStore } from '../../../stores/auth'
-import { customerDisplayPeriodLabel } from '../../../utils/customerMonitorDate'
+import {
+  customerDisplayCutoffDate,
+  workspaceTrendDateRange,
+  workspaceTrendPeriodLabel,
+  type WorkspaceTrendPreset,
+} from '../../../utils/customerMonitorDate'
 import { useSentimentWordCloud } from '../../../composables/useSentimentWordCloud'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { resolveRealtimeMenu } from '../portalNavigation'
@@ -47,12 +52,19 @@ export function useBrandInsights(options?: {
   const router = useRouter()
   const auth = useAuthStore()
   const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
-  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const analytics = inject(PortalAnalyticsKey)!
   const brandAsset = analytics.brandAsset
   const brandCompetitors = analytics.brandCompetitors
 
   const datePreset = ref<CompetitorDatePreset>('30')
+  const trendPreset = ref<WorkspaceTrendPreset>('month')
+  const initialTrendRange = workspaceTrendDateRange('month')
+  const trendStartDate = ref(initialTrendRange.startDate)
+  const trendEndDate = ref(initialTrendRange.endDate)
+  const trendMaxDate = customerDisplayCutoffDate()
+  const trendPeriodLabel = computed(() => (
+    workspaceTrendPeriodLabel(trendPreset.value, trendStartDate.value, trendEndDate.value)
+  ))
   const selectedPlatforms = ref<string[]>([])
   const promptFilter = ref('')
   const loading = ref(false)
@@ -74,6 +86,66 @@ export function useBrandInsights(options?: {
   )
 
   const days = computed(() => Number(datePreset.value))
+
+  function syncTrendRange(preset: WorkspaceTrendPreset) {
+    const range = workspaceTrendDateRange(
+      preset,
+      trendStartDate.value,
+      trendEndDate.value,
+    )
+    trendStartDate.value = range.startDate
+    trendEndDate.value = range.endDate
+  }
+
+  function applyTrendPreset(preset: WorkspaceTrendPreset) {
+    trendPreset.value = preset
+    if (preset === 'custom') return
+    syncTrendRange(preset)
+    void loadSummary()
+  }
+
+  function onCustomTrendDateChange() {
+    if (trendStartDate.value > trendEndDate.value) {
+      trendStartDate.value = trendEndDate.value
+    }
+    if (trendEndDate.value > trendMaxDate) {
+      trendEndDate.value = trendMaxDate
+    }
+    if (trendStartDate.value > trendMaxDate) {
+      trendStartDate.value = trendMaxDate
+    }
+    trendPreset.value = 'custom'
+    void loadSummary()
+  }
+
+  function buildCompareParams() {
+    const base = {
+      platforms: selectedPlatforms.value.length ? selectedPlatforms.value.join(',') : undefined,
+      prompt: promptFilter.value || undefined,
+      tenant_id: platformTenantId.value,
+    }
+    if (isCustomerView.value) {
+      return {
+        ...base,
+        start_date: trendStartDate.value,
+        end_date: trendEndDate.value,
+      }
+    }
+    return {
+      ...base,
+      days: days.value,
+    }
+  }
+
+  function drillDownDateDays() {
+    if (!isCustomerView.value) return datePreset.value
+    const start = new Date(`${trendStartDate.value}T00:00:00`)
+    const end = new Date(`${trendEndDate.value}T00:00:00`)
+    const span = Math.ceil((end.getTime() - start.getTime()) / 86400000) + 1
+    if (span <= 7) return '7'
+    if (span <= 30) return '30'
+    return '90'
+  }
 
   const platformTabs = computed(() => {
     const counts = new Map<string, number>()
@@ -233,7 +305,7 @@ export function useBrandInsights(options?: {
     const prompt = options?.prompt ?? promptFilter.value
     if (prompt) query.monitor_prompt = prompt
 
-    query.date_days = datePreset.value
+    query.date_days = drillDownDateDays()
     query.view = 'matrix'
 
     const dayIso = options?.dayLabel ? resolveTrendDayIso(options.dayLabel) : undefined
@@ -279,12 +351,7 @@ export function useBrandInsights(options?: {
     const version = ++loadVersion
     loading.value = true
     try {
-      const params = {
-        days: days.value,
-        platforms: selectedPlatforms.value.length ? selectedPlatforms.value.join(',') : undefined,
-        prompt: promptFilter.value || undefined,
-        tenant_id: platformTenantId.value,
-      }
+      const params = buildCompareParams()
       const compareData = await withRetry(() => getCompetitorCompare(params))
       if (version !== loadVersion) return
       summary.value = compareData
@@ -331,7 +398,12 @@ export function useBrandInsights(options?: {
   function resetFilters() {
     selectedPlatforms.value = []
     promptFilter.value = ''
-    datePreset.value = '30'
+    if (isCustomerView.value) {
+      trendPreset.value = 'month'
+      syncTrendRange('month')
+    } else {
+      datePreset.value = '30'
+    }
   }
 
   function exportCsv() {
@@ -360,7 +432,23 @@ export function useBrandInsights(options?: {
     ElMessage.success('已导出 CSV')
   }
 
-  watch([datePreset, selectedPlatforms, promptFilter], () => { void loadSummary() }, { deep: true })
+  watch([datePreset], () => {
+    if (!isCustomerView.value) void loadSummary()
+  })
+  watch([selectedPlatforms, promptFilter], () => { void loadSummary() })
+  watch(promptOptions, (options) => {
+    if (promptFilter.value && !options.includes(promptFilter.value)) {
+      promptFilter.value = ''
+    }
+  })
+  watch(
+    () => (brandAsset.value?.keyword_groups || [])
+      .map(group => `${group.id}:${group.status}:${(group.monitor_keywords || []).join('|')}`)
+      .join('||'),
+    (next, prev) => {
+      if (prev && next !== prev) void loadSummary()
+    },
+  )
   watch(
     () => brandCompetitors.value.map(item => `${item.id}:${item.name}`).join('|'),
     (next, prev) => {
@@ -384,7 +472,13 @@ export function useBrandInsights(options?: {
     brandAsset,
     brandCompetitors,
     isCustomerView,
-    customerPeriodLabel,
+    trendPreset,
+    trendStartDate,
+    trendEndDate,
+    trendMaxDate,
+    trendPeriodLabel,
+    applyTrendPreset,
+    onCustomTrendDateChange,
     datePreset,
     selectedPlatforms,
     promptFilter,

@@ -17,7 +17,7 @@ import {
 import { notifyOperationError } from '../../../utils/requestError'
 import { platformLabelMap } from '../portalMaps'
 import { formatDateTime } from '../portalUtils'
-import { regionOptions } from '../regionOptions'
+import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
 export const PROMPT_TEMPLATES = [
   { label: '产品推荐', value: '例如：XXX有哪些产品值得推荐？' },
@@ -68,7 +68,7 @@ export function useLeadDiagnosis() {
     brand_name: '',
     prompts: ['', '', '', '', ''],
     competitors: '',
-    region_code: '',
+    region_codes: [] as string[],
     contact_note: '',
     start_immediately: true,
   })
@@ -134,8 +134,7 @@ export function useLeadDiagnosis() {
   ))
 
   function regionLabel(code: string | null | undefined) {
-    if (!code) return '全部区域'
-    return regionOptions.find(item => item.code === code)?.name || code
+    return regionLabels(code ? [code] : [])
   }
 
   const filledPromptCount = computed(() => (
@@ -247,7 +246,7 @@ export function useLeadDiagnosis() {
       brand_name: '',
       prompts: ['', '', '', '', ''],
       competitors: '',
-      region_code: '',
+      region_codes: [],
       contact_note: '',
       start_immediately: true,
     }
@@ -299,7 +298,7 @@ export function useLeadDiagnosis() {
         brand_name: brand,
         prompts,
         competitors,
-        region_code: createForm.value.region_code.trim() || null,
+        region_codes: [...createForm.value.region_codes],
         contact_note: createForm.value.contact_note.trim() || undefined,
         start_immediately: createForm.value.start_immediately,
       })
@@ -390,6 +389,8 @@ export function useLeadDiagnosis() {
     executiveSummary,
     hasReportSections,
     regionOptions,
+    selectableRegionOptions,
+    regionLabels,
     regionLabel,
     promptTemplates: PROMPT_TEMPLATES,
     scheduleSlots: SCHEDULE_SLOTS,

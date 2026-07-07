@@ -13,11 +13,11 @@ from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
 from app.models.tenant import Tenant
 from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
-from app.services.brand_service import active_keyword_groups, keyword_group_monitor_keywords, molizhishu_monitor_terms
+from app.services.brand_service import active_keyword_groups, keyword_group_monitor_keywords, keyword_group_platforms, molizhishu_monitor_terms
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
-from app.services.platform_matrix_service import prepare_daily_platform_matrix_before_submit
+from app.core.region_catalog import normalize_region_codes, region_submission_targets
 
 
 DEFAULT_DAILY_WINDOW_START = time(hour=9, minute=30)
@@ -34,6 +34,7 @@ class DueScheduleGroup:
     group_key: str
     max_prompts: int
     keyword: str | None = None
+    region_code: str | None = None
 
 
 def _keyword_group_suffix(group: dict[str, Any]) -> str:
@@ -123,16 +124,19 @@ def enumerate_due_schedule_groups(
         keyword_groups = active_keyword_groups(db, asset.tenant_id)
         per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
         for group in keyword_groups:
-            group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}"
-            if schedule_run_blocks_due(get_schedule_run(db, asset.tenant_id, group_key), now=now):
-                continue
-            yield DueScheduleGroup(
-                tenant_id=asset.tenant_id,
-                schedule_key=schedule_key,
-                group_key=group_key,
-                max_prompts=per_group_max_prompts,
-                keyword=group.get("monitor_keyword"),
-            )
+            for region_code in region_submission_targets(asset.region_codes_json):
+                region_suffix = f"-rg{region_code}" if region_code else ""
+                group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
+                if schedule_run_blocks_due(get_schedule_run(db, asset.tenant_id, group_key), now=now):
+                    continue
+                yield DueScheduleGroup(
+                    tenant_id=asset.tenant_id,
+                    schedule_key=schedule_key,
+                    group_key=group_key,
+                    max_prompts=per_group_max_prompts,
+                    keyword=group.get("monitor_keyword"),
+                    region_code=region_code,
+                )
 
 
 def submit_schedule_group(
@@ -173,7 +177,8 @@ def submit_schedule_group(
         )
     )
     keyword_groups = active_keyword_groups(db, item.tenant_id)
-    group_suffix = item.group_key.split("-kw", 1)[-1]
+    group_part = item.group_key.split("-kw", 1)[-1]
+    group_suffix = group_part.split("-rg", 1)[0]
     keyword_group = next(
         (group for group in keyword_groups if _keyword_group_suffix(group) == group_suffix),
         None,
@@ -193,6 +198,7 @@ def submit_schedule_group(
         competitors,
         max_prompts=item.max_prompts,
         keyword_group=keyword_group,
+        region_code=item.region_code,
     )
     existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
     if existing_run is not None and existing_run.task_id:
@@ -386,11 +392,12 @@ def build_scheduled_payload(
     competitors: list[BrandCompetitor],
     max_prompts: int = 50,
     keyword_group: dict[str, Any] | None = None,
+    region_code: str | None = None,
 ) -> MonitorTaskCreateRequest:
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
     platforms = [
         PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
-        for code in filter_submittable_platforms(asset.monitored_platforms_json)
+        for code in filter_submittable_platforms(keyword_group_platforms(keyword_group, asset))
     ]
     monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
     return MonitorTaskCreateRequest(
@@ -399,7 +406,7 @@ def build_scheduled_payload(
         platforms=platforms,
         monitor_keywords=monitor_keyword,
         monitor_keyword_aliases=aliases,
-        region_code=[asset.region_code] if asset.region_code else None,
+        region_code=[region_code] if region_code else None,
     )
 
 
@@ -424,30 +431,37 @@ def preview_scheduled_tasks(
         keyword_groups = active_keyword_groups(db, asset.tenant_id)
         group_count = max(1, len(keyword_groups))
         per_group_max_prompts = max(1, max_prompts // group_count)
-        platforms = [
-            PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
-            for code in filter_submittable_platforms(asset.monitored_platforms_json)
-        ]
-        platform_count = len(platforms)
         group_previews: list[dict[str, Any]] = []
         for group in keyword_groups:
             prompts = build_scheduled_prompts(asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group)
+            group_platforms = [
+                PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
+                for code in filter_submittable_platforms(keyword_group_platforms(group, asset))
+            ]
+            group_platform_count = len(group_platforms)
             group_previews.append({
                 "monitor_keyword": group.get("monitor_keyword"),
                 "exposure_terms": group.get("exposure_terms") or [],
+                "platforms": [item.platform for item in group_platforms],
                 "prompt_limit": per_group_max_prompts,
                 "prompt_count": len(prompts),
                 "prompts": prompts,
-                "subtask_count": len(prompts) * platform_count,
+                "subtask_count": len(prompts) * group_platform_count,
             })
         total_prompts = sum(item["prompt_count"] for item in group_previews)
         total_subtasks = sum(item["subtask_count"] for item in group_previews)
         all_prompts = [prompt for group in group_previews for prompt in group["prompts"]]
+        all_platform_codes = sorted({code for group in group_previews for code in (group.get("platforms") or [])})
+        platform_count = len(all_platform_codes)
+        platforms = [
+            PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
+            for code in all_platform_codes
+        ]
         result.append({
             "tenant_id": asset.tenant_id,
             "tenant_name": tenant_map.get(asset.tenant_id) or asset.company_full_name,
             "brand_name": asset.brand_name,
-            "region_code": asset.region_code,
+            "region_codes": normalize_region_codes(asset.region_codes_json or []),
             "schedule_type": asset.schedule_type,
             "schedule_times": [item.strftime("%H:%M") for item in schedule_times_for_asset(asset)],
             "max_prompts_total": max_prompts,

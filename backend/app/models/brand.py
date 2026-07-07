@@ -21,7 +21,13 @@ class BrandAsset(Base):
     aliases_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="品牌别名和简称JSON")
     product_keywords_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="产品词或业务词JSON")
     monitored_platforms_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="已购买或允许监测的平台编码JSON")
-    region_code: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="监测地区编码，空值代表全部区域")
+    region_codes_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="监测地区编码列表，空数组代表全部区域",
+    )
     official_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="官网或主站URL")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="品牌说明")
     schedule_type: Mapped[str] = mapped_column(String(20), default="daily_times", nullable=False, comment="监测计划类型")
@@ -58,6 +64,13 @@ class BrandKeywordGroup(Base):
         default=list,
         server_default=text("(JSON_ARRAY())"),
         comment="露出词JSON",
+    )
+    platforms_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="监测平台编码JSON",
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序")
     status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")

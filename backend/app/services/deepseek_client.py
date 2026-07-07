@@ -49,11 +49,15 @@ class DeepseekClient:
             "Content-Type": "application/json",
         }
 
+    def _http_client(self) -> httpx.Client:
+        # 不走 Windows/Clash 系统代理，避免代理未启动时 WinError 10061
+        return httpx.Client(timeout=self.timeout, trust_env=False)
+
     def get_account_balance(self) -> dict[str, Any]:
         """Query DeepSeek prepaid balance via GET /user/balance."""
         url = f"{self.base_url}/user/balance"
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with self._http_client() as client:
                 response = client.get(url, headers={**self._headers(), "Accept": "application/json"})
             response.raise_for_status()
             payload = response.json()
@@ -86,7 +90,7 @@ class DeepseekClient:
         }
         started = time.perf_counter()
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with self._http_client() as client:
                 response = client.post(url, headers=self._headers(), json=body)
             response.raise_for_status()
             payload = response.json()

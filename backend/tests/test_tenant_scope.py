@@ -10,6 +10,7 @@ import pytest
 from app.api.dependencies import CurrentSession
 from app.services.tenant_scope import (
     assert_monitor_task_access,
+    ensure_lead_diagnosis_task_access,
     ensure_sales_tenant_access,
     resolve_and_guard_tenant_id,
 )
@@ -58,7 +59,37 @@ def test_sales_monitor_task_guard():
     tenant = SimpleNamespace(id=8, owner_user_id=2, deleted=False)
     db.scalar.side_effect = [position, tenant]
     with pytest.raises(PermissionError):
-        assert_monitor_task_access(db, _sales_current(user_id=1), 8)
+        assert_monitor_task_access(db, _sales_current(user_id=1), 8, task_id="task-8")
+
+
+def test_sales_lead_diagnosis_task_blocks_foreign_owner():
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    db.scalar.side_effect = [position, 99]
+    with pytest.raises(PermissionError, match="售前诊断"):
+        ensure_lead_diagnosis_task_access(db, _sales_current(user_id=1), "lead-task-1")
+
+
+def test_sales_lead_diagnosis_task_allows_owner():
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    db.scalar.side_effect = [position, 1]
+    ensure_lead_diagnosis_task_access(db, _sales_current(user_id=1), "lead-task-1")
+
+
+def test_sales_monitor_task_without_tenant_requires_lead_access():
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    db.scalar.side_effect = [position, 1]
+    assert_monitor_task_access(db, _sales_current(user_id=1), None, task_id="lead-task-1")
+
+
+def test_sales_monitor_task_without_tenant_blocks_orphan():
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_SALES", position_name="销售")
+    db.scalar.side_effect = [position, None, position]
+    with pytest.raises(PermissionError):
+        assert_monitor_task_access(db, _sales_current(user_id=1), None, task_id="orphan-task")
 
 
 def test_resolve_and_guard_tenant_id():

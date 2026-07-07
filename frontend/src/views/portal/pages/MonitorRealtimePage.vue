@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronDown, ChevronRight, Download, Info, RefreshCw } from '@lucide/vue'
+import { ChevronDown, ChevronRight, Download, RefreshCw } from '@lucide/vue'
 import { ElDrawer } from 'element-plus'
 import 'element-plus/es/components/drawer/style/css'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../services/monitor'
+import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 import { useMonitorRealtime } from '../composables/useMonitorRealtime'
 
 const {
@@ -33,7 +34,8 @@ const {
   filteredGroupedMonitorTasks,
   scheduleSourceLabel,
   isCustomerView,
-  customerPeriodLabel,
+  customerTrendPeriodLabel,
+  customerTrendMaxDate,
   displayScheduleLabel,
   refreshCurrentView,
   selectMonitorTask,
@@ -74,6 +76,14 @@ const {
 } = useMonitorRealtime()
 
 const isLoading = computed(() => loadingMonitor.value || loadingMatrix.value)
+
+const customerDatePresetOptions: Array<{ value: WorkspaceTrendPreset; label: string }> = [
+  { value: '7d', label: '近7日' },
+  { value: 'month', label: '月' },
+  { value: 'quarter', label: '季度' },
+  { value: 'year', label: '年' },
+  { value: 'custom', label: '自定义' },
+]
 
 const drawerAvgRank = computed(() => {
   const cell = detailContext.value?.cell
@@ -127,8 +137,39 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
   <section class="monitor-page realtime-monitor-page">
     <header class="realtime-sticky-bar">
       <div class="realtime-sticky-inner">
-        <div v-if="isCustomerView" class="realtime-customer-period">
-          数据范围：{{ customerPeriodLabel }}
+        <div v-if="isCustomerView" class="realtime-date-filter">
+          <div class="realtime-date-presets">
+            <button
+              v-for="option in customerDatePresetOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: datePreset === option.value }"
+              @click="applyDatePreset(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <span
+            v-if="datePreset !== 'custom' && customerTrendPeriodLabel"
+            class="realtime-date-range-chip"
+            :title="`${filters.startDate} ~ ${filters.endDate}`"
+          >{{ customerTrendPeriodLabel }}</span>
+          <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
+            <input
+              v-model="filters.startDate"
+              type="date"
+              :max="filters.endDate"
+              @change="onCustomDateChange"
+            >
+            <span>至</span>
+            <input
+              v-model="filters.endDate"
+              type="date"
+              :min="filters.startDate"
+              :max="customerTrendMaxDate"
+              @change="onCustomDateChange"
+            >
+          </div>
         </div>
         <template v-else>
           <div class="realtime-date-presets">
@@ -212,16 +253,6 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
     </header>
 
     <article class="realtime-hero">
-      <div class="realtime-hero-top">
-        <div>
-          <span class="realtime-hero-eyebrow">Realtime Monitor</span>
-          <h2>{{ heroMetrics.brandName }}</h2>
-          <p class="realtime-hero-note">
-            <Info />
-            数字为<strong>露出词</strong>在 AI 推荐列表中的排名（分类列表按分类内序号，无序号按出现顺序），越小越靠前
-          </p>
-        </div>
-      </div>
       <div v-if="isLoading && !rankingMatrix && !monitorDetail" class="realtime-hero-skeleton">
         <div /><div /><div /><div />
       </div>
@@ -330,7 +361,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
             >
               <th class="realtime-matrix-time-col">
                 <span>{{ displayScheduleLabel(row.schedule_label || row.snapshot_at || '-') }}{{ isCustomerView ? '' : scheduleSourceLabel(row.schedule_source) }}</span>
-                <small v-if="row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
+                <small v-if="!isCustomerView && row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
                 <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
                   <PlatformBadge :code="row.platform" size="xs" />
                 </small>

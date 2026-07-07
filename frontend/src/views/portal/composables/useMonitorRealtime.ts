@@ -5,8 +5,12 @@ import { notifyOperationError } from '../../../utils/requestError'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import {
   customerDisplayPeriodLabel,
+  customerDisplayCutoffDate,
   customerDisplayDateRange,
   monitorTaskBeforeToday,
+  workspaceTrendDateRange,
+  workspaceTrendPeriodLabel,
+  type WorkspaceTrendPreset,
 } from '../../../utils/customerMonitorDate'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -48,7 +52,14 @@ import { sortPlatformCodes } from '../platformOrder'
 import { formatExposureLabel, formatRank, sanitizeCustomerScheduleLabel } from '../portalUtils'
 
 export type MonitorViewMode = 'list' | 'matrix'
-export type RealtimeDatePreset = 'yesterday' | '7d' | '30d' | 'custom'
+export type RealtimeDatePreset = '7d' | '30d' | 'custom'
+export type MonitorDatePreset = RealtimeDatePreset | WorkspaceTrendPreset
+
+const CUSTOMER_DATE_PRESETS: WorkspaceTrendPreset[] = ['7d', 'month', 'quarter', 'year', 'custom']
+
+function isCustomerDatePreset(preset: MonitorDatePreset): preset is WorkspaceTrendPreset {
+  return (CUSTOMER_DATE_PRESETS as string[]).includes(preset)
+}
 
 function promptBelongsToGroup(prompt: string, group: BrandKeywordGroup) {
   const text = (prompt || '').trim()
@@ -167,6 +178,14 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   })
   const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
   const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
+  const customerTrendPeriodLabel = computed(() => (
+    workspaceTrendPeriodLabel(
+      isCustomerDatePreset(datePreset.value) ? datePreset.value : '7d',
+      filters.startDate,
+      filters.endDate,
+    )
+  ))
+  const customerTrendMaxDate = customerDisplayCutoffDate()
   const monitorTasks = ref<MonitorTask[]>([])
   const monitorDetail = ref<{ task: MonitorTask; subtasks: MonitorSubtask[] } | null>(null)
   const loadingMonitor = ref(false)
@@ -176,9 +195,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const viewMode = ref<MonitorViewMode>('matrix')
   const rankingMatrix = ref<RankingMatrix | null>(null)
   const loadingMatrix = ref(false)
-  const datePreset = ref<RealtimeDatePreset>(
-    auth.session?.identity?.identity_type === 'CUSTOMER' ? '7d' : '7d',
-  )
+  const datePreset = ref<MonitorDatePreset>('7d')
   const configExpanded = ref(false)
 
   const detailVisible = ref(false)
@@ -639,7 +656,9 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       filters.endDate = day
       datePreset.value = 'custom'
     } else if (days === '7' || days === '30' || days === '90') {
-      const range = defaultDateRange(Number(days))
+      const range = isCustomerView.value
+        ? customerDisplayDateRange(Number(days))
+        : defaultDateRange(Number(days))
       filters.startDate = range.startDate
       filters.endDate = range.endDate
       datePreset.value = days === '7' ? '7d' : days === '90' ? 'custom' : '30d'
@@ -884,16 +903,19 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     loadingSnapshotId.value = null
   }
 
-  function applyDatePreset(preset: RealtimeDatePreset) {
+  function applyDatePreset(preset: MonitorDatePreset) {
     if (isCustomerView.value) {
-      datePreset.value = preset === '30d' ? '30d' : '7d'
-      const range = customerDisplayDateRange(preset === '30d' ? 30 : 7)
+      if (!isCustomerDatePreset(preset)) return
+      datePreset.value = preset
+      if (preset === 'custom') return
+      const range = workspaceTrendDateRange(preset)
       filters.startDate = range.startDate
       filters.endDate = range.endDate
       void loadRankingMatrix()
       return
     }
-    datePreset.value = preset
+    if (!['7d', '30d', 'custom'].includes(preset)) return
+    datePreset.value = preset as RealtimeDatePreset
     if (preset === 'custom') return
     const range = defaultDateRange(preset === '30d' ? 30 : 7)
     filters.startDate = range.startDate
@@ -902,13 +924,28 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   }
 
   function onCustomDateChange() {
-    if (isCustomerView.value) return
+    if (isCustomerView.value) {
+      if (filters.startDate > filters.endDate) {
+        filters.startDate = filters.endDate
+      }
+      if (filters.endDate > customerTrendMaxDate) {
+        filters.endDate = customerTrendMaxDate
+      }
+      if (filters.startDate > customerTrendMaxDate) {
+        filters.startDate = customerTrendMaxDate
+      }
+      datePreset.value = 'custom'
+      void loadRankingMatrix()
+      return
+    }
     datePreset.value = 'custom'
     void loadRankingMatrix()
   }
 
   function resetFilters() {
-    const range = isCustomerView.value ? customerDisplayDateRange(7) : defaultDateRange(7)
+    const range = isCustomerView.value
+      ? workspaceTrendDateRange('7d')
+      : defaultDateRange(7)
     filters.platform = ''
     filters.keywordGroup = ''
     filters.monitorKeyword = ''
@@ -1024,6 +1061,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     scheduleRoundOptions,
     isCustomerView,
     customerPeriodLabel,
+    customerTrendPeriodLabel,
+    customerTrendMaxDate,
     displayScheduleLabel,
     formatMonitorGroupLabel,
     formatKeywordGroupDetailHint,

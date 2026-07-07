@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, time
+from datetime import date, datetime, timedelta, time
 from typing import Any
 
 from sqlalchemy import select
@@ -12,8 +12,13 @@ from sqlalchemy.orm import Session, load_only
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
-from app.services.brand_service import get_brand_asset, list_competitors
-from app.services.monitor_service import customer_display_cutoff
+from app.services.brand_service import (
+    active_keyword_groups,
+    get_brand_asset,
+    keyword_group_monitor_keywords,
+    list_competitors,
+)
+from app.services.monitor_service import customer_display_cutoff, customer_display_date_range
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
 from app.services.ranking_parser import (
@@ -208,6 +213,48 @@ def _include_in_sentiment_leaderboard(row: dict[str, Any]) -> bool:
     return row["positive_rate"] > 0 or row["negative_rate"] > 0
 
 
+def resolve_analytics_date_range(
+    current: CurrentSession,
+    *,
+    days: int = 30,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> tuple[datetime, datetime]:
+    if current.identity.identity_type == "CUSTOMER":
+        start_at = datetime.combine(start_date, time.min) if start_date else None
+        end_at = datetime.combine(end_date, time.max) if end_date else None
+        if start_at is not None or end_at is not None:
+            return customer_display_date_range(
+                start_at=start_at,
+                end_at=end_at,
+                default_lookback_days=30,
+            )
+        range_end = customer_display_cutoff()
+        range_start = datetime.combine(
+            range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
+            time.min,
+        )
+        return range_start, range_end
+    if start_date is not None and end_date is not None:
+        return datetime.combine(start_date, time.min), datetime.combine(end_date, time.max)
+    range_end = datetime.now()
+    range_start = range_end - timedelta(days=max(1, min(days, 365)))
+    return range_start, range_end
+
+
+def _configured_prompt_options(db: Session, tenant_id: int) -> list[str]:
+    """竞品页问题筛选：与当前启用的监测词组配置同步，而非历史子任务残留。"""
+    seen: set[str] = set()
+    options: list[str] = []
+    for group in active_keyword_groups(db, tenant_id):
+        for prompt in keyword_group_monitor_keywords(group):
+            text = str(prompt or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                options.append(text)
+    return options
+
+
 def build_competitor_compare_summary(
     db: Session,
     current: CurrentSession,
@@ -216,6 +263,8 @@ def build_competitor_compare_summary(
     platform: str | None = None,
     platforms: str | None = None,
     days: int = 30,
+    start_date: date | None = None,
+    end_date: date | None = None,
     prompt: str | None = None,
     subtask_limit: int = 5000,
 ) -> dict[str, Any]:
@@ -226,15 +275,12 @@ def build_competitor_compare_summary(
     entities = _tracked_entities(asset, competitors)
     brand_display = (asset.brand_name if asset else None) or "本品牌"
 
-    if current.identity.identity_type == "CUSTOMER":
-        range_end = customer_display_cutoff()
-        range_start = datetime.combine(
-            range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
-            time.min,
-        )
-    else:
-        range_end = datetime.now()
-        range_start = range_end - timedelta(days=max(1, min(days, 365)))
+    range_start, range_end = resolve_analytics_date_range(
+        current,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
 
@@ -267,7 +313,7 @@ def build_competitor_compare_summary(
 
     subtasks = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))))
     sample_total = len(subtasks)
-    prompt_options = sorted({str(item.prompt or "").strip() for item in subtasks if str(item.prompt or "").strip()})
+    prompt_options = _configured_prompt_options(db, resolved_tenant_id)
 
     global_buckets: dict[str, dict[str, Any]] = {}
     platform_buckets: dict[str, dict[str, dict[str, Any]]] = {}

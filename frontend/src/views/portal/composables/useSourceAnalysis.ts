@@ -10,7 +10,7 @@ import {
 } from '../../../utils/customerMonitorDate'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
-import { sortPlatformRows, sortPlatformTabs } from '../platformOrder'
+import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
 import { sourceCategory, sourceCategoryLabels, type SourceCategory } from '../sourceCategory'
 
@@ -82,6 +82,11 @@ export function useSourceAnalysis(options?: {
 
   const platformRanking = computed(() => sortPlatformRows(monitorSummary.value?.platform_stats || []))
 
+  const structurePlatformCodes = computed(() => resolvePurchasedPlatformCodes(
+    brandAsset.value?.monitored_platforms,
+    platformRanking.value.map(item => item.platform),
+  ))
+
   const filteredSources = computed(() => {
     const keyword = keywordFilter.value.trim().toLowerCase()
     const now = Date.now()
@@ -97,7 +102,7 @@ export function useSourceAnalysis(options?: {
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
       const dateMatched = customerCutoff
-        ? isBeforeCustomerCutoff(source.latest_time)
+        ? (!source.latest_time || isBeforeCustomerCutoff(source.latest_time))
         : (!rangeStart || (sourceTime != null && sourceTime >= rangeStart))
       return platformMatched && categoryMatched && keywordMatched && dateMatched
         && (source.exposure_terms || []).length > 0
@@ -107,20 +112,44 @@ export function useSourceAnalysis(options?: {
   const sourceTotalCount = computed(() => filteredSources.value.reduce((sum, item) => sum + item.count, 0))
   const uniqueSourceCount = computed(() => filteredSources.value.length)
   const platformWithSourcesCount = computed(() => {
+    const allowed = new Set(structurePlatformCodes.value)
     const codes = new Set<string>()
-    filteredSources.value.forEach(source => (source.platforms || []).forEach(code => codes.add(code)))
+    filteredSources.value.forEach(source => {
+      ;(source.platforms || []).forEach(code => {
+        if (allowed.size && !allowed.has(code)) return
+        codes.add(code)
+      })
+    })
     return codes.size
   })
 
   const platformTabs = computed(() => {
+    const allowed = new Set(structurePlatformCodes.value)
+    const scopeSources = isCustomerView.value
+      ? allSources.value.filter(source => !source.latest_time || isBeforeCustomerCutoff(source.latest_time))
+      : allSources.value
     const counts = new Map<string, number>()
-    allSources.value.forEach(source => {
-      ;(source.platforms || []).forEach(platform => counts.set(platform, (counts.get(platform) || 0) + source.count))
+    scopeSources.forEach(source => {
+      ;(source.platforms || []).forEach(platform => {
+        if (allowed.size && !allowed.has(platform)) return
+        counts.set(platform, (counts.get(platform) || 0) + source.count)
+      })
     })
+    const platformEntries = allowed.size
+      ? structurePlatformCodes.value.map(code => ({
+        code,
+        name: platformLabelMap[code] || code,
+        count: counts.get(code) || 0,
+      }))
+      : Array.from(counts.entries()).map(([code, count]) => ({
+        code,
+        name: platformLabelMap[code] || code,
+        count,
+      }))
+    const totalCount = platformEntries.reduce((sum, item) => sum + item.count, 0)
     return sortPlatformTabs([
-      { code: 'all', name: '全部平台', count: allSources.value.reduce((sum, source) => sum + source.count, 0) },
-      ...Array.from(counts.entries())
-        .map(([code, count]) => ({ code, name: platformLabelMap[code] || code, count })),
+      { code: 'all', name: '全部平台', count: totalCount },
+      ...platformEntries,
     ])
   })
 
@@ -149,22 +178,27 @@ export function useSourceAnalysis(options?: {
 
   const topSources = computed(() => filteredSources.value.slice(0, 5))
 
-  const sourceStructureRows = computed(() => platformRanking.value.slice(0, 6).map(platform => {
-    const platformSources = filteredSources.value.filter(source => (source.platforms || []).includes(platform.platform))
-    const total = Math.max(1, platformSources.reduce((sum, source) => sum + source.count, 0))
+  const sourceStructureRows = computed(() => structurePlatformCodes.value.map(platform => {
+    const platformSources = filteredSources.value.filter(source => (source.platforms || []).includes(platform))
+    const total = platformSources.reduce((sum, source) => sum + source.count, 0)
     const categoryMap = platformSources.reduce((map, source) => {
       map[source.category] = (map[source.category] || 0) + source.count
       return map
     }, {} as Record<string, number>)
+    const denom = total || 1
     return {
-      platform: platform.platform,
+      platform,
       total,
       categories: (Object.keys(sourceCategoryLabels) as SourceCategory[]).map(type => ({
         type,
-        value: Math.round(((categoryMap[type] || 0) / total) * 100),
+        value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
       })),
     }
   }))
+
+  const structureChartHeight = computed(() => Math.max(280, sourceStructureRows.value.length * 46 + 48))
+
+  const hasStructurePanel = computed(() => sourceStructureRows.value.length > 0)
 
   const sourceTrendRows = computed(() => {
     const backendPoints = monitorSummary.value?.source_citation_trend?.points || []
@@ -253,7 +287,7 @@ export function useSourceAnalysis(options?: {
     ElMessage.success('已导出 CSV')
   }
 
-  watch([filteredSources, sourceStructureRows, sourceTrendRows, loading], () => { void refreshCharts() }, { deep: true })
+  watch([filteredSources, sourceStructureRows, sourceTrendRows, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
 
   onMounted(() => {
     void loadSummary()
@@ -285,6 +319,8 @@ export function useSourceAnalysis(options?: {
     officialRate,
     sourceStructureRows,
     sourceTrendRows,
+    structureChartHeight,
+    hasStructurePanel,
     insight,
     loadSummary,
     resetFilters,

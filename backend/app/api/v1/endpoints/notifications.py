@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
+from app.services.approval_service import can_review_approvals
 from app.services.system_notification_service import (
     count_unread_notifications,
     list_notifications_for_user,
@@ -24,6 +25,7 @@ def list_notifications(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """当前用户可见的站内通知列表。"""
+    can_review = can_review_approvals(db, current)
     rows = list_notifications_for_user(
         db,
         user_id=current.user.id,
@@ -31,6 +33,7 @@ def list_notifications(
         tenant_id=current.identity.tenant_id,
         unread_only=unread_only,
         limit=limit,
+        can_review_approvals=can_review,
     )
     return ApiResponse(data=rows)
 
@@ -40,11 +43,13 @@ def unread_count(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
+    can_review = can_review_approvals(db, current)
     count = count_unread_notifications(
         db,
         user_id=current.user.id,
         identity_type=current.identity.identity_type,
         tenant_id=current.identity.tenant_id,
+        can_review_approvals=can_review,
     )
     return ApiResponse(data={"count": count})
 
@@ -66,10 +71,12 @@ def read_all_notifications(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
+    can_review = can_review_approvals(db, current)
     count = mark_all_notifications_read(
         db,
         user_id=current.user.id,
         identity_type=current.identity.identity_type,
         tenant_id=current.identity.tenant_id,
+        can_review_approvals=can_review,
     )
     return ApiResponse(data={"marked": count})

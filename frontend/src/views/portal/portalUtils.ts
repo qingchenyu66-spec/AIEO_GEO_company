@@ -60,3 +60,23 @@ export function sanitizeCustomerScheduleLabel(value?: string | null, fallback = 
   if (!cleaned || cleaned === '—' || cleaned === '-') return fallback
   return cleaned.replace(/^调度轮次[·•\s]*/i, '监测批次 · ')
 }
+
+/** 客户报告中心：去掉标题中的企业名前缀（如「某某公司 · GEO 监测月报」） */
+export function stripReportCompanyPrefix(
+  title: string,
+  names: Array<string | null | undefined> = [],
+) {
+  const text = (title || '').trim()
+  if (!text) return text
+  for (const name of names) {
+    const company = (name || '').trim()
+    if (!company) continue
+    for (const sep of [' · ', '·', ' - ', '－', '-']) {
+      const prefix = `${company}${sep}`
+      if (text.startsWith(prefix)) return text.slice(prefix.length).trim()
+    }
+  }
+  const matched = text.match(/^[^·\-－]{2,40}\s*[·\-－]\s*(.+)$/)
+  if (matched) return matched[1].trim()
+  return text
+}

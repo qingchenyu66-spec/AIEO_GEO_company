@@ -113,7 +113,7 @@ def import_tenant_lead_diagnosis(
         contact_note=contact_note or f"基于 {tenant.name} 历史监测数据（{len(tasks)} 轮已完成任务）自动生成",
         prompts_json=prompts,
         competitors_json=competitors[:10],
-        region_code=asset.region_code,
+        region_codes_json=list(asset.region_codes_json or []),
         schedule_times_json=list(asset.schedule_times_json or ["09:30", "14:30", "20:30"]),
         diagnosis_date=tasks[0].created_at.date(),
         status="collecting",

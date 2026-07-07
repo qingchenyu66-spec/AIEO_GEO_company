@@ -4,25 +4,26 @@ import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  createTenant, deleteTenant, getTenants, restoreTenant, updateTenant,
+  createTenant, deleteTenant, getTenants, listTenantSalesOwners, restoreTenant, transferTenantOwner, updateTenant,
   type TenantInfo,
+  type TenantSalesOwner,
 } from '../../../services/management'
 import {
   createCompetitor, deleteCompetitor, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, updateCompetitor,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup,
 } from '../../../services/brand'
-import { getKnowledgeFiles, type KnowledgeFileRecord } from '../../../services/knowledge'
+import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
+import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
 import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
-import { regionOptions } from '../regionOptions'
+import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
-export type EnterpriseTab = 'profile' | 'keywords' | 'platforms' | 'schedule' | 'competitors' | 'files'
+export type EnterpriseTab = 'profile' | 'keywords' | 'schedule' | 'competitors' | 'files'
 
 export const enterprisePermissionCodeMap = {
   list: 'platform.audit.list',
   profile: 'platform.audit.profile',
   keywords: 'platform.audit.keywords',
-  platforms: 'platform.audit.models',
   schedule: 'platform.audit.schedule',
   competitors: 'platform.audit.competitors',
   files: 'platform.audit.files',
@@ -93,7 +94,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const visibleEnterpriseTabs = computed(() => ([
     { code: 'profile', name: '企业资料' },
     { code: 'keywords', name: '监测词配置' },
-    { code: 'platforms', name: '平台范围' },
     { code: 'schedule', name: '监控计划' },
     { code: 'competitors', name: '竞品监控' },
     { code: 'files', name: '上传文件' },
@@ -110,11 +110,40 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const enterpriseFilters = reactive({
     keyword: '',
     expiry: 'active' as 'all' | 'active' | 'pending' | 'expired' | 'stopped',
+    owner_user_id: 'all' as 'all' | 'none' | number,
   })
   const tenantDialog = ref(false)
   const tenantForm = reactive({ name: '', code: '', service_start_date: '', service_end_date: '' })
+  const tenantTransferDialog = ref(false)
+  const tenantTransferTarget = ref<TenantInfo | null>(null)
+  const tenantTransferOwnerId = ref<number | null>(null)
+  const tenantSalesOwners = ref<TenantSalesOwner[]>([])
+  const loadingTenantSalesOwners = ref(false)
+  const transferringTenantOwner = ref(false)
+  const canTransferTenantOwner = computed(() => Boolean(menuGrant('platform.approvals')?.can_update))
+  const canFilterBySales = computed(() => canTransferTenantOwner.value)
+  const tenantSalesFilterOptions = computed(() => {
+    const map = new Map<number, string>()
+    for (const owner of tenantSalesOwners.value) {
+      map.set(owner.id, owner.display_name)
+    }
+    for (const tenant of tenants.value) {
+      if (tenant.owner_user_id && !map.has(tenant.owner_user_id)) {
+        map.set(tenant.owner_user_id, tenantOwnerLabel(tenant))
+      }
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  })
   const knowledgeFiles = ref<KnowledgeFileRecord[]>([])
   const loadingKnowledgeFiles = ref(false)
+  const knowledgePreviewVisible = ref(false)
+  const knowledgePreviewFile = ref<KnowledgeFileRecord | null>(null)
+  const knowledgePreviewText = ref('')
+  const knowledgePreviewLoading = ref(false)
+  const knowledgePreviewError = ref('')
+  const canDeleteKnowledgeFiles = computed(() => isPlatform.value && canViewEnterpriseTab('files'))
   const brandAsset = ref<BrandAsset | null>(null)
   const brandCompetitors = ref<BrandCompetitor[]>([])
   const competitorRows = ref<Array<{
@@ -142,7 +171,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brand_short_name: '',
     monitor_keywords_text: '',
     aliases_text: '',
-    region_code: '',
+    region_codes: [] as string[],
     monitored_platforms: [] as string[],
     official_url: '',
     description: '',
@@ -166,7 +195,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         || (enterpriseFilters.expiry === 'pending' && pending)
         || (enterpriseFilters.expiry === 'expired' && expired)
         || (enterpriseFilters.expiry === 'stopped' && stopped)
-      return keywordMatched && statusMatched
+      const ownerFilter = enterpriseFilters.owner_user_id
+      const ownerMatched = !canFilterBySales.value
+        || ownerFilter === 'all'
+        || (ownerFilter === 'none' && tenant.owner_user_id == null)
+        || tenant.owner_user_id === ownerFilter
+        || (typeof ownerFilter === 'string' && ownerFilter !== 'all' && ownerFilter !== 'none' && tenant.owner_user_id === Number(ownerFilter))
+      return keywordMatched && statusMatched && ownerMatched
     })
   })
 
@@ -228,6 +263,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return `${start} 至 ${end}`
   }
 
+  function tenantOwnerLabel(tenant: TenantInfo) {
+    return tenant.owner_display_name || tenant.owner_username || '未指定'
+  }
+
   function serviceStateFromPeriod(serviceStartDate: string, serviceEndDate: string) {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -251,12 +290,15 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function makeKeywordGroup(monitorKeyword = '', exposureTerms: string[] = []): BrandKeywordGroup {
     const keywords = monitorKeyword.trim() ? [monitorKeyword.trim()] : []
     const index = keywordGroupRows.value.length
+    const inheritedPlatforms = keywordGroupRows.value.find(item => (item.platforms || []).length)?.platforms
+      || (brandForm.monitored_platforms.length ? [...brandForm.monitored_platforms] : [])
     return {
       id: null,
       name: defaultKeywordGroupName(index),
       monitor_keyword: keywords[0] || '',
       monitor_keywords: keywords,
       exposure_terms: exposureTerms.length ? exposureTerms : keywords,
+      platforms: [...inheritedPlatforms],
       sort_order: index,
       status: true,
     }
@@ -274,6 +316,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           monitor_keyword: monitorKeywords[0] || '',
           monitor_keywords: [...monitorKeywords],
           exposure_terms: [...(group.exposure_terms || [])],
+          platforms: [...(group.platforms?.length ? group.platforms : (asset?.monitored_platforms || []))],
           sort_order: group.sort_order ?? index,
           status: group.status,
         }
@@ -288,6 +331,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       monitor_keyword: keyword,
       monitor_keywords: [keyword],
       exposure_terms: index === 0 && aliases.length ? aliases : [keyword],
+      platforms: [...(asset?.monitored_platforms || [])],
       sort_order: index,
       status: true,
     }))
@@ -431,16 +475,16 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.brand_short_name = asset?.brand_short_name || ''
     brandForm.monitor_keywords_text = [...new Set([...(asset?.monitor_keywords || []), ...(asset?.product_keywords || [])])].join('\n')
     brandForm.aliases_text = (asset?.aliases || []).join('\n')
-    brandForm.region_code = asset?.region_code || ''
+    brandForm.region_codes = [...(asset?.region_codes || [])]
     normalizeKeywordGroups(asset, tenant?.name || '')
     brandForm.monitored_platforms = asset ? [...(asset.monitored_platforms || [])] : []
     brandForm.official_url = asset?.official_url || ''
     brandForm.description = asset?.description || ''
-    brandForm.schedule_type = asset?.schedule_type === 'fixed_times' ? 'daily_times' : (asset?.schedule_type || 'daily_times')
-    brandForm.schedule_times = asset ? [...(asset.schedule_times || [])] : []
-    brandForm.schedule_frequency = asset?.schedule_frequency || 3
-    brandForm.schedule_weekdays = asset?.schedule_weekdays || []
-    brandForm.schedule_month_days_text = (asset?.schedule_month_days || []).join('\n')
+    brandForm.schedule_type = 'daily_times'
+    brandForm.schedule_times = asset?.schedule_times?.length ? [...asset.schedule_times] : ['09:30', '14:30', '20:30']
+    brandForm.schedule_frequency = asset?.schedule_frequency || brandForm.schedule_times.length || 3
+    brandForm.schedule_weekdays = []
+    brandForm.schedule_month_days_text = ''
   }
 
   function fillCompetitorRows(rows: BrandCompetitor[]) {
@@ -495,6 +539,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     loadingBrand.value = true
     try {
       tenants.value = await withRetry(() => getTenants())
+      if (canFilterBySales.value && !tenantSalesOwners.value.length) {
+        try {
+          tenantSalesOwners.value = await listTenantSalesOwners()
+        } catch {
+          // 销售筛选项加载失败不阻断企业列表
+        }
+      }
     } catch (error: unknown) {
       notifyError(error, '企业列表加载失败')
     } finally {
@@ -509,6 +560,62 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       knowledgeFiles.value = await withRetry(() => getKnowledgeFiles(brandForm.tenant_id))
     } catch (error: unknown) {
       notifyError(error, '知识库文件加载失败')
+    } finally {
+      loadingKnowledgeFiles.value = false
+    }
+  }
+
+  async function previewKnowledgeFile(file: KnowledgeFileRecord) {
+    knowledgePreviewFile.value = file
+    knowledgePreviewVisible.value = true
+    knowledgePreviewLoading.value = true
+    knowledgePreviewError.value = ''
+    knowledgePreviewText.value = ''
+    try {
+      const data = await withRetry(() => getKnowledgeFileContent(file.id))
+      knowledgePreviewText.value = data.text || ''
+    } catch (error: unknown) {
+      knowledgePreviewError.value = errorMessage(error)
+    } finally {
+      knowledgePreviewLoading.value = false
+    }
+  }
+
+  function closeKnowledgePreview() {
+    knowledgePreviewVisible.value = false
+    knowledgePreviewFile.value = null
+    knowledgePreviewText.value = ''
+    knowledgePreviewError.value = ''
+  }
+
+  async function downloadKnowledgeFileItem(file: KnowledgeFileRecord) {
+    try {
+      const filename = await downloadKnowledgeFile(file.id, file.original_name)
+      ElMessage.success(`已开始下载：${filename}`)
+    } catch (error: unknown) {
+      notifyError(error, '文件下载失败')
+    }
+  }
+
+  async function removeKnowledgeFile(file: KnowledgeFileRecord) {
+    if (!canDeleteKnowledgeFiles.value) return
+    try {
+      await ElMessageBox.confirm(`确定删除「${file.original_name}」？删除后不可恢复。`, '删除客户上传文件', {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      })
+    } catch {
+      return
+    }
+    loadingKnowledgeFiles.value = true
+    try {
+      await deleteKnowledgeFile(file.id)
+      if (knowledgePreviewFile.value?.id === file.id) closeKnowledgePreview()
+      await loadKnowledgeFiles()
+      ElMessage.success('文件已删除')
+    } catch (error: unknown) {
+      notifyError(error, '文件删除失败')
     } finally {
       loadingKnowledgeFiles.value = false
     }
@@ -562,12 +669,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const keywordGroups = keywordGroupRows.value
       .map((group, index) => {
         const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+        const platforms = [...new Set((group.platforms || []).map(item => item.trim()).filter(Boolean))]
         return {
           id: group.id || null,
           name: (group.name || '').trim() || defaultKeywordGroupName(index),
           monitor_keyword: monitorKeywords[0] || '',
           monitor_keywords: monitorKeywords,
           exposure_terms: group.exposure_terms.map(item => item.trim()).filter(Boolean),
+          platforms,
           sort_order: index,
           status: group.status,
         }
@@ -575,6 +684,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       .filter(group => group.monitor_keywords.length)
     if (!keywordGroups.length) {
       ElMessage.warning('请至少配置一个监测词组')
+      return
+    }
+    const missingPlatforms = keywordGroups.find(group => group.status && !group.platforms.length)
+    if (missingPlatforms) {
+      ElMessage.warning('每个启用的监测词组至少选择一个监测平台')
       return
     }
     loadingBrand.value = true
@@ -590,7 +704,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         const tenantIndex = tenants.value.findIndex(item => item.id === tenant.id)
         if (tenantIndex >= 0) tenants.value.splice(tenantIndex, 1, tenant)
       }
-      await saveBrandAsset({
+      const saved = await saveBrandAsset({
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
         brand_name: brandForm.company_full_name.trim(),
@@ -598,17 +712,23 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         monitor_keywords: keywordGroups.flatMap(group => group.monitor_keywords),
         aliases: [...new Set(keywordGroups.flatMap(group => group.exposure_terms))],
         product_keywords: [],
-        monitored_platforms: brandForm.monitored_platforms,
+        monitored_platforms: [...new Set(keywordGroups.flatMap(group => group.platforms))],
         keyword_groups: keywordGroups,
-        region_code: brandForm.region_code || null,
+        region_codes: [...brandForm.region_codes],
         official_url: brandForm.official_url.trim() || null,
         description: brandForm.description.trim() || null,
-        schedule_type: brandForm.schedule_type,
+        schedule_type: 'daily_times',
         schedule_times: scheduleTimeList(),
         schedule_frequency: Math.max(1, scheduleTimeList().length || brandForm.schedule_frequency),
-        schedule_weekdays: brandForm.schedule_weekdays,
-        schedule_month_days: numberList(brandForm.schedule_month_days_text, 1, 31),
+        schedule_weekdays: [],
+        schedule_month_days: [],
       })
+      if (isPendingApproval(saved)) {
+        const msg = pendingApprovalMessage(saved, '已提交审批，等待运营或管理员审核')
+        if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
+        else ElMessage.info(msg)
+        return
+      }
       await loadBrandAssetData()
       ElMessage.success(successText)
     } catch (error: unknown) {
@@ -679,6 +799,54 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       notifyError(error, '恢复服务失败')
     } finally {
       loadingBrand.value = false
+    }
+  }
+
+  async function openTenantTransferDialog(tenant: TenantInfo) {
+    tenantTransferTarget.value = tenant
+    tenantTransferOwnerId.value = tenant.owner_user_id
+    tenantTransferDialog.value = true
+    if (tenantSalesOwners.value.length) return
+    loadingTenantSalesOwners.value = true
+    try {
+      tenantSalesOwners.value = await listTenantSalesOwners()
+    } catch (error: unknown) {
+      notifyError(error, '销售列表加载失败')
+    } finally {
+      loadingTenantSalesOwners.value = false
+    }
+  }
+
+  async function submitTenantTransfer() {
+    if (!tenantTransferTarget.value) return
+    if (!tenantTransferOwnerId.value) {
+      ElMessage.warning('请选择归属销售')
+      return
+    }
+    if (tenantTransferTarget.value.owner_user_id === tenantTransferOwnerId.value) {
+      ElMessage.info('归属销售未变更')
+      tenantTransferDialog.value = false
+      return
+    }
+    const targetName = tenantTransferTarget.value.name
+    const ownerName = tenantSalesOwners.value.find(item => item.id === tenantTransferOwnerId.value)?.display_name || '所选销售'
+    try {
+      await ElMessageBox.confirm(`确认将「${targetName}」的归属销售转移给「${ownerName}」吗？转移后原销售将无法再访问该企业。`, '转移归属销售', { type: 'warning' })
+    } catch {
+      return
+    }
+    transferringTenantOwner.value = true
+    try {
+      const updated = await transferTenantOwner(tenantTransferTarget.value.id, tenantTransferOwnerId.value)
+      const index = tenants.value.findIndex(item => item.id === updated.id)
+      if (index >= 0) tenants.value.splice(index, 1, updated)
+      if (enterpriseInfoTenant.value?.id === updated.id) enterpriseInfoTenant.value = updated
+      tenantTransferDialog.value = false
+      ElMessage.success('企业归属销售已更新')
+    } catch (error: unknown) {
+      notifyError(error, '转移归属销售失败')
+    } finally {
+      transferringTenantOwner.value = false
     }
   }
 
@@ -824,6 +992,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     supportedPlatforms,
     formatPlatformLabels,
     regionOptions,
+    selectableRegionOptions,
+    regionLabels,
     tenants,
     enterpriseDetailMode,
     enterpriseDetailTab,
@@ -835,8 +1005,27 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterpriseFilters,
     tenantDialog,
     tenantForm,
+    tenantTransferDialog,
+    tenantTransferTarget,
+    tenantTransferOwnerId,
+    tenantSalesOwners,
+    loadingTenantSalesOwners,
+    transferringTenantOwner,
+    canTransferTenantOwner,
+    canFilterBySales,
+    tenantSalesFilterOptions,
     knowledgeFiles,
     loadingKnowledgeFiles,
+    knowledgePreviewVisible,
+    knowledgePreviewFile,
+    knowledgePreviewText,
+    knowledgePreviewLoading,
+    knowledgePreviewError,
+    canDeleteKnowledgeFiles,
+    previewKnowledgeFile,
+    closeKnowledgePreview,
+    downloadKnowledgeFileItem,
+    removeKnowledgeFile,
     brandAsset,
     brandCompetitors,
     competitorRows,
@@ -857,6 +1046,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     canRestoreTenantService,
     stopTenantActionLabel,
     tenantServicePeriod,
+    tenantOwnerLabel,
     editingGroupIndex,
     keywordGroupDisplayName,
     startEditGroupName,
@@ -885,6 +1075,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     submitTenant,
     removeTenant,
     restoreTenantService,
+    openTenantTransferDialog,
+    submitTenantTransfer,
     addCompetitorTag,
     removeCompetitorRow,
     formatFileSize,

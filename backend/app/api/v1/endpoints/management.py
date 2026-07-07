@@ -30,7 +30,7 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
 from app.services.deepseek_balance_service import fetch_deepseek_balance
-from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
+from app.services.lead_diagnosis_service import build_platform_cost_ranking, lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.services.operation_log_service import tenant_names_by_id, write_operation_log
 from app.services.operation_log_labels import humanize_action_type, humanize_description, humanize_target_module
@@ -44,6 +44,7 @@ from app.schemas.permission import (
     PositionSaveRequest,
     RoleInfo,
     TenantCreateRequest,
+    TenantTransferOwnerRequest,
     TenantUpdateRequest,
     UserCreateRequest,
     UserUpdateRequest,
@@ -53,9 +54,11 @@ from app.services.management_service import (
     create_managed_user,
     delete_managed_user,
     list_managed_users,
+    list_platform_sales_users,
     reset_managed_user_password,
     restore_managed_user,
     set_managed_user_status,
+    transfer_tenant_owner,
     update_managed_user,
 )
 from app.services.menu_permission_service import (
@@ -70,6 +73,7 @@ from app.services.permission_service import (
     list_roles_by_identity_type,
 )
 from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
+from app.services.approval_service import can_review_approvals, queue_or_run
 
 router = APIRouter(prefix="/management")
 
@@ -158,18 +162,39 @@ def validate_service_period(service_start_date: date | None, service_end_date: d
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="服务结束日期不能早于服务开始日期")
 
 
-def tenant_to_dict(tenant: Tenant) -> dict:
+def tenant_to_dict(tenant: Tenant, *, owner_lookup: dict[int, User] | None = None, db: Session | None = None) -> dict:
+    owner_display_name = None
+    owner_username = None
+    if tenant.owner_user_id:
+        owner = owner_lookup.get(tenant.owner_user_id) if owner_lookup is not None else None
+        if owner is None and db is not None:
+            owner = db.get(User, tenant.owner_user_id)
+        if owner is not None:
+            owner_display_name = owner.display_name
+            owner_username = owner.username
     return {
         "id": tenant.id,
         "name": tenant.name,
         "code": tenant.code,
         "status": tenant.status,
         "owner_user_id": tenant.owner_user_id,
+        "owner_display_name": owner_display_name,
+        "owner_username": owner_username,
         "stop_reason": tenant.stop_reason,
         "stopped_at": tenant.stopped_at.isoformat(sep=" ", timespec="minutes") if tenant.stopped_at else None,
         "stopped_by": tenant.stopped_by,
         "service_start_date": tenant.service_start_date.isoformat() if tenant.service_start_date else None,
         "service_end_date": tenant.service_end_date.isoformat() if tenant.service_end_date else None,
+    }
+
+
+def _tenant_owner_lookup(db: Session, tenants: list[Tenant]) -> dict[int, User]:
+    owner_ids = {tenant.owner_user_id for tenant in tenants if tenant.owner_user_id}
+    if not owner_ids:
+        return {}
+    return {
+        user.id: user
+        for user in db.scalars(select(User).where(User.id.in_(owner_ids)))
     }
 
 
@@ -471,8 +496,9 @@ def management_tenants(
     stmt = select(Tenant).where(Tenant.deleted.is_(False)).order_by(Tenant.id.desc())
     if is_sales_identity(db, current.identity):
         stmt = stmt.where(Tenant.owner_user_id == current.user.id)
-    tenants = db.scalars(stmt)
-    return ApiResponse(data=[tenant_to_dict(item) for item in tenants])
+    tenant_rows = list(db.scalars(stmt))
+    owner_lookup = _tenant_owner_lookup(db, tenant_rows)
+    return ApiResponse(data=[tenant_to_dict(item, owner_lookup=owner_lookup) for item in tenant_rows])
 
 
 @router.get("/operation-logs", response_model=ApiResponse[list[dict]])
@@ -697,22 +723,12 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         for row in platform_rows
     ])
 
-    cost_rank_stmt = (
-        select(GeoMonitorTask.tenant_id, func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
-        .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == GeoMonitorTask.task_id)
-        .where(GeoMonitorTask.deleted.is_(False))
+    cost_ranking = build_platform_cost_ranking(
+        db,
+        tenant_name_map=tenant_name_map,
+        tenant_ids=tenant_ids,
+        limit=8,
     )
-    if tenant_ids is not None:
-        cost_rank_stmt = cost_rank_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-    cost_rank_rows = db.execute(
-        cost_rank_stmt.group_by(GeoMonitorTask.tenant_id)
-        .order_by(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0).desc())
-        .limit(8)
-    ).all()
-    cost_ranking = [
-        {"tenant_id": row[0], "tenant_name": tenant_name_map.get(row[0]) or "未绑定企业", "cost": float(row[1] or 0)}
-        for row in cost_rank_rows
-    ]
     total_cost = round(sum(row["cost"] for row in cost_ranking), 4)
     total_subtasks_stmt = select(func.count(GeoMonitorSubtask.id)).join(
         GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
@@ -902,7 +918,7 @@ def management_create_tenant(
     write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
-    return ApiResponse(data=tenant_to_dict(tenant))
+    return ApiResponse(data=tenant_to_dict(tenant, db=db))
 
 
 @router.put("/tenants/{tenant_id}", response_model=ApiResponse[dict])
@@ -970,7 +986,55 @@ def management_update_tenant(
     )
     db.commit()
     db.refresh(tenant)
-    return ApiResponse(data=tenant_to_dict(tenant))
+    return ApiResponse(data=tenant_to_dict(tenant, db=db))
+
+
+@router.get("/tenant-sales-owners", response_model=ApiResponse[list[dict]])
+def management_tenant_sales_owners(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[list[dict]]:
+    require_platform(current)
+    if not can_review_approvals(db, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅运营或管理员可转移企业归属")
+    return ApiResponse(data=list_platform_sales_users(db))
+
+
+@router.patch("/tenants/{tenant_id}/owner", response_model=ApiResponse[dict])
+def management_transfer_tenant_owner(
+    tenant_id: int,
+    payload: TenantTransferOwnerRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    require_platform(current)
+    if not can_review_approvals(db, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅运营或管理员可转移企业归属")
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
+    old_owner_id = tenant.owner_user_id
+    old_owner = db.get(User, old_owner_id) if old_owner_id else None
+    try:
+        tenant = transfer_tenant_owner(db, tenant_id, payload.owner_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    new_owner = db.get(User, tenant.owner_user_id)
+    old_label = old_owner.display_name if old_owner else "未指定"
+    new_label = new_owner.display_name if new_owner else str(payload.owner_user_id)
+    write_management_log(
+        db,
+        current,
+        "企业归属转移",
+        f"企业「{tenant.name}」归属销售：{old_label} → {new_label}",
+        target_module="企业管理",
+        target_id=tenant.id,
+        tenant_id=tenant.id,
+        risk_level="关注",
+    )
+    db.commit()
+    db.refresh(tenant)
+    return ApiResponse(data=tenant_to_dict(tenant, db=db))
 
 
 @router.delete("/tenants/{tenant_id}", response_model=ApiResponse[dict])
@@ -1048,7 +1112,7 @@ def management_restore_tenant(
     write_management_log(db, current, "企业恢复", f"恢复企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
-    return ApiResponse(data=tenant_to_dict(tenant))
+    return ApiResponse(data=tenant_to_dict(tenant, db=db))
 
 
 @router.get("/users", response_model=ApiResponse[list[dict]])
@@ -1114,17 +1178,31 @@ def management_create_user(
 ) -> ApiResponse[dict]:
     require_platform(current)
     require_user_identity_create_permission(db, current, payload)
-    try:
+
+    def _execute():
         user = create_managed_user(db, payload, current.user, current.identity)
         write_management_log(db, current, "用户新增", f"新增用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id)
         db.commit()
+        return {"id": user.id, "username": user.username, "display_name": user.display_name}
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="management.user.create",
+            module="user",
+            action="create",
+            summary=f"新增用户：{payload.display_name or payload.username}",
+            payload={"body": payload.model_dump(mode="json")},
+            executor=_execute,
+        )
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"数据库保存失败：{exc.__class__.__name__}") from exc
-    return ApiResponse(data={"id": user.id, "username": user.username, "display_name": user.display_name})
+    return ApiResponse(data=result)
 
 
 @router.put("/users/{user_id}", response_model=ApiResponse[dict])
@@ -1136,17 +1214,32 @@ def management_update_user(
 ) -> ApiResponse[dict]:
     require_platform(current)
     require_user_identity_create_permission(db, current, payload, existing_user_id=user_id)
-    try:
+
+    def _execute():
         user = update_managed_user(db, user_id, payload, current.user, current.identity)
         write_management_log(db, current, "用户修改", f"修改用户与权限：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="关注")
         db.commit()
+        return {"id": user.id, "username": user.username, "display_name": user.display_name}
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="management.user.update",
+            module="user",
+            action="update",
+            summary=f"修改用户：{payload.display_name or user_id}",
+            payload={"body": payload.model_dump(mode="json"), "user_id": user_id},
+            target_id=user_id,
+            executor=_execute,
+        )
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"数据库保存失败：{exc.__class__.__name__}") from exc
-    return ApiResponse(data={"id": user.id, "username": user.username, "display_name": user.display_name})
+    return ApiResponse(data=result)
 
 
 @router.patch("/users/{user_id}/password", response_model=ApiResponse[dict])

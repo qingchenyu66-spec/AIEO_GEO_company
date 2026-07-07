@@ -57,6 +57,37 @@
   color: #17406a;
 }
 
+.competitor-date-filter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.competitor-date-range {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6a7f9a;
+  white-space: nowrap;
+}
+
+.competitor-custom-dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6a7f9a;
+  font-size: 11px;
+}
+
+.competitor-custom-dates input {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 11px;
+}
+
 .competitor-sticky-filters select {
   min-height: 36px;
   padding: 0 10px;

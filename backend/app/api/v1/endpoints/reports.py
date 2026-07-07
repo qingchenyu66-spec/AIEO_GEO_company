@@ -10,6 +10,7 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.api.http_errors import raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
+from app.services.approval_service import queue_or_run
 from app.services.operation_log_service import write_business_audit
 from app.services.report_export_service import build_report_export, content_disposition
 from app.services.report_service import generate_report, get_report_detail, list_reports, publish_report, update_report
@@ -36,22 +37,38 @@ def generate_report_endpoint(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """生成报告——仅运营端，基于诊断记录与监测快照，初始为草稿。"""
-    try:
+    tenant_id = payload.get("tenant_id")
+
+    def _execute():
         data = generate_report(db, payload, current)
+        write_business_audit(
+            db,
+            current,
+            "报告生成",
+            f"生成报告：{data.get('report_title') or data.get('title') or '未命名'}",
+            request=request,
+            target_module="报告中心",
+            target_id=data.get("id"),
+            tenant_id=data.get("tenant_id"),
+        )
+        db.commit()
+        return data
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="reports.generate",
+            module="report",
+            action="create",
+            summary=f"生成分析报告：{payload.get('report_title') or payload.get('title') or '未命名'}",
+            payload={"body": payload},
+            tenant_id=int(tenant_id) if tenant_id is not None else None,
+            executor=_execute,
+        )
     except Exception as exc:
         raise_write_endpoint_error(exc, context="reports.generate")
-    write_business_audit(
-        db,
-        current,
-        "报告生成",
-        f"生成报告：{data.get('report_title') or data.get('title') or '未命名'}",
-        request=request,
-        target_module="报告中心",
-        target_id=data.get("id"),
-        tenant_id=data.get("tenant_id"),
-    )
-    db.commit()
-    return ApiResponse(data=data)
+    return ApiResponse(data=result)
 
 
 @router.put("/{report_id}", response_model=ApiResponse[dict])
@@ -63,25 +80,42 @@ def update_report_endpoint(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """编辑并保存报告草稿——仅运营端。"""
-    try:
+    def _execute():
         data = update_report(db, report_id, payload, current)
+        write_business_audit(
+            db,
+            current,
+            "报告编辑",
+            f"保存报告草稿：{data.get('report_title') or data.get('title') or report_id}",
+            request=request,
+            target_module="报告中心",
+            target_id=report_id,
+            tenant_id=data.get("tenant_id"),
+            risk_level="关注",
+        )
+        db.commit()
+        return data
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="reports.update",
+            module="report",
+            action="update",
+            summary=f"编辑分析报告 #{report_id}",
+            payload={"body": payload, "report_id": report_id},
+            target_id=report_id,
+            tenant_id=payload.get("tenant_id"),
+            executor=_execute,
+        )
     except ValueError as exc:
         message = str(exc)
         code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=code, detail=message) from exc
-    write_business_audit(
-        db,
-        current,
-        "报告编辑",
-        f"保存报告草稿：{data.get('report_title') or data.get('title') or report_id}",
-        request=request,
-        target_module="报告中心",
-        target_id=report_id,
-        tenant_id=data.get("tenant_id"),
-        risk_level="关注",
-    )
-    db.commit()
-    return ApiResponse(data=data)
+    except Exception as exc:
+        raise_write_endpoint_error(exc, context="reports.update")
+    return ApiResponse(data=result)
 
 
 @router.post("/{report_id}/publish", response_model=ApiResponse[dict])
@@ -92,25 +126,41 @@ def publish_report_endpoint(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """发布报告——客户侧可见。"""
-    try:
+    def _execute():
         data = publish_report(db, report_id, current)
+        write_business_audit(
+            db,
+            current,
+            "报告发布",
+            f"发布报告：{data.get('report_title') or data.get('title') or report_id}",
+            request=request,
+            target_module="报告中心",
+            target_id=report_id,
+            tenant_id=data.get("tenant_id"),
+            risk_level="关注",
+        )
+        db.commit()
+        return data
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="reports.publish",
+            module="report",
+            action="publish",
+            summary=f"发布分析报告 #{report_id}",
+            payload={"report_id": report_id},
+            target_id=report_id,
+            executor=_execute,
+        )
     except ValueError as exc:
         message = str(exc)
         code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=code, detail=message) from exc
-    write_business_audit(
-        db,
-        current,
-        "报告发布",
-        f"发布报告：{data.get('report_title') or data.get('title') or report_id}",
-        request=request,
-        target_module="报告中心",
-        target_id=report_id,
-        tenant_id=data.get("tenant_id"),
-        risk_level="关注",
-    )
-    db.commit()
-    return ApiResponse(data=data)
+    except Exception as exc:
+        raise_write_endpoint_error(exc, context="reports.publish")
+    return ApiResponse(data=result)
 
 
 @router.get("/{report_id}/export/{export_format}")

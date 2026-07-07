@@ -116,8 +116,12 @@ export interface CeleryMonitorData {
   }
   beat_history?: CeleryBeatHistoryItem[]
   ops_insights?: {
-    scheduler_ok: boolean
+    scheduler_ok: boolean | null
     scheduler_status: string
+    scheduler_detail?: string
+    workers_online?: number
+    submit_workers?: number
+    sync_workers?: number
     pending_sync_tasks: number
     today_scan_count: number
     today_enqueued_tasks: number
@@ -157,8 +161,6 @@ export interface CeleryBeatHistoryItem {
   sync_details?: CelerySyncTaskDetail[]
 }
 
-export type PlatformServiceStatus = 'pending' | 'checking' | 'healthy' | 'degraded' | 'down'
-
 export interface MolizhishuBalance {
   available: boolean
   current_balance: number | null
@@ -179,9 +181,6 @@ export interface PlatformMatrixItem {
   channel: 'web' | 'mobile'
   channel_label: string
   supported: boolean
-  status: PlatformServiceStatus
-  status_label: string
-  status_hint: string
   probe_total: number
   probe_success: number
   probe_failed: number
@@ -191,10 +190,9 @@ export interface PlatformMatrixItem {
 export interface PlatformMatrix {
   snapshot_date: string
   supported_count: number
-  healthy_count: number
-  checking_count: number
-  pending_count: number
-  issue_count: number
+  probe_total: number
+  probe_success: number
+  probe_failed: number
   first_schedule_at: string | null
   updated_at: string
   catalog_source?: string

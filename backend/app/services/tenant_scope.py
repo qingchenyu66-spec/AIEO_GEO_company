@@ -105,15 +105,64 @@ def resolve_and_guard_analytics_tenant(
     return tenant_id
 
 
-def assert_monitor_task_access(db: Session, current: CurrentSession, tenant_id: int | None) -> None:
-    """监测任务读路径：客户绑定租户；平台销售仅看名下企业。"""
-    if tenant_id is None:
+def sales_owned_lead_diagnosis_task_ids(db: Session, user_id: int) -> list[str]:
+    """销售账号创建的售前诊断关联监测 task_id 列表。"""
+    from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
+
+    rows = db.scalars(
+        select(LeadDiagnosisRun.task_id)
+        .join(LeadDiagnosis, LeadDiagnosis.id == LeadDiagnosisRun.lead_diagnosis_id)
+        .where(
+            LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosis.created_by_user_id == user_id,
+            LeadDiagnosisRun.task_id.isnot(None),
+        )
+    )
+    return list(rows)
+
+
+def ensure_lead_diagnosis_task_access(db: Session, current: CurrentSession, task_id: str) -> None:
+    """销售只能访问本人创建的售前诊断关联监测任务。"""
+    from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
+
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("无权访问该监测数据")
+    if not is_sales_identity(db, current.identity):
         return
+    owner_id = db.scalar(
+        select(LeadDiagnosis.created_by_user_id)
+        .join(LeadDiagnosisRun, LeadDiagnosisRun.lead_diagnosis_id == LeadDiagnosis.id)
+        .where(
+            LeadDiagnosisRun.task_id == task_id,
+            LeadDiagnosis.deleted.is_(False),
+        )
+    )
+    if owner_id is None:
+        raise PermissionError("无权访问该监测数据")
+    if owner_id != current.user.id:
+        raise PermissionError("无权访问该售前诊断监测数据")
+
+
+def assert_monitor_task_access(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int | None,
+    *,
+    task_id: str | None = None,
+) -> None:
+    """监测任务读路径：客户绑定租户；平台销售仅看名下企业或本人售前诊断任务。"""
     if current.identity.identity_type == "CUSTOMER":
-        if current.identity.tenant_id != tenant_id:
+        if tenant_id is None or current.identity.tenant_id != tenant_id:
             raise PermissionError("无权访问该企业监测数据")
         return
-    ensure_sales_tenant_access(db, current, tenant_id)
+    if tenant_id is not None:
+        ensure_sales_tenant_access(db, current, tenant_id)
+        return
+    if task_id:
+        ensure_lead_diagnosis_task_access(db, current, task_id)
+        return
+    if is_sales_identity(db, current.identity):
+        raise PermissionError("无权访问该监测数据")
 
 
 def resolve_and_guard_tenant_id(

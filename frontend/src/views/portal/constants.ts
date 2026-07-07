@@ -5,12 +5,11 @@ export const USER_LIST_MENU = 'platform.users.list'
 export const POSITION_MENU = 'platform.positions'
 
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
-export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis']
+export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis', 'platform.audit.models']
 export const hiddenEnterprisePermissionMenus = [
   'platform.audit.list',
   'platform.audit.profile',
   'platform.audit.keywords',
-  'platform.audit.models',
   'platform.audit.schedule',
   'platform.audit.competitors',
   'platform.audit.files',

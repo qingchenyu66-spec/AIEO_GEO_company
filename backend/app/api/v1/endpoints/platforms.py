@@ -17,6 +17,7 @@ from app.core.celery_queue_monitor import (
     invalidate_queue_threshold_cache,
     is_business_metric_type,
     metric_label,
+    threshold_display_name,
 )
 from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
@@ -183,7 +184,7 @@ def list_thresholds(
             "tenant_id": r.tenant_id,
             "metric_type": r.metric_type,
             "metric_label": metric_label(r.metric_type),
-            "threshold_name": r.threshold_name,
+            "threshold_name": threshold_display_name(r.metric_type, r.threshold_name),
             "warning_value": r.warning_value,
             "critical_value": r.critical_value,
             "unit": r.unit,
@@ -244,7 +245,7 @@ def update_threshold(
         invalidate_queue_threshold_cache()
     return ApiResponse(data={
         "id": threshold.id,
-        "threshold_name": threshold.threshold_name,
+        "threshold_name": threshold_display_name(threshold.metric_type, threshold.threshold_name),
         "warning_value": threshold.warning_value,
         "critical_value": threshold.critical_value,
         "enabled": threshold.enabled,

@@ -8,7 +8,9 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
+from app.services.approval_service import queue_or_run
 from app.services.lead_diagnosis_service import (
+    assert_lead_diagnosis_create_allowed,
     build_lead_diagnosis_export,
     create_lead_diagnosis,
     get_lead_diagnosis,
@@ -43,7 +45,25 @@ def create_record(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     try:
-        return ApiResponse(data=create_lead_diagnosis(db, current, payload))
+        assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    def _execute():
+        return create_lead_diagnosis(db, current, payload)
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="lead_diagnosis.create",
+            module="lead_diagnosis",
+            action="create",
+            summary=f"新建售前诊断：{payload.brand_name or '未命名'}",
+            payload={"body": payload.model_dump(mode="json")},
+            executor=_execute,
+        )
+        return ApiResponse(data=result)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -58,7 +78,7 @@ def get_record(
 ) -> ApiResponse[dict]:
     try:
         require_lead_diagnosis_access(db, current, "can_export")
-        return ApiResponse(data=get_lead_diagnosis(db, lead_id))
+        return ApiResponse(data=get_lead_diagnosis(db, lead_id, current=current))
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -72,8 +92,22 @@ def update_record(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
+    def _execute():
+        return update_lead_diagnosis(db, current, lead_id, payload)
+
     try:
-        return ApiResponse(data=update_lead_diagnosis(db, current, lead_id, payload))
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="lead_diagnosis.update",
+            module="lead_diagnosis",
+            action="update",
+            summary=f"修改售前诊断 #{lead_id}",
+            payload={"body": payload.model_dump(mode="json"), "lead_id": lead_id},
+            target_id=lead_id,
+            executor=_execute,
+        )
+        return ApiResponse(data=result)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -88,8 +122,22 @@ def submit_run(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
+    def _execute():
+        return submit_due_lead_run(db, current, lead_id, schedule_key=schedule_key, force=force)
+
     try:
-        return ApiResponse(data=submit_due_lead_run(db, current, lead_id, schedule_key=schedule_key, force=force))
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="lead_diagnosis.submit_run",
+            module="lead_diagnosis",
+            action="submit",
+            summary=f"提交售前诊断执行 #{lead_id}",
+            payload={"lead_id": lead_id, "schedule_key": schedule_key, "force": force},
+            target_id=lead_id,
+            executor=_execute,
+        )
+        return ApiResponse(data=result)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -104,7 +152,7 @@ def refresh_record(
 ) -> ApiResponse[dict]:
     try:
         require_lead_diagnosis_access(db, current, "can_export")
-        return ApiResponse(data=refresh_lead_diagnosis_runs(db, lead_id))
+        return ApiResponse(data=refresh_lead_diagnosis_runs(db, lead_id, current=current))
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -120,7 +168,7 @@ def export_record(
 ) -> Response:
     try:
         require_lead_diagnosis_access(db, current, "can_export")
-        content, filename, mime = build_lead_diagnosis_export(db, lead_id, export_format=export_format)
+        content, filename, mime = build_lead_diagnosis_export(db, lead_id, export_format=export_format, current=current)
         return Response(
             content=content,
             media_type=mime,

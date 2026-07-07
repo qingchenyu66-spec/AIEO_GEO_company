@@ -1,13 +1,10 @@
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import {
-  deleteKnowledgeFile,
   getKnowledgeFiles,
-  parseKnowledgeFile,
   uploadKnowledgeFile,
   type KnowledgeFileRecord,
-  type KnowledgeParseStatus,
 } from '../../../services/knowledge'
 import { useAuthStore } from '../../../stores/auth'
 import { formatDateTime, formatFileSize } from '../portalUtils'
@@ -27,13 +24,6 @@ function matchesTypeFilter(file: KnowledgeFileRecord, filter: KnowledgeTypeFilte
   return normalizeExt(file.file_ext) === filter
 }
 
-const parseStatusLabels: Record<KnowledgeParseStatus, string> = {
-  none: '待解析',
-  parsing: '解析中',
-  parsed: '已完成',
-  failed: '解析异常',
-}
-
 export function useKnowledgeBase() {
   const auth = useAuthStore()
   const files = ref<KnowledgeFileRecord[]>([])
@@ -50,7 +40,6 @@ export function useKnowledgeBase() {
 
   const menuGrant = computed(() => auth.allowedMenus.find(menu => menu.menu_code === 'customer.knowledge'))
   const canUpload = computed(() => Boolean(menuGrant.value?.can_create))
-  const canManage = computed(() => Boolean(menuGrant.value?.can_update))
   const tenantName = computed(() => auth.session?.identity?.tenant_name || '当前企业')
 
   const filteredFiles = computed(() => {
@@ -72,21 +61,6 @@ export function useKnowledgeBase() {
   const pdfCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'pdf').length)
   const docCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'doc').length)
   const textCount = computed(() => files.value.filter(file => ['md', 'txt'].includes(normalizeExt(file.file_ext))).length)
-  const parsedCount = computed(() => files.value.filter(file => file.parse_status === 'parsed').length)
-  const failedCount = computed(() => files.value.filter(file => file.parse_status === 'failed').length)
-  const parsingCount = computed(() => files.value.filter(file => file.parse_status === 'parsing' || file.parse_status === 'none').length)
-
-  const extractedKeywordCount = computed(() => {
-    const keywords = new Set<string>()
-    files.value.forEach(file => {
-      file.parse_result?.keywords?.forEach(keyword => keywords.add(keyword))
-    })
-    return keywords.size
-  })
-
-  const geoPointCount = computed(() => (
-    files.value.reduce((sum, file) => sum + (file.parse_result?.geo_points?.length || 0), 0)
-  ))
 
   const lastUploadLabel = computed(() => {
     if (!files.value.length) return '-'
@@ -96,9 +70,6 @@ export function useKnowledgeBase() {
   const headline = computed(() => {
     if (loadError.value) return '资料加载失败，请刷新后重试'
     if (!files.value.length) return '尚未归档品牌资料，建议先上传产品说明与核心卖点文档'
-    if (parsingCount.value > 0) return `已归档 ${files.value.length} 份资料，${parsingCount.value} 份正在智能解析`
-    if (failedCount.value > 0) return `已归档 ${files.value.length} 份资料，${failedCount.value} 份解析异常需查看`
-    if (parsedCount.value > 0) return `已归档 ${files.value.length} 份资料，${parsedCount.value} 份已完成知识提炼`
     const latest = files.value[0]
     return `已归档 ${files.value.length} 份资料，最近上传「${latest.original_name}」`
   })
@@ -121,66 +92,19 @@ export function useKnowledgeBase() {
     }
   })
 
-  let parsePollTimer: number | null = null
-
-  function stopParsePolling() {
-    if (parsePollTimer !== null) {
-      window.clearInterval(parsePollTimer)
-      parsePollTimer = null
-    }
-  }
-
-  function syncParsePolling() {
-    const shouldPoll = files.value.some(file => file.parse_status === 'parsing' || file.parse_status === 'none')
-    if (!shouldPoll) {
-      stopParsePolling()
-      return
-    }
-    if (parsePollTimer !== null) return
-    parsePollTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void loadFiles({ silent: true })
-      }
-    }, 3000)
-  }
-
-  watch(files, syncParsePolling, { deep: true })
-
-  let pendingParseQueued = false
-
-  async function schedulePendingParses(items: KnowledgeFileRecord[]) {
-    const pending = items.filter(file => file.parse_status === 'none')
-    if (!pending.length || pendingParseQueued) return
-    pendingParseQueued = true
-    try {
-      await Promise.allSettled(pending.map(file => parseKnowledgeFile(file.id)))
-      await loadFiles({ silent: true })
-    } finally {
-      pendingParseQueued = false
-    }
-  }
-
-  async function loadFiles(options?: { silent?: boolean }) {
-    if (!options?.silent) {
-      loading.value = true
-      loadError.value = ''
-    }
+  async function loadFiles() {
+    loading.value = true
+    loadError.value = ''
     try {
       files.value = await withRetry(() => getKnowledgeFiles(null))
       if (files.value.length && selectedId.value === null) {
         selectedId.value = files.value[0].id
       }
-      if (!options?.silent) {
-        void schedulePendingParses(files.value)
-      }
-      syncParsePolling()
     } catch (error: unknown) {
-      if (!options?.silent) {
-        loadError.value = error instanceof Error ? error.message : '知识库文件加载失败'
-        files.value = []
-      }
+      loadError.value = error instanceof Error ? error.message : '知识库文件加载失败'
+      files.value = []
     } finally {
-      if (!options?.silent) loading.value = false
+      loading.value = false
     }
   }
 
@@ -200,17 +124,9 @@ export function useKnowledgeBase() {
     uploading.value = true
     try {
       const record = await uploadKnowledgeFile(file, null)
-      ElMessage.success('资料已上传，正在进行智能解析')
+      ElMessage.success('资料已上传')
       files.value = [record, ...files.value.filter(item => item.id !== record.id)]
       selectedId.value = record.id
-      if (record.parse_status === 'none') {
-        void parseKnowledgeFile(record.id)
-          .then(updated => {
-            files.value = [updated, ...files.value.filter(item => item.id !== updated.id)]
-          })
-          .catch(() => undefined)
-      }
-      syncParsePolling()
     } catch (error: unknown) {
       ElMessage.error(error instanceof Error ? error.message : '文件上传失败')
     } finally {
@@ -238,27 +154,6 @@ export function useKnowledgeBase() {
     event.preventDefault()
   }
 
-  async function removeSelectedFile() {
-    if (!selectedFile.value || !canManage.value) return
-    try {
-      await ElMessageBox.confirm(
-        `确定删除「${selectedFile.value.original_name}」？删除后不可恢复。`,
-        '删除资料',
-        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-      )
-    } catch {
-      return
-    }
-    try {
-      await deleteKnowledgeFile(selectedFile.value.id)
-      ElMessage.success('资料已删除')
-      selectedId.value = null
-      await loadFiles()
-    } catch (error: unknown) {
-      ElMessage.error(error instanceof Error ? error.message : '删除失败')
-    }
-  }
-
   function resetFilters() {
     keywordFilter.value = ''
     typeFilter.value = 'all'
@@ -273,40 +168,12 @@ export function useKnowledgeBase() {
     return ext.toUpperCase()
   }
 
-  function parseStatusLabel(status?: KnowledgeParseStatus) {
-    if (!status) return parseStatusLabels.none
-    return parseStatusLabels[status] || status
-  }
-
-  function parseStatusClass(status?: KnowledgeParseStatus) {
-    if (status === 'parsed') return 'is-success'
-    if (status === 'parsing') return 'is-pending'
-    if (status === 'failed') return 'is-failed'
-    return 'is-idle'
-  }
-
-  function parseProgress(status?: KnowledgeParseStatus): number | null {
-    if (status === 'parsed') return 100
-    if (status === 'failed') return 100
-    if (status === 'parsing') return null
-    return 12
-  }
-
-  function parseProgressText(status?: KnowledgeParseStatus) {
-    if (status === 'parsed') return '内容资产已完成结构化，可用于引用分析、诊断和报告素材'
-    if (status === 'failed') return '解析未完成，请检查文件内容或重新上传'
-    if (status === 'parsing') return '内容资产引擎正在抽取摘要、关键词和可引用要点（状态同步自后台任务）'
-    return '文件已入库，等待内容资产引擎处理'
-  }
-
   onMounted(loadFiles)
-  onUnmounted(stopParsePolling)
 
   return {
     pageMenuName,
     tenantName,
     canUpload,
-    canManage,
     files,
     filteredFiles,
     loading,
@@ -321,22 +188,12 @@ export function useKnowledgeBase() {
     pdfCount,
     docCount,
     textCount,
-    parsedCount,
-    failedCount,
-    parsingCount,
-    extractedKeywordCount,
-    geoPointCount,
     lastUploadLabel,
     headline,
     loadFiles,
     handleFileInput,
     handleDrop,
     handleDragOver,
-    removeSelectedFile,
-    parseStatusLabel,
-    parseStatusClass,
-    parseProgress,
-    parseProgressText,
     resetFilters,
     formatFileSize,
     formatDateTime,

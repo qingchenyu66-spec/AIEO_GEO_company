@@ -20,6 +20,7 @@ import {
 import { initChart, type ECharts } from '../../../utils/echartsLoader'
 import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
+import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
 import '../../../styles/lead-diagnosis.css'
 
@@ -53,8 +54,7 @@ const {
   trackedEntities,
   executiveSummary,
   hasReportSections,
-  regionOptions,
-  regionLabel,
+  regionLabels,
   promptTemplates,
   scheduleSlots,
   scheduleDays,
@@ -244,13 +244,9 @@ onUnmounted(() => {
             <span>主要竞品</span>
             <input v-model="createForm.competitors" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
           </label>
-          <label class="lead-field">
+          <label class="lead-field lead-field-wide">
             <span>监测地区</span>
-            <select v-model="createForm.region_code">
-              <option v-for="region in regionOptions" :key="region.code || 'all'" :value="region.code">
-                {{ region.name }}
-              </option>
-            </select>
+            <RegionMultiSelect v-model="createForm.region_codes" />
           </label>
           <label class="lead-field lead-field-wide">
             <span>销售备注</span>
@@ -696,7 +692,7 @@ onUnmounted(() => {
               <div class="lead-config-list">
                 <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
                 <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
-                <div><strong>监测地区</strong><span>{{ regionLabel(detail.region_code) }}</span></div>
+                <div><strong>监测地区</strong><span>{{ regionLabels(detail.region_codes) }}</span></div>
                 <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>
                 <div v-if="detail.contact_note"><strong>销售备注</strong><span>{{ detail.contact_note }}</span></div>
                 <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>

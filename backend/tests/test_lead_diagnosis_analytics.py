@@ -34,7 +34,7 @@ class _RunStub:
 
 class _LeadStub:
     brand_name = "儒思HR"
-    region_code = None
+    region_codes_json: list[str] = []
     prompts_json = ["HR课程性价比高的品牌推荐", "HR培训机构品牌排名"]
     competitors_json = ["北森", "光华赋能"]
 
@@ -108,7 +108,7 @@ def test_build_rank_trend_across_runs() -> None:
 
 def test_build_brand_city_rankings_groups_by_region() -> None:
     lead = _LeadStub()
-    lead.region_code = "110000"
+    lead.region_codes_json = ["110000"]
     runs = [_RunStub("202607030930", "2026-07-03 09:30", "task-1")]
     subtasks = [
         _SubtaskStub(

@@ -15,7 +15,7 @@ from app.models.diagnosis import BrandDiagnosis
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.models.report import GeoReport
 from app.models.tenant import Tenant
-from app.services.brand_service import active_keyword_groups, brand_exposure_terms, ensure_tenant, get_brand_asset, list_competitors
+from app.services.brand_service import active_keyword_groups, brand_exposure_terms, ensure_tenant, get_brand_asset, list_competitors, tenant_purchased_platforms
 from app.services.monitor_service import TERMINAL_STATUSES, _is_valid_citation_source, _matched_source_keywords
 from app.services.report_ai_service import enrich_report_narrative
 from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
@@ -52,8 +52,9 @@ def sanitize_display_text(value: str | None, fallback: str | None = None) -> str
 
 
 def _default_diagnosis_title(brand_name: str, report_type: str) -> str:
+    del brand_name
     label = REPORT_TYPE_LABELS.get(report_type, "品牌诊断")
-    return f"{brand_name} · GEO {label}"
+    return f"GEO {label}"
 
 
 def _sanitize_report_content(content: dict[str, Any] | None, *, brand_name: str, report_type: str) -> dict[str, Any] | None:
@@ -84,7 +85,7 @@ def build_tenant_monitor_snapshot(db: Session, tenant_id: int) -> dict[str, Any]
     """汇总企业监测数据，供报告生成与预览使用。"""
     asset = get_brand_asset(db, tenant_id)
     competitors = list_competitors(db, tenant_id)
-    purchased_platforms = set((asset.monitored_platforms_json if asset else None) or [])
+    purchased_platforms = set(tenant_purchased_platforms(db, tenant_id, asset))
 
     task_rows = list(
         db.scalars(
@@ -263,14 +264,15 @@ def _period_label_for_type(report_type: str, now: datetime) -> str:
 
 
 def _default_report_title(report_type: str, brand_name: str) -> str:
+    del brand_name
     return {
-        "diagnosis": f"{brand_name} · GEO 企业诊断报告",
-        "weekly": f"{brand_name} · GEO 监测周报",
-        "monthly": f"{brand_name} · GEO 监测月报",
-        "annual": f"{brand_name} · GEO 监测年报",
-        "comparison": f"{brand_name} · 竞品对比报告",
-        "periodic": f"{brand_name} · 周期监测报告",
-    }.get(report_type, f"{brand_name} · GEO 监测报告")
+        "diagnosis": "GEO 企业诊断报告",
+        "weekly": "GEO 监测周报",
+        "monthly": "GEO 监测月报",
+        "annual": "GEO 监测年报",
+        "comparison": "竞品对比报告",
+        "periodic": "周期监测报告",
+    }.get(report_type, "GEO 监测报告")
 
 
 def _ensure_platform_operator(current: CurrentSession) -> None:

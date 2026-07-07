@@ -44,7 +44,11 @@ from app.services.snapshot_backfill_service import (
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.menu_permission_service import require_snapshot_backfill_permission
-from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
+from app.services.tenant_scope import (
+    ensure_sales_tenant_access,
+    sales_owned_lead_diagnosis_task_ids,
+    sales_owned_tenant_ids,
+)
 from app.services.schedule_context import schedule_plan_summary, schedule_runs_for_tasks
 from app.services.schedule_service import preview_scheduled_tasks, run_due_scheduled_tasks
 
@@ -169,17 +173,29 @@ def monitor_ranking_matrix(
 
 @router.get("/workspace-brief", response_model=ApiResponse[dict])
 def monitor_workspace_brief(
+    start_date: date | None = Query(default=None, description="趋势起始日（含），客户侧不晚于昨日"),
+    end_date: date | None = Query(default=None, description="趋势截止日（含），客户侧不晚于昨日"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Return customer workspace morning briefing with intent-aware KPIs."""
     if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="运营工作台简报仅支持客户企业账号")
-    cache_key = workspace_brief_cache_key(current.identity.tenant_id)
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="起始日期不能晚于结束日期")
+    tenant_id = current.identity.tenant_id
+    start_key = start_date.isoformat() if start_date else None
+    end_key = end_date.isoformat() if end_date else None
+    cache_key = workspace_brief_cache_key(tenant_id, start_key, end_key)
     try:
         data = get_or_build_json_cache(
             cache_key,
-            lambda: workspace_brief(db, current),
+            lambda: workspace_brief(
+                db,
+                current,
+                start_date=start_date,
+                end_date=end_date,
+            ),
             ttl_seconds=WORKSPACE_BRIEF_CACHE_TTL,
         )
         return ApiResponse(data=data)
@@ -218,17 +234,19 @@ def monitor_snapshot_backfill_pending(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     owned = sales_owned_tenant_ids(db, current)
     scoped_tenant_ids: list[int] | None = None
+    allowed_lead_task_ids: list[str] | None = None
     if owned is not None:
-        if not owned:
-            return ApiResponse(data=SnapshotBackfillListResponse.model_validate({
-                "items": [], "summary": {"pending": 0, "total": 0}, "total": 0, "offset": offset, "limit": limit,
-            }))
+        allowed_lead_task_ids = sales_owned_lead_diagnosis_task_ids(db, current.user.id)
         if tenant_id is not None:
             try:
                 ensure_sales_tenant_access(db, current, tenant_id)
             except PermissionError as exc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         elif all_tenants:
+            if not owned and not allowed_lead_task_ids:
+                return ApiResponse(data=SnapshotBackfillListResponse.model_validate({
+                    "items": [], "summary": {"pending": 0, "total": 0}, "total": 0, "offset": offset, "limit": limit,
+                }))
             scoped_tenant_ids = owned
             tenant_id = None
         else:
@@ -237,6 +255,7 @@ def monitor_snapshot_backfill_pending(
         db,
         tenant_id=tenant_id,
         tenant_ids=scoped_tenant_ids,
+        allowed_lead_task_ids=allowed_lead_task_ids,
         detect_date=on_date,
         source=source,
         platform=platform,

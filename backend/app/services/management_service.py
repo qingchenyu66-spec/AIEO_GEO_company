@@ -249,7 +249,14 @@ def _upsert_identity_for_user(db: Session, user: User, item: UserIdentityCreateI
         replace_identity_menus(db, identity.id, _menu_ids_for_identity(db, item, position), writable=item.identity_type == "PLATFORM")
 
 
-def create_managed_user(db: Session, payload: UserCreateRequest, creator: User, creator_identity: UserIdentity) -> User:
+def create_managed_user(
+    db: Session,
+    payload: UserCreateRequest,
+    creator: User,
+    creator_identity: UserIdentity,
+    *,
+    commit: bool = True,
+) -> User:
     exists = db.scalar(select(User).where(User.username == payload.username, User.deleted.is_(False)))
     if exists is not None:
         raise ValueError("账号已存在")
@@ -270,12 +277,21 @@ def create_managed_user(db: Session, payload: UserCreateRequest, creator: User, 
     for index, item in enumerate(payload.identities):
         _create_identity_for_user(db, user, item, is_default=index == 0, owner_user_id=creator.id)
 
-    db.commit()
-    db.refresh(user)
+    if commit:
+        db.commit()
+        db.refresh(user)
     return user
 
 
-def update_managed_user(db: Session, user_id: int, payload: UserUpdateRequest, current_user: User, current_identity: UserIdentity) -> User:
+def update_managed_user(
+    db: Session,
+    user_id: int,
+    payload: UserUpdateRequest,
+    current_user: User,
+    current_identity: UserIdentity,
+    *,
+    commit: bool = True,
+) -> User:
     user = get_managed_user(db, user_id, current_user, current_identity)
     _reject_garbled_text(payload.display_name, "用户姓名")
     identity_types = [item.identity_type for item in payload.identities]
@@ -291,8 +307,9 @@ def update_managed_user(db: Session, user_id: int, payload: UserUpdateRequest, c
             db.query(UserIdentityMenu).filter(UserIdentityMenu.identity_id == identity.id).delete(synchronize_session=False)
     for index, item in enumerate(payload.identities):
         _upsert_identity_for_user(db, user, item, is_default=index == 0, owner_user_id=current_user.id)
-    db.commit()
-    db.refresh(user)
+    if commit:
+        db.commit()
+        db.refresh(user)
     return user
 
 
@@ -338,3 +355,71 @@ def restore_managed_user(db: Session, user_id: int, current_user: User, current_
     db.commit()
     db.refresh(user)
     return user
+
+
+def _is_sales_position(position: Position | None) -> bool:
+    if position is None or position.deleted:
+        return False
+    return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+
+
+def user_has_platform_sales_identity(db: Session, user_id: int) -> bool:
+    rows = db.execute(
+        select(Position)
+        .join(UserIdentity, UserIdentity.position_id == Position.id)
+        .where(
+            UserIdentity.user_id == user_id,
+            UserIdentity.identity_type == "PLATFORM",
+            UserIdentity.deleted.is_(False),
+            UserIdentity.status.is_(True),
+            Position.deleted.is_(False),
+        )
+    ).scalars()
+    return any(_is_sales_position(position) for position in rows)
+
+
+def list_platform_sales_users(db: Session) -> list[dict]:
+    rows = db.execute(
+        select(User.id, User.username, User.display_name, User.status)
+        .join(UserIdentity, UserIdentity.user_id == User.id)
+        .join(Position, Position.id == UserIdentity.position_id)
+        .where(
+            User.deleted.is_(False),
+            User.status.is_(True),
+            UserIdentity.deleted.is_(False),
+            UserIdentity.status.is_(True),
+            UserIdentity.identity_type == "PLATFORM",
+            Position.deleted.is_(False),
+            or_(
+                Position.position_code == "PLATFORM_SALES",
+                Position.position_name == "销售",
+            ),
+        )
+        .distinct()
+        .order_by(User.display_name.asc(), User.id.asc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "username": row.username,
+            "display_name": row.display_name,
+            "status": row.status,
+        }
+        for row in rows
+    ]
+
+
+def transfer_tenant_owner(db: Session, tenant_id: int, owner_user_id: int) -> Tenant:
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError("企业不存在")
+    target = db.scalar(select(User).where(User.id == owner_user_id, User.deleted.is_(False), User.status.is_(True)))
+    if target is None:
+        raise ValueError("目标销售账号不存在或已停用")
+    if not user_has_platform_sales_identity(db, owner_user_id):
+        raise ValueError("目标账号不是有效的平台销售身份")
+    if tenant.owner_user_id == owner_user_id:
+        return tenant
+    tenant.owner_user_id = owner_user_id
+    db.flush()
+    return tenant

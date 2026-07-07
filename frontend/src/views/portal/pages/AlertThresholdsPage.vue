@@ -179,7 +179,7 @@ onMounted(loadThresholds)
       <section v-if="balanceThreshold" class="alert-balance-card" :class="`is-${balanceStatus}`">
         <Wallet />
         <div>
-          <span>模力账户余额（实时）</span>
+          <span>账户余额（实时）</span>
           <strong>{{ balance?.current_balance_text || '—' }}</strong>
           <p>
             预警 ≤ {{ balanceThreshold.warning_value }}{{ balanceThreshold.unit }}

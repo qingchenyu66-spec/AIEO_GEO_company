@@ -45,3 +45,13 @@ export function sortPlatformTabs<T extends { code: string }>(rows: T[]): T[] {
 export function formatPlatformLabels(codes: string[], labelMap: Record<string, string>): string {
   return sortPlatformCodes(codes).map(code => labelMap[code] || code).join('、')
 }
+
+/** 客户已购平台优先；无配置时回退到监测数据里出现的平台 */
+export function resolvePurchasedPlatformCodes(
+  monitoredPlatforms: string[] | null | undefined,
+  fallbackCodes: string[] = [],
+): string[] {
+  const purchased = (monitoredPlatforms || []).filter(Boolean)
+  if (purchased.length) return sortPlatformCodes(purchased)
+  return sortPlatformCodes(fallbackCodes.filter(Boolean))
+}

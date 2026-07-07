@@ -7,6 +7,7 @@ import {
   createManagedUser, deleteManagedUser, getManagedUsers, getTenants, resetManagedUserPassword,
   restoreManagedUser, setManagedUserStatus, updateManagedUser, type ManagedUser, type TenantInfo,
 } from '../../../services/management'
+import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
 import { USER_LIST_MENU } from '../constants'
 import { managementErrorMessage } from '../managementErrorMessage'
 import { createEmptyIdentityForm, createUserCreateForm, type UserIdentityForm } from '../permissionGroups'
@@ -179,12 +180,20 @@ export function useUserManagement(options: UserManagementOptions) {
     }
     creatingUser.value = true
     try {
-      await createManagedUser({
+      const result = await createManagedUser({
         username: userForm.username,
         password: userForm.password,
         display_name: userForm.display_name,
         identities,
       })
+      if (isPendingApproval(result)) {
+        const msg = pendingApprovalMessage(result, '已提交审批，通过后用户才会创建')
+        if (isDuplicateMergedApproval(result)) ElMessage.warning(msg)
+        else ElMessage.success(msg)
+        userForm.username = ''
+        userForm.display_name = ''
+        return
+      }
       ElMessage.success('用户已新增，并完成菜单权限分配')
       userForm.username = ''
       userForm.display_name = ''
@@ -218,10 +227,17 @@ export function useUserManagement(options: UserManagementOptions) {
   async function saveEditUser() {
     if (!editingUser.value || !validateEditForm()) return
     try {
-      await updateManagedUser(editingUser.value.id, {
+      const result = await updateManagedUser(editingUser.value.id, {
         display_name: editForm.display_name,
         identities: identityPayloadFromForm(editForm),
       })
+      if (isPendingApproval(result)) {
+        const msg = pendingApprovalMessage(result, '已提交审批，通过后修改才会生效')
+        if (isDuplicateMergedApproval(result)) ElMessage.warning(msg)
+        else ElMessage.success(msg)
+        editDialog.value = false
+        return
+      }
       ElMessage.success('用户信息和权限已更新')
       editDialog.value = false
       await loadUserManagement()

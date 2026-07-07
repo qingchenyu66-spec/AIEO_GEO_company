@@ -100,6 +100,19 @@ def delete_cache(key: str) -> None:
         logger.warning("Delete Redis cache failed, key=%s, error=%s", key, exc)
 
 
+def delete_cache_pattern(pattern: str) -> None:
+    """按模式删除缓存 key（用于同一资源多日期缓存失效）。"""
+    client = get_redis_client()
+    if client is None:
+        return
+    full_pattern = prefixed_key(pattern)
+    try:
+        for key in client.scan_iter(match=full_pattern, count=100):
+            client.delete(key)
+    except RedisError as exc:
+        logger.warning("Delete Redis cache pattern failed, pattern=%s, error=%s", pattern, exc)
+
+
 @contextmanager
 def redis_lock(key: str, ttl_seconds: int | None = None) -> Iterator[bool]:
     """简单分布式锁。

@@ -84,6 +84,11 @@ async function handleRead(item: SystemNotification) {
     open.value = false
     return
   }
+  if (item.category === 'operation_approval' || item.category === 'operation_approval_result') {
+    portalNavigate('platform.approvals')
+    open.value = false
+    return
+  }
   if (item.category === 'snapshot_backfill' && item.payload) {
     const payload = item.payload
     portalNavigate('platform.snapshot_backfill', false, {

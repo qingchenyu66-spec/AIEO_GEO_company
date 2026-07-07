@@ -14,7 +14,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -29,6 +29,7 @@ import {
 } from './portal/constants'
 import { platformLabelMap, monitorStatusLabelMap } from './portal/portalMaps'
 import { usePortalMenu } from './portal/usePortalMenu'
+import { useApprovalPendingCount } from './portal/composables/useApprovalPendingCount'
 import '../styles/menu-config.css'
 
 const PositionPage = defineAsyncComponent(() => import('./portal/PositionPage.vue'))
@@ -45,6 +46,7 @@ const SnapshotBackfillOpsPage = defineAsyncComponent(() => import('./portal/page
 const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
 const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
+const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/ApprovalCenterPage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
 
 const auth = useAuthStore()
@@ -71,6 +73,7 @@ const isSnapshotBackfillPage = computed(() => activeMenuCode.value === 'platform
 const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
 const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
+const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approvals')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
 
@@ -82,6 +85,9 @@ const portalFullscreen = computed(() => isCustomerWorkspacePage.value && workspa
 watch(activeMenuCode, code => {
   if (code !== 'customer.workspace') {
     void workspaceFullscreen.exit()
+  }
+  if (code === 'platform.approvals') {
+    void refreshPendingCount()
   }
 })
 
@@ -106,6 +112,12 @@ const {
 const hasUserCreateMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === USER_CREATE_MENU) && creatableIdentityTypes.value.length > 0)
 const hasUserListMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === USER_LIST_MENU || item.menu_code === 'platform.users'))
 const hasPositionMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === POSITION_MENU))
+const hasApprovalMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === 'platform.approvals'))
+
+const { pendingCount: pendingApprovalCount, refreshPendingCount } = useApprovalPendingCount(
+  () => isPlatform.value && hasApprovalMenu.value,
+)
+provide(ApprovalPendingRefreshKey, refreshPendingCount)
 
 const activeMenu = computed(() => {
   const userMenu = userManagementMenu.value
@@ -136,6 +148,7 @@ const pageSubtitle = computed(() => {
   if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
+  if (activeMenuCode.value === 'platform.models') return '平台目录同步自模力指数官方文档，展示今日各平台探测成功/失败条数。'
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 
@@ -209,14 +222,14 @@ async function refreshMenusFromServer() {
     ensureActiveMenuAllowed()
   } catch {
     ElMessage.warning('会话已失效，请重新登录')
-    auth.logout()
-    router.replace('/login')
+    await auth.logout()
+    await router.replace('/login')
   }
 }
 
-function logout() {
-  auth.logout()
-  router.replace('/login')
+async function logout() {
+  await auth.logout()
+  await router.replace('/login')
 }
 
 watch(activeMenuCode, (newCode, oldCode) => {
@@ -266,6 +279,7 @@ onMounted(() => {
     :immersive="isCustomerWorkspacePage"
     :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
+    :pending-approval-count="pendingApprovalCount"
     @toggle-user-submenu="toggleUserSubmenu"
     @select-menu="selectMenu"
     @set-menu-code="navigateToMenu"
@@ -288,6 +302,7 @@ onMounted(() => {
     <SnapshotBackfillOpsPage v-else-if="isSnapshotBackfillPage" />
     <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
     <KnowledgeBasePage v-else-if="isKnowledgePage" />
+    <ApprovalCenterPage v-else-if="isApprovalPage" />
 
     <template v-else>
       <template v-if="isDashboardPage">

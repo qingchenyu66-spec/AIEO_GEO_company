@@ -41,6 +41,8 @@ const {
   topCategory,
   officialRate,
   sourceTrendRows,
+  structureChartHeight,
+  hasStructurePanel,
   insight,
   loadSummary,
   resetFilters,
@@ -165,17 +167,21 @@ const categoryOptions = [
       </div>
     </div>
 
-    <template v-if="filteredSources.length">
+    <template v-if="hasStructurePanel || filteredSources.length">
       <section class="source-analytics-grid">
-        <article class="source-panel">
+        <article v-if="hasStructurePanel" class="source-panel">
           <div class="source-panel-head">
             <div>
               <h3>分平台信源结构</h3>
-              <p>各模型引用来源的类型占比</p>
+              <p>各已购模型引用来源的类型占比</p>
             </div>
             <Database />
           </div>
-          <div ref="structureChartRef" class="echart-box source-structure-echart" />
+          <div
+            ref="structureChartRef"
+            class="echart-box source-structure-echart"
+            :style="{ height: `${structureChartHeight}px` }"
+          />
         </article>
 
         <article class="source-panel">
@@ -185,7 +191,7 @@ const categoryOptions = [
               <p>官网 / 媒体 / 问答 / 社交 / 百科</p>
             </div>
           </div>
-          <div class="source-category-list">
+          <div v-if="filteredSources.length" class="source-category-list">
             <div v-for="item in categoryStats" :key="item.key" class="source-category-row">
               <span>{{ item.name }}</span>
               <div class="source-category-bar">
@@ -194,24 +200,26 @@ const categoryOptions = [
               <em>{{ item.percent }}%</em>
             </div>
           </div>
+          <div v-else class="mini-empty chart-empty">当前筛选下暂无含露出词信源。</div>
         </article>
       </section>
 
-      <article class="source-panel">
-        <div class="source-panel-head">
-          <div>
-            <h3>引用趋势</h3>
-            <p>{{ isCustomerView ? '按检测日统计露出词信源引用次数' : '按检测日统计新增引用次数' }}</p>
+      <template v-if="filteredSources.length">
+        <article class="source-panel">
+          <div class="source-panel-head">
+            <div>
+              <h3>引用趋势</h3>
+              <p>{{ isCustomerView ? '按检测日统计露出词信源引用次数' : '按检测日统计新增引用次数' }}</p>
+            </div>
+            <span v-if="isCustomerView" class="source-customer-period">{{ trendPeriodLabel }}</span>
           </div>
-          <span v-if="isCustomerView" class="source-customer-period">{{ trendPeriodLabel }}</span>
-        </div>
-        <div
-          v-if="sourceTrendRows.some(item => item.value > 0)"
-          ref="trendChartRef"
-          class="echart-box source-trend-echart"
-        />
-        <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
-      </article>
+          <div
+            v-if="sourceTrendRows.some(item => item.value > 0)"
+            ref="trendChartRef"
+            class="echart-box source-trend-echart"
+          />
+          <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
+        </article>
 
       <section class="source-panel">
         <div class="source-panel-head">
@@ -272,6 +280,7 @@ const categoryOptions = [
           <strong>{{ source.count }}</strong>
         </div>
       </article>
+      </template>
     </template>
 
     <div v-else-if="!loading" class="source-empty-state">

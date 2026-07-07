@@ -9,6 +9,7 @@ import {
   watchWorkspaceCampusCharts,
   type WorkspaceCampusChartData,
 } from '../composables/useWorkspaceCampusCharts'
+import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 
 const {
   brief,
@@ -26,18 +27,19 @@ const {
   navigateToMenu,
   focusWorkspaceAlerts,
   openAlertTarget,
-  openSnapshot,
   realtimeMenuName,
   canOpenRealtime,
-  formatDateTime,
   formatKpiDelta,
   kpiDeltaClass,
-  snapshotMetric,
-  snapshotIntentClass,
-  snapshotIntentLabel,
   platformLabelMap,
   greetingLabel,
+  trendPreset,
+  trendStartDate,
+  trendEndDate,
+  trendMaxDate,
   trendPeriodLabel,
+  applyTrendPreset,
+  onCustomTrendDateChange,
   platformPeriodLabel,
   healthScore,
   healthScoreExplanation,
@@ -48,7 +50,8 @@ const {
   platformRankList,
   todoItems,
   showTodoStrip,
-  latestSnapshot,
+  activeRound,
+  roundSummaryLine,
 } = useCustomerWorkspace()
 
 const { enterActive, enterGeneration } = useWorkspaceEnter(() => brief.value)
@@ -57,23 +60,27 @@ void alertsSectionRef
 const displayName = computed(() => brief.value?.company_name || brief.value?.brand_name || '当前企业')
 const showEmptyGuide = computed(() => heroTone.value === 'empty' && !loading.value)
 
+const trendPresetOptions: Array<{ value: WorkspaceTrendPreset; label: string }> = [
+  { value: '7d', label: '近7日' },
+  { value: 'month', label: '月' },
+  { value: 'quarter', label: '季度' },
+  { value: 'year', label: '年' },
+  { value: 'custom', label: '自定义' },
+]
+
 const scheduleLine = computed(() => {
-  const latest = brief.value?.latest_schedule
-  if (!latest?.completed_subtasks) return '暂无已完成监测批次'
-  return `最新监测批次 · 已完成 ${latest.completed_subtasks} 条`
+  const active = activeRound.value
+  if (!active) return '暂无已完成监测批次'
+  const prefix = active.usingPrevious ? '上一轮监测' : '最新监测批次'
+  return `${prefix} · 已完成 ${active.completed} 条`
 })
 
 const emptyHint = computed(() => {
-  if (brief.value?.recent_snapshots?.length) return ''
+  if (activeRound.value) return ''
   return '暂无已完成检测结果，请等待监测任务返回。'
 })
 
-const sampleTotal = computed(() => {
-  const latest = brief.value?.latest_schedule
-  if (latest?.completed_subtasks) return latest.completed_subtasks
-  if (!brief.value) return 0
-  return brief.value.kpis.ranking_sample_count + brief.value.kpis.exposure_sample_count
-})
+const sampleTotal = computed(() => activeRound.value?.completed ?? 0)
 
 const rankGaugeScore = computed(() => {
   const rank = brief.value?.kpis.avg_brand_rank
@@ -174,7 +181,7 @@ watch(showEmptyGuide, (empty) => {
       <p>{{ emptyHint }}</p>
       <ul>
         <li>系统会自动发起检测并同步结果，无需手动提交</li>
-        <li>结果返回后，这里会展示健康分、平台表现与检测快照</li>
+        <li>结果返回后，这里会展示健康分、平台表现与露出趋势</li>
         <li>可先查看{{ realtimeMenuName }}页了解任务结构，或维护品牌/竞品配置</li>
       </ul>
       <button v-if="canOpenRealtime" type="button" class="ws-campus-primary" @click="navigateToMenu('customer.realtime')">
@@ -184,24 +191,12 @@ watch(showEmptyGuide, (empty) => {
     </section>
 
     <template v-else-if="brief">
-      <!-- ① 结论 + ② 健康分 + 趋势 -->
-      <div class="ws-campus-grid-top">
-        <article class="ws-campus-card ws-campus-greet" :class="heroTone">
-          <div class="ws-campus-greet-main">
+      <!-- ① 简报 + ② 露出率趋势（一体） -->
+      <article class="ws-campus-hero">
+        <section class="ws-campus-hero-summary ws-campus-greet" :class="heroTone">
+          <div class="ws-campus-greet-top">
             <div class="ws-campus-greet-copy">
               <div class="ws-campus-greet-hello">{{ greetingLabel() }}，{{ workspaceHeadline }}</div>
-              <small>数据来自真实监测任务返回</small>
-              <div class="ws-campus-greet-sample">
-                <b>
-                  <WorkspaceCountUp
-                    :value="sampleTotal"
-                    :active="enterActive"
-                    :generation="enterGeneration"
-                    :duration="900"
-                  />
-                </b>
-                <span>本轮完成样本</span>
-              </div>
             </div>
             <div class="ws-campus-health-block">
               <div ref="healthGaugeRef" class="ws-campus-chart ws-campus-chart-health" />
@@ -218,20 +213,69 @@ watch(showEmptyGuide, (empty) => {
                   </button>
                 </el-tooltip>
               </div>
-              <small>{{ healthScoreSummary }}</small>
             </div>
           </div>
-        </article>
+          <div class="ws-campus-greet-foot">
+            <div class="ws-campus-greet-stat">
+              <b>
+                <WorkspaceCountUp
+                  :value="sampleTotal"
+                  :active="enterActive"
+                  :generation="enterGeneration"
+                  :duration="900"
+                />
+              </b>
+              <span>本轮完成样本</span>
+            </div>
+            <span v-if="healthScoreSummary" class="ws-campus-greet-divider" aria-hidden="true" />
+            <div v-if="healthScoreSummary" class="ws-campus-greet-stat is-summary">
+              <span>{{ healthScoreSummary }}</span>
+            </div>
+          </div>
+        </section>
 
-        <article class="ws-campus-card">
-          <div class="ws-campus-card-head">
+        <section class="ws-campus-hero-trend">
+          <div class="ws-campus-card-head ws-campus-card-head-trend">
             <h3>露出率趋势</h3>
-            <span class="ws-campus-chip">{{ trendPeriodLabel }}</span>
+            <div class="ws-campus-date-filter">
+              <div class="ws-campus-date-presets">
+                <button
+                  v-for="option in trendPresetOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: trendPreset === option.value }"
+                  @click="applyTrendPreset(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+              <span
+                v-if="trendPreset !== 'custom' && trendPeriodLabel"
+                class="ws-campus-date-range"
+                :title="`${trendStartDate} ~ ${trendEndDate}`"
+              >{{ trendPeriodLabel }}</span>
+              <div v-if="trendPreset === 'custom'" class="ws-campus-custom-dates">
+                <input
+                  v-model="trendStartDate"
+                  type="date"
+                  :max="trendEndDate"
+                  @change="onCustomTrendDateChange"
+                >
+                <span>至</span>
+                <input
+                  v-model="trendEndDate"
+                  type="date"
+                  :min="trendStartDate"
+                  :max="trendMaxDate"
+                  @change="onCustomTrendDateChange"
+                >
+              </div>
+            </div>
           </div>
           <div ref="trendChartRef" class="ws-campus-chart ws-campus-chart-trend" />
           <p v-if="!trendBars.length" class="ws-campus-mini-empty ws-campus-chart-empty">暂无趋势数据</p>
-        </article>
-      </div>
+        </section>
+      </article>
 
       <!-- ③ 三 KPI -->
       <div class="ws-campus-kpi-strip">
@@ -264,9 +308,6 @@ watch(showEmptyGuide, (empty) => {
         <div class="ws-campus-card-head">
           <h3>已购平台表现</h3>
           <span class="ws-campus-chip">{{ platformPeriodLabel }}</span>
-          <button v-if="canOpenRealtime" type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
-            查看{{ realtimeMenuName }}
-          </button>
         </div>
         <div ref="platformRankChartRef" class="ws-campus-chart ws-campus-chart-rank" />
         <p v-if="!platformRankList.length" class="ws-campus-mini-empty">暂无平台数据</p>
@@ -288,28 +329,8 @@ watch(showEmptyGuide, (empty) => {
         </button>
       </div>
 
-      <!-- ⑤ 最近检测快照 -->
-      <article class="ws-campus-card ws-campus-snapshot">
-        <div class="ws-campus-card-head">
-          <h3>最近检测快照</h3>
-          <button v-if="canOpenRealtime" type="button" class="ws-campus-link" @click="navigateToMenu('customer.realtime')">
-            进入{{ realtimeMenuName }}
-          </button>
-        </div>
-        <template v-if="latestSnapshot">
-          <div class="ws-campus-snap-meta">
-            <span class="ws-campus-tag" :class="snapshotIntentClass(latestSnapshot)">{{ snapshotIntentLabel(latestSnapshot) }}</span>
-            <span>{{ platformLabelMap[latestSnapshot.platform] || latestSnapshot.platform }}</span>
-            <span>{{ latestSnapshot.schedule_label || formatDateTime(latestSnapshot.updated_at) }}</span>
-          </div>
-          <h4>{{ latestSnapshot.prompt }}</h4>
-          <p>{{ latestSnapshot.answer_excerpt || '暂无摘要' }}</p>
-          <button type="button" class="ws-campus-snap-foot" @click="openSnapshot(latestSnapshot)">
-            {{ snapshotMetric(latestSnapshot) }} · 点击查看详情 →
-          </button>
-        </template>
-        <p v-else class="ws-campus-mini-empty">{{ emptyHint }}</p>
-      </article>
+      <!-- ⑤ 本轮监测摘要 -->
+      <p class="ws-campus-round-summary">{{ roundSummaryLine }}</p>
 
       <!-- 告警 -->
       <div

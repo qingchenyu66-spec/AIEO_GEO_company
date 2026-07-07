@@ -13,6 +13,7 @@ import {
   Trophy,
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 import { useBrandInsights, type CompetitorDatePreset } from '../composables/useCompetitorAnalysis'
 import '../../../styles/competitor-analysis.css'
 
@@ -23,7 +24,13 @@ const sentimentWordCloudRef = ref<HTMLDivElement | null>(null)
 const {
   brandAsset,
   isCustomerView,
-  customerPeriodLabel,
+  trendPreset,
+  trendStartDate,
+  trendEndDate,
+  trendMaxDate,
+  trendPeriodLabel,
+  applyTrendPreset,
+  onCustomTrendDateChange,
   datePreset,
   promptFilter,
   promptOptions,
@@ -54,6 +61,14 @@ const datePresets: Array<{ value: CompetitorDatePreset; label: string }> = [
   { value: '90', label: '近 90 天' },
 ]
 
+const customerTrendPresetOptions: Array<{ value: WorkspaceTrendPreset; label: string }> = [
+  { value: '7d', label: '近7日' },
+  { value: 'month', label: '月' },
+  { value: 'quarter', label: '季度' },
+  { value: 'year', label: '年' },
+  { value: 'custom', label: '自定义' },
+]
+
 function formatRank(value: number | null | undefined) {
   if (value === null || value === undefined) return '—'
   return Number.isInteger(value) ? `#${value}` : `#${value.toFixed(1)}`
@@ -68,8 +83,40 @@ function isPlatformActive(code: string) {
   <section class="competitor-page brand-insights-page">
     <header class="competitor-sticky-bar">
       <div class="competitor-sticky-inner">
-        <span class="brand-insights-brand-pill">{{ brandAsset?.brand_name || '本品牌' }}</span>
-        <div v-if="isCustomerView" class="competitor-customer-period">{{ customerPeriodLabel }}</div>
+        <div v-if="isCustomerView" class="competitor-date-filter">
+          <div class="competitor-date-presets">
+            <button
+              v-for="option in customerTrendPresetOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: trendPreset === option.value }"
+              @click="applyTrendPreset(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <span
+            v-if="trendPreset !== 'custom' && trendPeriodLabel"
+            class="competitor-date-range"
+            :title="`${trendStartDate} ~ ${trendEndDate}`"
+          >{{ trendPeriodLabel }}</span>
+          <div v-if="trendPreset === 'custom'" class="competitor-custom-dates">
+            <input
+              v-model="trendStartDate"
+              type="date"
+              :max="trendEndDate"
+              @change="onCustomTrendDateChange"
+            >
+            <span>至</span>
+            <input
+              v-model="trendEndDate"
+              type="date"
+              :min="trendStartDate"
+              :max="trendMaxDate"
+              @change="onCustomTrendDateChange"
+            >
+          </div>
+        </div>
         <div v-else class="competitor-date-presets">
           <button
             v-for="preset in datePresets"

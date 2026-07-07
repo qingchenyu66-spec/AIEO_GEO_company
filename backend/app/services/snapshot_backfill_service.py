@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
@@ -538,6 +538,7 @@ def list_snapshot_backfill_page(
     *,
     tenant_id: int | None = None,
     tenant_ids: list[int] | None = None,
+    allowed_lead_task_ids: list[str] | None = None,
     detect_date: date | None = None,
     source: str | None = None,
     platform: str | None = None,
@@ -557,10 +558,32 @@ def list_snapshot_backfill_page(
     scan_cap = max(limit * 50, 5000) if tenant_id is None and not tenant_ids else None
     if scan_cap is not None:
         stmt = stmt.limit(scan_cap)
-    if tenant_ids:
-        stmt = stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    if tenant_ids is not None:
+        if allowed_lead_task_ids is not None:
+            lead_scope = (
+                and_(
+                    GeoMonitorTask.tenant_id.is_(None),
+                    GeoMonitorTask.task_id.in_(allowed_lead_task_ids),
+                )
+                if allowed_lead_task_ids
+                else false()
+            )
+            if tenant_ids:
+                stmt = stmt.where(or_(GeoMonitorTask.tenant_id.in_(tenant_ids), lead_scope))
+            else:
+                stmt = stmt.where(lead_scope)
+        else:
+            stmt = stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
     elif tenant_id is not None:
         stmt = stmt.where(GeoMonitorTask.tenant_id == tenant_id)
+    elif allowed_lead_task_ids is not None:
+        if not allowed_lead_task_ids:
+            stmt = stmt.where(false())
+        else:
+            stmt = stmt.where(
+                GeoMonitorTask.tenant_id.is_(None),
+                GeoMonitorTask.task_id.in_(allowed_lead_task_ids),
+            )
     platform_code = str(platform or "").strip()
     if platform_code:
         stmt = stmt.where(GeoMonitorSubtask.platform == platform_code)
@@ -568,11 +591,20 @@ def list_snapshot_backfill_page(
     keyword_group_filter = str(keyword_group or "").strip()
     source_filter = str(source or "").strip()
     if source_filter == "lead_diagnosis":
-        lead_task_ids = select(LeadDiagnosisRun.task_id).where(LeadDiagnosisRun.task_id.isnot(None))
-        stmt = stmt.where(
-            GeoMonitorTask.tenant_id.is_(None),
-            GeoMonitorTask.task_id.in_(lead_task_ids),
-        )
+        if allowed_lead_task_ids is not None:
+            if not allowed_lead_task_ids:
+                stmt = stmt.where(false())
+            else:
+                stmt = stmt.where(
+                    GeoMonitorTask.tenant_id.is_(None),
+                    GeoMonitorTask.task_id.in_(allowed_lead_task_ids),
+                )
+        else:
+            lead_task_ids = select(LeadDiagnosisRun.task_id).where(LeadDiagnosisRun.task_id.isnot(None))
+            stmt = stmt.where(
+                GeoMonitorTask.tenant_id.is_(None),
+                GeoMonitorTask.task_id.in_(lead_task_ids),
+            )
     elif source_filter == "tenant_monitor":
         lead_task_ids = select(LeadDiagnosisRun.task_id).where(LeadDiagnosisRun.task_id.isnot(None))
         stmt = stmt.where(

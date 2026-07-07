@@ -32,6 +32,21 @@
   white-space: nowrap;
 }
 
+.realtime-date-filter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.realtime-date-range-chip {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6a7f9a;
+  white-space: nowrap;
+  letter-spacing: .01em;
+}
+
 .realtime-date-presets {
   display: inline-flex;
   padding: 3px;
@@ -135,7 +150,7 @@
 
 /* Hero */
 .realtime-hero {
-  padding: 22px 24px;
+  padding: 16px 20px;
   border-radius: 18px;
   border: 1px solid rgba(45, 108, 223, .14);
   background:

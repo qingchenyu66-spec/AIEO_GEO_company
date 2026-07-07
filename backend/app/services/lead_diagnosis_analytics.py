@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorSubtask
-from app.core.region_catalog import region_display_name
+from app.core.region_catalog import region_display_name, normalize_region_codes
 from app.services.monitor_service import TERMINAL_STATUSES
 from app.services.ranking_parser import (
     normalize_structured_rankings,
@@ -389,7 +389,10 @@ def _subtask_region_code(
         first = str(codes[0] or "").strip()
         if first:
             return first
-    return str(lead.region_code or "").strip()
+    fallback_codes = normalize_region_codes(lead.region_codes_json or [])
+    if len(fallback_codes) == 1:
+        return fallback_codes[0]
+    return ""
 
 
 def _build_brand_city_rankings(

@@ -36,11 +36,20 @@ export interface TenantInfo {
   code: string
   status: boolean
   owner_user_id: number | null
+  owner_display_name?: string | null
+  owner_username?: string | null
   stop_reason: 'manual' | 'canceled' | 'expired' | null
   stopped_at: string | null
   stopped_by: number | null
   service_start_date: string | null
   service_end_date: string | null
+}
+
+export interface TenantSalesOwner {
+  id: number
+  username: string
+  display_name: string
+  status: boolean
 }
 
 export interface ManagedUser {
@@ -133,7 +142,7 @@ export interface PlatformOverview {
   service_counts: Record<string, number>
   expiring_tenants: Array<{ id: number; name: string; service_end_date: string; days_left: number }>
   platform_stats: Array<{ platform: string; total: number; completed: number; failed: number; cost: number; success_rate: number }>
-  cost_ranking: Array<{ tenant_id: number | null; tenant_name: string; cost: number }>
+  cost_ranking: Array<{ tenant_id: number | null; lead_diagnosis_id?: number | null; tenant_name: string; cost: number }>
   quota_overview: {
     used_amount: number
     today_amount: number
@@ -295,6 +304,17 @@ export async function restoreTenant(tenantId: number): Promise<TenantInfo> {
   return response.data.data
 }
 
+export async function listTenantSalesOwners(): Promise<TenantSalesOwner[]> {
+  const response = await http.get('/v1/management/tenant-sales-owners')
+  return response.data.data
+}
+
+export async function transferTenantOwner(tenantId: number, ownerUserId: number): Promise<TenantInfo> {
+  const response = await http.patch(`/v1/management/tenants/${tenantId}/owner`, { owner_user_id: ownerUserId })
+  invalidateCache('/v1/management/tenants')
+  return response.data.data
+}
+
 export interface ManagedUserQuery {
   keyword?: string
   tenant_id?: number | null
@@ -308,16 +328,18 @@ export async function getManagedUsers(params?: ManagedUserQuery): Promise<Manage
   return response.data.data
 }
 
-export async function createManagedUser(payload: CreateUserPayload): Promise<void> {
-  await http.post('/v1/management/users', payload)
+export async function createManagedUser(payload: CreateUserPayload): Promise<unknown> {
+  const response = await http.post('/v1/management/users', payload)
   invalidateCache('/v1/management/users')
+  return response.data.data
 }
 
 export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'>
 
-export async function updateManagedUser(userId: number, payload: UpdateUserPayload): Promise<void> {
-  await http.put(`/v1/management/users/${userId}`, payload)
+export async function updateManagedUser(userId: number, payload: UpdateUserPayload): Promise<unknown> {
+  const response = await http.put(`/v1/management/users/${userId}`, payload)
   invalidateCache('/v1/management/users')
+  return response.data.data
 }
 
 export async function resetManagedUserPassword(userId: number, password: string): Promise<void> {

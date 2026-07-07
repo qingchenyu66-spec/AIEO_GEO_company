@@ -32,6 +32,7 @@ from app.services.brand_service import (
     list_keyword_groups,
     molizhishu_brand_payload,
     molizhishu_monitor_terms,
+    tenant_purchased_platforms,
 )
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
@@ -783,7 +784,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     tenant_ids = [task.tenant_id for task in tasks if task.tenant_id]
     asset_rows = list(db.scalars(select(BrandAsset).where(BrandAsset.tenant_id.in_(tenant_ids), BrandAsset.deleted.is_(False)))) if tenant_ids else []
     purchased_platforms_by_tenant = {
-        asset.tenant_id: set(asset.monitored_platforms_json or [])
+        asset.tenant_id: set(tenant_purchased_platforms(db, asset.tenant_id, asset))
         for asset in asset_rows
     }
     exposure_terms_by_tenant = {
@@ -1002,7 +1003,7 @@ def get_monitor_task(db: Session, task_id: str, current: CurrentSession) -> GeoM
     task = db.scalar(stmt)
     if task is None:
         raise ValueError("任务不存在或无权访问")
-    assert_monitor_task_access(db, current, task.tenant_id)
+    assert_monitor_task_access(db, current, task.tenant_id, task_id=task.task_id)
     return task
 
 
@@ -1023,7 +1024,12 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
     if subtask is None:
         raise ValueError("子任务不存在或无权访问")
     if subtask.task is not None:
-        assert_monitor_task_access(db, current, subtask.task.tenant_id)
+        assert_monitor_task_access(
+            db,
+            current,
+            subtask.task.tenant_id,
+            task_id=subtask.task.task_id,
+        )
     if current.identity.identity_type == "CUSTOMER":
         task = subtask.task
         if task is None:
@@ -1927,7 +1933,7 @@ def ranking_matrix(
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+    purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
     daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
@@ -2052,17 +2058,6 @@ def ranking_matrix(
         }
         bucket["cell_samples"].setdefault(prompt, []).append(cell)
 
-    columns = [
-        {"prompt": prompt, "group_name": prompt_set[prompt]}
-        for prompt in sorted(prompt_set.keys(), key=lambda text: (prompt_set[text] or "zzz", text))
-    ]
-
-    group_map: dict[str, list[str]] = {}
-    for column in columns:
-        group_name = column["group_name"] or "其他监测问题"
-        group_map.setdefault(group_name, []).append(column["prompt"])
-    prompt_groups = [{"name": name, "prompts": prompts} for name, prompts in group_map.items()]
-
     sorted_tasks = sorted(
         task_rows.values(),
         key=lambda row: (
@@ -2096,6 +2091,37 @@ def ranking_matrix(
             "sample_count": round_count,
             "cells": cells,
         })
+
+    configured_prompts: list[str] = []
+    configured_seen: set[str] = set()
+    for group in keyword_groups:
+        for prompt in keyword_group_monitor_keywords(group):
+            text = str(prompt or "").strip()
+            if text and text not in configured_seen:
+                configured_seen.add(text)
+                configured_prompts.append(text)
+
+    if configured_prompts:
+        visible_prompts = list(configured_prompts)
+    else:
+        visible_prompts = sorted(
+            prompt_set.keys(),
+            key=lambda text: (prompt_set[text] or "zzz", text),
+        )
+
+    columns = [
+        {
+            "prompt": prompt,
+            "group_name": prompt_set.get(prompt) or _prompt_group_name(prompt, keyword_group_rows),
+        }
+        for prompt in visible_prompts
+    ]
+
+    group_map: dict[str, list[str]] = {}
+    for column in columns:
+        group_name = column["group_name"] or "其他监测问题"
+        group_map.setdefault(group_name, []).append(column["prompt"])
+    prompt_groups = [{"name": name, "prompts": prompts} for name, prompts in group_map.items()]
 
     schedule_round_count = len({row.get("day_key") for row in rows if row.get("day_key")})
 
@@ -2413,14 +2439,26 @@ def _workspace_competitor_score(
     }
 
 
-def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
+def workspace_brief(
+    db: Session,
+    current: CurrentSession,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
     """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources."""
     if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
         raise ValueError("运营工作台简报仅支持客户企业账号")
 
     tenant_id = current.identity.tenant_id
     range_end = customer_display_cutoff()
-    trend_start, trend_end = customer_display_date_range(default_lookback_days=7)
+    start_at = datetime.combine(start_date, time.min) if start_date else None
+    end_at = datetime.combine(end_date, time.max) if end_date else None
+    trend_start, trend_end = customer_display_date_range(
+        start_at=start_at,
+        end_at=end_at,
+        default_lookback_days=7 if not start_at and not end_at else None,
+    )
 
     asset = get_brand_asset(db, tenant_id)
     keyword_group_rows = list_keyword_groups(db, tenant_id)
@@ -2429,7 +2467,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+    purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
     purchased_set = set(purchased_platforms)
 
     from app.services.monitor_stats_service import (
@@ -2442,16 +2480,17 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
 
     use_daily_stats = has_daily_stats(db, [tenant_id])
     daily_stat_by_day: dict[str, list] = {}
+    trend_span_days = (trend_end.date() - trend_start.date()).days + 1
     if use_daily_stats:
         for row in list_daily_stats_for_tenant(
             db,
             tenant_id,
-            since=(trend_start - timedelta(days=45)).date(),
+            since=trend_start.date(),
             until=range_end.date(),
         ):
             daily_stat_by_day.setdefault(row.stat_date.isoformat(), []).append(row)
 
-    lookback_start = trend_start - timedelta(days=21 if use_daily_stats else 45)
+    lookback_start = trend_start - timedelta(days=max(45, trend_span_days + 14) if not use_daily_stats else 7)
     subtask_limit = 100 if use_daily_stats else 400
 
     stmt = (
@@ -2752,7 +2791,7 @@ def workspace_brief(db: Session, current: CurrentSession) -> dict[str, Any]:
         if mention_delta is not None and mention_delta < -5:
             alerts.append({
                 "level": "warn",
-                "message": f"较上一轮，推荐类露出率下降 {abs(mention_delta):.1f}%。",
+                "message": f"较上一轮，关键词露出率下降 {abs(mention_delta):.1f}%。",
             })
         neg_delta = round_comparison.get("negative_count_delta")
         if neg_delta is not None and neg_delta > 0:

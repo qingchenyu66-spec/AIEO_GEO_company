@@ -7,3 +7,4 @@ export const PortalAnalyticsKey: InjectionKey<ReturnType<typeof useMonitorAnalyt
 export const PlatformAdminKey: InjectionKey<PlatformAdminContext> = Symbol('platform-admin')
 export const WorkspaceFullscreenKey: InjectionKey<WorkspaceFullscreenContext> = Symbol('workspace-fullscreen')
 export const PortalNavigateKey: InjectionKey<(menuCode: string, replace?: boolean, extraQuery?: Record<string, string>) => void> = Symbol('portal-navigate')
+export const ApprovalPendingRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('approval-pending-refresh')

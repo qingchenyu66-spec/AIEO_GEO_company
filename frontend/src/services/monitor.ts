@@ -403,8 +403,13 @@ export async function getRankingMatrix(params?: RankingMatrixQuery): Promise<Ran
   return response.data.data
 }
 
-export async function getWorkspaceBrief(): Promise<WorkspaceBrief> {
-  const response = await http.get('/v1/monitor/workspace-brief')
+export interface WorkspaceBriefQuery {
+  start_date?: string
+  end_date?: string
+}
+
+export async function getWorkspaceBrief(params?: WorkspaceBriefQuery): Promise<WorkspaceBrief> {
+  const response = await http.get('/v1/monitor/workspace-brief', { params })
   return response.data.data
 }
 

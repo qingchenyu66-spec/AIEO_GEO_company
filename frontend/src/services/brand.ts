@@ -12,7 +12,7 @@ export interface BrandAsset {
   product_keywords: string[]
   monitored_platforms: string[]
   keyword_groups: BrandKeywordGroup[]
-  region_code: string | null
+  region_codes: string[]
   official_url: string | null
   description: string | null
   schedule_type: 'daily_times' | 'fixed_times' | 'weekly' | 'monthly'
@@ -30,6 +30,7 @@ export interface BrandKeywordGroup {
   monitor_keyword: string
   monitor_keywords?: string[]
   exposure_terms: string[]
+  platforms?: string[]
   sort_order: number
   status: boolean
 }
@@ -112,9 +113,11 @@ export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.
 export function formatKeywordGroupDetailHint(group: BrandKeywordGroup): string {
   const keywords = keywordGroupMonitorKeywords(group)
   const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
+  const platforms = (group.platforms || []).map(code => code.trim()).filter(Boolean)
   const parts: string[] = []
   if (keywords.length) parts.push(`监测词：${keywords.join('、')}`)
   if (exposure.length) parts.push(`露出词：${exposure.join('、')}`)
+  if (platforms.length) parts.push(`平台：${platforms.join('、')}`)
   return parts.join(' · ')
 }
 
@@ -148,7 +151,7 @@ export interface BrandAssetPayload {
   product_keywords: string[]
   monitored_platforms: string[]
   keyword_groups: BrandKeywordGroup[]
-  region_code?: string | null
+  region_codes?: string[]
   official_url?: string | null
   description?: string | null
   schedule_type: 'daily_times' | 'fixed_times' | 'weekly' | 'monthly'

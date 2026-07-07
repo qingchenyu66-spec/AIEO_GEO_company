@@ -125,12 +125,41 @@
 .ws-campus-ghost .spinning { animation: ws-spin 1s linear infinite; }
 @keyframes ws-spin { to { transform: rotate(360deg); } }
 
-/* 栅格 */
+/* 首屏 Hero：简报 + 趋势一体 */
+.ws-campus-hero {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 0;
+  margin-bottom: 12px;
+  background: var(--ws-card);
+  border-radius: 10px;
+  box-shadow: var(--ws-shadow);
+  border: 1px solid rgba(219, 230, 243, .9);
+  overflow: hidden;
+}
+.ws-campus-hero-summary {
+  display: flex;
+  flex-direction: column;
+  min-height: 188px;
+}
+.ws-campus-hero-trend {
+  display: flex;
+  flex-direction: column;
+  padding: 13px 15px;
+  border-left: 1px solid rgba(219, 230, 243, .9);
+  min-height: 188px;
+}
+.ws-campus-hero-trend .ws-campus-card-head {
+  margin-bottom: 6px;
+}
+
+/* 栅格（遗留区块复用） */
 .ws-campus-grid-top {
   display: grid;
   grid-template-columns: minmax(300px, 380px) 1fr;
   gap: 12px;
   margin-bottom: 12px;
+  align-items: stretch;
 }
 .ws-campus-grid-mid {
   display: grid;
@@ -178,6 +207,62 @@
   color: #2d6cdf;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
+}
+.ws-campus-card-head-trend {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.ws-campus-date-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+.ws-campus-date-range {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6a7f9a;
+  white-space: nowrap;
+  letter-spacing: .01em;
+}
+.ws-campus-date-presets {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid #d9e8f6;
+  border-radius: 999px;
+  background: #fff;
+}
+.ws-campus-date-presets button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #58708f;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ws-campus-date-presets button.active {
+  background: linear-gradient(135deg, rgba(45, 108, 223, .12), rgba(34, 199, 196, .12));
+  color: #17406a;
+}
+.ws-campus-custom-dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6a7f9a;
+  font-size: 11px;
+}
+.ws-campus-custom-dates input {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 11px;
 }
 
 .ws-campus-greet {
@@ -185,8 +270,8 @@
     linear-gradient(135deg, rgba(16, 35, 61, .96), rgba(23, 64, 106, .92) 48%, rgba(20, 167, 199, .74)),
     radial-gradient(circle at 100% 0%, rgba(255, 255, 255, .18), transparent 36%);
   border-color: rgba(120, 180, 230, .28);
-  min-height: 152px;
   color: #fff;
+  padding: 13px 15px;
 }
 .ws-campus-greet.warn {
   background:
@@ -194,11 +279,52 @@
     radial-gradient(circle at 100% 0%, rgba(255, 255, 255, .16), transparent 34%);
   border-color: rgba(148, 163, 184, .34);
 }
-.ws-campus-greet-main {
+.ws-campus-greet-main,
+.ws-campus-greet-top {
+  flex: 1;
   display: flex;
-  align-items: stretch;
-  gap: 16px;
+  align-items: center;
+  gap: 10px;
   justify-content: space-between;
+  min-height: 0;
+}
+.ws-campus-greet-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  flex-shrink: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(226, 239, 255, .18);
+}
+.ws-campus-greet-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ws-campus-greet-stat b {
+  font-size: 20px;
+  font-weight: 800;
+  color: #80e7ff;
+  line-height: 1;
+}
+.ws-campus-greet-stat span {
+  font-size: 11px;
+  color: rgba(226, 239, 255, .72);
+  line-height: 1.35;
+}
+.ws-campus-greet-stat.is-summary {
+  flex: 1;
+  min-width: 0;
+}
+.ws-campus-greet-stat.is-summary span {
+  font-size: 11px;
+}
+.ws-campus-greet-divider {
+  width: 1px;
+  height: 14px;
+  background: rgba(226, 239, 255, .22);
+  flex-shrink: 0;
 }
 .ws-campus-greet-copy {
   flex: 1;
@@ -213,36 +339,17 @@
 .ws-campus-greet.warn .ws-campus-greet-hello { color: #ffffff; }
 .ws-campus-greet-copy small {
   display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: rgba(226, 239, 255, .75);
-}
-.ws-campus-greet-sample {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(226, 239, 255, .18);
-}
-.ws-campus-greet-sample b {
-  display: block;
-  font-size: 28px;
-  font-weight: 800;
-  color: #80e7ff;
-  line-height: 1.1;
-}
-.ws-campus-greet-sample span {
-  display: block;
   margin-top: 4px;
-  font-size: 12px;
-  color: rgba(226, 239, 255, .72);
+  font-size: 11px;
+  color: rgba(226, 239, 255, .75);
 }
 .ws-campus-health-block {
   flex-shrink: 0;
-  width: 112px;
+  width: 84px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
 }
 .ws-campus-health-block > span {
   display: block;
@@ -256,7 +363,7 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 .ws-campus-health-label > span {
   margin-top: 0;
@@ -287,13 +394,11 @@
   margin-bottom: 0;
 }
 .ws-campus-health-block small {
-  font-size: 10px;
-  color: rgba(226, 239, 255, .72);
-  line-height: 1.4;
+  display: none;
 }
 .ws-campus-chart-health {
-  height: 88px;
-  width: 88px;
+  height: 72px;
+  width: 72px;
 }
 
 /* 迷你维条 */
@@ -421,7 +526,9 @@
   width: 100%;
 }
 .ws-campus-chart-trend {
-  height: 168px;
+  flex: 1;
+  min-height: 128px;
+  height: 128px;
 }
 .ws-campus-chart-donut {
   height: 200px;
@@ -436,7 +543,7 @@
   margin: 0 auto;
 }
 .ws-campus-chart-empty {
-  margin-top: -180px;
+  margin-top: -140px;
   position: relative;
   z-index: 1;
   pointer-events: none;
@@ -592,7 +699,19 @@
 .ws-campus-gauge .delta-up { color: #059669; }
 .ws-campus-gauge .delta-down { color: #dc2626; }
 
-/* 快照 */
+/* 本轮监测摘要 */
+.ws-campus-round-summary {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ws-muted);
+  line-height: 1.55;
+  background: #f8fafc;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+}
+
+/* 快照（遗留样式，供其他页复用时可删） */
 .ws-campus-snapshot { border-left: 3px solid var(--ws-teal); }
 .ws-campus-snap-meta {
   display: flex;
@@ -767,8 +886,15 @@
   .ws-campus-kpi-strip { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
+  .ws-campus-hero {
+    grid-template-columns: 1fr;
+  }
+  .ws-campus-hero-trend {
+    border-left: none;
+    border-top: 1px solid rgba(219, 230, 243, .9);
+  }
   .ws-campus-grid-top { grid-template-columns: 1fr; }
-  .ws-campus-greet-main { flex-direction: column; }
-  .ws-campus-health-block { width: 100%; }
+  .ws-campus-greet-top { flex-direction: row; }
+  .ws-campus-health-block { width: 84px; }
   .customer-workspace-page.ws-campus { padding: 16px; }
 }

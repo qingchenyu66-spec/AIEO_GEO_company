@@ -8,7 +8,7 @@ import { getPlatformMatrix, type PlatformMatrix } from '../../../services/platfo
 import { useAuthStore } from '../../../stores/auth'
 import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
-import { sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
+import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
 
 export const monitorSummaryMenuCodes = new Set([
@@ -151,23 +151,30 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     return []
   })
 
-  const sourceStructureRows = computed(() => platformRanking.value.slice(0, 6).map(platform => {
-    const platformSources = sourceRanking.value.filter(source => (source.platforms || []).includes(platform.platform))
-    const total = Math.max(1, platformSources.reduce((sum, source) => sum + source.count, 0))
-    const categoryMap = platformSources.reduce((map, source) => {
-      const category = sourceCategory(source)
-      map[category] = (map[category] || 0) + source.count
-      return map
-    }, {} as Record<string, number>)
-    return {
-      platform: platform.platform,
-      total,
-      categories: Object.keys(sourceCategoryLabels).map(type => ({
-        type,
-        value: Math.round(((categoryMap[type] || 0) / total) * 100),
-      })),
-    }
-  }))
+  const sourceStructureRows = computed(() => {
+    const platforms = resolvePurchasedPlatformCodes(
+      brandAsset.value?.monitored_platforms,
+      platformRanking.value.map(item => item.platform),
+    )
+    return platforms.map(platform => {
+      const platformSources = sourceRanking.value.filter(source => (source.platforms || []).includes(platform))
+      const total = platformSources.reduce((sum, source) => sum + source.count, 0)
+      const categoryMap = platformSources.reduce((map, source) => {
+        const category = sourceCategory(source)
+        map[category] = (map[category] || 0) + source.count
+        return map
+      }, {} as Record<string, number>)
+      const denom = total || 1
+      return {
+        platform,
+        total,
+        categories: Object.keys(sourceCategoryLabels).map(type => ({
+          type,
+          value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
+        })),
+      }
+    })
+  })
 
   const contentPreferenceRows = computed(() => {
     const rows = [
@@ -312,7 +319,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   }
 
   async function loadMonitorSummary(syncRemote = false) {
-    if (!shouldLoadMonitorSummary.value && !syncRemote) return
+    if (!shouldLoadMonitorSummary.value && !syncRemote && monitorSummary.value) return
     loadingSummary.value = true
     try {
       const summary = await withRetry(() => getMonitorSummary())

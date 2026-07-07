@@ -67,14 +67,14 @@ const primaryPanelTitle = computed(() => {
   const mode = functionalPage.value.mode
   if (mode === 'diagnosis') return '品牌健康分'
   if (mode === 'report') return '报告预览'
-  if (mode === 'platforms') return '模型平台状态'
+  if (mode === 'platforms') return ''
   if (mode === 'logs' || mode === 'settings') return ''
   return '检测明细'
 })
 
 const showFeatureHero = computed(() => {
   const mode = functionalPage.value.mode
-  return mode !== 'logs' && mode !== 'settings'
+  return mode !== 'logs' && mode !== 'settings' && mode !== 'platforms'
 })
 
 const editingConfigId = ref<number | null>(null)
@@ -333,7 +333,7 @@ function handleAction(action: string) {
     focusLogFilters()
     return
   }
-  if (action === '刷新状态') {
+  if (action === '刷新状态' || action === '刷新数据') {
     void loadPlatformMatrix(true)
     return
   }

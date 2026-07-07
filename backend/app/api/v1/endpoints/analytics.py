@@ -3,6 +3,8 @@
 from collections import Counter
 import re
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -76,6 +78,8 @@ def sentiment_keywords(
     platform: str | None = None,
     platforms: str | None = None,
     days: int = Query(default=30, ge=1, le=365),
+    start_date: date | None = Query(default=None, description="起始日（含），客户侧不晚于昨日"),
+    end_date: date | None = Query(default=None, description="截止日（含），客户侧不晚于昨日"),
     prompt: str | None = None,
     limit: int = Query(default=80, ge=1, le=120),
     current: CurrentSession = Depends(get_current_session),
@@ -90,6 +94,8 @@ def sentiment_keywords(
             platform=platform,
             platforms=platforms,
             days=days,
+            start_date=start_date,
+            end_date=end_date,
             prompt=prompt,
             limit=limit,
         )
@@ -104,6 +110,8 @@ def competitor_compare(
     platform: str | None = None,
     platforms: str | None = None,
     days: int = Query(default=30, ge=1, le=365),
+    start_date: date | None = Query(default=None, description="起始日（含），客户侧不晚于昨日"),
+    end_date: date | None = Query(default=None, description="截止日（含），客户侧不晚于昨日"),
     prompt: str | None = None,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
@@ -117,6 +125,8 @@ def competitor_compare(
             platform=platform,
             platforms=platforms,
             days=days,
+            start_date=start_date,
+            end_date=end_date,
             prompt=prompt,
         )
         return ApiResponse(data=data)

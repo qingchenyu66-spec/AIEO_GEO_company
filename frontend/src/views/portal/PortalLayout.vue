@@ -31,6 +31,7 @@ defineProps<{
   menuIcon: (menu: MenuInfo) => Component
   immersive?: boolean
   fullscreen?: boolean
+  pendingApprovalCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -116,6 +117,11 @@ const emit = defineEmits<{
           >
             <component :is="menuIcon(menu)" class="nav-icon" aria-hidden="true" />
             <span>{{ menu.menu_name }}</span>
+            <b
+              v-if="menu.menu_code === 'platform.approvals' && (pendingApprovalCount ?? 0) > 0"
+              class="nav-badge"
+              :aria-label="`${pendingApprovalCount} 条待审批`"
+            >{{ (pendingApprovalCount ?? 0) > 99 ? '99+' : pendingApprovalCount }}</b>
           </button>
         </template>
       </nav>

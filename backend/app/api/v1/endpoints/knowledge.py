@@ -1,6 +1,9 @@
 """知识库 API。"""
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -13,8 +16,10 @@ from app.services.knowledge_parse_service import schedule_knowledge_parse, seria
 from app.services.knowledge_service import (
     assert_knowledge_file_access,
     delete_knowledge_file,
+    knowledge_file_media_type,
     list_knowledge_files,
     read_knowledge_file_text,
+    resolve_knowledge_file_path,
     save_knowledge_file,
 )
 from app.services.operation_log_service import write_business_audit
@@ -81,6 +86,26 @@ def knowledge_file_content(
     except Exception as exc:
         raise_read_endpoint_error(exc, context="knowledge.content")
     return ApiResponse(data=data)
+
+
+@router.get("/files/{file_id}/download")
+def download_knowledge_file(
+    file_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """下载知识库原文件。"""
+    try:
+        record, file_path = resolve_knowledge_file_path(db, current, file_id)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="knowledge.download")
+    encoded_name = quote(record.original_name)
+    return FileResponse(
+        path=file_path,
+        media_type=knowledge_file_media_type(record),
+        filename=record.original_name,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"},
+    )
 
 
 @router.post("/files/{file_id}/parse", response_model=ApiResponse[dict])

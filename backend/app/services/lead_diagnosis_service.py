@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterator
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -15,14 +15,20 @@ from kombu.exceptions import OperationalError
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
-from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES, LEAD_SCHEDULE_DAYS
+from app.core.lead_diagnosis_config import (
+    DEFAULT_LEAD_SCHEDULE_TIMES,
+    LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
+    LEAD_SCHEDULE_DAYS,
+)
 from app.core.masking import mask_phone
+from app.core.region_catalog import normalize_region_codes, region_display_name, region_submission_targets
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
 from app.schemas.monitor import FAST_MONITOR_MODE, CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, build_rule_report_sections
 from app.services.menu_permission_service import has_identity_menu_permission
+from app.services.tenant_scope import is_sales_identity
 from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
@@ -32,6 +38,94 @@ ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
 LEAD_RUN_STALE_MINUTES = 10
 LEAD_DIAGNOSIS_TASK_SUBTITLE = "售前诊断"
+
+
+def lead_diagnosis_cost_rank_label(brand_name: str | None) -> str:
+    brand = str(brand_name or "").strip()
+    if not brand:
+        return LEAD_DIAGNOSIS_TASK_SUBTITLE
+    return f"{brand}_{LEAD_DIAGNOSIS_TASK_SUBTITLE}"
+
+
+def build_platform_cost_ranking(
+    db: Session,
+    *,
+    tenant_name_map: dict[int, str],
+    tenant_ids: list[int] | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """运营总览费用排行：正式企业按 tenant 汇总，售前诊断按线索品牌拆分展示。"""
+    from sqlalchemy import func
+
+    tenant_stmt = (
+        select(GeoMonitorTask.tenant_id, func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
+        .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == GeoMonitorTask.task_id)
+        .where(GeoMonitorTask.deleted.is_(False), GeoMonitorTask.tenant_id.isnot(None))
+    )
+    if tenant_ids is not None:
+        tenant_stmt = tenant_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    tenant_rows = db.execute(tenant_stmt.group_by(GeoMonitorTask.tenant_id)).all()
+
+    ranking: list[dict[str, Any]] = [
+        {
+            "tenant_id": int(row[0]),
+            "lead_diagnosis_id": None,
+            "tenant_name": tenant_name_map.get(int(row[0])) or f"企业 #{row[0]}",
+            "cost": round(float(row[1] or 0), 4),
+        }
+        for row in tenant_rows
+        if float(row[1] or 0) > 0
+    ]
+
+    if tenant_ids is None:
+        lead_rows = db.execute(
+            select(
+                LeadDiagnosis.id,
+                LeadDiagnosis.brand_name,
+                func.coalesce(func.sum(GeoMonitorSubtask.amount), 0),
+            )
+            .join(LeadDiagnosisRun, LeadDiagnosisRun.lead_diagnosis_id == LeadDiagnosis.id)
+            .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == LeadDiagnosisRun.task_id)
+            .join(GeoMonitorTask, GeoMonitorTask.task_id == LeadDiagnosisRun.task_id)
+            .where(
+                GeoMonitorTask.deleted.is_(False),
+                GeoMonitorTask.tenant_id.is_(None),
+                LeadDiagnosis.deleted.is_(False),
+                LeadDiagnosisRun.task_id.isnot(None),
+            )
+            .group_by(LeadDiagnosis.id, LeadDiagnosis.brand_name)
+        ).all()
+        for lead_id, brand_name, amount in lead_rows:
+            cost = round(float(amount or 0), 4)
+            if cost <= 0:
+                continue
+            ranking.append({
+                "tenant_id": None,
+                "lead_diagnosis_id": int(lead_id),
+                "tenant_name": lead_diagnosis_cost_rank_label(brand_name),
+                "cost": cost,
+            })
+
+        lead_task_ids = select(LeadDiagnosisRun.task_id).where(LeadDiagnosisRun.task_id.isnot(None))
+        orphan_cost = float(db.scalar(
+            select(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
+            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+            .where(
+                GeoMonitorTask.deleted.is_(False),
+                GeoMonitorTask.tenant_id.is_(None),
+                GeoMonitorTask.task_id.notin_(lead_task_ids),
+            )
+        ) or 0)
+        if orphan_cost > 0:
+            ranking.append({
+                "tenant_id": None,
+                "lead_diagnosis_id": None,
+                "tenant_name": "其他未绑定任务",
+                "cost": round(orphan_cost, 4),
+            })
+
+    ranking.sort(key=lambda item: item["cost"], reverse=True)
+    return ranking[:limit]
 
 
 def lead_run_blocks_due(run: LeadDiagnosisRun | None, *, now: datetime | None = None) -> bool:
@@ -80,6 +174,7 @@ class DueLeadRun:
     lead_id: int
     schedule_key: str
     schedule_label: str
+    region_code: str | None = None
 
 
 def require_lead_diagnosis_access(db: Session, current: CurrentSession, action: str = "can_export") -> None:
@@ -89,6 +184,30 @@ def require_lead_diagnosis_access(db: Session, current: CurrentSession, action: 
         raise PermissionError("当前身份无售前诊断权限")
 
 
+def ensure_lead_diagnosis_owner_access(db: Session, current: CurrentSession, lead: LeadDiagnosis) -> None:
+    """销售只能访问本人创建的售前诊断；运营/管理员不限制。"""
+    if not is_sales_identity(db, current.identity):
+        return
+    if lead.created_by_user_id != current.user.id:
+        raise PermissionError("无权访问该售前诊断")
+
+
+def _load_lead_diagnosis(db: Session, lead_id: int) -> LeadDiagnosis | None:
+    return db.scalar(
+        select(LeadDiagnosis)
+        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+
+
+def ensure_lead_diagnosis_owner_access_by_id(db: Session, current: CurrentSession, lead_id: int) -> LeadDiagnosis:
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    ensure_lead_diagnosis_owner_access(db, current, lead)
+    return lead
+
+
 def _schedule_slots(lead: LeadDiagnosis) -> list[str]:
     raw = lead.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES
     cleaned = [str(item).strip() for item in raw if str(item).strip()]
@@ -96,21 +215,31 @@ def _schedule_slots(lead: LeadDiagnosis) -> list[str]:
 
 
 def _schedule_total_count(lead: LeadDiagnosis) -> int:
-    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead))
+    region_count = len(region_submission_targets(lead.region_codes_json))
+    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead)) * region_count
 
 
-def _iter_schedule_plan(lead: LeadDiagnosis) -> Iterator[tuple[date, str, str, str]]:
-    """按时间顺序产出 (day, slot, schedule_key, schedule_label)。"""
+def _append_region_to_schedule(key: str, label: str, region_code: str | None) -> tuple[str, str]:
+    if not region_code:
+        return key, label
+    name = region_display_name(region_code)
+    return f"{key}-rg{region_code}", f"{label} · {name}"
+
+
+def _iter_schedule_plan(lead: LeadDiagnosis) -> Iterator[tuple[date, str, str, str, str | None]]:
+    """按时间顺序产出 (day, slot, schedule_key, schedule_label, region_code)。"""
     slots = _schedule_slots(lead)
     for day_offset in range(LEAD_SCHEDULE_DAYS):
         day = lead.diagnosis_date + timedelta(days=day_offset)
         for slot in slots:
             key, label = _build_schedule_key(day, slot)
-            yield day, slot, key, label
+            for region_code in region_submission_targets(lead.region_codes_json):
+                schedule_key, schedule_label = _append_region_to_schedule(key, label, region_code)
+                yield day, slot, schedule_key, schedule_label, region_code
 
 
 def _expected_schedule_keys(lead: LeadDiagnosis) -> set[str]:
-    return {key for _, _, key, _ in _iter_schedule_plan(lead)}
+    return {key for _, _, key, _, _ in _iter_schedule_plan(lead)}
 
 
 def _slot_time(value: str) -> time | None:
@@ -160,8 +289,8 @@ def _serialize_run(run: LeadDiagnosisRun) -> dict[str, Any]:
     }
 
 
-def _lead_region_codes(lead: LeadDiagnosis) -> list[str] | None:
-    code = (lead.region_code or "").strip()
+def _lead_region_codes(lead: LeadDiagnosis, region_code: str | None = None) -> list[str] | None:
+    code = (region_code or "").strip()
     return [code] if code else None
 
 
@@ -177,7 +306,7 @@ def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False, mask_c
         "contact_note": lead.contact_note,
         "prompts": lead.prompts_json or [],
         "competitors": lead.competitors_json or [],
-        "region_code": lead.region_code,
+        "region_codes": normalize_region_codes(lead.region_codes_json or []),
         "schedule_times": _schedule_slots(lead),
         "schedule_days": LEAD_SCHEDULE_DAYS,
         "schedule_total_count": _schedule_total_count(lead),
@@ -209,6 +338,8 @@ def list_lead_diagnoses(db: Session, current: CurrentSession, *, keyword: str | 
     )
     if status:
         stmt = stmt.where(LeadDiagnosis.status == status)
+    if is_sales_identity(db, current.identity):
+        stmt = stmt.where(LeadDiagnosis.created_by_user_id == current.user.id)
     rows = list(db.scalars(stmt))
     if keyword:
         needle = keyword.strip().lower()
@@ -221,15 +352,66 @@ def list_lead_diagnoses(db: Session, current: CurrentSession, *, keyword: str | 
     return [_serialize_lead(row, mask_contact=True) for row in rows]
 
 
-def get_lead_diagnosis(db: Session, lead_id: int) -> dict[str, Any]:
-    lead = db.scalar(
-        select(LeadDiagnosis)
-        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
-        .options(selectinload(LeadDiagnosis.runs))
-    )
+def get_lead_diagnosis(
+    db: Session,
+    lead_id: int,
+    *,
+    current: CurrentSession | None = None,
+) -> dict[str, Any]:
+    if current is not None:
+        ensure_lead_diagnosis_owner_access_by_id(db, current, lead_id)
+    lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
     return _serialize_lead(lead, include_result=True)
+
+
+def normalize_lead_brand_name(brand_name: str | None) -> str:
+    return str(brand_name or "").strip().lower()
+
+
+def find_recent_lead_diagnosis_by_brand(
+    db: Session,
+    *,
+    user_id: int,
+    brand_name: str,
+    within_days: int = LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
+) -> LeadDiagnosis | None:
+    """同一创建人、同一品牌名在冷却期内是否已有诊断记录。"""
+    normalized = normalize_lead_brand_name(brand_name)
+    if not normalized or not user_id:
+        return None
+    cutoff = datetime.now() - timedelta(days=max(1, within_days))
+    return db.scalar(
+        select(LeadDiagnosis)
+        .where(
+            LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosis.created_by_user_id == user_id,
+            func.lower(func.trim(LeadDiagnosis.brand_name)) == normalized,
+            LeadDiagnosis.created_at >= cutoff,
+        )
+        .order_by(desc(LeadDiagnosis.id))
+        .limit(1)
+    )
+
+
+def assert_lead_diagnosis_create_allowed(
+    db: Session,
+    current: CurrentSession,
+    brand_name: str,
+) -> None:
+    existing = find_recent_lead_diagnosis_by_brand(
+        db,
+        user_id=current.user.id,
+        brand_name=brand_name,
+    )
+    if existing is None:
+        return
+    created_at = existing.created_at.strftime("%Y-%m-%d %H:%M")
+    raise ValueError(
+        f"同一品牌 {LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS} 天内只能创建一条售前诊断，"
+        f"您已于 {created_at} 创建「{existing.brand_name}」（#{existing.id}）"
+    )
 
 
 def create_lead_diagnosis(
@@ -238,6 +420,7 @@ def create_lead_diagnosis(
     payload: LeadDiagnosisCreateRequest,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
+    assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
     diagnosis_date = payload.diagnosis_date or date.today()
     lead = LeadDiagnosis(
         brand_name=payload.brand_name.strip(),
@@ -246,7 +429,7 @@ def create_lead_diagnosis(
         contact_note=(payload.contact_note or "").strip() or None,
         prompts_json=payload.prompts,
         competitors_json=payload.competitors,
-        region_code=(payload.region_code or "").strip() or None,
+        region_codes_json=normalize_region_codes(payload.region_codes),
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
         diagnosis_date=diagnosis_date,
         status="pending",
@@ -269,9 +452,10 @@ def update_lead_diagnosis(
     payload: LeadDiagnosisUpdateRequest,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
-    lead = db.scalar(select(LeadDiagnosis).where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False)))
+    lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
+    ensure_lead_diagnosis_owner_access(db, current, lead)
     if payload.contact_name is not None:
         lead.contact_name = payload.contact_name.strip() or None
     if payload.contact_phone is not None:
@@ -279,7 +463,7 @@ def update_lead_diagnosis(
     if payload.contact_note is not None:
         lead.contact_note = payload.contact_note.strip() or None
     db.commit()
-    return get_lead_diagnosis(db, lead_id)
+    return get_lead_diagnosis(db, lead_id, current=current)
 
 
 def _is_slot_due(
@@ -322,11 +506,16 @@ def enumerate_due_lead_runs(
             for run in (lead.runs or [])
             if lead_run_blocks_due(run, now=now)
         }
-        for day, slot, schedule_key, schedule_label in _iter_schedule_plan(lead):
+        for day, slot, schedule_key, schedule_label, region_code in _iter_schedule_plan(lead):
             if schedule_key in existing_keys:
                 continue
             if force or _is_slot_due(day, slot, now, tolerance_minutes=tolerance):
-                yield DueLeadRun(lead_id=lead.id, schedule_key=schedule_key, schedule_label=schedule_label)
+                yield DueLeadRun(
+                    lead_id=lead.id,
+                    schedule_key=schedule_key,
+                    schedule_label=schedule_label,
+                    region_code=region_code,
+                )
 
 
 def submit_due_lead_run(
@@ -339,13 +528,10 @@ def submit_due_lead_run(
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     now = datetime.now()
-    lead = db.scalar(
-        select(LeadDiagnosis)
-        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
-        .options(selectinload(LeadDiagnosis.runs))
-    )
+    lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
+    ensure_lead_diagnosis_owner_access(db, current, lead)
     if lead.status not in ACTIVE_STATUSES:
         raise ValueError("当前诊断已结束，无法继续抓取")
 
@@ -358,12 +544,15 @@ def submit_due_lead_run(
             for run in (lead.runs or [])
             if lead_run_blocks_due(run, now=now)
         }
-        for _day, _slot, key, label in _iter_schedule_plan(lead):
-            if schedule_key and key != schedule_key:
+        for _day, _slot, key, label, region_code in _iter_schedule_plan(lead):
+            if schedule_key and key != schedule_key and not schedule_key.startswith(f"{key}-rg"):
                 continue
-            if key in existing_keys:
+            full_key, full_label = _append_region_to_schedule(key, label, region_code)
+            if schedule_key and full_key != schedule_key:
                 continue
-            due_items = [DueLeadRun(lead_id=lead.id, schedule_key=key, schedule_label=label)]
+            if full_key in existing_keys:
+                continue
+            due_items = [DueLeadRun(lead_id=lead.id, schedule_key=full_key, schedule_label=full_label, region_code=region_code)]
             break
     if not due_items:
         return {"status": "skipped", "message": "当前没有可提交的抓取窗口"}
@@ -405,7 +594,7 @@ def submit_due_lead_run(
         competitors=_competitor_payload(lead.competitors_json or []),
         prompts=lead.prompts_json or [],
         platforms=platforms,
-        region_code=_lead_region_codes(lead),
+        region_code=_lead_region_codes(lead, item.region_code),
     )
     if existing_run is not None and existing_run.status == "failed":
         run = existing_run
@@ -489,12 +678,15 @@ def _task_map(db: Session, lead: LeadDiagnosis) -> dict[str, GeoMonitorTask]:
     return {row.task_id: row for row in rows}
 
 
-def refresh_lead_diagnosis_runs(db: Session, lead_id: int) -> dict[str, Any]:
-    lead = db.scalar(
-        select(LeadDiagnosis)
-        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
-        .options(selectinload(LeadDiagnosis.runs))
-    )
+def refresh_lead_diagnosis_runs(
+    db: Session,
+    lead_id: int,
+    *,
+    current: CurrentSession | None = None,
+) -> dict[str, Any]:
+    if current is not None:
+        ensure_lead_diagnosis_owner_access_by_id(db, current, lead_id)
+    lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
     tasks = _task_map(db, lead)
@@ -865,8 +1057,14 @@ def _rule_diagnosis_block(
     }
 
 
-def build_lead_diagnosis_export(db: Session, lead_id: int, export_format: str = "pdf") -> tuple[bytes, str, str]:
-    detail = get_lead_diagnosis(db, lead_id)
+def build_lead_diagnosis_export(
+    db: Session,
+    lead_id: int,
+    export_format: str = "pdf",
+    *,
+    current: CurrentSession | None = None,
+) -> tuple[bytes, str, str]:
+    detail = get_lead_diagnosis(db, lead_id, current=current)
     if detail.get("status") != "ready":
         raise ValueError("诊断尚未完成，暂无法导出")
     result = detail.get("diagnosis_result") or {}

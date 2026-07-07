@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,7 +21,13 @@ class LeadDiagnosis(Base):
     contact_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="销售备注")
     prompts_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="检测问题列表，最多5条")
     competitors_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="竞品名称列表")
-    region_code: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="监测地区编码，空值代表全部区域")
+    region_codes_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="监测地区编码列表，空数组代表全部区域",
+    )
     schedule_times_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="每日抓取时段")
     diagnosis_date: Mapped[date] = mapped_column(Date, index=True, nullable=False, comment="诊断日期")
     status: Mapped[str] = mapped_column(

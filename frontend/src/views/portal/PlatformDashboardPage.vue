@@ -107,7 +107,6 @@ const customerDataRows = computed(() => {
     { label: '服务中企业', value: data?.active_tenants ?? 0 },
     { label: '累计任务', value: data?.task_total ?? 0 },
     { label: '检测子任务', value: data?.subtask_total ?? 0 },
-    { label: '品牌曝光率', value: `${data?.mention_rate ?? 0}%` },
     { label: '信源记录', value: data?.source_count ?? 0 },
   ]
 })
@@ -117,7 +116,7 @@ const quotaRows = computed(() => {
   const balance = molizhishuBalance.value ?? overview.value?.molizhishu_balance
   const deepseek = deepseekBalance.value ?? overview.value?.deepseek_balance
   return [
-    { label: '模力账户余额', value: formatBalanceValue(balance), highlight: true, note: balanceNote(balance) },
+    { label: '账户余额', value: formatBalanceValue(balance), highlight: true, note: balanceNote(balance) },
     { label: 'DeepSeek 账户余额', value: formatBalanceValue(deepseek), highlight: true, note: balanceNote(deepseek) },
     { label: '累计消耗', value: quota?.used_amount ?? 0 },
     { label: '今日消耗', value: quota?.today_amount ?? 0 },
@@ -299,7 +298,7 @@ onUnmounted(() => {
       </article>
 
       <article class="panel">
-        <div class="panel-head"><div><h2>费用额度</h2><p>模力与 DeepSeek 账户余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
+        <div class="panel-head"><div><h2>费用额度</h2><p>账户与 DeepSeek 余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
         <div class="ops-quota-grid">
           <div v-for="row in quotaRows" :key="row.label" :class="{ 'is-highlight': row.highlight }">
             <span>{{ row.label }}</span>
@@ -312,9 +311,9 @@ onUnmounted(() => {
       </article>
 
       <article class="panel">
-        <div class="panel-head"><div><h2>费用消耗排行</h2><p>按企业汇总接口消耗</p></div><WalletCards /></div>
+        <div class="panel-head"><div><h2>费用消耗排行</h2><p>按企业与售前诊断汇总接口消耗</p></div><WalletCards /></div>
         <div class="ops-cost-list">
-          <div v-for="(item, index) in overview?.cost_ranking || []" :key="`${item.tenant_id}-${index}`">
+          <div v-for="(item, index) in overview?.cost_ranking || []" :key="`${item.tenant_id ?? 'lead'}-${item.lead_diagnosis_id ?? index}`">
             <i>{{ index + 1 }}</i>
             <span>{{ item.tenant_name }}</span>
             <b>{{ item.cost }}</b>
@@ -336,7 +335,7 @@ onUnmounted(() => {
       </article>
 
       <article class="panel">
-        <div class="panel-head"><div><h2>客户数据概况</h2><p>企业、任务、曝光和信源数据总览</p></div><FileBarChart /></div>
+        <div class="panel-head"><div><h2>客户数据概况</h2><p>企业、任务与信源数据总览</p></div><FileBarChart /></div>
         <div class="ops-customer-data-grid">
           <div v-for="row in customerDataRows" :key="row.label">
             <span>{{ row.label }}</span>

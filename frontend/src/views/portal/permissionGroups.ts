@@ -31,7 +31,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
   }
   if (key === 'audit') return '企业资料、监测词、购买模型、监控计划和竞品配置可在这里拆分授权。'
   if (key === 'analysis') return '报告中心支持查看/导出、生成与编辑发布；客户侧默认仅查看已发布报告。'
-  if (key === 'users') return '包含用户新增、用户列表和职位管理，通常只给管理员或负责人。'
+  if (key === 'users') return '包含用户新增、用户列表、职位管理和操作审批；销售通常仅可查看自己的申请，运营/管理员可审批。'
   if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
   if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'
   if (key === 'system') return '系统配置、操作日志、模型平台等后台维护能力。'
@@ -48,7 +48,7 @@ export function permissionGroupKey(menu: MenuInfo) {
   }
   if (menu.menu_code === 'platform.dashboard') return 'dashboard'
   if (menu.menu_code.startsWith('platform.audit')) return 'audit'
-  if (menu.menu_code.startsWith('platform.users') || menu.menu_code === POSITION_MENU) return 'users'
+  if (menu.menu_code.startsWith('platform.users') || menu.menu_code === POSITION_MENU || menu.menu_code === 'platform.approvals') return 'users'
   if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
   if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'

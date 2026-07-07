@@ -3,7 +3,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { PortalNavigateKey } from '../injectionKeys'
 import { withRetry } from '../../../composables/useRetry'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
-import { customerDisplayPeriodLabel, customerTrendPeriodLabel } from '../../../utils/customerMonitorDate'
+import { customerDisplayPeriodLabel, customerDisplayCutoffDate, workspaceTrendDateRange, workspaceTrendPeriodLabel, type WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -77,6 +77,40 @@ function snapshotIntentLabel(snapshot: WorkspaceSnapshot) {
   return '口碑'
 }
 
+function resolveActiveRound(data: WorkspaceBrief) {
+  const latest = data.latest_schedule
+  const previous = data.previous_schedule
+  const kpiTotal = data.kpis.ranking_sample_count + data.kpis.exposure_sample_count
+
+  const latestCompleted = latest?.completed_subtasks ?? 0
+  if (latestCompleted > 0) {
+    return {
+      schedule: latest,
+      completed: latestCompleted,
+      usingPrevious: false as const,
+    }
+  }
+
+  const prevCompleted = previous?.completed_subtasks ?? 0
+  if (prevCompleted > 0) {
+    return {
+      schedule: previous,
+      completed: prevCompleted,
+      usingPrevious: true as const,
+    }
+  }
+
+  if (kpiTotal > 0) {
+    return {
+      schedule: latest ?? previous,
+      completed: kpiTotal,
+      usingPrevious: false as const,
+    }
+  }
+
+  return null
+}
+
 function resolveHeroTone(data: WorkspaceBrief | null): WorkspaceHeroTone {
   if (!data) return 'empty'
   const hasData = data.kpis.ranking_sample_count > 0
@@ -104,13 +138,7 @@ function resolveStatusSummary(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
 
 function resolvePrimaryAction(data: WorkspaceBrief, tone: WorkspaceHeroTone) {
   if (tone === 'empty') return null
-  if (tone === 'warn' || data.alerts.some(alert => alert.level === 'warn')) {
-    if (data.alerts.some(alert => alert.level === 'warn' && /竞品/.test(alert.message))) {
-      return { menu: 'customer.competitor', label: '查看需关注项' }
-    }
-    return { menu: 'customer.realtime', label: '查看需关注项' }
-  }
-  if (data.kpis.competitor_count > 0) {
+  if (data.kpis.competitor_count > 0 && tone === 'calm') {
     return { menu: 'customer.competitor', label: '查看竞品对比' }
   }
   return { menu: 'customer.realtime', label: '查看实时检测' }
@@ -251,6 +279,11 @@ export function useCustomerWorkspace() {
   const alertsExpanded = ref(false)
   const alertsSectionRef = ref<HTMLElement | null>(null)
   const alertsFocused = ref(false)
+  const trendPreset = ref<WorkspaceTrendPreset>('7d')
+  const initialTrendRange = workspaceTrendDateRange('7d')
+  const trendStartDate = ref(initialTrendRange.startDate)
+  const trendEndDate = ref(initialTrendRange.endDate)
+  const trendMaxDate = customerDisplayCutoffDate()
 
   const realtimeMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
@@ -274,9 +307,10 @@ export function useCustomerWorkspace() {
     const action = brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
     if (!action || !hasMenu(action.menu)) return null
     const menuName = auth.allowedMenus.find(menu => menu.menu_code === action.menu)?.menu_name
+    const useMenuName = action.label === '查看实时检测' && menuName
     return {
       ...action,
-      label: menuName ? `查看${menuName}` : action.label,
+      label: useMenuName ? `查看${menuName}` : action.label,
     }
   })
   const warnAlerts = computed(() => brief.value?.alerts.filter(alert => alert.level === 'warn') || [])
@@ -441,7 +475,7 @@ export function useCustomerWorkspace() {
     return [
       {
         key: 'mention',
-        label: '推荐类露出率',
+        label: '关键词露出率',
         value: data.kpis.brand_mention_rate,
         unit: '%',
         decimals: 1,
@@ -548,13 +582,91 @@ export function useCustomerWorkspace() {
     todoItems.value.some(item => item.count > 0)
   ))
 
-  const latestSnapshot = computed(() => brief.value?.recent_snapshots?.[0] ?? null)
+  const activeRound = computed(() => (brief.value ? resolveActiveRound(brief.value) : null))
+
+  const roundSummaryLine = computed(() => {
+    const data = brief.value
+    if (!data) return ''
+
+    const active = activeRound.value
+    if (!active) return '暂无已完成监测批次，请等待监测任务返回'
+
+    const { schedule, completed, usingPrevious } = active
+    const parts: string[] = [`${usingPrevious ? '上一轮' : '本轮'}完成 ${completed} 条`]
+
+    const leader = platformMatrixSummary.value.leader
+    if (leader) {
+      const label = platformLabelMap[leader.platform] || leader.platform
+      parts.push(`${label}露出最高（${leader.mention_rate.toFixed(1)}%）`)
+    }
+
+    const purchased = new Set(data.purchased_platforms || [])
+    const pending = (data.platform_highlights || [])
+      .filter(row => row.sample_count === 0 && purchased.has(row.platform))
+      .map(row => platformLabelMap[row.platform] || row.platform)
+
+    if (pending.length === 1) {
+      parts.push(`${pending[0]} 待返回`)
+    } else if (pending.length === 2) {
+      parts.push(`${pending.join('、')} 待返回`)
+    } else if (pending.length > 2) {
+      parts.push(`${pending.slice(0, 2).join('、')} 等 ${pending.length} 个平台待返回`)
+    }
+
+    const batchLabel = schedule?.schedule_label
+      || (usingPrevious
+        ? data.round_comparison?.previous_schedule_label
+        : data.round_comparison?.latest_schedule_label)
+    if (batchLabel) {
+      parts.push(`${usingPrevious ? '参考批次' : '最新批次'} ${batchLabel}`)
+    }
+
+    return parts.join(' · ')
+  })
+
+  const trendPeriodLabel = computed(() => (
+    workspaceTrendPeriodLabel(trendPreset.value, trendStartDate.value, trendEndDate.value)
+  ))
+
+  function syncTrendRange(preset: WorkspaceTrendPreset) {
+    const range = workspaceTrendDateRange(
+      preset,
+      trendStartDate.value,
+      trendEndDate.value,
+    )
+    trendStartDate.value = range.startDate
+    trendEndDate.value = range.endDate
+  }
+
+  function applyTrendPreset(preset: WorkspaceTrendPreset) {
+    trendPreset.value = preset
+    if (preset === 'custom') return
+    syncTrendRange(preset)
+    void loadBrief()
+  }
+
+  function onCustomTrendDateChange() {
+    if (trendStartDate.value > trendEndDate.value) {
+      trendStartDate.value = trendEndDate.value
+    }
+    if (trendEndDate.value > trendMaxDate) {
+      trendEndDate.value = trendMaxDate
+    }
+    if (trendStartDate.value > trendMaxDate) {
+      trendStartDate.value = trendMaxDate
+    }
+    trendPreset.value = 'custom'
+    void loadBrief()
+  }
 
   async function loadBrief() {
     loading.value = true
     loadError.value = ''
     try {
-      brief.value = await withRetry(() => getWorkspaceBrief())
+      brief.value = await withRetry(() => getWorkspaceBrief({
+        start_date: trendStartDate.value,
+        end_date: trendEndDate.value,
+      }))
     } catch (error: unknown) {
       notifyOperationError(error, '工作台数据加载失败')
       loadError.value = extractErrorDetail(error)
@@ -658,7 +770,13 @@ export function useCustomerWorkspace() {
     formatPlatformLabels,
     greetingLabel,
     customerPeriodLabel: customerDisplayPeriodLabel(),
-    trendPeriodLabel: customerTrendPeriodLabel(),
+    trendPreset,
+    trendStartDate,
+    trendEndDate,
+    trendMaxDate,
+    trendPeriodLabel,
+    applyTrendPreset,
+    onCustomTrendDateChange,
     platformPeriodLabel,
     healthScore,
     healthScoreExplanation,
@@ -676,7 +794,8 @@ export function useCustomerWorkspace() {
     platformRankList,
     todoItems,
     showTodoStrip,
-    latestSnapshot,
+    activeRound,
+    roundSummaryLine,
     gaugeDashOffset,
   }
 }

@@ -95,6 +95,8 @@ export async function getSentimentKeywords(params?: {
   platform?: string
   platforms?: string
   days?: number
+  start_date?: string
+  end_date?: string
   prompt?: string
   limit?: number
 }): Promise<SentimentKeywordsSummary> {
@@ -112,6 +114,8 @@ export async function getCompetitorCompare(params?: {
   platform?: string
   platforms?: string
   days?: number
+  start_date?: string
+  end_date?: string
   prompt?: string
 }): Promise<CompetitorCompareSummary> {
   const response = await http.get('/v1/analytics/competitor-compare', { params })
