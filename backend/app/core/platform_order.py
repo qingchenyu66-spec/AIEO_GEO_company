@@ -50,3 +50,18 @@ def sort_catalog_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if item["sort_order"] >= 999:
             item["sort_order"] = (index + 1) * 10
     return ordered
+
+
+def ranking_matrix_row_sort_key(
+    *,
+    day_key: str | None,
+    keyword_group: str | None = None,
+    platform: str | None = None,
+) -> tuple[str, str, int, str]:
+    """Newest day first; platforms follow market rank ascending within a day."""
+    return (
+        day_key or "",
+        keyword_group or "",
+        -platform_market_rank(platform),
+        platform or "",
+    )

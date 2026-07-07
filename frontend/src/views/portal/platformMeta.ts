@@ -26,7 +26,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
   },
   doubao_mobile: {
     code: 'doubao_mobile',
-    name: '豆包移动版',
+    name: '豆包移动端',
     accent: '#ff7a45',
     icon: '/platform-icons/doubao.png',
   },

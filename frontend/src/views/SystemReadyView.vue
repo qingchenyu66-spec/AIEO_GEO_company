@@ -4,6 +4,7 @@ import {
   Activity, ArrowRight, BarChart3, Building2, ClipboardCheck, Code2, Database,
   FileBarChart, Gauge, Layers3, RefreshCw, Search, Server, Settings, ShieldCheck
 } from '@lucide/vue'
+import AppBrandLogo from '../components/AppBrandLogo.vue'
 import { getHealth, type HealthData } from '../services/system'
 
 const health = ref<HealthData | null>(null)
@@ -45,7 +46,7 @@ onMounted(refreshHealth)
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">G</div>
+        <div class="brand-mark"><AppBrandLogo variant="icon" /></div>
         <div><strong>GEO Monitor</strong><span>AI 平台推广监测系统</span></div>
       </div>
       <nav class="nav">

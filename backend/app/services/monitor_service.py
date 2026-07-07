@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
-from app.core.platform_order import platform_market_rank, sort_platform_codes, sort_platform_items
+from app.core.platform_order import platform_market_rank, ranking_matrix_row_sort_key, sort_platform_codes, sort_platform_items
 from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
@@ -1452,6 +1452,15 @@ def _matrix_row_key(
     return "|".join(part for part in parts if part)
 
 
+def matrix_platform_visible(platform: str | None, purchased_platforms: list[str]) -> bool:
+    """排名矩阵仅展示企业当前配置的监测平台；无配置时保留全部（兼容旧数据）。"""
+    purchased = {code for code in purchased_platforms if code}
+    if not purchased:
+        return True
+    text = str(platform or "").strip()
+    return bool(text and text in purchased)
+
+
 def _matrix_day_key(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -2019,6 +2028,8 @@ def ranking_matrix(
             continue
         if detect_dt < range_start or detect_dt > range_end:
             continue
+        if not matrix_platform_visible(item.platform, purchased_platforms):
+            continue
         day_key = detect_dt.date().isoformat()
         keyword_group = schedule_ctx.get("keyword_group")
         prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
@@ -2060,11 +2071,10 @@ def ranking_matrix(
 
     sorted_tasks = sorted(
         task_rows.values(),
-        key=lambda row: (
-            row.get("day_key") or "",
-            row.get("keyword_group") or "",
-            platform_market_rank(row.get("platform")),
-            row.get("platform") or "",
+        key=lambda row: ranking_matrix_row_sort_key(
+            day_key=row.get("day_key"),
+            keyword_group=row.get("keyword_group"),
+            platform=row.get("platform"),
         ),
         reverse=True,
     )[:limit_rows]

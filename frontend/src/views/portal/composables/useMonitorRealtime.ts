@@ -420,12 +420,28 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   const rankingMatrixView = computed(() => {
     if (!rankingMatrix.value) return null
+
+    const purchased = new Set(platformOptions.value)
+    let matrix = rankingMatrix.value
+    if (matrix.all_platforms && purchased.size) {
+      const rows = matrix.rows.filter(row => !row.platform || purchased.has(row.platform))
+      const roundKeys = new Set(
+        rows.map(row => row.day_key || row.schedule_window_key || '').filter(Boolean),
+      )
+      matrix = {
+        ...matrix,
+        rows,
+        task_count: rows.length,
+        schedule_round_count: roundKeys.size || matrix.schedule_round_count,
+      }
+    }
+
     const exactPrompt = filters.exactPrompt.trim()
-    if (!exactPrompt) return rankingMatrix.value
-    const columns = rankingMatrix.value.columns.filter(col => (col.prompt || '').trim() === exactPrompt)
-    if (!columns.length) return { ...rankingMatrix.value, columns: [], rows: [] }
-    const rows = rankingMatrix.value.rows.filter(row => columns.some(col => row.cells[col.prompt]))
-    return { ...rankingMatrix.value, columns, rows }
+    if (!exactPrompt) return matrix
+    const columns = matrix.columns.filter(col => (col.prompt || '').trim() === exactPrompt)
+    if (!columns.length) return { ...matrix, columns: [], rows: [] }
+    const rows = matrix.rows.filter(row => columns.some(col => row.cells[col.prompt]))
+    return { ...matrix, columns, rows }
   })
 
   const filteredGroupedMonitorTasks = computed<MonitorTaskScheduleGroup[]>(() => {

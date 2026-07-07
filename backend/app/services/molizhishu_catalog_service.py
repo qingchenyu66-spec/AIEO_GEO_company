@@ -20,7 +20,7 @@ CACHE_TTL = timedelta(hours=24)
 
 _FALLBACK_CATALOG: list[dict[str, Any]] = sort_catalog_items([
     {"code": "doubao", "name": "豆包", "description": "字节跳动旗下的智能 AI 助手。", "channel": "web", "sort_order": 10},
-    {"code": "doubao_mobile", "name": "豆包移动版", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 11},
+    {"code": "doubao_mobile", "name": "豆包移动端", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 11},
     {"code": "baiduai", "name": "百度 AI+", "description": "百度推出的 AI 搜索。", "channel": "web", "sort_order": 20},
     {"code": "deepseek", "name": "DeepSeek", "description": "领先的国产自研大模型，性能强劲。", "channel": "web", "sort_order": 30},
     {"code": "deepseek_mobile", "name": "DeepSeek 移动端", "description": "DeepSeek 移动端版本。", "channel": "mobile", "sort_order": 31},

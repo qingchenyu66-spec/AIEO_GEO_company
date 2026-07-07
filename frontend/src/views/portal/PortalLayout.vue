@@ -2,6 +2,7 @@
 import { Building2, ChevronDown, LogOut, ShieldCheck } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
+import AppBrandLogo from '../../components/AppBrandLogo.vue'
 import NotificationBell from './components/NotificationBell.vue'
 import {
   POSITION_MENU,
@@ -54,7 +55,7 @@ const emit = defineEmits<{
   >
     <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
-        <div class="brand-mark">G</div>
+        <div class="brand-mark"><AppBrandLogo variant="icon" /></div>
         <div><strong>GEO Monitor</strong><span>{{ isPlatform ? '平台运营端' : '客户企业端' }}</span></div>
       </div>
       <div class="portal-tag">

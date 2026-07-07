@@ -3,12 +3,13 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowRight, BarChart3, BookOpenCheck, Boxes, Building2, Check, Eye, EyeOff,
-  LockKeyhole, MessageSquareWarning, SearchCheck, ShieldCheck, UserRound,
+  ArrowRight, Building2, Check, Eye, EyeOff, LockKeyhole, ShieldCheck, UserRound,
 } from '@lucide/vue'
 import { notifyOperationError } from '../utils/requestError'
 import { useAuthStore } from '../stores/auth'
+import AppBrandLogo from '../components/AppBrandLogo.vue'
 import PlatformBadge from '../components/PlatformBadge.vue'
+import { supportedPlatforms } from '../views/portal/platformMeta'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -26,22 +27,7 @@ const selected = computed(() => auth.pendingIdentities.find(item => item.id === 
 function identityDisplayName(identity: { position_name?: string | null; identity_name?: string }) {
   return identity.position_name || identity.identity_name || '登录身份'
 }
-const platforms = [
-  { code: 'doubao', name: '豆包', mark: '豆', tone: 'doubao' },
-  { code: 'baiduai', name: '百度 AI+', mark: '百', tone: 'baidu' },
-  { code: 'deepseek', name: 'DeepSeek', mark: 'D', tone: 'deepseek' },
-  { code: 'weibo_zhisou', name: '微博智搜', mark: '微', tone: 'weibo' },
-  { code: 'yuanbao', name: '元宝', mark: '元', tone: 'yuanbao' },
-  { code: 'qianwen', name: '通义千问', mark: '千', tone: 'qianwen' },
-  { code: 'quark', name: '夸克', mark: '夸', tone: 'quark' },
-  { code: 'kimi', name: 'Kimi', mark: 'K', tone: 'kimi' },
-]
-const capabilities = [
-  [SearchCheck, '品牌曝光'],
-  [BarChart3, '推荐排名'],
-  [BookOpenCheck, '引用来源'],
-  [MessageSquareWarning, '舆情风险'],
-]
+const platforms = supportedPlatforms.map(item => ({ code: item.code, name: item.name }))
 
 async function submitLogin() {
   if (!form.username || !form.password) return ElMessage.warning('请输入账号和密码')
@@ -85,75 +71,91 @@ async function enterWithIdentity() {
 
 <template>
   <main class="auth-page">
-    <section class="auth-visual">
-      <header class="auth-brand">
-        <div class="auth-brand-mark"><Boxes /></div>
-        <div><strong>GEO Monitor</strong><span>AI 平台推广监测系统</span></div>
+    <div class="auth-ambient" aria-hidden="true">
+      <div class="auth-bg-base"></div>
+      <div class="auth-bg-grid"></div>
+      <div class="auth-bg-vignette"></div>
+      <div class="auth-spotlight"></div>
+      <div class="auth-orb auth-orb-a"></div>
+      <div class="auth-orb auth-orb-b"></div>
+      <div class="auth-orb auth-orb-c"></div>
+      <div class="auth-orb auth-orb-d"></div>
+    </div>
+
+    <div class="auth-wrap">
+      <header class="auth-hero">
+        <AppBrandLogo variant="full" alt="艾迪亚控股集团 · GEO Monitor" />
+        <h1>GEO Monitor</h1>
+        <p class="auth-hero-sub">AI 平台推广监测</p>
       </header>
 
-      <div class="auth-visual-content">
-        <div class="auth-title">
-          <h1>让品牌在 AI 回答中<span>被看见</span></h1>
-          <p>覆盖主流 AI 平台，持续洞察品牌曝光、推荐排名与引用表现</p>
+      <form class="auth-form" @submit.prevent="submitLogin">
+        <h2>欢迎回来</h2>
+
+        <label class="auth-field-label" for="username">账号</label>
+        <div class="auth-field">
+          <UserRound aria-hidden="true" />
+          <input id="username" v-model="form.username" autocomplete="username" placeholder="请输入账号" />
         </div>
 
-        <div class="constellation-wrap" aria-label="主流 AI 平台动态接入生态">
-          <div class="orbit-grid"></div>
-          <div class="orbit-halo orbit-halo-large"></div>
-          <div class="orbit-halo orbit-halo-small"></div>
-          <div class="orbit-core">
-            <span class="core-pulse"></span>
-            <div class="core-mark"><Boxes /></div>
-            <strong>GEO</strong>
-            <small>AI 可见度中枢</small>
-          </div>
-          <div class="orbit-platforms">
-            <div
-              v-for="(platform, index) in platforms"
-              :key="platform.code"
-              class="platform-node"
-              :class="[`platform-node-${index + 1}`, `platform-node-${platform.tone}`]"
-            >
-              <PlatformBadge
-                :code="platform.code"
-                size="lg"
-                icon-only
-                :show-label="false"
-                class="auth-orbit-badge"
-              />
-              <span class="platform-label"><i></i>{{ platform.name }}</span>
-            </div>
-          </div>
+        <label class="auth-field-label" for="password">密码</label>
+        <div class="auth-field">
+          <LockKeyhole aria-hidden="true" />
+          <input
+            id="password"
+            v-model="form.password"
+            :type="showPassword ? 'text' : 'password'"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+          />
+          <button
+            type="button"
+            class="auth-field-toggle"
+            :title="showPassword ? '隐藏密码' : '显示密码'"
+            :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+            @click="showPassword = !showPassword"
+          >
+            <EyeOff v-if="showPassword" />
+            <Eye v-else />
+          </button>
         </div>
 
-        <div class="capability-row">
-          <div v-for="([icon, label]) in capabilities" :key="label as string" class="capability-item">
-            <component :is="icon" /><span>{{ label }}</span>
+        <label class="auth-remember">
+          <input v-model="form.remember" type="checkbox" />
+          <span class="auth-remember-box" aria-hidden="true">
+            <Check />
+          </span>
+          <span class="auth-remember-text">记住账号</span>
+        </label>
+
+        <button class="auth-submit" type="submit" :disabled="loading">
+          <span v-if="loading" class="auth-submit-spinner" aria-hidden="true"></span>
+          <span>{{ loading ? '正在验证' : '登录系统' }}</span>
+          <ArrowRight v-if="!loading" />
+        </button>
+      </form>
+
+      <div class="auth-platform-strip" aria-label="已接入监测平台">
+        <div class="auth-platform-strip-head">
+          <span class="auth-platform-strip-title">
+            <span class="auth-platform-dot" aria-hidden="true"></span>
+            监测平台
+          </span>
+          <span class="auth-platform-count">{{ platforms.length }} 个已接入</span>
+        </div>
+        <div class="auth-platform-grid">
+          <div v-for="platform in platforms" :key="platform.code" class="auth-platform-item">
+            <PlatformBadge
+              :code="platform.code"
+              size="sm"
+              icon-only
+              :show-label="false"
+            />
+            <span>{{ platform.name }}</span>
           </div>
         </div>
       </div>
-    </section>
-
-    <section class="auth-form-side">
-      <div class="auth-orbit"><Boxes /></div>
-      <form class="auth-form" @submit.prevent="submitLogin">
-        <div class="auth-heading">
-          <span>统一登录入口</span>
-          <h2>登录 GEO Monitor</h2>
-          <p>根据账号权限进入平台运营端或客户企业端</p>
-          <i></i>
-        </div>
-
-        <label class="auth-label" for="username">账号</label>
-        <div class="auth-input"><UserRound /><input id="username" v-model="form.username" autocomplete="username" placeholder="请输入账号" /></div>
-
-        <label class="auth-label" for="password">密码</label>
-        <div class="auth-input"><LockKeyhole /><input id="password" v-model="form.password" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" /><button type="button" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-label="showPassword ? '隐藏密码' : '显示密码'" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" /><Eye v-else /></button></div>
-
-        <div class="auth-options"><label><input v-model="form.remember" type="checkbox" /> 记住账号</label><button type="button">忘记密码</button></div>
-        <button class="auth-submit" type="submit" :disabled="loading"><span v-if="loading" class="auth-submit-spinner" aria-hidden="true"></span><span>{{ loading ? '正在验证' : '登录系统' }}</span><ArrowRight v-if="!loading" /></button>
-      </form>
-    </section>
+    </div>
 
     <el-dialog v-model="identityDialog" width="620px" :close-on-click-modal="false" :show-close="false" class="identity-dialog dark-identity-dialog">
       <template #header><div class="identity-head"><span>选择本次登录身份</span><small>{{ auth.pendingUser?.display_name }}，检测到 {{ auth.pendingIdentities.length }} 个可用身份</small></div></template>

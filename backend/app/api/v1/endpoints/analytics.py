@@ -12,11 +12,21 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import CurrentSession, get_current_session
 from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
+from app.core.read_cache import (
+    SENTIMENT_KEYWORDS_CACHE_TTL,
+    get_or_build_json_cache,
+    sentiment_keywords_cache_key,
+)
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.common import ApiResponse
+from app.schemas.sentiment_wordcloud import (
+    SentimentWordCloudImageRequest,
+    SentimentWordCloudImageResponse,
+)
 from app.services.competitor_analytics_service import build_competitor_compare_summary
 from app.services.monitor_service import customer_display_cutoff
 from app.services.sentiment_keyword_service import build_sentiment_keywords
+from app.services.sentiment_wordcloud_image_service import generate_sentiment_wordcloud_image
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 
 from app.core.chinese_stop_words import WORDCLOUD_STOP_WORDS
@@ -87,21 +97,61 @@ def sentiment_keywords(
 ) -> ApiResponse[dict]:
     """品牌情绪词——按正/负面回答提取短语，供词云展示与快照下钻。"""
     try:
-        data = build_sentiment_keywords(
-            db,
-            current,
-            tenant_id=tenant_id,
+        resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        cache_key = sentiment_keywords_cache_key(
+            current.identity.identity_type,
+            resolved_tenant_id,
             platform=platform,
             platforms=platforms,
             days=days,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
             prompt=prompt,
             limit=limit,
+        )
+
+        def build() -> dict:
+            return build_sentiment_keywords(
+                db,
+                current,
+                tenant_id=tenant_id,
+                platform=platform,
+                platforms=platforms,
+                days=days,
+                start_date=start_date,
+                end_date=end_date,
+                prompt=prompt,
+                limit=limit,
+            )
+
+        data = get_or_build_json_cache(
+            cache_key,
+            build,
+            ttl_seconds=SENTIMENT_KEYWORDS_CACHE_TTL,
         )
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="analytics.sentiment_keywords")
+
+
+@router.post("/sentiment-wordcloud-image", response_model=ApiResponse[SentimentWordCloudImageResponse])
+def sentiment_wordcloud_image(
+    payload: SentimentWordCloudImageRequest,
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[SentimentWordCloudImageResponse]:
+    """品牌情绪词云图——Python wordcloud 填充中国地图蒙版（参考优词云 fill 模式）。"""
+    del current
+    try:
+        data = generate_sentiment_wordcloud_image(
+            [item.model_dump() for item in payload.items],
+            polarity=payload.polarity,
+            width=payload.width,
+            height=payload.height,
+            max_words=payload.max_words,
+        )
+        return ApiResponse(data=SentimentWordCloudImageResponse.model_validate(data))
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.sentiment_wordcloud_image")
 
 
 @router.get("/competitor-compare", response_model=ApiResponse[dict])

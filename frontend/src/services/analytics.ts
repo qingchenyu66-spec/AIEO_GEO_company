@@ -90,6 +90,40 @@ export interface SentimentKeywordsSummary {
   source?: 'deepseek' | 'rule'
 }
 
+export interface SentimentWordCloudPlacement {
+  text: string
+  count: number
+  subtask_id: string
+  task_id: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface SentimentWordCloudImageResult {
+  image_base64: string
+  width: number
+  height: number
+  placements: SentimentWordCloudPlacement[]
+}
+
+export async function generateSentimentWordCloudImage(payload: {
+  items: SentimentKeywordItem[]
+  polarity: 'positive' | 'negative'
+}): Promise<SentimentWordCloudImageResult> {
+  const response = await http.post('/v1/analytics/sentiment-wordcloud-image', {
+    items: payload.items,
+    polarity: payload.polarity,
+    width: 1024,
+    height: 1024,
+    max_words: 72,
+  }, {
+    timeout: 60000,
+  })
+  return response.data.data
+}
+
 export async function getSentimentKeywords(params?: {
   tenant_id?: number
   platform?: string

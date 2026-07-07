@@ -18,6 +18,7 @@ MANAGEMENT_OVERVIEW_CACHE_TTL = 30
 MONITOR_SUMMARY_CACHE_TTL = 20
 WORKSPACE_BRIEF_CACHE_TTL = 45
 CELERY_MONITOR_CACHE_TTL = 20
+SENTIMENT_KEYWORDS_CACHE_TTL = 120
 CACHE_BUILD_LOCK_TTL = 45
 CACHE_BUILD_WAIT_SECONDS = 3.0
 CACHE_BUILD_POLL_INTERVAL = 0.15
@@ -39,6 +40,28 @@ def workspace_brief_cache_key(
 
 def celery_monitor_cache_key() -> str:
     return "celery:monitor:panel:v1"
+
+
+def sentiment_keywords_cache_key(
+    identity_type: str,
+    tenant_id: int,
+    *,
+    platform: str | None,
+    platforms: str | None,
+    days: int,
+    start_date: str | None,
+    end_date: str | None,
+    prompt: str | None,
+    limit: int,
+) -> str:
+    platform_key = platforms or platform or "all"
+    prompt_key = prompt or "all"
+    start_key = start_date or "default"
+    end_key = end_date or "default"
+    return (
+        f"analytics:sentiment-keywords:v1:{identity_type}:{tenant_id}:"
+        f"{platform_key}:{days}:{start_key}:{end_key}:{prompt_key}:{limit}"
+    )
 
 
 def get_or_build_json_cache(

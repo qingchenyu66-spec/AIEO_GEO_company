@@ -694,6 +694,7 @@
 
 .brand-insights-wordcloud-panel {
   padding-bottom: 8px;
+  grid-column: 1 / -1;
 }
 
 .brand-insights-sentiment-tabs {
@@ -741,6 +742,10 @@
   min-height: 360px;
   height: 360px;
   cursor: pointer;
+}
+
+.brand-insights-wordcloud-echart.is-loading {
+  opacity: .72;
 }
 
 .brand-insights-ai-badge {

@@ -37,6 +37,7 @@ const {
   selectedPlatforms,
   platformTabs,
   loading,
+  keywordsLoading,
   leaderboardRows,
   sentimentLeaderboardRows,
   brandRow,
@@ -47,12 +48,14 @@ const {
   sentimentKeywordTab,
   activeSentimentKeywords,
   activeSentimentKeywordSample,
+  sentimentKeywordSource,
   mentionTrendHiddenCount,
   loadSummary,
   resetFilters,
   exportCsv,
   togglePlatform,
   drillDownToRealtime,
+  drillDownToSnapshot,
 } = useBrandInsights({ mentionTrendChartRef, sentimentTrendChartRef, sentimentWordCloudRef })
 
 const datePresets: Array<{ value: CompetitorDatePreset; label: string }> = [
@@ -318,8 +321,8 @@ function isPlatformActive(code: string) {
           <div>
             <h3>品牌情绪词</h3>
             <p>
-              基于监测回答语义聚合的高频表达 · 点击词条直达快照
-              <span class="brand-insights-ai-badge">智能语义洞察</span>
+              从本品牌被提及的回答中提取短语 · 点击词条直达快照
+              <span v-if="sentimentKeywordSource === 'deepseek'" class="brand-insights-ai-badge">DeepSeek 提炼</span>
             </p>
           </div>
           <Cloud />
@@ -341,11 +344,15 @@ function isPlatformActive(code: string) {
           </button>
         </div>
         <div
-          v-if="activeSentimentKeywords.length"
+          v-show="activeSentimentKeywords.length || keywordsLoading"
           ref="sentimentWordCloudRef"
           class="echart-box brand-insights-wordcloud-echart"
+          :class="{ 'is-loading': keywordsLoading }"
         />
-        <div v-else class="mini-empty chart-empty">
+        <div v-if="keywordsLoading && !activeSentimentKeywords.length" class="mini-empty chart-empty">
+          情绪词加载中…
+        </div>
+        <div v-else-if="!activeSentimentKeywords.length" class="mini-empty chart-empty">
           {{ activeSentimentKeywordSample > 0 ? '暂无可用短语，请稍后刷新。' : `暂无${sentimentKeywordTab === 'positive' ? '正面' : '负面'}情绪样本。` }}
         </div>
       </section>

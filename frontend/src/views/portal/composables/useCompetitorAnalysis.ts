@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getCompetitorCompare, getSentimentKeywords, type CompetitorCompareSummary, type SentimentKeywordItem, type SentimentKeywordsSummary } from '../../../services/analytics'
+import { useSentimentWordCloud, preloadSentimentWordCloudRuntime } from '../../../composables/useSentimentWordCloud'
 import { useAuthStore } from '../../../stores/auth'
 import {
   customerDisplayCutoffDate,
@@ -11,7 +12,6 @@ import {
   workspaceTrendPeriodLabel,
   type WorkspaceTrendPreset,
 } from '../../../utils/customerMonitorDate'
-import { useSentimentWordCloud } from '../../../composables/useSentimentWordCloud'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { resolveRealtimeMenu } from '../portalNavigation'
 import { platformLabelMap } from '../portalMaps'
@@ -68,6 +68,7 @@ export function useBrandInsights(options?: {
   const selectedPlatforms = ref<string[]>([])
   const promptFilter = ref('')
   const loading = ref(false)
+  const keywordsLoading = ref(false)
   const summary = ref<CompetitorCompareSummary | null>(null)
   const sentimentKeywords = ref<SentimentKeywordsSummary | null>(null)
   const sentimentKeywordTab = ref<'positive' | 'negative'>('positive')
@@ -350,29 +351,34 @@ export function useBrandInsights(options?: {
   async function loadSummary() {
     const version = ++loadVersion
     loading.value = true
+    keywordsLoading.value = true
+    sentimentKeywords.value = null
     try {
       const params = buildCompareParams()
-      const compareData = await withRetry(() => getCompetitorCompare(params))
+      const keywordParams = { ...params, limit: 55 }
+      const comparePromise = withRetry(() => getCompetitorCompare(params))
+      const keywordsPromise = withRetry(() => getSentimentKeywords(keywordParams)).catch(() => null)
+
+      const compareData = await comparePromise
       if (version !== loadVersion) return
       summary.value = compareData
-      sentimentKeywords.value = null
-      void withRetry(() => getSentimentKeywords({ ...params, limit: 60 }))
-        .then(keywordData => {
-          if (version !== loadVersion) return
-          sentimentKeywords.value = keywordData
-          const rows = sentimentKeywordTab.value === 'positive' ? keywordData.positive : keywordData.negative
-          void renderWordCloud(rows, sentimentKeywordTab.value)
-        })
-        .catch(() => undefined)
+      loading.value = false
+
+      void keywordsPromise.then(keywordData => {
+        if (version !== loadVersion) return
+        if (keywordData) sentimentKeywords.value = keywordData
+        keywordsLoading.value = false
+      })
     } catch (error: unknown) {
       if (version !== loadVersion) return
+      keywordsLoading.value = false
       ElMessage.error(`品牌洞察数据加载失败：${errorMessage(error)}`)
     } finally {
       if (version === loadVersion) loading.value = false
     }
   }
 
-  async function refreshCharts() {
+  async function refreshTrendCharts() {
     await renderCharts({
       chartTrend: [],
       platformRanking: [],
@@ -390,9 +396,16 @@ export function useBrandInsights(options?: {
         sentimentTrend: payload => drillDownToRealtime({ dayLabel: payload.label }),
       },
     })
-    if (sentimentKeywords.value) {
-      await renderWordCloud(activeSentimentKeywords.value, sentimentKeywordTab.value)
-    }
+  }
+
+  async function refreshWordCloud() {
+    if (loading.value || keywordsLoading.value) return
+    await renderWordCloud(activeSentimentKeywords.value, sentimentKeywordTab.value)
+  }
+
+  async function refreshCharts() {
+    await refreshTrendCharts()
+    await refreshWordCloud()
   }
 
   function resetFilters() {
@@ -455,11 +468,17 @@ export function useBrandInsights(options?: {
       if (prev && next !== prev) void loadSummary()
     },
   )
-  watch([focusedMentionTrendSeries, sentimentTrendRows, activeSentimentKeywords, sentimentKeywordTab, loading], () => {
-    void refreshCharts()
-  }, { deep: true })
+  watch([focusedMentionTrendSeries, sentimentTrendRows, loading], () => {
+    void refreshTrendCharts()
+  }, { deep: true, flush: 'post' })
+
+  watch([activeSentimentKeywords, sentimentKeywordTab, keywordsLoading], () => {
+    if (keywordsLoading.value) return
+    void refreshWordCloud()
+  }, { deep: true, flush: 'post' })
 
   onMounted(() => {
+    preloadSentimentWordCloudRuntime()
     void loadSummary()
     window.addEventListener('resize', refreshCharts)
   })
@@ -485,6 +504,7 @@ export function useBrandInsights(options?: {
     promptOptions,
     platformTabs,
     loading,
+    keywordsLoading,
     summary,
     leaderboardRows,
     sentimentLeaderboardRows,

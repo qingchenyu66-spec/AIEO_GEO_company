@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, time
 from typing import Any
 
@@ -158,26 +159,33 @@ def _aggregate_with_deepseek(
         return None
 
     extracted_total = 0
-    for start in range(0, len(excerpts), _LLM_BATCH_SIZE):
-        batch = excerpts[start:start + _LLM_BATCH_SIZE]
-        try:
-            phrases = client.extract_sentiment_phrases(
+    batches = [
+        excerpts[start:start + _LLM_BATCH_SIZE]
+        for start in range(0, len(excerpts), _LLM_BATCH_SIZE)
+    ]
+    try:
+        workers = min(4, max(1, len(batches)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(
+                client.extract_sentiment_phrases,
                 brand_name=brand_display,
                 polarity=polarity,
                 excerpts=batch,
-            )
-        except DeepseekApiError as exc:
-            logger.warning("DeepSeek 情绪词提取失败：%s", exc)
-            return None
-        for row in phrases:
-            text = row["text"]
-            if brand_names and text in brand_names:
-                continue
-            entry = bucket[text]
-            entry["count"] += 1
-            entry["subtask_ids"].append(row["subtask_id"])
-            entry["task_ids"].append(row["task_id"])
-            extracted_total += 1
+            ) for batch in batches]
+            for future in as_completed(futures):
+                phrases = future.result()
+                for row in phrases:
+                    text = row["text"]
+                    if brand_names and text in brand_names:
+                        continue
+                    entry = bucket[text]
+                    entry["count"] += 1
+                    entry["subtask_ids"].append(row["subtask_id"])
+                    entry["task_ids"].append(row["task_id"])
+                    extracted_total += 1
+    except DeepseekApiError as exc:
+        logger.warning("DeepSeek 情绪词提取失败：%s", exc)
+        return None
 
     if extracted_total == 0:
         return None
@@ -257,7 +265,8 @@ def build_sentiment_keywords(
 
     buckets: dict[str, dict[str, dict[str, Any]]] = {"positive": {}, "negative": {}}
     used_llm = False
-    for polarity in ("positive", "negative"):
+
+    def build_polarity_bucket(polarity: str) -> tuple[str, dict[str, dict[str, Any]], bool]:
         llm_bucket = _aggregate_with_deepseek(
             brand_display=brand_display,
             polarity=polarity,
@@ -265,10 +274,18 @@ def build_sentiment_keywords(
             brand_names=brand_names,
         )
         if llm_bucket:
-            buckets[polarity] = llm_bucket
-            used_llm = True
-        else:
-            buckets[polarity] = _aggregate_rule_based(grouped[polarity], brand_names)
+            return polarity, llm_bucket, True
+        return polarity, _aggregate_rule_based(grouped[polarity], brand_names), False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(build_polarity_bucket, polarity): polarity
+            for polarity in ("positive", "negative")
+        }
+        for future in as_completed(futures):
+            polarity, bucket, llm_used = future.result()
+            buckets[polarity] = bucket
+            used_llm = used_llm or llm_used
 
     def finalize(polarity: str) -> list[dict[str, Any]]:
         rows = []
