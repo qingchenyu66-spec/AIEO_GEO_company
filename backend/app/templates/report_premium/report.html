@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ title }}</title>
+  <style>
+    {{ font_face_css | safe }}
+    :root { --bg:#070b14; --card:rgba(15,23,42,.88); --line:rgba(148,163,184,.2); --text:#e2e8f0; --muted:#94a3b8; --cyan:#22d3ee; --violet:#8b5cf6; --red:#f87171; --green:#34d399; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'GeoReportCJK',"Microsoft YaHei","PingFang SC",sans-serif; background:var(--bg); color:var(--text); -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    @page { size:A4 landscape; margin:0; }
+    .page { width:297mm; height:210mm; page-break-after:always; position:relative; overflow:hidden;
+      background:radial-gradient(circle at 85% 15%,rgba(139,92,246,.16),transparent 42%),linear-gradient(145deg,#070b14,#0f172a 55%,#111827); }
+    .page:last-child { page-break-after:auto; }
+    .watermark { position:absolute; right:-2mm; bottom:8mm; font-size:64px; font-weight:700; color:rgba(255,255,255,.03); letter-spacing:.08em; }
+    .inner { position:relative; z-index:1; height:100%; padding:14mm 16mm 12mm; display:flex; flex-direction:column; }
+    .head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6mm; }
+    .tag { font-size:10px; letter-spacing:.2em; color:var(--cyan); font-weight:600; text-transform:uppercase; }
+    .h2 { font-size:24px; font-weight:700; margin-top:3px; }
+    .sub { font-size:12px; color:var(--muted); margin-top:4px; line-height:1.55; }
+    .no { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:3px 10px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:4mm; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:5mm; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:4mm; }
+    .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:3mm; }
+    table { width:100%; border-collapse:collapse; font-size:11px; }
+    th,td { padding:3mm 2.5mm; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .highlight { color:#fff; font-weight:700; }
+    .risk { color:var(--red); font-weight:600; }
+    .ok { color:var(--green); }
+    .lead { font-size:12px; line-height:1.8; color:#cbd5e1; }
+    .list { list-style:none; display:flex; flex-direction:column; gap:2.5mm; }
+    .list li { font-size:11px; line-height:1.7; color:#cbd5e1; padding-left:4mm; position:relative; }
+    .list li::before { content:""; position:absolute; left:0; top:6px; width:5px; height:5px; border-radius:50%; background:var(--cyan); }
+    .chart { width:100%; border-radius:8px; background:#fff; padding:2mm; }
+    .foot { margin-top:auto; padding-top:3mm; border-top:1px solid var(--line); display:flex; justify-content:space-between; font-size:10px; color:var(--muted); }
+    .cover-title { font-size:38px; font-weight:700; line-height:1.15; }
+    .cover-badge { display:inline-block; padding:5px 12px; border-radius:999px; border:1px solid rgba(34,211,238,.35); color:var(--cyan); font-size:11px; margin-bottom:5mm; }
+    .score { position:absolute; right:20mm; top:50%; transform:translateY(-50%); width:68mm; height:68mm; border-radius:50%; border:3px solid rgba(139,92,246,.35); display:flex; flex-direction:column; align-items:center; justify-content:center; background:radial-gradient(circle,rgba(139,92,246,.15),transparent 70%); }
+    .score .n { font-size:48px; font-weight:700; color:var(--violet); }
+    .dim-card h4 { font-size:13px; margin-bottom:2mm; color:#e2e8f0; }
+    .dim-card p, .dim-card li { font-size:11px; line-height:1.65; color:#cbd5e1; }
+    .toc-item { display:flex; justify-content:space-between; padding:3mm 4mm; border:1px solid var(--line); border-radius:8px; margin-bottom:2.5mm; font-size:12px; }
+    .kpi-val { font-size:24px; font-weight:700; color:var(--cyan); }
+    .interp { margin-bottom:3mm; }
+    .interp strong { display:block; font-size:12px; color:#fff; margin-bottom:1mm; }
+    .interp span { font-size:11px; line-height:1.7; color:#cbd5e1; }
+  </style>
+</head>
+<body>
+
+<section class="page">
+  <div class="watermark">GEO</div>
+  <div class="inner">
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;max-width:65%;">
+      <div class="cover-badge">{{ type_label }}</div>
+      <h1 class="cover-title">{{ preface.report_title or title }}</h1>
+      <p style="font-size:18px;color:#cbd5e1;margin:4mm 0;">{{ company_name }}</p>
+      <p class="lead">报告周期：{{ preface.period_range or period_label }}<br/>出具日期：{{ generated_at }}</p>
+    </div>
+    <div class="score"><div class="n">{{ health_score or '—' }}</div><div style="font-size:10px;color:var(--muted);">GEO 健康分</div></div>
+    <div class="foot"><span>GEO Monitor</span><span>Confidential</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">CONTENTS</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Contents</div><h2 class="h2">报告目录</h2></div><div class="no">02 / 10</div></div>
+    {% for item in toc %}<div class="toc-item"><span>{{ item.title }}</span><span>P{{ '%02d'|format(item.page) }}</span></div>{% endfor %}
+    <div class="foot"><span>{{ brand_name }}</span><span>{{ type_label }}</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">PREFACE</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 01</div><h2 class="h2">报告前言</h2><p class="sub">监测范围 · 监测口径 · 数据样本说明</p></div><div class="no">03 / 10</div></div>
+    <div class="card" style="flex:1;">
+      <table>
+        <tr><th style="width:22%;">出品方</th><td>{{ preface.publisher }}</td></tr>
+        <tr><th>监测工具</th><td>{{ preface.monitor_tool }}</td></tr>
+        <tr><th>报告周期</th><td>{{ preface.period_range }}</td></tr>
+        <tr><th>监测样本规模</th><td class="lead">{{ preface.sample_description }}</td></tr>
+        <tr><th>监测核心维度</th><td>{{ preface.core_dimensions | join('、') }}</td></tr>
+        <tr><th>纳入竞品</th><td>{{ preface.competitors }}</td></tr>
+        <tr><th>报告用途</th><td class="lead">{{ preface.purpose }}</td></tr>
+      </table>
+    </div>
+    <div class="foot"><span>监测口径说明</span><span>Preface</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">OVERVIEW</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 02</div><h2 class="h2">集团全域品牌监测总览</h2></div><div class="no">04 / 10</div></div>
+    <div class="grid4" style="margin-bottom:4mm;">
+      <div class="card"><div style="font-size:11px;color:var(--muted);">综合健康分</div><div class="kpi-val">{{ overview.kpi_table.health_score or '—' }}</div></div>
+      <div class="card"><div style="font-size:11px;color:var(--muted);">品牌提及率</div><div class="kpi-val">{{ overview.kpi_table.mention_rate }}%</div></div>
+      <div class="card"><div style="font-size:11px;color:var(--muted);">平均推荐排名</div><div class="kpi-val">#{{ overview.kpi_table.avg_rank or '—' }}</div></div>
+      <div class="card"><div style="font-size:11px;color:var(--muted);">引用信源</div><div class="kpi-val">{{ overview.kpi_table.source_count }}类</div></div>
+    </div>
+    <div class="grid2" style="flex:1;">
+      <div class="card">
+        <h3 style="font-size:13px;margin-bottom:3mm;">指标深度解读</h3>
+        {% for item in overview.interpretations %}
+        <div class="interp"><strong>{{ item.title }}</strong><span>{{ item.body }}</span></div>
+        {% endfor %}
+      </div>
+      <div class="card">
+        <h3 style="font-size:13px;margin-bottom:3mm;">核心发现</h3>
+        <ul class="list">{% for h in highlights %}<li>{{ h }}</li>{% endfor %}</ul>
+        {% if charts.platform_mention %}<img class="chart" style="margin-top:3mm;" src="{{ charts.platform_mention }}" alt="platform" />{% endif %}
+      </div>
+    </div>
+    <div class="foot"><span>大盘总览</span><span>Overview</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">SENTIMENT</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 03</div><h2 class="h2">全域舆情情绪深度拆解</h2><p class="sub">有效舆情样本总量：{{ sentiment.total_samples }} 条</p></div><div class="no">05 / 10</div></div>
+    <div class="grid2" style="flex:1;">
+      <div class="card">
+        {% for layer in sentiment.layers %}
+        <div style="margin-bottom:4mm;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:1mm;">
+            {% if layer.label == '正面' %}<span class="ok">{{ layer.label }}</span>{% elif layer.label == '负面' %}<span class="risk">{{ layer.label }}</span>{% else %}{{ layer.label }}{% endif %}
+           ：{{ layer.count }} 条，占比 {{ layer.percent }}%
+          </div>
+          <p class="lead">{{ layer.summary }}</p>
+          {% if layer.pain_points %}
+          <ul class="list" style="margin-top:2mm;">{% for p in layer.pain_points %}<li class="risk">{{ p }}</li>{% endfor %}</ul>
+          {% if layer.risk_note %}<p class="lead risk" style="margin-top:2mm;">{{ layer.risk_note }}</p>{% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <div class="card">
+        {% if charts.sentiment_pie %}<img class="chart" src="{{ charts.sentiment_pie }}" alt="sentiment" />{% endif %}
+        <p class="lead" style="margin-top:3mm;">{{ sentiment.summary }}</p>
+      </div>
+    </div>
+    <div class="foot"><span>舆情分层</span><span>Sentiment</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">PLATFORM</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 04</div><h2 class="h2">主流 AI 平台对标分析</h2><p class="sub">{{ platform_benchmark.intro }}</p></div><div class="no">06 / 10</div></div>
+    <div class="card" style="margin-bottom:4mm;">
+      <table>
+        <thead><tr><th>平台</th><th>完成量</th><th>提及率</th><th>均位</th><th>综合定位判断</th></tr></thead>
+        <tbody>
+          {% for row in platform_benchmark.rows %}
+          <tr>
+            <td class="highlight">{{ row.name }}{% if row.is_leading %} ★{% elif row.is_weak %} ▼{% endif %}</td>
+            <td>{{ row.completed }}/{{ row.total or row.completed }}</td>
+            <td>{{ row.mention_rate }}%</td>
+            <td>#{{ row.avg_rank or '—' }}</td>
+            <td class="lead">{{ row.positioning }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="lead card" style="padding:3mm 4mm;"><strong>平台核心结论：</strong>{{ platform_benchmark.conclusion }}</p>
+    <div class="foot"><span>平台横评</span><span>Platform Benchmark</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">SOURCES</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 05</div><h2 class="h2">核心信源传播影响力分析</h2></div><div class="no">07 / 10</div></div>
+    <div class="grid2" style="flex:1;">
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>信源渠道</th><th>引用</th><th>渠道价值拆解</th></tr></thead>
+          <tbody>
+            {% for row in source_influence.rows %}
+            <tr><td>{{ row.index }}</td><td>{{ row.title }}</td><td>{{ row.count }}次</td><td class="lead">{{ row.value_analysis }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        {% if charts.source_bar %}<img class="chart" src="{{ charts.source_bar }}" alt="sources" />{% endif %}
+        <p class="lead" style="margin-top:3mm;"><strong>核心判断：</strong>{{ source_influence.conclusion }}</p>
+      </div>
+    </div>
+    <div class="foot"><span>信源影响力</span><span>Sources</span></div>
+  </div>
+</section>
+
+<section class="page">
+  <div class="watermark">STRATEGY</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 06</div><h2 class="h2">风险诊断与分维度落地优化策略</h2></div><div class="no">08 / 10</div></div>
+    <div class="card" style="margin-bottom:4mm;">
+      <h3 style="font-size:13px;margin-bottom:2mm;">当前核心现存问题</h3>
+      <ul class="list">{% for p in risk_and_strategy.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+    </div>
+    <div class="grid2">
+      {% for dim in risk_and_strategy.dimensions %}
+      <div class="card dim-card">
+        <h4>{{ dim.title }}</h4>
+        <ul class="list">{% for item in dim.actions %}<li>{{ item }}</li>{% endfor %}</ul>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="foot"><span>优化策略</span><span>Strategy</span></div>
+  </div>
+</section>
+
+{% if action_plan and action_plan.title %}
+<section class="page">
+  <div class="watermark">PLAN</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 07</div><h2 class="h2">{{ action_plan.title }}</h2></div><div class="no">09 / 10</div></div>
+    <div class="grid2" style="flex:1;">
+      <div class="card">
+        <h3 style="font-size:13px;margin-bottom:2mm;">核心指标目标（{{ action_plan.period_label }}）</h3>
+        <ul class="list">{% for g in action_plan.goals %}<li>{{ g }}</li>{% endfor %}</ul>
+      </div>
+      <div class="card">
+        <h3 style="font-size:13px;margin-bottom:2mm;">重点行动</h3>
+        <ul class="list">{% for a in action_plan.actions %}<li>{{ a }}</li>{% endfor %}</ul>
+      </div>
+    </div>
+    <div class="foot"><span>行动规划</span><span>Action Plan</span></div>
+  </div>
+</section>
+{% endif %}
+
+<section class="page">
+  <div class="watermark">NOTES</div>
+  <div class="inner">
+    <div class="head"><div><div class="tag">Module 08</div><h2 class="h2">报告备注说明</h2></div><div class="no">10 / 10</div></div>
+    <div class="card" style="flex:1;">
+      <ol style="padding-left:5mm;font-size:12px;line-height:1.9;color:#cbd5e1;">
+        {% for note in disclaimer.notes %}<li style="margin-bottom:3mm;">{{ note }}</li>{% endfor %}
+      </ol>
+      <p class="lead" style="margin-top:5mm;">{{ footer_note }}</p>
+      <p class="lead" style="margin-top:3mm;">品牌：{{ brand_name }} · 企业：{{ company_name }} · 类型：{{ type_label }} · 周期：{{ period_label }}</p>
+    </div>
+    <div class="foot"><span>GEO Monitor</span><span>End of Report</span></div>
+  </div>
+</section>
+
+</body>
+</html>

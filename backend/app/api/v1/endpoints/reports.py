@@ -36,7 +36,7 @@ def generate_report_endpoint(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """生成报告——仅运营端，基于诊断记录与监测快照，初始为草稿。"""
+    """生成品牌诊断报告——仅运营端手动触发，初始为草稿。周期报告由 Celery 自动生成并发布。"""
     tenant_id = payload.get("tenant_id")
 
     def _execute():

@@ -16,7 +16,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { PlatformAdminKey } from '../injectionKeys'
 import { useReportCenter } from '../composables/useReportCenter'
 import { platformLabelMap } from '../portalMaps'
-import { formatDateTime } from '../portalUtils'
+import { formatDateTime, externalLink } from '../portalUtils'
 import '../../../styles/report-center.css'
 
 const props = defineProps<{ isPlatform: boolean }>()
@@ -271,9 +271,12 @@ function diagnosisTitleText(title: string | null | undefined) {
             <div class="report-card-meta">
               <span class="report-badge type">{{ reportDetail.report_type_label || reportDetail.report_type }}</span>
               <span class="report-badge status">{{ reportDetail.status_label || reportDetail.status }}</span>
-              <span v-if="previewContent?.period_label" class="report-badge type">{{ previewContent.period_label }}</span>
+              <span
+                v-if="previewContent?.period_label && reportDetail.report_type !== 'diagnosis'"
+                class="report-badge type"
+              >{{ previewContent.period_label }}</span>
             </div>
-            <h2>{{ isPlatform ? reportDetail.report_title : displayReportTitle(reportDetail) }}</h2>
+            <h2>{{ displayReportTitle(reportDetail) }}</h2>
             <p v-if="previewAiInsights?.executive_summary" class="report-executive-summary">{{ previewAiInsights.executive_summary }}</p>
             <p>{{ reportDetail.data_summary }}</p>
           </div>
@@ -362,30 +365,31 @@ function diagnosisTitleText(title: string | null | undefined) {
               <p>AI 回答中引用品牌露出词较多的来源</p>
             </div>
             <div class="report-source-list">
-              <a
-                v-for="(source, index) in previewSources"
-                :key="source.url"
-                class="report-source-item"
-                :href="source.url"
-                target="_blank"
-                rel="noopener"
-              >
-                <span class="report-source-rank">{{ index + 1 }}</span>
-                <div class="report-source-copy">
-                  <b>{{ source.title }}</b>
-                  <span>
-                    <PlatformBadge
-                      v-for="code in source.platforms.slice(0, 3)"
-                      :key="code"
-                      :code="code"
-                      size="xs"
-                      icon-only
-                    />
-                    {{ source.platforms.length > 3 ? `+${source.platforms.length - 3}` : '' }}
-                  </span>
-                </div>
-                <span class="report-source-count">{{ source.count }} 次</span>
-              </a>
+              <template v-for="(source, index) in previewSources" :key="source.url">
+                <a
+                  v-if="externalLink(source.url)"
+                  class="report-source-item"
+                  :href="externalLink(source.url)!"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span class="report-source-rank">{{ index + 1 }}</span>
+                  <div class="report-source-copy">
+                    <b>{{ source.title }}</b>
+                    <span>
+                      <PlatformBadge
+                        v-for="code in source.platforms.slice(0, 3)"
+                        :key="code"
+                        :code="code"
+                        size="xs"
+                        icon-only
+                      />
+                      {{ source.platforms.length > 3 ? `+${source.platforms.length - 3}` : '' }}
+                    </span>
+                  </div>
+                  <span class="report-source-count">{{ source.count }} 次</span>
+                </a>
+              </template>
             </div>
           </section>
 
@@ -407,11 +411,11 @@ function diagnosisTitleText(title: string | null | undefined) {
               打印报告
             </button>
             <a
-              v-if="reportDetail.report_url"
+              v-if="externalLink(reportDetail.report_url)"
               class="ghost-link-btn"
-              :href="reportDetail.report_url"
+              :href="externalLink(reportDetail.report_url)!"
               target="_blank"
-              rel="noopener"
+              rel="noopener noreferrer"
             >
               下载附件
               <ArrowRight />

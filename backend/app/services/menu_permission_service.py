@@ -274,13 +274,19 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
 
 def position_menu_grants(db: Session, position_id: int) -> list[MenuGrantItem]:
+    return position_menu_grants_map(db, [position_id]).get(position_id, [])
+
+
+def position_menu_grants_map(db: Session, position_ids: list[int]) -> dict[int, list[MenuGrantItem]]:
+    if not position_ids:
+        return {}
     rows = db.execute(
         select(PositionMenu, Menu)
         .join(Menu, Menu.id == PositionMenu.menu_id)
-        .where(PositionMenu.position_id == position_id, Menu.deleted.is_(False))
+        .where(PositionMenu.position_id.in_(position_ids), Menu.deleted.is_(False))
         .order_by(Menu.sort_order.asc(), Menu.id.asc())
     ).all()
-    grants: list[MenuGrantItem] = []
+    grants_map: dict[int, list[MenuGrantItem]] = {position_id: [] for position_id in position_ids}
     for grant, menu in rows:
         if is_retired_menu_code(menu.menu_code):
             continue
@@ -291,7 +297,7 @@ def position_menu_grants(db: Session, position_id: int) -> list[MenuGrantItem]:
             can_export=grant.can_export,
         ):
             continue
-        grants.append(
+        grants_map.setdefault(grant.position_id, []).append(
             MenuGrantItem(
                 menu_id=menu.id,
                 menu_code=menu.menu_code,
@@ -301,7 +307,7 @@ def position_menu_grants(db: Session, position_id: int) -> list[MenuGrantItem]:
                 can_export=grant.can_export,
             )
         )
-    return grants
+    return grants_map
 
 
 def sync_position_menu_grants(
@@ -454,6 +460,49 @@ def ensure_identity_menus_from_position(db: Session, identity: UserIdentity) -> 
         return False
     replace_identity_menus_from_position(db, identity.id, identity.position_id)
     return True
+
+
+def require_platform_menu_permission(
+    db: Session,
+    current,
+    menu_code: str,
+    action: str,
+    *,
+    detail: str | None = None,
+) -> None:
+    from app.api.dependencies import CurrentSession
+
+    session: CurrentSession = current
+    if session.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可访问")
+    if not has_identity_menu_permission(db, session.identity.id, menu_code, action):
+        raise PermissionError(detail or "当前身份无权执行此操作")
+
+
+def require_health_ops_access(db: Session, current) -> None:
+    require_platform_menu_permission(
+        db,
+        current,
+        "platform.settings",
+        "can_export",
+        detail="当前账号无权查看运维健康详情",
+    )
+
+
+def require_knowledge_permission(db: Session, current, action: str) -> None:
+    from app.api.dependencies import CurrentSession
+
+    session: CurrentSession = current
+    if session.identity.identity_type == "CUSTOMER":
+        if not has_identity_menu_permission(db, session.identity.id, "customer.knowledge", action):
+            raise PermissionError("无权操作企业知识库")
+        return
+    if action == "can_export":
+        if not has_identity_menu_permission(db, session.identity.id, "platform.audit.files", "can_export"):
+            raise PermissionError("无权查看企业知识库")
+        return
+    if not has_identity_menu_permission(db, session.identity.id, "platform.audit.profile", "can_update"):
+        raise PermissionError("无权维护企业知识库")
 
 
 def require_snapshot_backfill_permission(

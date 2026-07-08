@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.tasks.monitor.scan_pending_syncs": {"queue": "sync"},
         "app.tasks.monitor.sync_one_monitor_task": {"queue": "sync"},
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
+        "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
     },
     beat_schedule={
@@ -57,6 +58,10 @@ celery_app.conf.update(
         "finalize-lead-diagnoses": {
             "task": "app.tasks.monitor.finalize_lead_diagnoses",
             "schedule": crontab(minute="*/10", hour="9-22"),
+        },
+        "scan-due-scheduled-reports": {
+            "task": "app.tasks.monitor.scan_due_scheduled_reports",
+            "schedule": crontab(hour=20, minute=0),
         },
     },
 )

@@ -30,6 +30,20 @@ def test_parse_bullet_list_uses_appearance_order():
     assert entries[1]["rank"] == 2
 
 
+def test_parse_skips_markdown_table_rows():
+    text = """
+| 排名 | 公司 |
+| --- | --- |
+| 1 | 艾迪亚 |
+| 2 | 分众传媒 |
+
+1. 真正第一名
+2. 真正第二名
+"""
+    entries = parse_answer_rankings(text)
+    assert [item["name"] for item in entries] == ["真正第一名", "真正第二名"]
+
+
 def test_structured_rankings_fill_missing_rank_within_category():
     raw = [
         {"name": "A公司", "category": "电梯"},

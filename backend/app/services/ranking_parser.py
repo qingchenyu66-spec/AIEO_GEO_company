@@ -76,6 +76,15 @@ def _coerce_rank_number(value: Any) -> int | float | None:
         return None
 
 
+def _is_markdown_table_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("|") and "|" in stripped[1:]:
+        return True
+    return bool(re.match(r"^[\|\s:\-]+$", stripped))
+
+
 def _is_category_header(line: str) -> bool:
     stripped = line.strip()
     if not stripped or len(stripped) > 80:
@@ -194,6 +203,8 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     for raw_line in normalized.splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        if _is_markdown_table_line(line):
             continue
         if _is_category_header(line):
             current_category = _extract_category_name(line)

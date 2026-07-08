@@ -6,18 +6,22 @@ export function useKnowledgePreview(selectedFile: ComputedRef<KnowledgeFileRecor
   const fullText = ref('')
   const fullTextLoading = ref(false)
   const fullTextError = ref('')
+  let loadSeq = 0
 
   async function loadFullText(fileId: number) {
+    const seq = ++loadSeq
     fullTextLoading.value = true
     fullTextError.value = ''
     try {
       const data = await withRetry(() => getKnowledgeFileContent(fileId))
+      if (seq !== loadSeq) return
       fullText.value = data.text || ''
     } catch (error: unknown) {
+      if (seq !== loadSeq) return
       fullTextError.value = error instanceof Error ? error.message : '预览加载失败'
       fullText.value = ''
     } finally {
-      fullTextLoading.value = false
+      if (seq === loadSeq) fullTextLoading.value = false
     }
   }
 

@@ -22,6 +22,7 @@ from reportlab.platypus import Image as PdfImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_period_content_service import format_diagnosis_display_title
 from app.services.report_chart_service import (
     build_entity_rank_trend_chart,
     build_mention_rate_bar_chart,
@@ -33,6 +34,7 @@ REPORT_TYPE_LABELS = {
     "diagnosis": "企业诊断",
     "weekly": "监测周报",
     "monthly": "监测月报",
+    "quarterly": "监测季报",
     "annual": "监测年报",
     "comparison": "对比报告",
     "periodic": "周期报告",
@@ -159,7 +161,7 @@ def _append_docx_narrative_sections(document: Document, sections: dict[str, Any]
     if intro:
         hint = document.add_paragraph(intro)
         hint.runs[0].font.color.rgb = RGBColor(0x58, 0x70, 0x8F)
-        hint.runs[0].font.size = Pt(9)
+        hint.runs[0].font.size = Pt(10)
     for key, title in REPORT_SECTION_TITLES:
         text = str(sections.get(key) or "").strip()
         if not text:
@@ -168,7 +170,7 @@ def _append_docx_narrative_sections(document: Document, sections: dict[str, Any]
         heading_run = heading.add_run(title)
         heading_run.bold = True
         heading_run.font.color.rgb = RGBColor(0x22, 0x72, 0xD9)
-        heading_run.font.size = Pt(11)
+        heading_run.font.size = Pt(12.5)
         for paragraph in _split_narrative_paragraphs(text):
             body = document.add_paragraph(paragraph)
             body.paragraph_format.left_indent = Pt(6)
@@ -212,7 +214,7 @@ def _append_docx_insight_block(document: Document, *, title: str, subtitle: str,
     if subtitle:
         hint = document.add_paragraph(subtitle)
         hint.runs[0].font.color.rgb = RGBColor(0x58, 0x70, 0x8F)
-        hint.runs[0].font.size = Pt(9)
+        hint.runs[0].font.size = Pt(10)
     paragraph = document.add_paragraph(body)
     paragraph.paragraph_format.left_indent = Pt(8)
     paragraph.paragraph_format.space_before = Pt(4)
@@ -254,8 +256,12 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
     snapshot = content.get("monitor_snapshot") or {}
     ai_insights = content.get("ai_insights") or {}
     health_score = diagnosis.get("health_score") or kpis.get("health_score")
+    report_type = str(report.get("report_type") or "")
+    title = report.get("report_title") or "GEO 监测报告"
+    if report_type == "diagnosis":
+        title = format_diagnosis_display_title(title)
     return {
-        "title": report.get("report_title") or "GEO 监测报告",
+        "title": title,
         "type_label": report.get("report_type_label") or REPORT_TYPE_LABELS.get(report.get("report_type"), "报告"),
         "status_label": report.get("status_label") or report.get("status") or "",
         "tenant_name": report.get("tenant_name") or "",
@@ -282,6 +288,12 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "tracked_entities": snapshot.get("tracked_entities") or [],
         "brand_city_rankings": snapshot.get("brand_city_rankings") or [],
         "report_sections": content.get("report_sections") or {},
+        "premium_content": content.get("premium_content") or {},
+        "report_modules": content.get("report_modules") or {},
+        "report_type": report.get("report_type") or "",
+        "period_start": content.get("period_start"),
+        "period_end": content.get("period_end"),
+        "sentiment_counts": snapshot.get("sentiment_counts") or {},
     }
 
 def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
@@ -301,8 +313,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         "ReportTitle",
         parent=styles["Heading1"],
         fontName=PDF_FONT,
-        fontSize=18,
-        leading=24,
+        fontSize=20,
+        leading=28,
         textColor=colors.HexColor("#12385f"),
         spaceAfter=8,
     )
@@ -310,8 +322,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         "ReportSubtitle",
         parent=styles["Normal"],
         fontName=PDF_FONT,
-        fontSize=10,
-        leading=14,
+        fontSize=11,
+        leading=16,
         textColor=colors.HexColor("#58708f"),
         spaceAfter=6,
     )
@@ -319,8 +331,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         "SectionTitle",
         parent=styles["Heading2"],
         fontName=PDF_FONT,
-        fontSize=13,
-        leading=18,
+        fontSize=15,
+        leading=21,
         textColor=colors.HexColor("#17406a"),
         spaceBefore=10,
         spaceAfter=6,
@@ -329,8 +341,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
         "Body",
         parent=styles["Normal"],
         fontName=PDF_FONT,
-        fontSize=10,
-        leading=15,
+        fontSize=11.5,
+        leading=17,
         textColor=colors.HexColor("#45627f"),
     )
     bullet_style = ParagraphStyle(
@@ -344,8 +356,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
     subheading_style = ParagraphStyle(
         "Subheading",
         parent=body_style,
-        fontSize=11,
-        leading=16,
+        fontSize=12.5,
+        leading=18,
         textColor=colors.HexColor("#17406a"),
         spaceBefore=4,
         spaceAfter=6,
@@ -353,8 +365,8 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
     lead_style = ParagraphStyle(
         "Lead",
         parent=body_style,
-        fontSize=10.5,
-        leading=17,
+        fontSize=12,
+        leading=19,
         textColor=colors.HexColor("#334e6f"),
         spaceAfter=8,
     )
@@ -362,16 +374,16 @@ def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes
     tagline_style = ParagraphStyle(
         "ReportTagline",
         parent=subtitle_style,
-        fontSize=9,
-        leading=13,
+        fontSize=10.5,
+        leading=15,
         textColor=colors.HexColor("#2272d9"),
         spaceAfter=8,
     )
     footer_style = ParagraphStyle(
         "ReportFooter",
         parent=subtitle_style,
-        fontSize=8,
-        leading=12,
+        fontSize=9.5,
+        leading=14,
         textColor=colors.HexColor("#8aa0ba"),
         spaceBefore=6,
     )
@@ -728,7 +740,7 @@ def _set_docx_default_font(document: Document, font_name: str = "Microsoft YaHei
     normal = document.styles["Normal"]
     normal.font.name = font_name
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
-    normal.font.size = Pt(10.5)
+    normal.font.size = Pt(12)
     normal.font.color.rgb = RGBColor(0x45, 0x62, 0x7F)
 
 
@@ -736,7 +748,7 @@ def _add_docx_section_title(document: Document, text: str) -> None:
     paragraph = document.add_paragraph()
     run = paragraph.add_run(text)
     run.bold = True
-    run.font.size = Pt(12)
+    run.font.size = Pt(14)
     run.font.color.rgb = RGBColor(0x17, 0x40, 0x6A)
 
 
@@ -751,7 +763,7 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
 
     tagline = document.add_paragraph(REPORT_HERO_TAGLINE)
     tagline.runs[0].font.color.rgb = RGBColor(0x22, 0x72, 0xD9)
-    tagline.runs[0].font.size = Pt(9)
+    tagline.runs[0].font.size = Pt(10.5)
 
     meta = " · ".join(item for item in [payload["type_label"], payload["period_label"], payload["tenant_name"]] if item)
     if meta:
@@ -933,10 +945,10 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
     if generated:
         footer = document.add_paragraph(f"报告出具时间：{generated}")
         footer.runs[0].font.color.rgb = RGBColor(0x8A, 0xA0, 0xBA)
-        footer.runs[0].font.size = Pt(9)
+        footer.runs[0].font.size = Pt(10.5)
     note = document.add_paragraph(REPORT_FOOTER_NOTE)
     note.runs[0].font.color.rgb = RGBColor(0x8A, 0xA0, 0xBA)
-    note.runs[0].font.size = Pt(9)
+    note.runs[0].font.size = Pt(10.5)
 
     buffer = io.BytesIO()
     document.save(buffer)
@@ -948,13 +960,29 @@ def build_report_export(report: dict[str, Any], export_format: ExportFormat) -> 
     payload = _normalize_export_payload(report)
     platform_names = _platform_label_map()
     if export_format == "pdf":
-        content = _build_pdf(payload, platform_names)
+        content = _build_pdf_premium_or_fallback(payload, platform_names)
         mime = "application/pdf"
     else:
         content = _build_docx(payload, platform_names)
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     filename = _safe_filename(payload["title"], export_format)
     return content, filename, mime
+
+
+def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
+    """优先 Premium 深色模板；Playwright 不可用时回退 ReportLab。"""
+    import logging
+
+    from app.services.report_premium_context_service import enrich_export_payload_for_premium
+    from app.services.report_premium_pdf_service import build_premium_pdf
+
+    logger = logging.getLogger(__name__)
+    enriched = enrich_export_payload_for_premium(payload, report_type=payload.get("report_type"))
+    try:
+        return build_premium_pdf(enriched)
+    except Exception as exc:
+        logger.warning("Premium PDF 生成失败，回退 ReportLab：%s", exc)
+        return _build_pdf(enriched, platform_names)
 
 
 def content_disposition(filename: str) -> str:

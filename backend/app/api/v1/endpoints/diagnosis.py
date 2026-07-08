@@ -1,4 +1,4 @@
-﻿"""品牌诊断API端点。"""
+"""品牌诊断API端点。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, desc
@@ -9,6 +9,7 @@ from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.diagnosis import BrandDiagnosis
 from app.schemas.common import ApiResponse
+from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.approval_service import queue_or_run
 from app.services.tenant_scope import (
     guard_tenant_resource_access,
@@ -28,6 +29,12 @@ def list_diagnosis(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """品牌诊断列表。客户看自己的，运营看全部。"""
+    if current.identity.identity_type == "CUSTOMER":
+        if not has_identity_menu_permission(db, current.identity.id, "customer.diagnosis", "can_export"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看品牌诊断")
+    else:
+        if not has_identity_menu_permission(db, current.identity.id, "platform.reports", "can_export"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看品牌诊断")
     stmt = (
         select(BrandDiagnosis)
         .where(BrandDiagnosis.deleted.is_(False))
@@ -80,6 +87,8 @@ def create_diagnosis(
 ) -> ApiResponse[dict]:
     """运营创建品牌诊断。"""
     require_platform(current)
+    if not has_identity_menu_permission(db, current.identity.id, "platform.reports", "can_create"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权创建品牌诊断")
     raw_tenant_id = payload.get("tenant_id", current.identity.tenant_id)
     if raw_tenant_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定企业")

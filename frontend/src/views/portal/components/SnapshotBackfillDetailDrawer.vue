@@ -9,6 +9,7 @@ import type { SnapshotBackfillPendingItem } from '../../../services/snapshotBack
 import { monitorStatusLabelMap, platformLabelMap, sentimentLabelMap } from '../portalMaps'
 import { formatDateTime, formatMonitorSubtaskRankDetail } from '../portalUtils'
 import { snapshotBackfillBatchLabel, snapshotBackfillRankDisplay } from '../snapshotBackfillDisplay'
+import { externalLink } from '../portalUtils'
 
 const props = defineProps<{
   visible: boolean
@@ -31,6 +32,8 @@ const drawerVisible = computed({
 const headline = computed(() => props.item?.tenant_name || props.item?.brand_name || props.item?.monitor_keywords || '快照详情')
 
 const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props.subtask))
+
+const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
 
 function showRankNote() {
   if (props.subtask?.prompt_intent !== 'ranking' && props.item?.prompt_intent !== 'ranking') return false
@@ -96,6 +99,10 @@ const answerPreview = computed(() => {
           <dt>词组</dt>
           <dd>{{ item.keyword_group || item.monitor_keywords || '—' }}</dd>
         </div>
+        <div v-if="item.region_label && item.region_label !== '全部区域'">
+          <dt>监测地区</dt>
+          <dd>{{ item.region_label }}</dd>
+        </div>
         <div>
           <dt>调度批次</dt>
           <dd>{{ snapshotBackfillBatchLabel(item) }}</dd>
@@ -125,9 +132,9 @@ const answerPreview = computed(() => {
         </div>
         <div class="is-wide">
           <dt>快照链接</dt>
-          <dd v-if="subtask.page_screenshot">
-            <a :href="subtask.page_screenshot" target="_blank" rel="noopener noreferrer" class="snapshot-detail-link">
-              {{ subtask.page_screenshot }}
+          <dd v-if="snapshotLink">
+            <a :href="snapshotLink" target="_blank" rel="noopener noreferrer" class="snapshot-detail-link">
+              {{ snapshotLink }}
               <ExternalLink :size="14" />
             </a>
           </dd>

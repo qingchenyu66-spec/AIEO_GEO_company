@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronDown, ChevronRight, Download, RefreshCw } from '@lucide/vue'
+import { BarChart3, ChevronDown, ChevronRight, Download, LayoutGrid, RefreshCw } from '@lucide/vue'
 import { ElDrawer } from 'element-plus'
 import 'element-plus/es/components/drawer/style/css'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import RankingMatrixChartPanel from '../components/RankingMatrixChartPanel.vue'
 import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../services/monitor'
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { externalLink } from '../portalUtils'
 import { useMonitorRealtime } from '../composables/useMonitorRealtime'
 
 const {
@@ -19,10 +21,13 @@ const {
   viewMode,
   rankingMatrix,
   rankingMatrixView,
+  matrixChartType,
+  activeMatrixPlatform,
+  matrixLayoutMode,
+  matrixFilterSummary,
   detailVisible,
   detailSubtask,
   detailContext,
-  selectedMatrixCell,
   heroMetrics,
   platformCoverage,
   platformOptions,
@@ -30,7 +35,6 @@ const {
   monitorGroupOptions,
   monitorKeywordOptions,
   exposureTermOptions,
-  filterScope,
   filteredGroupedMonitorTasks,
   scheduleSourceLabel,
   isCustomerView,
@@ -40,7 +44,7 @@ const {
   refreshCurrentView,
   selectMonitorTask,
   switchViewMode,
-  selectMatrixCell,
+  openMatrixChartCell,
   toggleMatrixSnapshot,
   matrixDrawerSnapshots,
   isMatrixDrawerMode,
@@ -61,9 +65,6 @@ const {
   taskPromptPreview,
   answerExcerpt,
   sentimentToneClass,
-  matrixCellRankClass,
-  matrixCellTitle,
-  isLatestMatrixRow,
   taskPromptCount,
   taskPlatformCount,
   filteredMonitorSubtasks,
@@ -75,7 +76,13 @@ const {
   formatDateTime,
 } = useMonitorRealtime()
 
-const isLoading = computed(() => loadingMonitor.value || loadingMatrix.value)
+
+const isLoading = computed(() => {
+  if (viewMode.value === 'matrix') {
+    return loadingMatrix.value && !rankingMatrix.value
+  }
+  return loadingMonitor.value || loadingMatrix.value
+})
 
 const customerDatePresetOptions: Array<{ value: WorkspaceTrendPreset; label: string }> = [
   { value: '7d', label: '近7日' },
@@ -249,8 +256,23 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
             导出矩阵
           </button>
         </div>
+        <div class="realtime-filter-summary">
+          日期 <b>{{ matrixFilterSummary.date }}</b>
+          · 平台 <b>{{ matrixFilterSummary.platform }}</b>
+          · 词组 <b>{{ matrixFilterSummary.group }}</b>
+          · 监测词 <b>{{ matrixFilterSummary.monitorKeyword }}</b>
+          · 露出词 <b>{{ matrixFilterSummary.exposureTerm }}</b>
+          · 结果 <b>{{ matrixFilterSummary.columnCount }}</b> 词 · <b>{{ matrixFilterSummary.dayCount }}</b> 天
+        </div>
       </div>
     </header>
+
+    <div v-if="viewMode === 'matrix'" class="realtime-matrix-legend-strip">
+      <span><i class="legend-top-1" />#1</span>
+      <span><i class="legend-top-3" />#2–3</span>
+      <span><i class="legend-mid" />#4–6</span>
+      <span><i class="legend-none" />未提及</span>
+    </div>
 
     <article class="realtime-hero">
       <div v-if="isLoading && !rankingMatrix && !monitorDetail" class="realtime-hero-skeleton">
@@ -310,87 +332,115 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
       </div>
     </details>
 
-    <section v-if="viewMode === 'matrix'" class="realtime-matrix-panel">
-      <div class="realtime-matrix-head">
-        <div>
-          <h3>排名矩阵</h3>
-          <p>行 = 每日均值排名 · 列 = 监测关键词 · 排名按露出词匹配 · 同一天多次监测取平均</p>
+    <section v-if="viewMode === 'matrix'" class="realtime-matrix-panel realtime-matrix-platform-grid">
+      <div class="realtime-chart-mode-bar">
+        <div class="realtime-chart-mode-label">
+          图表类型
+          <small>切换排名快照与走势热力</small>
+        </div>
+        <div class="realtime-chart-view-toggle">
+          <button
+            type="button"
+            :class="{ active: matrixChartType === 'bar' }"
+            @click="matrixChartType = 'bar'"
+          >
+            <BarChart3 />
+            排名快照
+          </button>
+          <button
+            type="button"
+            :class="{ active: matrixChartType === 'heat' }"
+            @click="matrixChartType = 'heat'"
+          >
+            <LayoutGrid />
+            走势热力
+          </button>
+          <!-- 完整矩阵与走势热力功能重叠，暂隐藏
+          <button
+            type="button"
+            :class="{ active: matrixChartType === 'table' }"
+            @click="matrixChartType = 'table'"
+          >
+            <Table2 />
+            完整矩阵
+          </button>
+          -->
         </div>
       </div>
 
-      <div v-if="rankingMatrix" class="realtime-matrix-meta">
-        <span class="realtime-meta-platform">
-          平台
-          <b v-if="rankingMatrix.all_platforms">全部</b>
-          <PlatformBadge v-else-if="rankingMatrix.platform" :code="rankingMatrix.platform" size="xs" />
-          <b v-else>-</b>
-        </span>
-        <span>监测天数 <b>{{ rankingMatrixView?.schedule_round_count ?? rankingMatrixView?.rows.length }}</b></span>
-        <span>监测问题 <b>{{ rankingMatrixView?.columns.length }}</b></span>
-      </div>
-
-      <div class="realtime-matrix-legend">
-        <span><i class="legend-top-1" />#1</span>
-        <span><i class="legend-top-3" />#2–3</span>
-        <span><i class="legend-mid" />#4–6</span>
-        <span><i class="legend-none" />未提及</span>
-      </div>
-
       <div v-if="loadingMatrix" class="mini-empty">排名矩阵加载中…</div>
-      <div v-else-if="rankingMatrixView?.columns.length && rankingMatrixView.rows.length" class="realtime-matrix-scroll">
-        <table class="realtime-matrix-table">
-          <thead>
-            <tr>
-              <th class="realtime-matrix-time-col">日期</th>
-              <th
-                v-for="column in rankingMatrixView!.columns"
-                :key="column.prompt"
-                class="realtime-matrix-prompt-col"
-                :title="column.prompt"
+      <RankingMatrixChartPanel
+        v-else-if="rankingMatrixView"
+        :matrix="rankingMatrixView"
+        :chart-type="matrixChartType"
+        :active-platform="activeMatrixPlatform"
+        :layout-mode="matrixLayoutMode"
+        :purchased-platforms="platformOptions"
+        :platform-label-map="platformLabelMap"
+        :format-rank="formatRank"
+        :display-schedule-label="displayScheduleLabel"
+        @update:active-platform="activeMatrixPlatform = $event"
+        @open-cell="openMatrixChartCell"
+      />
+      <!-- 完整矩阵表视图暂隐藏（与走势热力重叠），代码保留便于恢复
+      <template v-else-if="rankingMatrixView?.columns.length && rankingMatrixView.rows.length">
+        <div class="realtime-matrix-scroll">
+          <table class="realtime-matrix-table">
+            <thead>
+              <tr>
+                <th class="realtime-matrix-time-col">日期</th>
+                <th
+                  v-for="column in rankingMatrixView!.columns"
+                  :key="column.prompt"
+                  class="realtime-matrix-prompt-col"
+                  :title="column.prompt"
+                >
+                  <small v-if="column.monitor_keyword">{{ column.monitor_keyword }}</small>
+                  <small v-else-if="column.group_name">{{ column.group_name }}</small>
+                  <span>{{ column.prompt }}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in rankingMatrixView.rows"
+                :key="`${row.schedule_window_key || row.task_id}-${row.keyword_group || ''}-${row.platform || ''}`"
+                :class="{ 'realtime-matrix-row-latest': isLatestMatrixRow(row) }"
               >
-                <small v-if="column.group_name">{{ column.group_name }}</small>
-                <span>{{ column.prompt }}</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in rankingMatrixView.rows"
-              :key="`${row.schedule_window_key || row.task_id}-${row.keyword_group || ''}-${row.platform || ''}`"
-              :class="{ 'realtime-matrix-row-latest': isLatestMatrixRow(row) }"
-            >
-              <th class="realtime-matrix-time-col">
-                <span>{{ displayScheduleLabel(row.schedule_label || row.snapshot_at || '-') }}{{ isCustomerView ? '' : scheduleSourceLabel(row.schedule_source) }}</span>
-                <small v-if="!isCustomerView && row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
-                <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
-                  <PlatformBadge :code="row.platform" size="xs" />
-                </small>
-              </th>
-              <td
-                v-for="column in rankingMatrixView!.columns"
-                :key="`${row.schedule_window_key || row.task_id}-${column.prompt}`"
-                class="realtime-matrix-cell"
-                :class="[
-                  matrixCellRankClass(row.cells[column.prompt]?.mention_position),
-                  {
-                    'is-active': selectedMatrixCell?.taskId === row.task_id
-                      && selectedMatrixCell?.prompt === column.prompt
-                      && (selectedMatrixCell?.platform || '') === (row.platform || ''),
-                  },
-                ]"
-                :title="matrixCellTitle(row.cells[column.prompt])"
-                @click="selectMatrixCell(row.task_id, row.platform, row.snapshot_at, row.schedule_label, column.prompt, row.cells[column.prompt])"
-              >
-                {{ formatRank(row.cells[column.prompt]?.mention_position) }}
-                <small
-                  v-if="(row.cells[column.prompt]?.rank_sample_count || 0) > 1"
-                  class="realtime-matrix-cell-note"
-                >均</small>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                <th class="realtime-matrix-time-col">
+                  <span>{{ displayScheduleLabel(row.schedule_label || row.snapshot_at || '-') }}{{ isCustomerView ? '' : scheduleSourceLabel(row.schedule_source) }}</span>
+                  <small v-if="!isCustomerView && row.keyword_group && !filterScope.keywordGroup && !filterScope.monitorKeyword">{{ row.keyword_group }}</small>
+                  <small v-if="rankingMatrixView?.all_platforms && row.platform" class="realtime-matrix-platform">
+                    <PlatformBadge :code="row.platform" size="xs" />
+                  </small>
+                </th>
+                <td
+                  v-for="column in rankingMatrixView!.columns"
+                  :key="`${row.schedule_window_key || row.task_id}-${column.prompt}`"
+                  class="realtime-matrix-cell"
+                  :class="[
+                    matrixCellRankClass(row.cells[column.prompt]?.mention_position),
+                    {
+                      'is-active': selectedMatrixCell?.taskId === row.task_id
+                        && selectedMatrixCell?.prompt === column.prompt
+                        && (selectedMatrixCell?.platform || '') === (row.platform || ''),
+                    },
+                  ]"
+                  :title="matrixCellTitle(row.cells[column.prompt])"
+                  @click="selectMatrixCell(row.task_id, row.platform, row.snapshot_at, row.schedule_label, column.prompt, row.cells[column.prompt])"
+                >
+                  {{ formatRank(row.cells[column.prompt]?.mention_position) }}
+                  <small
+                    v-if="(row.cells[column.prompt]?.rank_sample_count || 0) > 1"
+                    class="realtime-matrix-cell-note"
+                  >均</small>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+      -->
       <div v-else class="mini-empty">当前筛选条件下暂无排名数据，请调整日期或平台。</div>
     </section>
 
@@ -558,9 +608,10 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
                   <span>情感 {{ sentimentLabelMap[detailSubtask.sentiment || ''] || '暂无' }}</span>
                   <span>状态 {{ monitorStatusLabelMap[detailSubtask.status || ''] || '—' }}</span>
                   <a
-                    v-if="detailSubtask.page_screenshot || snapshot.page_screenshot"
-                    :href="(detailSubtask.page_screenshot || snapshot.page_screenshot)!"
+                    v-if="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)"
+                    :href="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)!"
                     target="_blank"
+                    rel="noopener noreferrer"
                   >打开快照</a>
                 </div>
                 <p v-if="snapshotRankNote(snapshot, detailSubtask)" class="realtime-drawer-note">
@@ -573,8 +624,9 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
                   <a
                     v-for="source in detailSubtask.reference_list.slice(0, 8)"
                     :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
-                    :href="source.url"
+                    :href="externalLink(source.url) || undefined"
                     target="_blank"
+                    rel="noopener noreferrer"
                   >{{ source.title || source.site || source.url }}</a>
                 </div>
                 <p v-if="detailSubtask.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
@@ -589,7 +641,12 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
           <span v-if="drawerExposure != null">品牌露出 {{ drawerExposure }}</span>
           <span>情感 {{ sentimentLabelMap[detailSubtask?.sentiment || detailContext?.cell?.sentiment || ''] || '暂无' }}</span>
           <span>状态 {{ monitorStatusLabelMap[detailSubtask?.status || detailContext?.cell?.status || ''] || '—' }}</span>
-          <a v-if="detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot" :href="(detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot)!" target="_blank">打开快照</a>
+          <a
+            v-if="externalLink(detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot)"
+            :href="externalLink(detailSubtask?.page_screenshot || detailContext?.cell?.page_screenshot)!"
+            target="_blank"
+            rel="noopener noreferrer"
+          >打开快照</a>
         </div>
 
         <p v-if="showRankNote" class="realtime-drawer-note">
@@ -604,8 +661,9 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
           <a
             v-for="source in detailSubtask.reference_list.slice(0, 8)"
             :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
-            :href="source.url"
+            :href="externalLink(source.url) || undefined"
             target="_blank"
+            rel="noopener noreferrer"
           >{{ source.title || source.site || source.url }}</a>
         </div>
 

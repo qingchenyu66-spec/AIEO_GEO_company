@@ -232,18 +232,18 @@ def _exec_brand_asset(db: Session, current: CurrentSession, record: OperationApp
 
 def _exec_report_generate(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     body = data.get("body") or data
-    return generate_report(db, body, current)
+    return generate_report(db, body, current, auto_commit=False)
 
 
 def _exec_report_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     report_id = int(data.get("report_id") or record.target_id or 0)
     body = data.get("body") or data
-    return update_report(db, report_id, body, current)
+    return update_report(db, report_id, body, current, auto_commit=False)
 
 
 def _exec_report_publish(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     report_id = int(data.get("report_id") or record.target_id or 0)
-    return publish_report(db, report_id, current)
+    return publish_report(db, report_id, current, auto_commit=False)
 
 
 def _exec_diagnosis_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:

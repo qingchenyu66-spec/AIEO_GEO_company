@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.region_catalog import extract_region_code_from_schedule_key, normalize_region_codes, region_display_name
 from app.models.brand import BrandAsset
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
@@ -138,6 +139,43 @@ def lead_diagnosis_runs_for_tasks(db: Session, task_ids: list[str]) -> dict[str,
     return {row.task_id: row for row in rows if row.task_id}
 
 
+def resolve_task_region_code(
+    task: GeoMonitorTask,
+    *,
+    schedule_run: GeoMonitorScheduleRun | None = None,
+    schedule_key: str | None = None,
+) -> str | None:
+    codes = normalize_region_codes(getattr(task, "region_code_json", None) or [])
+    if codes:
+        return codes[0]
+    key = schedule_key or (schedule_run.schedule_key if schedule_run else None)
+    return extract_region_code_from_schedule_key(key)
+
+
+def _schedule_context_base(
+    *,
+    schedule_key: str | None,
+    schedule_window_key: str | None,
+    schedule_label: str | None,
+    schedule_run_status: str | None,
+    schedule_source: str,
+    keyword_group: str | None,
+    task: GeoMonitorTask,
+    schedule_run: GeoMonitorScheduleRun | None = None,
+) -> dict[str, Any]:
+    region_code = resolve_task_region_code(task, schedule_run=schedule_run, schedule_key=schedule_key)
+    return {
+        "schedule_key": schedule_key,
+        "schedule_window_key": schedule_window_key,
+        "schedule_label": schedule_label,
+        "schedule_run_status": schedule_run_status,
+        "schedule_source": schedule_source,
+        "keyword_group": keyword_group,
+        "region_code": region_code,
+        "region_label": region_display_name(region_code),
+    }
+
+
 def resolve_task_schedule_context(
     task: GeoMonitorTask,
     schedule_run: GeoMonitorScheduleRun | None,
@@ -148,51 +186,56 @@ def resolve_task_schedule_context(
     if schedule_run and schedule_run.schedule_key:
         window_key = extract_schedule_window_key(schedule_run.schedule_key)
         label = format_schedule_window_label(window_key)
-        return {
-            "schedule_key": schedule_run.schedule_key,
-            "schedule_window_key": window_key,
-            "schedule_label": label or window_key,
-            "schedule_run_status": schedule_run.status,
-            "schedule_source": "run",
-            "keyword_group": keyword_group,
-        }
+        return _schedule_context_base(
+            schedule_key=schedule_run.schedule_key,
+            schedule_window_key=window_key,
+            schedule_label=label or window_key,
+            schedule_run_status=schedule_run.status,
+            schedule_source="run",
+            keyword_group=keyword_group,
+            task=task,
+            schedule_run=schedule_run,
+        )
 
     if lead_run and lead_run.schedule_key:
         window_key = extract_schedule_window_key(lead_run.schedule_key) or lead_run.schedule_key
         label = lead_run.schedule_label or format_schedule_window_label(window_key) or window_key
-        return {
-            "schedule_key": lead_run.schedule_key,
-            "schedule_window_key": window_key,
-            "schedule_label": label,
-            "schedule_run_status": lead_run.status,
-            "schedule_source": "lead_diagnosis" if not getattr(task, "tenant_id", None) else "run",
-            "keyword_group": keyword_group,
-        }
+        return _schedule_context_base(
+            schedule_key=lead_run.schedule_key,
+            schedule_window_key=window_key,
+            schedule_label=label,
+            schedule_run_status=lead_run.status,
+            schedule_source="lead_diagnosis" if not getattr(task, "tenant_id", None) else "run",
+            keyword_group=keyword_group,
+            task=task,
+        )
 
     inferred_key, inferred_label = infer_schedule_window_from_datetime(
         task.created_at,
         asset,
     )
     if inferred_key and inferred_label:
-        return {
-            "schedule_key": None,
-            "schedule_window_key": inferred_key,
-            "schedule_label": inferred_label,
-            "schedule_run_status": None,
-            "schedule_source": "inferred",
-            "keyword_group": keyword_group,
-        }
+        return _schedule_context_base(
+            schedule_key=None,
+            schedule_window_key=inferred_key,
+            schedule_label=inferred_label,
+            schedule_run_status=None,
+            schedule_source="inferred",
+            keyword_group=keyword_group,
+            task=task,
+        )
 
     fallback_label = task.created_at.strftime("%Y-%m-%d %H:%M") if task.created_at else None
     fallback_key = task.created_at.strftime("%Y%m%d-%H%M") if task.created_at else task.task_id
-    return {
-        "schedule_key": None,
-        "schedule_window_key": fallback_key,
-        "schedule_label": fallback_label,
-        "schedule_run_status": None,
-        "schedule_source": "created_at",
-        "keyword_group": keyword_group,
-    }
+    return _schedule_context_base(
+        schedule_key=None,
+        schedule_window_key=fallback_key,
+        schedule_label=fallback_label,
+        schedule_run_status=None,
+        schedule_source="created_at",
+        keyword_group=keyword_group,
+        task=task,
+    )
 
 
 def schedule_plan_summary(asset: BrandAsset | None) -> dict[str, Any]:

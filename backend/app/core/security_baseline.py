@@ -27,8 +27,15 @@ def validate_flower_auth(*, strict: bool = False) -> None:
     logger.warning(message)
 
 
+_INSECURE_SECRET_KEYS = frozenset({"change-me", "secret", "dev", "test", ""})
+
+
 def validate_security_baseline() -> None:
     """启动时校验 CORS / 调试开关等安全基线。"""
+    if settings.is_production and settings.secret_key.strip().lower() in _INSECURE_SECRET_KEYS:
+        raise RuntimeError("生产环境必须配置安全的 SECRET_KEY")
+    if settings.is_production and len(settings.secret_key.strip()) < 32:
+        logger.warning("生产环境 SECRET_KEY 长度建议不少于 32 字符")
     if settings.allow_credentials_with_wildcard_cors:
         raise RuntimeError("CORS 不允许 allow_credentials=True 与 origins=* 同时配置")
     if settings.is_production and settings.debug:

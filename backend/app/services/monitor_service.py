@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
 from app.core.platform_order import platform_market_rank, ranking_matrix_row_sort_key, sort_platform_codes, sort_platform_items
+from app.core.region_catalog import normalize_region_codes
 from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
@@ -24,8 +25,10 @@ from app.services.brand_service import (
     brand_exposure_terms,
     collect_exposure_term_options,
     get_brand_asset,
+    is_generic_keyword_group_name,
     keyword_group_display_label,
     keyword_group_monitor_keywords,
+    keyword_group_name,
     keyword_group_primary_keyword,
     keyword_group_to_dict,
     list_competitors,
@@ -493,7 +496,10 @@ def _build_submit_payload(
     if final_competitors:
         request_body["competitors"] = final_competitors
     if payload.region_code:
-        request_body["regionCode"] = payload.region_code
+        region_codes = normalize_region_codes(payload.region_code)
+        if region_codes:
+            # ponytail: 模力 batch 接口仅接受单个 regionCode 字符串
+            request_body["regionCode"] = region_codes[0]
     callback_url = str(payload.callback_url) if payload.callback_url else settings.molizhishu_callback_url.strip()
     if callback_url:
         request_body["callbackUrl"] = callback_url
@@ -578,6 +584,7 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
     if existing is not None:
         raise ValueError(f"任务已存在：{task_id}")
+    region_codes = normalize_region_codes(payload.region_code or []) or None
     task = GeoMonitorTask(
         task_id=task_id,
         tenant_id=tenant_id,
@@ -589,7 +596,7 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
         failed_items=data.get("failedItems") or 0,
         prompts_json=payload.prompts,
         platforms_json=request_body["platforms"],
-        region_code_json=payload.region_code,
+        region_code_json=region_codes,
         callback_url=data.get("callbackUrl"),
         poll_url=data.get("pollUrl"),
         raw_request_json=request_body,
@@ -632,6 +639,7 @@ def submit_standalone_monitor_task(
     existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
     if existing is not None:
         raise ValueError(f"任务已存在：{task_id}")
+    region_codes = normalize_region_codes(payload.region_code or []) or None
     task = GeoMonitorTask(
         task_id=task_id,
         tenant_id=tenant_id,
@@ -643,7 +651,7 @@ def submit_standalone_monitor_task(
         failed_items=data.get("failedItems") or 0,
         prompts_json=payload.prompts,
         platforms_json=request_body["platforms"],
-        region_code_json=payload.region_code,
+        region_code_json=region_codes,
         callback_url=data.get("callbackUrl"),
         poll_url=data.get("pollUrl"),
         raw_request_json=request_body,
@@ -1383,11 +1391,12 @@ def _resolve_prompt_keyword_group(
     prompt: str,
     groups: list[BrandKeywordGroup],
 ) -> BrandKeywordGroup | None:
+    best: tuple[int, BrandKeywordGroup] | None = None
     for group in groups:
-        keywords = keyword_group_monitor_keywords(group)
-        if _prompt_belongs_to_group(prompt, keywords, group.exposure_terms_json or []):
-            return group
-    return None
+        score = _prompt_group_match_score(prompt, group)
+        if score >= 0 and (best is None or score > best[0]):
+            best = (score, group)
+    return best[1] if best else None
 
 
 def _prompt_group_name(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
@@ -1395,6 +1404,173 @@ def _prompt_group_name(prompt: str, groups: list[BrandKeywordGroup]) -> str | No
     if group is None:
         return None
     return keyword_group_display_label(group) or keyword_group_primary_keyword(group) or None
+
+
+def _prompt_monitor_keyword(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
+    group = _resolve_prompt_keyword_group(prompt, groups)
+    if group is None:
+        return None
+    return _matrix_group_monitor_label(group) or None
+
+
+def _matrix_group_monitor_label(group: BrandKeywordGroup) -> str:
+    """矩阵图 Y 轴标签：优先用词组独立配置的 monitor_keyword，避免共用监测问题文案。"""
+    explicit = str(group.monitor_keyword or "").strip()
+    if explicit:
+        return explicit
+    name = keyword_group_name(group)
+    if not is_generic_keyword_group_name(name):
+        return name
+    keywords = keyword_group_monitor_keywords(group)
+    return keywords[0] if keywords else name
+
+
+def _prompt_group_match_score(prompt: str, group: BrandKeywordGroup) -> int:
+    text = (prompt or "").strip()
+    if not text:
+        return -1
+    explicit = str(group.monitor_keyword or "").strip()
+    if explicit:
+        if text == explicit:
+            return 2000 + len(explicit)
+        if explicit in text:
+            return 1500 + len(explicit)
+        if text in explicit:
+            return 1400 + len(text)
+    best = -1
+    for keyword in keyword_group_monitor_keywords(group):
+        token = str(keyword or "").strip()
+        if not token:
+            continue
+        if text == token:
+            return 1200 + len(token)
+        if token in text:
+            best = max(best, 800 + len(token))
+        elif text in token:
+            best = max(best, 700 + len(text))
+    return best
+
+
+def _group_row_labels(group: BrandKeywordGroup) -> set[str]:
+    labels: set[str] = set()
+    for text in (
+        _matrix_group_monitor_label(group),
+        keyword_group_display_label(group),
+        keyword_group_name(group),
+        str(group.monitor_keyword or "").strip(),
+    ):
+        if text:
+            labels.add(text)
+    return labels
+
+
+def _prompt_key_for_monitor_keyword(
+    group: BrandKeywordGroup,
+    keyword: str,
+    rows: list[dict[str, Any]],
+    prompt_set: dict[str, str | None],
+) -> str:
+    text = str(keyword or "").strip()
+    if not text:
+        return ""
+    if text in prompt_set:
+        return text
+
+    labels = _group_row_labels(group)
+    matched_prompts: list[str] = []
+    for row in rows:
+        row_label = str(row.get("keyword_group") or "").strip()
+        if labels and row_label not in labels:
+            continue
+        cells = row.get("cells") or {}
+        if text in cells:
+            return text
+        for prompt in cells:
+            prompt_text = str(prompt or "").strip()
+            if not prompt_text:
+                continue
+            if text == prompt_text or text in prompt_text or prompt_text in text:
+                matched_prompts.append(prompt_text)
+    if matched_prompts:
+        return sorted(
+            matched_prompts,
+            key=lambda prompt: _prompt_group_match_score(prompt, group),
+            reverse=True,
+        )[0]
+
+    ranked_candidates: list[tuple[int, str]] = []
+    for candidate in prompt_set:
+        score = _prompt_group_match_score(candidate, group)
+        if score >= 0 and (text == candidate or text in candidate or candidate in text):
+            ranked_candidates.append((score, candidate))
+    if ranked_candidates:
+        return max(ranked_candidates, key=lambda item: (item[0], len(item[1])))[1]
+    return text
+
+
+def _build_matrix_columns(
+    keyword_groups: list[BrandKeywordGroup],
+    prompt_set: dict[str, str | None],
+    rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """按监测词建列：每个词组的每个 monitor keyword 各占一列。"""
+    matrix_rows = rows or []
+    eligible = sorted(
+        [
+            group for group in keyword_groups
+            if group.status
+            and not group.deleted
+            and (str(group.monitor_keyword or "").strip() or keyword_group_monitor_keywords(group))
+        ],
+        key=lambda item: int(item.sort_order or 0),
+    )
+
+    columns: list[dict[str, Any]] = []
+    seen_prompts: set[str] = set()
+    for group in eligible:
+        keywords = keyword_group_monitor_keywords(group)
+        if not keywords:
+            explicit = str(group.monitor_keyword or "").strip()
+            keywords = [explicit] if explicit else []
+        for keyword in keywords:
+            text = str(keyword or "").strip()
+            if not text:
+                continue
+            prompt_key = _prompt_key_for_monitor_keyword(group, text, matrix_rows, prompt_set)
+            if not prompt_key or prompt_key in seen_prompts:
+                continue
+            seen_prompts.add(prompt_key)
+            columns.append({
+                "prompt": prompt_key,
+                "group_name": keyword_group_display_label(group),
+                "monitor_keyword": text,
+                "group_id": group.id,
+            })
+
+    if columns:
+        return columns
+
+    visible_prompts = sorted(
+        prompt_set.keys(),
+        key=lambda text: (prompt_set[text] or "zzz", text),
+    )
+    return [
+        {
+            "prompt": prompt,
+            "group_name": prompt_set.get(prompt) or _prompt_group_name(prompt, keyword_groups),
+            "monitor_keyword": (
+                _matrix_group_monitor_label(matched)
+                if (matched := _resolve_prompt_keyword_group(prompt, keyword_groups))
+                else None
+            ),
+            "group_id": (
+                matched.id
+                if (matched := _resolve_prompt_keyword_group(prompt, keyword_groups))
+                else None
+            ),
+        }
+        for prompt in visible_prompts
+    ]
 
 
 def _keyword_group_from_schedule_key(
@@ -1851,6 +2027,11 @@ def _resolve_brand_rank(
     if prompt_monitor_intent(subtask.prompt) != "ranking":
         return None, has_brand_in_text
 
+    raw = getattr(subtask, "raw_result_json", None)
+    raw = raw if isinstance(raw, dict) else {}
+    if raw.get("source") == "manual_snapshot" and subtask.mention_position is not None:
+        return subtask.mention_position, True
+
     monitor_keyword = str(monitor_keywords or "").strip()
     is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
 
@@ -2031,7 +2212,15 @@ def ranking_matrix(
         if not matrix_platform_visible(item.platform, purchased_platforms):
             continue
         day_key = detect_dt.date().isoformat()
-        keyword_group = schedule_ctx.get("keyword_group")
+        keyword_group = (
+            _resolve_display_keyword_group(
+                item.task,
+                schedule_runs_map.get(task_id),
+                keyword_group_rows,
+            )
+            or _prompt_group_name(prompt, keyword_group_rows)
+            or schedule_ctx.get("keyword_group")
+        )
         prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
         row_key = _matrix_row_key(
             day_key,
@@ -2102,30 +2291,7 @@ def ranking_matrix(
             "cells": cells,
         })
 
-    configured_prompts: list[str] = []
-    configured_seen: set[str] = set()
-    for group in keyword_groups:
-        for prompt in keyword_group_monitor_keywords(group):
-            text = str(prompt or "").strip()
-            if text and text not in configured_seen:
-                configured_seen.add(text)
-                configured_prompts.append(text)
-
-    if configured_prompts:
-        visible_prompts = list(configured_prompts)
-    else:
-        visible_prompts = sorted(
-            prompt_set.keys(),
-            key=lambda text: (prompt_set[text] or "zzz", text),
-        )
-
-    columns = [
-        {
-            "prompt": prompt,
-            "group_name": prompt_set.get(prompt) or _prompt_group_name(prompt, keyword_group_rows),
-        }
-        for prompt in visible_prompts
-    ]
+    columns = _build_matrix_columns(keyword_group_rows, prompt_set, rows)
 
     group_map: dict[str, list[str]] = {}
     for column in columns:

@@ -27,6 +27,7 @@ from app.services.molizhishu_platforms import (
     refresh_platform_catalog,
 )
 from app.services.geo_platform_seed_service import sync_geo_platforms_from_catalog
+from app.services.menu_permission_service import require_platform_menu_permission
 from app.services.platform_matrix_service import build_platform_matrix
 
 router = APIRouter(prefix="/platforms")
@@ -74,6 +75,16 @@ def sync_platform_catalog(
 ) -> ApiResponse[dict]:
     """从模力官方目录同步 geo_platform 表（幂等 upsert）。"""
     require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.settings",
+            "can_update",
+            detail="当前账号无权同步平台目录",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     result = sync_geo_platforms_from_catalog(db, force_refresh=force_refresh)
     return ApiResponse(data=result)
 
@@ -94,20 +105,40 @@ def platform_matrix(
 @router.get("/molizhishu-balance", response_model=ApiResponse[dict])
 def molizhishu_balance(
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """查询模力指数账户当前余额。"""
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
+    require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.settings",
+            "can_export",
+            detail="当前账号无权查看模力指数余额",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return ApiResponse(data=fetch_molizhishu_balance())
 
 
 @router.get("/deepseek-balance", response_model=ApiResponse[dict])
 def deepseek_balance(
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """查询 DeepSeek API 账户当前余额。"""
-    if current.identity.identity_type != "PLATFORM":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
+    require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.settings",
+            "can_export",
+            detail="当前账号无权查看 DeepSeek 余额",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return ApiResponse(data=fetch_deepseek_balance())
 
 
@@ -115,11 +146,22 @@ def deepseek_balance(
 def supported_platforms(
     refresh: bool = False,
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """从模力指数官方文档同步的支持平台目录。"""
     if current.identity.identity_type != "PLATFORM":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端可查看")
     if refresh:
+        try:
+            require_platform_menu_permission(
+                db,
+                current,
+                "platform.settings",
+                "can_update",
+                detail="当前账号无权刷新平台目录",
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         refresh_platform_catalog(force=True)
     catalog = get_supported_platform_catalog()
     return ApiResponse(data={
@@ -137,6 +179,16 @@ def update_platform(
 ) -> ApiResponse[dict]:
     """更新平台配置。"""
     require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.settings",
+            "can_update",
+            detail="当前账号无权修改平台配置",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     platform = db.scalar(
         select(GeoPlatform).where(GeoPlatform.id == platform_id, GeoPlatform.deleted.is_(False))
     )
@@ -168,6 +220,16 @@ def list_thresholds(
 ) -> ApiResponse[list[dict]]:
     """预警阈值配置列表。scope=business|technical|all。"""
     require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.alerts",
+            "can_export",
+            detail="当前账号无权查看预警阈值",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     stmt = select(AlertThreshold).where(AlertThreshold.deleted.is_(False))
     if tenant_id is not None:
         stmt = stmt.where(AlertThreshold.tenant_id == tenant_id)
@@ -199,9 +261,20 @@ def list_thresholds(
 @alert_router.get("/celery-monitor", response_model=ApiResponse[dict])
 def alerts_celery_monitor(
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """中文版 Celery 队列与 Worker 监控。"""
     require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.settings",
+            "can_export",
+            detail="当前账号无权查看队列监控",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     try:
         data = get_or_build_json_cache(
             celery_monitor_cache_key(),
@@ -226,6 +299,16 @@ def update_threshold(
 ) -> ApiResponse[dict]:
     """更新预警阈值。"""
     require_platform(current)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.alerts",
+            "can_update",
+            detail="当前账号无权修改预警阈值",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     threshold = db.scalar(
         select(AlertThreshold).where(
             AlertThreshold.id == threshold_id, AlertThreshold.deleted.is_(False)

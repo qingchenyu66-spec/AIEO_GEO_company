@@ -142,14 +142,30 @@
 
 .report-list-panel,
 .report-preview-panel {
+  display: flex;
+  flex-direction: column;
   border: 1px solid #d9e8f6;
   border-radius: 18px;
   background: #fff;
   overflow: hidden;
+  position: sticky;
+  top: 12px;
+  max-height: calc(100dvh - 96px);
+}
+
+.report-list-panel {
+  align-self: start;
+}
+
+.report-preview-panel {
+  width: 100%;
+  min-width: 0;
+  align-self: start;
 }
 
 .report-list-head,
 .report-preview-head {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -157,6 +173,26 @@
   padding: 16px 18px;
   border-bottom: 1px solid #e8f1fa;
   background: linear-gradient(180deg, #fbfdff, #f5faff);
+}
+
+.report-list-body {
+  display: grid;
+  gap: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.report-preview-panel > .report-preview-body,
+.report-preview-panel > .report-edit-body,
+.report-preview-panel > .report-empty-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .report-list-head h3,
@@ -171,13 +207,6 @@
   margin: 4px 0 0;
   color: #7a93b0;
   font-size: 12px;
-}
-
-.report-list-body {
-  display: grid;
-  gap: 0;
-  max-height: calc(100vh - 320px);
-  overflow: auto;
 }
 
 .report-card {
@@ -272,6 +301,7 @@
   display: grid;
   gap: 16px;
   padding: 18px;
+  align-content: start;
 }
 
 .report-preview-title {
@@ -502,9 +532,10 @@
   display: grid;
   place-items: center;
   gap: 10px;
-  min-height: 280px;
+  min-height: 240px;
   padding: 32px;
   text-align: center;
+  align-content: center;
 }
 
 .report-empty-panel h3 {
@@ -529,7 +560,17 @@
     grid-template-columns: 1fr;
   }
 
-  .report-list-body {
+  .report-list-panel,
+  .report-preview-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .report-list-body,
+  .report-preview-panel > .report-preview-body,
+  .report-preview-panel > .report-edit-body,
+  .report-preview-panel > .report-empty-panel {
+    overflow: visible;
     max-height: none;
   }
 

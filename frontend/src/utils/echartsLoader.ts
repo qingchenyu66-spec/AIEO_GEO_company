@@ -8,7 +8,7 @@ export type EchartsRuntime = {
   graphic?: typeof import('echarts/core').graphic
 }
 
-type LoaderMode = 'dashboard' | 'diagnosis' | 'portal' | 'wordcloud'
+type LoaderMode = 'dashboard' | 'diagnosis' | 'portal' | 'wordcloud' | 'matrix'
 
 const runtimes: Partial<Record<LoaderMode, EchartsRuntime>> = {}
 const loadPromises: Partial<Record<LoaderMode, Promise<EchartsRuntime>>> = {}
@@ -71,6 +71,28 @@ async function loadPortalRuntime(): Promise<EchartsRuntime> {
   }
 }
 
+async function loadMatrixChartsRuntime(): Promise<EchartsRuntime> {
+  const [core, charts, components, renderers] = await Promise.all([
+    import('echarts/core'),
+    import('echarts/charts'),
+    import('echarts/components'),
+    import('echarts/renderers'),
+  ])
+  core.use([
+    charts.BarChart,
+    charts.HeatmapChart,
+    components.GridComponent,
+    components.TooltipComponent,
+    components.VisualMapComponent,
+    renderers.CanvasRenderer,
+  ])
+  return {
+    init: core.init,
+    getInstanceByDom: core.getInstanceByDom,
+    graphic: core.graphic,
+  }
+}
+
 async function loadWordCloudRuntime(): Promise<EchartsRuntime> {
   const [core, renderers] = await Promise.all([
     import('echarts/core'),
@@ -86,6 +108,7 @@ const loaders: Record<LoaderMode, () => Promise<EchartsRuntime>> = {
   diagnosis: loadDiagnosisRuntime,
   portal: loadPortalRuntime,
   wordcloud: loadWordCloudRuntime,
+  matrix: loadMatrixChartsRuntime,
 }
 
 export async function loadEchartsRuntime(mode: LoaderMode = 'dashboard'): Promise<EchartsRuntime> {

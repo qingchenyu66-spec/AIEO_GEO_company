@@ -10,6 +10,7 @@ import {
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useSourceAnalysis, type SourceDatePreset } from '../composables/useSourceAnalysis'
+import { externalLink } from '../portalUtils'
 import { useAuthStore } from '../../../stores/auth'
 import '../../../styles/source-analysis.css'
 
@@ -236,7 +237,7 @@ const categoryOptions = [
             :class="{ 'is-top': index === 0 }"
           >
             <span class="source-top-rank">{{ index + 1 }}</span>
-            <a :href="source.url" target="_blank" rel="noopener noreferrer" class="source-top-title-link">
+            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-top-title-link">
               {{ source.title || domainFromUrl(source.url) }}
             </a>
             <small>{{ domainFromUrl(source.url) }}</small>
@@ -265,7 +266,7 @@ const categoryOptions = [
         <div v-for="(source, index) in filteredSources" :key="source.url" class="source-table-row">
           <span>{{ index + 1 }}</span>
           <div class="source-table-main">
-            <a :href="source.url" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
+            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
               {{ source.title || domainFromUrl(source.url) }}
             </a>
             <small>{{ domainFromUrl(source.url) }}</small>

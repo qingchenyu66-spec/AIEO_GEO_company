@@ -5,6 +5,7 @@ from app.services.report_chart_service import (
     build_mention_rate_bar_chart,
     build_platform_mention_chart,
     build_rank_trend_chart,
+    build_sentiment_pie_chart,
 )
 
 
@@ -49,3 +50,9 @@ def test_build_mention_rate_bar_chart_returns_png() -> None:
     )
     assert png is not None
     assert len(png) > 1000
+
+
+def test_build_sentiment_pie_chart_skips_zero_unknown() -> None:
+    png = build_sentiment_pie_chart({"正面": 100, "中性": 30, "负面": 10, "未知": 0})
+    assert png is not None
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"

@@ -171,7 +171,13 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session) -> None:
     db_session.commit()
 
     current = SimpleNamespace(
-        identity=SimpleNamespace(identity_type="PLATFORM", tenant_id=None, id=1, identity_name="运营测试"),
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
         user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
     )
     result = apply_snapshot_backfill(
@@ -359,6 +365,62 @@ def test_list_snapshot_backfill_items_uses_schedule_run_label(db_session) -> Non
     assert len(rows) == 1
     assert rows[0]["schedule_label"] == "2026-07-01 09:30"
     assert rows[0]["source"] == "tenant_monitor"
+
+
+def test_list_snapshot_backfill_items_includes_region_from_schedule_key(db_session) -> None:
+    tenant = Tenant(name="企业E", code="tenant-e", deleted=False)
+    db_session.add(tenant)
+    db_session.flush()
+
+    task = GeoMonitorTask(
+        tenant_id=tenant.id,
+        task_id="task-region",
+        monitor_keywords="品牌E",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["郑州板材门店推荐"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+        created_at=datetime(2026, 7, 8, 9, 35, 0),
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-region",
+        task_id="task-region",
+        platform="doubao",
+        mode="standard",
+        prompt="郑州板材门店推荐",
+        status="completed",
+        answer_content="回答E",
+        raw_result_json={},
+        updated_at=datetime(2026, 7, 8, 9, 40, 0),
+    )
+    db_session.add(
+        GeoMonitorScheduleRun(
+            tenant_id=tenant.id,
+            task_id="task-region",
+            schedule_key="20260708-0930-kw24-rg330000",
+            status="submitted",
+        )
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    rows = list_snapshot_backfill_items(
+        db_session,
+        tenant_id=tenant.id,
+        detect_date=datetime(2026, 7, 8).date(),
+        platform="doubao",
+        limit=10,
+    )
+    assert len(rows) == 1
+    assert rows[0]["region_code"] == "330000"
+    assert rows[0]["region_label"] == "浙江"
+    assert rows[0]["schedule_key"] == "20260708-0930-kw24-rg330000"
+    assert rows[0]["schedule_window_key"] == "20260708-0930"
 
 
 def test_list_snapshot_backfill_items_filters_by_keyword(db_session) -> None:

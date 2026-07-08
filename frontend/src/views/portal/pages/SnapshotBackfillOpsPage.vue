@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { RefreshCw, Upload } from '@lucide/vue'
 import '../../../styles/snapshot-backfill.css'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
@@ -16,6 +17,7 @@ import {
   getBrandAsset,
   formatKeywordGroupDetailHint,
   keywordGroupDisplayName,
+  keywordGroupMonitorKeywords,
   keywordGroupSelectValue,
   type BrandKeywordGroup,
 } from '../../../services/brand'
@@ -36,6 +38,7 @@ const canViewBackfill = computed(() => Boolean(backfillMenu.value?.can_export))
 const canSubmitBackfill = computed(() => Boolean(backfillMenu.value?.can_update))
 
 const PAGE_SIZE = 40
+const FILTER_DEBOUNCE_MS = 350
 
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -67,7 +70,42 @@ const platformFilter = ref('')
 const keywordGroupFilter = ref('')
 const keywordFilter = ref('')
 const keywordGroupOptions = ref<BrandKeywordGroup[]>([])
+const tenantMonitoredPlatforms = ref<string[]>([])
 const pendingOnly = ref(false)
+
+let listRequestSeq = 0
+let listAbortController: AbortController | null = null
+let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+const platformFilterOptions = computed(() => {
+  if (tenantFilter.value === '') return supportedPlatforms
+  const codes = new Set<string>()
+  for (const group of keywordGroupOptions.value) {
+    for (const code of group.platforms || []) {
+      if (code) codes.add(code)
+    }
+  }
+  if (!codes.size) {
+    for (const code of tenantMonitoredPlatforms.value) {
+      if (code) codes.add(code)
+    }
+  }
+  if (!codes.size) return supportedPlatforms
+  return supportedPlatforms.filter(platform => codes.has(platform.code))
+})
+
+const monitorKeywordOptions = computed(() => {
+  const seen = new Set<string>()
+  const options: string[] = []
+  for (const group of keywordGroupOptions.value) {
+    for (const keyword of keywordGroupMonitorKeywords(group)) {
+      if (seen.has(keyword)) continue
+      seen.add(keyword)
+      options.push(keyword)
+    }
+  }
+  return options.sort((left, right) => left.localeCompare(right, 'zh-CN'))
+})
 
 const pendingCount = computed(() => listSummary.value.pending)
 const overwriteCount = computed(() => listSummary.value.overwrite)
@@ -132,17 +170,21 @@ const keywordGroupSummary = computed(() => {
 
 async function loadTenantKeywordGroups() {
   keywordGroupFilter.value = ''
+  keywordFilter.value = ''
+  tenantMonitoredPlatforms.value = []
   if (tenantFilter.value === '') {
     keywordGroupOptions.value = []
     return
   }
   try {
     const asset = await getBrandAsset(Number(tenantFilter.value))
+    tenantMonitoredPlatforms.value = [...(asset.asset?.monitored_platforms || [])]
     keywordGroupOptions.value = (asset.asset?.keyword_groups || []).filter(
       (group: BrandKeywordGroup) => group.status && (group.monitor_keyword || (group.monitor_keywords || []).length),
     )
   } catch {
     keywordGroupOptions.value = []
+    tenantMonitoredPlatforms.value = []
   }
 }
 
@@ -161,7 +203,12 @@ function buildListQuery(offset = 0) {
 }
 
 async function fetchPage(offset: number, append: boolean) {
-  const result = await getPendingSnapshotBackfills(buildListQuery(offset))
+  listAbortController?.abort()
+  const controller = new AbortController()
+  listAbortController = controller
+  const seq = ++listRequestSeq
+  const result = await getPendingSnapshotBackfills(buildListQuery(offset), { signal: controller.signal })
+  if (seq !== listRequestSeq) return
   if (append) {
     const existing = new Set(items.value.map(item => item.subtask_id))
     const merged = [...items.value]
@@ -183,12 +230,23 @@ async function loadItems() {
   try {
     await fetchPage(0, false)
   } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    if ((error as { code?: string })?.code === 'ERR_CANCELED') return
     notifyOperationError(error, '加载补录列表失败')
   } finally {
     loading.value = false
     await nextTick()
     setupLoadMoreObserver()
   }
+}
+
+function scheduleLoadItems() {
+  if (!canViewBackfill.value) return
+  if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+  filterDebounceTimer = setTimeout(() => {
+    filterDebounceTimer = null
+    void loadItems()
+  }, FILTER_DEBOUNCE_MS)
 }
 
 async function loadMore() {
@@ -289,16 +347,50 @@ async function openBackfill(item: SnapshotBackfillPendingItem) {
   }
 }
 
-async function handleSuccess() {
-  const activeId = detailItem.value?.subtask_id
+function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendingItem {
+  return {
+    subtask_id: subtask.subtask_id,
+    task_id: subtask.task_id || '',
+    tenant_id: subtask.tenant_id ?? null,
+    tenant_name: subtask.tenant_name ?? null,
+    platform: subtask.platform,
+    prompt: subtask.prompt,
+    error_message: subtask.error_message ?? null,
+    source: (subtask.source as SnapshotBackfillPendingItem['source']) || 'tenant_monitor',
+    monitor_keywords: subtask.monitor_keywords ?? null,
+    task_status: subtask.status ?? null,
+    updated_at: subtask.updated_at ?? null,
+    mention_position: subtask.mention_position ?? null,
+    has_answer: Boolean(subtask.answer_content),
+    needs_backfill: subtask.needs_backfill ?? false,
+    status: subtask.status ?? null,
+  }
+}
+
+async function handleSuccess(updatedSubtask?: MonitorSubtask) {
+  const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id
+
   await loadItems()
   emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
-  if (activeId) {
-    const refreshed = items.value.find(row => row.subtask_id === activeId)
-    if (refreshed) {
-      await openDetail(refreshed)
+
+  if (detailVisible.value && activeId) {
+    if (updatedSubtask?.subtask_id === activeId) {
+      detailSubtask.value = updatedSubtask
+      const baseItem = detailItem.value
+        || items.value.find(row => row.subtask_id === activeId)
+        || backfillItemFromSubtask(updatedSubtask)
+      detailItem.value = mergeSnapshotBackfillItem(baseItem, updatedSubtask)
+    } else {
+      const refreshed = items.value.find(row => row.subtask_id === activeId)
+      if (refreshed) {
+        await openDetail(refreshed)
+      } else {
+        await openDetailById(activeId, detailItem.value)
+      }
     }
   }
+
+  ElMessage.success('快照补录已保存，列表与详情已刷新')
   clearDeepLink()
 }
 
@@ -317,6 +409,7 @@ function resetFilters() {
   keywordGroupFilter.value = ''
   keywordFilter.value = ''
   keywordGroupOptions.value = []
+  tenantMonitoredPlatforms.value = []
   pendingOnly.value = false
   void loadItems()
 }
@@ -350,6 +443,8 @@ onMounted(async () => {
 onUnmounted(() => {
   loadMoreObserver?.disconnect()
   loadMoreObserver = null
+  if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+  listAbortController?.abort()
 })
 
 watch(loadMoreSentinel, () => {
@@ -371,9 +466,15 @@ watch(tenantFilter, () => {
   void loadTenantKeywordGroups()
 })
 
+watch(platformFilterOptions, (options) => {
+  if (!platformFilter.value) return
+  if (!options.some(platform => platform.code === platformFilter.value)) {
+    platformFilter.value = ''
+  }
+})
+
 watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter, pendingOnly], () => {
-  if (!canViewBackfill.value) return
-  void loadItems()
+  scheduleLoadItems()
 })
 </script>
 
@@ -422,7 +523,7 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
         </select>
         <select v-model="platformFilter" title="平台">
           <option value="">全部平台</option>
-          <option v-for="platform in supportedPlatforms" :key="platform.code" :value="platform.code">
+          <option v-for="platform in platformFilterOptions" :key="platform.code" :value="platform.code">
             {{ platform.name }}
           </option>
         </select>
@@ -442,13 +543,17 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
             {{ keywordGroupDisplayName(group, index) }}
           </option>
         </select>
-        <input
+        <select
           v-model="keywordFilter"
-          type="text"
           class="snapshot-backfill-keyword-input"
-          placeholder="监测问题搜索"
-          autocomplete="off"
+          :disabled="!monitorKeywordOptions.length"
+          :title="tenantFilter ? '监测词' : '请先选择企业'"
         >
+          <option value="">{{ tenantFilter ? '全部监测词' : '先选企业' }}</option>
+          <option v-for="keyword in monitorKeywordOptions" :key="keyword" :value="keyword">
+            {{ keyword }}
+          </option>
+        </select>
         <label class="snapshot-backfill-toolbar-check">
           <input v-model="pendingOnly" type="checkbox">
           仅待补录
@@ -473,7 +578,7 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
         {{ platformLabelMap[platformFilter] || platformFilter }}
       </span>
       <span v-if="keywordGroupSummary" class="snapshot-backfill-chip">词组 {{ keywordGroupSummary }}</span>
-      <span v-if="keywordFilter.trim()" class="snapshot-backfill-chip">关键词 {{ keywordFilter.trim() }}</span>
+      <span v-if="keywordFilter" class="snapshot-backfill-chip">监测词 {{ keywordFilter }}</span>
       <small>通知铃铛可直达对应子任务</small>
     </div>
 
@@ -505,6 +610,10 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
             <div class="snapshot-backfill-metric">
               <dt>词组</dt>
               <dd>{{ item.keyword_group || item.monitor_keywords || '—' }}</dd>
+            </div>
+            <div v-if="item.region_label && item.region_label !== '全部区域'" class="snapshot-backfill-metric">
+              <dt>地区</dt>
+              <dd>{{ item.region_label }}</dd>
             </div>
             <div class="snapshot-backfill-metric" :class="rankMetricClass(item)">
               <dt>排名</dt>

@@ -19,6 +19,16 @@ import { platformLabelMap } from '../portalMaps'
 import { formatDateTime } from '../portalUtils'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
+export function formatLeadCreator(
+  creator?: { display_name?: string | null; username?: string | null } | null,
+) {
+  if (!creator?.display_name) return '—'
+  const name = creator.display_name.trim()
+  const username = (creator.username || '').trim()
+  if (username && username !== name) return `${name}（${username}）`
+  return name
+}
+
 export const PROMPT_TEMPLATES = [
   { label: '产品推荐', value: '例如：XXX有哪些产品值得推荐？' },
   { label: '排名查询', value: '例如：XXX在同类品牌里排名怎么样？' },
@@ -32,9 +42,12 @@ export const SCHEDULE_DAYS = 3
 export const SCHEDULE_TOTAL = SCHEDULE_DAYS * SCHEDULE_SLOTS.length
 
 function addDays(isoDate: string, days: number): string {
-  const date = new Date(`${isoDate}T00:00:00`)
-  date.setDate(date.getDate() + days)
-  return date.toISOString().slice(0, 10)
+  const [year, month, day] = isoDate.split('-').map(part => Number.parseInt(part, 10))
+  const date = new Date(year, month - 1, day + days)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 export const RUN_STATUS_LABELS: Record<string, string> = {
@@ -62,7 +75,9 @@ export function useLeadDiagnosis() {
   const showCreatePanel = ref(false)
   const createStep = ref(1)
   const detailTab = ref<DetailTab>('progress')
+  const submittingSlotKey = ref<string | null>(null)
   let pollTimer: ReturnType<typeof setInterval> | null = null
+  let detailSeq = 0
 
   const createForm = ref({
     brand_name: '',
@@ -144,9 +159,25 @@ export function useLeadDiagnosis() {
   const scheduleTimeline = computed(() => {
     const item = detail.value
     if (!item) return []
+    const runMap = new Map((item.runs || []).map(run => [run.schedule_key, run]))
+
+    if (item.schedule_plan?.length) {
+      const dayOrder = [...new Set(item.schedule_plan.map(entry => entry.day))]
+      const dayIndexMap = new Map(dayOrder.map((day, index) => [day, index + 1]))
+      return item.schedule_plan.map((entry, index) => ({
+        index: index + 1,
+        day: entry.day,
+        dayOffset: dayIndexMap.get(entry.day) ?? 1,
+        slot: entry.slot,
+        schedule_key: entry.schedule_key,
+        label: entry.schedule_label,
+        run: runMap.get(entry.schedule_key),
+        state: runMap.get(entry.schedule_key)?.status || 'waiting',
+      }))
+    }
+
     const slots = item.schedule_times?.length ? item.schedule_times : SCHEDULE_SLOTS
     const days = item.schedule_days ?? SCHEDULE_DAYS
-    const runMap = new Map((item.runs || []).map(run => [run.schedule_key, run]))
     const entries: ScheduleTimelineItem[] = []
     let index = 0
     for (let dayOffset = 0; dayOffset < days; dayOffset += 1) {
@@ -170,6 +201,18 @@ export function useLeadDiagnosis() {
       }
     }
     return entries
+  })
+
+  const schedulePlanSummary = computed(() => {
+    const item = detail.value
+    if (!item) return ''
+    const calendarDays = item.schedule_calendar_days ?? item.schedule_days ?? SCHEDULE_DAYS
+    const total = item.schedule_total_count ?? SCHEDULE_TOTAL
+    const endDate = item.plan_end_date
+    if (endDate && endDate !== item.diagnosis_date) {
+      return `共 ${total} 次抓取，跨 ${calendarDays} 个自然日（${item.diagnosis_date} 至 ${endDate}）；创建当日已过的时段自动跳过并顺延。`
+    }
+    return `连续 ${calendarDays} 天、每天三个时段各抓一轮，九次全部完成后自动汇总结论。`
   })
 
   const progressPercent = computed(() => {
@@ -201,8 +244,11 @@ export function useLeadDiagnosis() {
   }
 
   async function refreshSilently(id: number) {
+    if (selectedId.value !== id) return
     try {
-      detail.value = await refreshLeadDiagnosis(id)
+      const latest = await refreshLeadDiagnosis(id)
+      if (selectedId.value !== id) return
+      detail.value = latest
       await loadRecords({ silent: true })
       if (detail.value.status === 'ready' || detail.value.status === 'failed') stopPolling()
     } catch {
@@ -226,17 +272,21 @@ export function useLeadDiagnosis() {
   }
 
   async function selectRecord(id: number) {
+    const seq = ++detailSeq
     selectedId.value = id
     detailTab.value = 'progress'
     detailLoading.value = true
     try {
-      detail.value = await getLeadDiagnosisDetail(id)
+      const latest = await getLeadDiagnosisDetail(id)
+      if (seq !== detailSeq || selectedId.value !== id) return
+      detail.value = latest
       if (detail.value.status === 'ready') detailTab.value = 'report'
       startPollingIfNeeded()
     } catch (error: unknown) {
+      if (seq !== detailSeq) return
       notifyOperationError(error, '加载诊断详情失败')
     } finally {
-      detailLoading.value = false
+      if (seq === detailSeq) detailLoading.value = false
     }
   }
 
@@ -331,11 +381,32 @@ export function useLeadDiagnosis() {
   async function handleForceRun() {
     if (!selectedId.value || !canCreate.value) return
     try {
-      await submitLeadDiagnosisRun(selectedId.value, true)
+      await submitLeadDiagnosisRun(selectedId.value, { force: true })
       ElMessage.success('已提交抓取任务')
       await handleRefresh()
     } catch (error: unknown) {
       notifyOperationError(error, '提交抓取失败')
+    }
+  }
+
+  function canRunScheduleSlot(state: string) {
+    if (state === 'completed' || state === 'skipped') return false
+    if (state === 'submitted' || state === 'pending') return false
+    return true
+  }
+
+  async function handleRunSlot(scheduleKey: string, slotLabel: string) {
+    if (!selectedId.value || !canCreate.value) return
+    if (submittingSlotKey.value) return
+    submittingSlotKey.value = scheduleKey
+    try {
+      await submitLeadDiagnosisRun(selectedId.value, { force: true, scheduleKey })
+      ElMessage.success(`已提交：${slotLabel}`)
+      await handleRefresh()
+    } catch (error: unknown) {
+      notifyOperationError(error, '提交抓取失败')
+    } finally {
+      submittingSlotKey.value = null
     }
   }
 
@@ -400,8 +471,10 @@ export function useLeadDiagnosis() {
     statusLabels: LEAD_STATUS_LABELS,
     platformLabelMap,
     formatDateTime,
+    formatLeadCreator,
     filledPromptCount,
     scheduleTimeline,
+    schedulePlanSummary,
     progressPercent,
     healthTone,
     loadRecords,
@@ -413,6 +486,9 @@ export function useLeadDiagnosis() {
     submitCreate,
     handleRefresh,
     handleForceRun,
+    handleRunSlot,
+    canRunScheduleSlot,
+    submittingSlotKey,
     handleExport,
   }
 }

@@ -8,6 +8,7 @@ import { ApprovalPendingRefreshKey } from '../injectionKeys'
 const auth = useAuthStore()
 const refreshPendingCount = inject(ApprovalPendingRefreshKey, () => {})
 const loading = ref(false)
+const actingId = ref<number | null>(null)
 const statusFilter = ref<'pending' | 'approved' | 'rejected' | 'all'>('pending')
 const rows = ref<OperationApproval[]>([])
 const expandedId = ref<number | null>(null)
@@ -56,11 +57,13 @@ async function loadRows() {
 }
 
 async function approveRow(row: OperationApproval) {
+  if (actingId.value) return
   try {
     await ElMessageBox.confirm(`确认通过「${row.summary}」？`, '审批通过', { type: 'warning' })
   } catch {
     return
   }
+  actingId.value = row.id
   loading.value = true
   try {
     const result = await approveOperation(row.id)
@@ -73,11 +76,13 @@ async function approveRow(row: OperationApproval) {
   } catch {
     ElMessage.error('审批失败')
   } finally {
+    actingId.value = null
     loading.value = false
   }
 }
 
 async function rejectRow(row: OperationApproval) {
+  if (actingId.value) return
   let comment = ''
   try {
     const { value } = await ElMessageBox.prompt('请输入驳回原因（可选）', '驳回审批', {
@@ -89,6 +94,7 @@ async function rejectRow(row: OperationApproval) {
   } catch {
     return
   }
+  actingId.value = row.id
   loading.value = true
   try {
     await rejectOperation(row.id, comment)
@@ -97,6 +103,7 @@ async function rejectRow(row: OperationApproval) {
   } catch {
     ElMessage.error('驳回失败')
   } finally {
+    actingId.value = null
     loading.value = false
   }
 }

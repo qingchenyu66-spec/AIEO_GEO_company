@@ -13,6 +13,7 @@ import {
 } from '../../../services/monitor'
 import { PortalAnalyticsKey, PortalNavigateKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
+import { externalLink } from '../portalUtils'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import '../../../styles/platform-matrix.css'
 
@@ -643,7 +644,12 @@ onUnmounted(() => {
             <b>{{ item.prompt }}</b>
             <span>{{ item.mention_position ? `第${item.mention_position}位` : '-' }}</span>
             <em>{{ monitorStatusLabelMap[item.status || ''] || item.status || '-' }}</em>
-            <a v-if="item.page_screenshot" :href="item.page_screenshot" target="_blank">打开</a>
+            <a
+              v-if="externalLink(item.page_screenshot)"
+              :href="externalLink(item.page_screenshot)!"
+              target="_blank"
+              rel="noopener noreferrer"
+            >打开</a>
             <span v-else>待返回</span>
           </div>
           <div v-if="!recentSubtasks.length" class="mini-empty">暂无检测明细，真实任务完成后自动显示。</div>

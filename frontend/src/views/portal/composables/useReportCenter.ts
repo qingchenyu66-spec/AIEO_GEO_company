@@ -15,7 +15,7 @@ import {
   type ReportExportFormat,
 } from '../../../services/reports'
 import type { TenantInfo } from '../../../services/management'
-import { stripReportCompanyPrefix } from '../portalUtils'
+import { formatReportDisplayTitle } from '../portalUtils'
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -25,11 +25,11 @@ export type ReportTypeFilter = 'all' | ReportType
 
 const reportTypeOptions: Array<{ value: ReportTypeFilter; label: string }> = [
   { value: 'all', label: '全部' },
-  { value: 'diagnosis', label: '企业诊断' },
+  { value: 'diagnosis', label: '品牌诊断' },
   { value: 'weekly', label: '监测周报' },
   { value: 'monthly', label: '监测月报' },
+  { value: 'quarterly', label: '监测季报' },
   { value: 'annual', label: '监测年报' },
-  { value: 'comparison', label: '对比报告' },
 ]
 
 type UseReportCenterOptions = {
@@ -113,7 +113,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
       total: rows.length,
       publishedCount,
       latestTitle: latest
-        ? (options.isPlatform() ? latest.report_title : displayReportTitle(latest))
+        ? formatReportDisplayTitle(latest)
         : null,
       latestHealth: latest?.health_score ?? null,
       avgHealth: healthAvg,
@@ -130,17 +130,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const previewAiInsights = computed(() => previewContent.value?.ai_insights || null)
   const isDeepseekReport = computed(() => previewAiInsights.value?.source === 'deepseek')
 
-  function reportCompanyNames(item?: { tenant_name?: string | null } | null) {
-    return [
-      previewContent.value?.brand_name,
-      item?.tenant_name,
-      selectedReport.value?.tenant_name,
-    ]
-  }
-
-  function displayReportTitle(item: Pick<ReportListItem, 'report_title' | 'tenant_name'>) {
-    if (options.isPlatform()) return item.report_title
-    return stripReportCompanyPrefix(item.report_title, reportCompanyNames(item))
+  function displayReportTitle(item: Pick<ReportListItem, 'report_title' | 'report_type' | 'tenant_name'>) {
+    return formatReportDisplayTitle(item)
   }
 
   const heroTitle = computed(() => {

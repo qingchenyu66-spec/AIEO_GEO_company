@@ -63,8 +63,10 @@ const {
   statusLabels,
   platformLabelMap,
   formatDateTime,
+  formatLeadCreator,
   filledPromptCount,
   scheduleTimeline,
+  schedulePlanSummary,
   progressPercent,
   healthTone,
   selectRecord,
@@ -74,6 +76,9 @@ const {
   nextCreateStep,
   handleRefresh,
   handleForceRun,
+  handleRunSlot,
+  canRunScheduleSlot,
+  submittingSlotKey,
   handleExport,
 } = useLeadDiagnosis()
 
@@ -255,7 +260,7 @@ onUnmounted(() => {
         </div>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
-          <span>提交后连续 <b>{{ scheduleDays }}</b> 天、每天 <b>{{ scheduleSlots.join(' / ') }}</b> 共九次抓取，全部完成后可导出 PDF。</span>
+          <span>提交后共 <b>九次</b>抓取（每天 <b>{{ scheduleSlots.join(' / ') }}</b>）；若创建时已错过当日早场，剩余时段顺延，全部完成后可导出 PDF。</span>
         </div>
         <div class="lead-form-actions">
           <button type="button" class="lead-secondary-btn" @click="closeCreatePanel">取消</button>
@@ -350,6 +355,7 @@ onUnmounted(() => {
               <span class="lead-badge" :class="item.status">{{ statusLabels[item.status] }}</span>
             </div>
             <p>诊断日期 {{ item.diagnosis_date }}</p>
+            <p v-if="item.creator" class="lead-rail-creator">创建人 {{ formatLeadCreator(item.creator) }}</p>
             <div class="lead-rail-progress">
               <i v-for="(state, idx) in listProgress(item)" :key="idx" :class="state" />
             </div>
@@ -389,14 +395,17 @@ onUnmounted(() => {
             <div>
               <span class="lead-badge" :class="detail?.status">{{ detail ? statusLabels[detail.status] : '' }}</span>
               <h2>{{ detail?.brand_name }}</h2>
-              <small>诊断日期 {{ detail?.diagnosis_date }}</small>
+              <small>
+                诊断日期 {{ detail?.diagnosis_date }}
+                <template v-if="detail?.creator"> · 创建人 {{ formatLeadCreator(detail.creator) }}</template>
+              </small>
             </div>
             <div class="lead-detail-actions">
               <button type="button" class="lead-secondary-btn small" :disabled="detailLoading" @click="handleRefresh">
                 <RefreshCw :size="16" /> 刷新进度
               </button>
               <button v-if="canCreate && detail?.status !== 'ready'" type="button" class="lead-secondary-btn small" @click="handleForceRun">
-                <Zap :size="16" /> 立即抓取
+                <Zap :size="16" /> 立即抓取下一档
               </button>
               <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport">
                 <Download :size="16" /> {{ exporting ? '导出中...' : '下载 PDF' }}
@@ -455,8 +464,8 @@ onUnmounted(() => {
 
             <section v-if="detailTab === 'progress'" class="lead-panel">
               <div class="lead-panel-title">
-                <h3>三天九次抓取计划</h3>
-                <p>连续 {{ scheduleDays }} 天、每天三个时段各抓一轮，九次全部完成后自动汇总结论。</p>
+                <h3>九次抓取计划</h3>
+                <p>{{ schedulePlanSummary }}</p>
               </div>
               <div class="lead-timeline">
                 <article v-for="slot in scheduleTimeline" :key="slot.schedule_key" class="lead-slot" :class="slotClass(slot.state)">
@@ -470,11 +479,23 @@ onUnmounted(() => {
                     <small v-if="slot.run">
                       {{ slot.run.prompt_count }} 问题 x {{ slot.run.platform_count }} 平台 · {{ runStatusLabels[slot.run.status] || slot.run.status }}
                     </small>
-                    <small v-else>等待到点自动执行，或点击“立即抓取”。</small>
+                    <small v-else>等待到点自动执行，或点击右侧「抓取此次」。</small>
                   </div>
-                  <span class="lead-badge" :class="slot.state === 'completed' ? 'ready' : slot.state === 'failed' ? 'failed' : 'collecting'">
-                    {{ slot.run ? (runStatusLabels[slot.run.status] || slot.run.status) : '待执行' }}
-                  </span>
+                  <div class="lead-slot-actions">
+                    <button
+                      v-if="canCreate && detail?.status !== 'ready' && canRunScheduleSlot(slot.state)"
+                      type="button"
+                      class="lead-secondary-btn small"
+                      :disabled="submittingSlotKey === slot.schedule_key"
+                      @click="handleRunSlot(slot.schedule_key, slot.label)"
+                    >
+                      <Zap :size="14" />
+                      {{ submittingSlotKey === slot.schedule_key ? '提交中…' : '抓取此次' }}
+                    </button>
+                    <span v-else class="lead-badge" :class="slot.state === 'completed' ? 'ready' : slot.state === 'failed' ? 'failed' : 'collecting'">
+                      {{ slot.run ? (runStatusLabels[slot.run.status] || slot.run.status) : '待执行' }}
+                    </span>
+                  </div>
                 </article>
               </div>
             </section>
@@ -687,15 +708,30 @@ onUnmounted(() => {
             <section v-else class="lead-panel">
               <div class="lead-panel-title">
                 <h3>任务配置</h3>
-                <p>售前诊断的输入范围和创建记录。</p>
+                <p>售前诊断的输入范围与创建记录。</p>
               </div>
-              <div class="lead-config-list">
-                <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
-                <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
-                <div><strong>监测地区</strong><span>{{ regionLabels(detail.region_codes) }}</span></div>
-                <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>
-                <div v-if="detail.contact_note"><strong>销售备注</strong><span>{{ detail.contact_note }}</span></div>
-                <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>
+              <div v-if="detail.creator" class="lead-config-group">
+                <h4>创建信息</h4>
+                <div class="lead-config-list">
+                  <div><strong>创建人</strong><span>{{ formatLeadCreator(detail.creator) }}</span></div>
+                  <div v-if="detail.creator.username"><strong>登录账号</strong><span>{{ detail.creator.username }}</span></div>
+                  <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>
+                  <div><strong>诊断日期</strong><span>{{ detail.diagnosis_date }}</span></div>
+                  <div v-if="detail.plan_end_date"><strong>计划截止</strong><span>{{ detail.plan_end_date }}</span></div>
+                  <div v-if="detail.schedule_total_count"><strong>抓取计划</strong><span>共 {{ detail.schedule_total_count }} 次（{{ scheduleDays }} 天 × 每日 {{ scheduleSlots.length }} 档）</span></div>
+                </div>
+              </div>
+              <div class="lead-config-group">
+                <h4>检测配置</h4>
+                <div class="lead-config-list">
+                  <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
+                  <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
+                  <div><strong>监测地区</strong><span>{{ regionLabels(detail.region_codes) }}</span></div>
+                  <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>
+                  <div v-if="detail.contact_name"><strong>联系人</strong><span>{{ detail.contact_name }}</span></div>
+                  <div v-if="detail.contact_phone"><strong>联系电话</strong><span>{{ detail.contact_phone }}</span></div>
+                  <div v-if="detail.contact_note"><strong>销售备注</strong><span>{{ detail.contact_note }}</span></div>
+                </div>
               </div>
             </section>
           </template>

@@ -347,12 +347,14 @@ def build_backfill_notification_context(
     task: GeoMonitorTask,
     *,
     schedule_ctx: dict[str, Any] | None = None,
+    tenant_name: str | None = None,
+    lead_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    tenant_name = None
-    if task.tenant_id:
+    if tenant_name is None and task.tenant_id:
         tenant = db.get(Tenant, task.tenant_id)
         tenant_name = tenant.name if tenant else None
-    lead_ctx = _lead_context_for_task(db, task.task_id)
+    if lead_ctx is None:
+        lead_ctx = _lead_context_for_task(db, task.task_id)
     source = resolve_monitor_task_source(
         task,
         has_lead_run=bool(lead_ctx.get("lead_diagnosis_id")),
@@ -372,9 +374,12 @@ def build_backfill_notification_context(
         "task_status": task.status,
         "updated_at": subtask.updated_at.isoformat() if subtask.updated_at else None,
         "task_created_at": task.created_at.isoformat() if task.created_at else None,
-        "schedule_key": schedule_ctx.get("schedule_window_key") or schedule_ctx.get("schedule_key"),
+        "schedule_key": schedule_ctx.get("schedule_key"),
+        "schedule_window_key": schedule_ctx.get("schedule_window_key"),
         "schedule_label": schedule_ctx.get("schedule_label"),
         "schedule_source": schedule_ctx.get("schedule_source"),
+        "region_code": schedule_ctx.get("region_code"),
+        "region_label": schedule_ctx.get("region_label"),
         "lead_diagnosis_id": lead_ctx.get("lead_diagnosis_id") if source == "lead_diagnosis" else None,
         "brand_name": lead_ctx.get("brand_name") if source == "lead_diagnosis" else None,
     }
@@ -405,6 +410,7 @@ def _snapshot_backfill_log_description(
     platform_label = platform_names.get(subtask.platform or "", subtask.platform or "—")
     scope = ctx.get("brand_name") or ctx.get("tenant_name") or "未命名任务"
     schedule_label = str(ctx.get("schedule_label") or "").strip()
+    region_label = str(ctx.get("region_label") or "").strip()
     prompt_text = (subtask.prompt or "").strip() or "—"
     if len(prompt_text) > 60:
         prompt_text = prompt_text[:59] + "…"
@@ -412,6 +418,8 @@ def _snapshot_backfill_log_description(
     detail_parts: list[str] = [scope]
     if schedule_label:
         detail_parts.append(schedule_label)
+    if region_label and region_label != "全部区域":
+        detail_parts.append(region_label)
     if keyword_group:
         detail_parts.append(f"词组「{keyword_group}」")
     detail_parts.append(platform_label)
@@ -441,6 +449,8 @@ def build_snapshot_backfill_item(
     keyword_groups_cache: dict[int, list] | None = None,
     keyword_group_dict_cache: dict[int, list[dict[str, Any]]] | None = None,
     brand_asset_cache: dict[int, BrandAsset | None] | None = None,
+    tenant_name: str | None = None,
+    lead_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """运营端快照补录单条展示字段，与列表/通知/详情抽屉共用。"""
     keyword_groups_cache = keyword_groups_cache if keyword_groups_cache is not None else {}
@@ -454,7 +464,14 @@ def build_snapshot_backfill_item(
         lead_runs_map=lead_runs_map,
         brand_asset_cache=brand_asset_cache,
     )
-    ctx = build_backfill_notification_context(db, subtask, task, schedule_ctx=schedule_ctx)
+    ctx = build_backfill_notification_context(
+        db,
+        subtask,
+        task,
+        schedule_ctx=schedule_ctx,
+        tenant_name=tenant_name,
+        lead_ctx=lead_ctx,
+    )
 
     if task.tenant_id:
         if task.tenant_id not in keyword_groups_cache:
@@ -507,6 +524,73 @@ def build_snapshot_backfill_item(
     return ctx
 
 
+def _lead_context_from_maps(
+    db: Session,
+    task_id: str,
+    lead_runs_map: dict[str, LeadDiagnosisRun],
+    lead_cache: dict[int, LeadDiagnosis],
+) -> dict[str, Any]:
+    run = lead_runs_map.get(task_id)
+    if run is None:
+        return {}
+    lead = lead_cache.get(run.lead_diagnosis_id)
+    if lead is None:
+        lead = db.get(LeadDiagnosis, run.lead_diagnosis_id)
+        if lead is not None:
+            lead_cache[run.lead_diagnosis_id] = lead
+    return {
+        "lead_diagnosis_id": run.lead_diagnosis_id,
+        "brand_name": lead.brand_name if lead else None,
+    }
+
+
+def _snapshot_backfill_sort_key(schedule_ctx: dict[str, Any], subtask: GeoMonitorSubtask) -> str:
+    return "|".join(
+        [
+            str(schedule_ctx.get("schedule_key") or ""),
+            str(subtask.platform or ""),
+            str(subtask.prompt or ""),
+        ]
+    )
+
+
+def _resolve_snapshot_backfill_source(
+    task: GeoMonitorTask,
+    lead_ctx: dict[str, Any],
+) -> str:
+    return resolve_monitor_task_source(
+        task,
+        has_lead_run=bool(lead_ctx.get("lead_diagnosis_id")),
+    )
+
+
+def _matches_keyword_group_filter(
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    keyword_group_filter: str,
+    keyword_group_dicts: list[dict[str, Any]],
+    keyword_group_rows: list,
+) -> bool:
+    if not keyword_group_filter:
+        return True
+    matched_group = _resolve_prompt_keyword_group(subtask.prompt or "", keyword_group_rows)
+    keyword_group_label = (
+        keyword_group_display_label(matched_group)
+        if matched_group is not None
+        else str(task.monitor_keywords or "").strip() or None
+    )
+    return _snapshot_backfill_matches_keyword_group(
+        subtask,
+        {
+            "keyword_group": keyword_group_label,
+            "monitor_keywords": task.monitor_keywords,
+        },
+        keyword_group=keyword_group_filter,
+        keyword_group_dicts=keyword_group_dicts,
+    )
+
+
 def _snapshot_backfill_matches_keyword_group(
     subtask: GeoMonitorSubtask,
     ctx: dict[str, Any],
@@ -549,15 +633,17 @@ def list_snapshot_backfill_page(
     limit: int = 50,
 ) -> dict[str, Any]:
     """运营端快照补录列表（含汇总统计），可按企业/检测日/来源/平台/关键词筛选。"""
+    platform_code = str(platform or "").strip()
+    keyword_text = str(keyword or "").strip()
+    keyword_group_filter = str(keyword_group or "").strip()
+    source_filter = str(source or "").strip()
+
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .where(GeoMonitorTask.deleted.is_(False))
         .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorSubtask.updated_at.desc())
     )
-    scan_cap = max(limit * 50, 5000) if tenant_id is None and not tenant_ids else None
-    if scan_cap is not None:
-        stmt = stmt.limit(scan_cap)
     if tenant_ids is not None:
         if allowed_lead_task_ids is not None:
             lead_scope = (
@@ -584,12 +670,9 @@ def list_snapshot_backfill_page(
                 GeoMonitorTask.tenant_id.is_(None),
                 GeoMonitorTask.task_id.in_(allowed_lead_task_ids),
             )
-    platform_code = str(platform or "").strip()
+
     if platform_code:
         stmt = stmt.where(GeoMonitorSubtask.platform == platform_code)
-    keyword_text = str(keyword or "").strip()
-    keyword_group_filter = str(keyword_group or "").strip()
-    source_filter = str(source or "").strip()
     if source_filter == "lead_diagnosis":
         if allowed_lead_task_ids is not None:
             if not allowed_lead_task_ids:
@@ -630,6 +713,38 @@ def list_snapshot_backfill_page(
             )
         )
 
+    no_answer = or_(GeoMonitorSubtask.answer_content.is_(None), GeoMonitorSubtask.answer_content == "")
+    if pending_only:
+        stmt = stmt.where(
+            no_answer,
+            or_(
+                GeoMonitorSubtask.status.in_(("failed", "stopped")),
+                and_(
+                    GeoMonitorSubtask.error_message.isnot(None),
+                    GeoMonitorSubtask.error_message != "",
+                    GeoMonitorSubtask.status.in_(tuple(TERMINAL_STATUSES)),
+                ),
+            ),
+        )
+    if keyword_text:
+        stmt = stmt.where(GeoMonitorSubtask.prompt.like(f"%{keyword_text}%"))
+
+    has_scope_filter = bool(
+        tenant_id
+        or tenant_ids
+        or detect_date
+        or platform_code
+        or keyword_text
+        or keyword_group_filter
+        or source_filter
+    )
+    if tenant_id is None and not tenant_ids:
+        scan_cap = min(max(limit * 20, 1000), 2500) if not has_scope_filter else min(max(limit * 40, 2000), 4000)
+    else:
+        scan_cap = None
+    if scan_cap is not None:
+        stmt = stmt.limit(scan_cap)
+
     rows = list(db.scalars(stmt))
     task_ids = {item.task_id for item in rows}
     tasks = {
@@ -639,17 +754,84 @@ def list_snapshot_backfill_page(
     schedule_runs_map = schedule_runs_for_tasks(db, list(task_ids))
     lead_runs_map = lead_diagnosis_runs_for_tasks(db, list(task_ids))
 
-    all_items: list[dict[str, Any]] = []
+    tenant_name_map: dict[int, str] = {}
+    if tasks:
+        tenant_ids_in_page = {task.tenant_id for task in tasks.values() if task.tenant_id}
+        if tenant_ids_in_page:
+            tenant_name_map = {
+                row.id: row.name
+                for row in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids_in_page)))
+            }
+
     keyword_groups_cache: dict[int, list] = {}
     keyword_group_dict_cache: dict[int, list[dict[str, Any]]] = {}
     brand_asset_cache: dict[int, BrandAsset | None] = {}
+    lead_cache: dict[int, LeadDiagnosis] = {}
+
+    candidates: list[tuple[GeoMonitorSubtask, GeoMonitorTask, dict[str, Any], dict[str, Any]]] = []
+    pending_count = 0
+    overwrite_count = 0
     for subtask in rows:
         task = tasks.get(subtask.task_id)
         if task is None or not subtask_backfill_eligible(subtask, pending_only=pending_only):
             continue
-        if platform_code and subtask.platform != platform_code:
+
+        lead_ctx = _lead_context_from_maps(db, task.task_id, lead_runs_map, lead_cache)
+        task_source = _resolve_snapshot_backfill_source(task, lead_ctx)
+        if source_filter and task_source != source_filter:
             continue
-        ctx = build_snapshot_backfill_item(
+
+        keyword_group_rows: list = []
+        keyword_group_dicts: list[dict[str, Any]] = []
+        if task.tenant_id:
+            if task.tenant_id not in keyword_groups_cache:
+                try:
+                    orm_groups = list_keyword_groups(db, task.tenant_id)
+                except Exception:
+                    orm_groups = []
+                keyword_groups_cache[task.tenant_id] = orm_groups
+                keyword_group_dict_cache[task.tenant_id] = [
+                    keyword_group_to_dict(item)
+                    for item in orm_groups
+                    if item.status and item.monitor_keyword
+                ]
+            keyword_group_rows = keyword_groups_cache[task.tenant_id]
+            keyword_group_dicts = keyword_group_dict_cache[task.tenant_id]
+
+        if not _matches_keyword_group_filter(
+            subtask,
+            task,
+            keyword_group_filter=keyword_group_filter,
+            keyword_group_dicts=keyword_group_dicts,
+            keyword_group_rows=keyword_group_rows,
+        ):
+            continue
+
+        schedule_ctx = _schedule_context_for_task(
+            db,
+            task,
+            schedule_runs_map=schedule_runs_map,
+            lead_runs_map=lead_runs_map,
+            brand_asset_cache=brand_asset_cache,
+        )
+        candidates.append((subtask, task, schedule_ctx, lead_ctx))
+
+        needs = subtask_needs_snapshot_backfill(subtask)
+        has_answer = bool((subtask.answer_content or "").strip())
+        if needs:
+            pending_count += 1
+        elif has_answer:
+            overwrite_count += 1
+
+    candidates.sort(
+        key=lambda item: _snapshot_backfill_sort_key(item[2], item[0]),
+        reverse=True,
+    )
+    total = len(candidates)
+    page_offset = max(0, int(offset or 0))
+    page_candidates = candidates[page_offset:page_offset + limit]
+    page_items = [
+        build_snapshot_backfill_item(
             db,
             subtask,
             task,
@@ -658,39 +840,17 @@ def list_snapshot_backfill_page(
             keyword_groups_cache=keyword_groups_cache,
             keyword_group_dict_cache=keyword_group_dict_cache,
             brand_asset_cache=brand_asset_cache,
+            tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
+            lead_ctx=lead_ctx,
         )
-        if source_filter and ctx.get("source") != source_filter:
-            continue
-        group_dicts = keyword_group_dict_cache.get(task.tenant_id, []) if task.tenant_id else []
-        if not _snapshot_backfill_matches_keyword_group(
-            subtask,
-            ctx,
-            keyword_group=keyword_group_filter,
-            keyword_group_dicts=group_dicts,
-        ):
-            continue
-        if keyword_text and keyword_text.lower() not in (subtask.prompt or "").lower():
-            continue
-        all_items.append(ctx)
-    all_items.sort(
-        key=lambda row: (
-            str(row.get("schedule_key") or ""),
-            str(row.get("platform") or ""),
-            str(row.get("prompt") or ""),
-        ),
-        reverse=True,
-    )
-    total = len(all_items)
-    pending = sum(1 for row in all_items if row.get("needs_backfill"))
-    overwrite = sum(1 for row in all_items if row.get("has_answer") and not row.get("needs_backfill"))
-    page_offset = max(0, int(offset or 0))
-    page_items = all_items[page_offset:page_offset + limit]
+        for subtask, task, _schedule_ctx, lead_ctx in page_candidates
+    ]
     return {
         "items": page_items,
         "summary": {
             "total": total,
-            "pending": pending,
-            "overwrite": overwrite,
+            "pending": pending_count,
+            "overwrite": overwrite_count,
             "shown": len(page_items),
             "offset": page_offset,
             "limit": limit,

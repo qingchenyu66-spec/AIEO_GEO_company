@@ -285,3 +285,82 @@ def build_platform_mention_chart(platform_stats: list[dict[str, Any]]) -> bytes 
 
     fig.tight_layout()
     return _figure_to_png(fig)
+
+
+def build_sentiment_pie_chart(sentiment_counts: dict[str, int]) -> bytes | None:
+    """正/中/负面舆情占比饼图（忽略计数为 0 的分类）。"""
+    from app.services.report_period_content_service import normalize_sentiment_counts
+
+    normalized = normalize_sentiment_counts(sentiment_counts)
+    if not normalized:
+        return None
+    filtered = {
+        str(label): int(value)
+        for label, value in normalized.items()
+        if int(value or 0) > 0
+    }
+    if not filtered:
+        return None
+    _configure_matplotlib()
+    labels = list(filtered.keys())
+    values = [float(filtered[label]) for label in labels]
+    colors_map = {"正面": "#34d399", "中性": "#94a3b8", "负面": "#f87171", "未知": "#cbd5e1"}
+    colors = [colors_map.get(label, "#3b82f6") for label in labels]
+
+    fig, ax = plt.subplots(figsize=(4.8, 3.8))
+    legend_labels = [f"{label} {filtered[label]}条" for label in labels]
+
+    def _autopct(pct: float) -> str:
+        return f"{pct:.1f}%" if pct >= 3 else ""
+
+    wedges, _texts, autotexts = ax.pie(
+        values,
+        labels=None,
+        autopct=_autopct,
+        startangle=90,
+        colors=colors,
+        pctdistance=0.72,
+        textprops={"fontsize": 8},
+    )
+    for autotext in autotexts:
+        if autotext.get_text():
+            autotext.set_color("white")
+            autotext.set_fontsize(8)
+    ax.legend(
+        wedges,
+        legend_labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.12),
+        ncol=min(len(labels), 4),
+        fontsize=8,
+        frameon=False,
+    )
+    ax.set_title("舆情情绪占比分布", fontsize=12, fontweight="bold", color="#12385f", pad=10)
+    fig.tight_layout()
+    return _figure_to_png(fig)
+
+
+def build_source_bar_chart(top_sources: list[dict[str, Any]], *, limit: int = 8) -> bytes | None:
+    """高频信源引用次数条形图。"""
+    if not top_sources:
+        return None
+    _configure_matplotlib()
+    rows = top_sources[:limit]
+    labels = [str(row.get("title") or row.get("url") or "—")[:18] for row in rows]
+    values = [float(row.get("count") or 0) for row in rows]
+
+    fig, ax = plt.subplots(figsize=(6.8, max(2.8, len(rows) * 0.35)))
+    y_pos = list(range(len(labels)))
+    bars = ax.barh(y_pos, values, color="#6366f1", height=0.62)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("引用次数", color="#17406a")
+    ax.set_title("TOP 信源引用次数", fontsize=12, fontweight="bold", color="#12385f", pad=10)
+    ax.grid(axis="x", linestyle="--", alpha=0.25)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    for bar, value in zip(bars, values):
+        ax.text(value + 0.1, bar.get_y() + bar.get_height() / 2, f"{int(value)}", va="center", fontsize=8)
+    fig.tight_layout()
+    return _figure_to_png(fig)

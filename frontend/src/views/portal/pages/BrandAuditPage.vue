@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { inject, onMounted } from 'vue'
-import { HelpCircle } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
@@ -109,9 +108,7 @@ const {
   reportDialog,
   reportDialogTenant,
   reportGenerating,
-  reportType,
   reportTitle,
-  reportTypeOptions,
   canGenerateEnterpriseReport,
   openReportDialog,
   submitEnterpriseReport,
@@ -475,18 +472,15 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </template>
     </el-dialog>
 
-    <el-dialog v-model="reportDialog" width="520px" title="生成报告">
-      <p v-if="reportDialogTenant" class="report-dialog-hint">为「{{ reportDialogTenant.name }}」生成监测报告，生成后可编辑并发布，客户仅可查看已发布报告。</p>
+    <el-dialog v-model="reportDialog" width="520px" title="生成品牌诊断报告">
+      <p v-if="reportDialogTenant" class="report-dialog-hint">
+        为「{{ reportDialogTenant.name }}」生成品牌诊断报告。生成后为草稿，确认后可发布；客户仅可查看已发布报告。
+        周报/月报/季报/年报由系统按周期自动生成并直接发布至客户端。
+      </p>
       <div class="form-grid password-grid">
         <label class="form-field-full">
-          <span>报告类型</span>
-          <select v-model="reportType">
-            <option v-for="option in reportTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-        </label>
-        <label class="form-field-full">
           <span>报告标题（可选）</span>
-          <input v-model="reportTitle" placeholder="留空则按类型自动生成标题" />
+          <input v-model="reportTitle" placeholder="留空则使用默认标题「GEO 企业诊断报告」" />
         </label>
       </div>
       <template #footer>

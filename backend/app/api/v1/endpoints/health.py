@@ -2,10 +2,11 @@
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.celery_health import celery_health
 from app.core.celery_queue_monitor import get_queue_monitor_snapshot
 from app.core.config import settings
@@ -13,6 +14,7 @@ from app.core.database import get_db
 from app.core.redis_client import redis_health
 from app.schemas.common import ApiResponse
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
+from app.services.menu_permission_service import require_health_ops_access
 from app.services.system_service import check_database
 
 router = APIRouter()
@@ -73,6 +75,11 @@ def health_check_ops(
     db: Session = Depends(get_db),
     current: CurrentSession = Depends(get_current_session),
 ) -> ApiResponse[dict]:
-    """运营详细健康检查（需登录）。"""
-    del current
+    """运营详细健康检查（需登录且具备系统配置查看权限）。"""
+    try:
+        require_health_ops_access(db, current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="health.ops")
     return ApiResponse(data=_detailed_health_payload(db))

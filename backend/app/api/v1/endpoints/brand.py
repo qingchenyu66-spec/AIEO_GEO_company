@@ -146,7 +146,7 @@ def remove_competitor(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """逻辑删除竞品。"""
-    require_platform(current, detail="仅平台运营端可以维护企业配置")
+    require_any_update_permission(current, db, ["platform.audit", "platform.audit.competitors"])
     try:
         delete_competitor(db, current, competitor_id, tenant_id)
     except Exception as exc:

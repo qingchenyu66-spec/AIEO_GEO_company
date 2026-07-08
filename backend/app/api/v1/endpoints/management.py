@@ -38,6 +38,7 @@ from app.services.snapshot_backfill_service import list_snapshot_backfill_page
 from app.schemas.permission import (
     MenuConfigBatchItem,
     MenuConfigUpdateRequest,
+    MenuGrantItem,
     MenuInfo,
     PasswordResetRequest,
     PositionInfo,
@@ -64,6 +65,7 @@ from app.services.management_service import (
 from app.services.menu_permission_service import (
     has_identity_menu_permission,
     position_menu_grants,
+    position_menu_grants_map,
     sync_identity_menus_for_position,
     sync_position_menu_grants,
 )
@@ -117,10 +119,18 @@ def require_system_config_access(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问密钥配置")
 
 
-def has_identity_menu_permission(db: Session, identity_id: int, menu_code: str, action: str = "can_create") -> bool:
-    from app.services.menu_permission_service import has_identity_menu_permission as check_permission
-
-    return check_permission(db, identity_id, menu_code, action)
+def _require_platform_menu(
+    db: Session,
+    current: CurrentSession,
+    menu_code: str,
+    action: str,
+    detail: str | None = None,
+) -> None:
+    if not has_identity_menu_permission(db, current.identity.id, menu_code, action):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail or "当前账号无权执行此操作",
+        )
 
 
 def require_user_identity_create_permission(
@@ -308,8 +318,15 @@ def sync_position_menus(
     )
 
 
-def position_to_dict(db: Session, position: Position) -> dict:
-    grants = position_menu_grants(db, position.id)
+def position_to_dict(
+    position: Position,
+    *,
+    grants: list[MenuGrantItem] | None = None,
+    db: Session | None = None,
+) -> dict:
+    resolved_grants = grants if grants is not None else (
+        position_menu_grants(db, position.id) if db is not None else []
+    )
     return PositionInfo(
         id=position.id,
         position_code=position.position_code,
@@ -317,9 +334,17 @@ def position_to_dict(db: Session, position: Position) -> dict:
         identity_type=position.identity_type,
         role_code=position.role_code,
         description=position.description,
-        menu_ids=[item.menu_id for item in grants],
-        menu_grants=grants,
+        menu_ids=[item.menu_id for item in resolved_grants],
+        menu_grants=resolved_grants,
     ).model_dump()
+
+
+def positions_to_dicts(db: Session, positions: list[Position]) -> list[dict]:
+    grants_map = position_menu_grants_map(db, [position.id for position in positions])
+    return [
+        position_to_dict(position, grants=grants_map.get(position.id, []))
+        for position in positions
+    ]
 
 
 @router.get("/menus", response_model=ApiResponse[list[dict]])
@@ -329,6 +354,7 @@ def management_menus(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看菜单配置")
     menus = [
         MenuInfo(
             id=menu.id,
@@ -351,6 +377,7 @@ def management_roles(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看角色配置")
     roles = [
         RoleInfo(
             id=role.id,
@@ -371,11 +398,9 @@ def management_positions(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    positions = [
-        position_to_dict(db, position)
-        for position in list_positions_by_identity_type(db, identity_type)
-    ]
-    return ApiResponse(data=positions)
+    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看职位列表")
+    positions = list_positions_by_identity_type(db, identity_type)
+    return ApiResponse(data=positions_to_dicts(db, positions))
 
 
 @router.post("/positions", response_model=ApiResponse[dict])
@@ -385,6 +410,7 @@ def management_create_position(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.positions", "can_create", "当前账号无权新增职位")
     role = db.scalar(select(Role).where(Role.role_code == payload.role_code, Role.identity_type == payload.identity_type, Role.status.is_(True), Role.deleted.is_(False)))
     if role is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="角色不存在或已停用")
@@ -413,7 +439,7 @@ def management_create_position(
     write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}", target_module="职位管理", target_id=position.id)
     db.commit()
     db.refresh(position)
-    return ApiResponse(data=position_to_dict(db, position))
+    return ApiResponse(data=position_to_dict(position, db=db))
 
 
 @router.put("/positions/{position_id}", response_model=ApiResponse[dict])
@@ -424,6 +450,7 @@ def management_update_position(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.positions", "can_update", "当前账号无权修改职位")
     position = db.scalar(select(Position).where(Position.id == position_id, Position.deleted.is_(False)))
     if position is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="职位不存在")
@@ -458,7 +485,7 @@ def management_update_position(
     write_management_log(db, current, "职位修改", f"修改职位：{position.position_name}（已同步 {synced_users} 个身份）", target_module="职位管理", target_id=position.id, risk_level="关注")
     db.commit()
     db.refresh(position)
-    return ApiResponse(data=position_to_dict(db, position))
+    return ApiResponse(data=position_to_dict(position, db=db))
 
 
 @router.delete("/positions/{position_id}", response_model=ApiResponse[dict])
@@ -468,6 +495,7 @@ def management_delete_position(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.positions", "can_delete", "当前账号无权删除职位")
     position = db.scalar(select(Position).where(Position.id == position_id, Position.deleted.is_(False)))
     if position is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="职位不存在")
@@ -493,6 +521,7 @@ def management_tenants(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_export", "当前账号无权查看企业列表")
     stmt = select(Tenant).where(Tenant.deleted.is_(False)).order_by(Tenant.id.desc())
     if is_sales_identity(db, current.identity):
         stmt = stmt.where(Tenant.owner_user_id == current.user.id)
@@ -507,6 +536,7 @@ def management_operation_logs(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.logs", "can_export", "当前账号无权查看操作日志")
     stmt = select(OperationLog).order_by(OperationLog.id.desc()).limit(100)
     owned = sales_owned_tenant_ids(db, current)
     if owned is not None:
@@ -525,9 +555,11 @@ def management_operation_logs(
 @router.get("/celery-monitor", response_model=ApiResponse[dict])
 def management_celery_monitor(
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """中文版 Celery 队列与 Worker 监控数据。"""
     require_platform(current)
+    _require_platform_menu(db, current, "platform.settings", "can_export", "当前账号无权查看队列监控")
     return ApiResponse(data=format_celery_monitor_zh(get_queue_monitor_snapshot()))
 
 
@@ -897,6 +929,7 @@ def management_create_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权新增企业")
     validate_service_period(payload.service_start_date, payload.service_end_date)
     name = payload.name.strip()
     code = (payload.code or _tenant_code_from_name(name)).strip()
@@ -929,6 +962,7 @@ def management_update_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权修改企业")
     guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
@@ -1044,6 +1078,7 @@ def management_stop_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_delete", "当前账号无权停止企业服务")
     guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
@@ -1085,6 +1120,7 @@ def management_restore_tenant(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权恢复企业服务")
     guard_sales_tenant(db, current, tenant_id)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
@@ -1213,6 +1249,7 @@ def management_update_user(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.users.list", "can_update", "当前账号无权修改用户")
     require_user_identity_create_permission(db, current, payload, existing_user_id=user_id)
 
     def _execute():
@@ -1250,6 +1287,7 @@ def management_reset_password(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.users.list", "can_update", "当前账号无权重置用户密码")
     try:
         reset_managed_user_password(db, user_id, payload.password, current.user, current.identity)
         write_management_log(db, current, "密码重置", f"重置用户密码：用户ID {user_id}", target_module="用户管理", target_id=user_id, risk_level="关注")
@@ -1268,6 +1306,7 @@ def management_set_user_status(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.users.list", "can_update", "当前账号无权变更用户状态")
     try:
         user = set_managed_user_status(db, user_id, enabled, current.user, current.identity)
         write_management_log(db, current, "用户状态", f"{'启用' if enabled else '禁用'}用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="关注" if not enabled else "正常")
@@ -1285,6 +1324,7 @@ def management_delete_user(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.users.list", "can_delete", "当前账号无权删除用户")
     try:
         user = delete_managed_user(db, user_id, current.user, current.identity)
         write_management_log(db, current, "用户删除", f"删除用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id, risk_level="高危")
@@ -1302,6 +1342,7 @@ def management_restore_user(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
+    _require_platform_menu(db, current, "platform.users.list", "can_update", "当前账号无权恢复用户")
     try:
         user = restore_managed_user(db, user_id, current.user, current.identity)
         write_management_log(db, current, "用户恢复", f"恢复用户：{user.display_name}（{user.username}）", target_module="用户管理", target_id=user.id)
@@ -1320,6 +1361,7 @@ def get_menu_configs(
 ) -> ApiResponse[list[dict]]:
     """获取菜单配置列表"""
     require_platform(current)
+    require_system_config_access(db, current)
     stmt = select(MenuConfig).where(MenuConfig.deleted.is_(False))
     if identity_type:
         stmt = stmt.where(MenuConfig.identity_type == identity_type)
@@ -1347,6 +1389,7 @@ def update_menu_config(
 ):
     """更新菜单配置（名称、排序、可见性）"""
     require_platform(current)
+    require_system_config_access(db, current, for_update=True)
     config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
@@ -1379,6 +1422,7 @@ def delete_menu_config(
 ):
     """停用菜单配置（逻辑删除）"""
     require_platform(current)
+    require_system_config_access(db, current, for_update=True)
     config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
@@ -1398,6 +1442,7 @@ def batch_update_menu_configs(
 ):
     """批量更新菜单配置"""
     require_platform(current)
+    require_system_config_access(db, current, for_update=True)
     updated_count = 0
     for item in configs:
         config = db.scalar(select(MenuConfig).where(MenuConfig.id == item.id, MenuConfig.deleted.is_(False)))

@@ -226,6 +226,7 @@ class DeepseekClient:
             "diagnosis": "企业诊断",
             "weekly": "监测周报",
             "monthly": "监测月报",
+            "quarterly": "监测季报",
             "annual": "监测年报",
             "comparison": "竞品对比报告",
             "periodic": "周期报告",
@@ -261,25 +262,29 @@ class DeepseekClient:
             if source_note:
                 source_lines.append(f"- 信源覆盖：{source_note}")
 
+        periodic_report = report_type in {"weekly", "monthly", "quarterly", "annual"}
         json_schema = (
             "{\n"
-            '  "executive_summary": "80-160字执行摘要",\n'
-            '  "highlights": ["3-5条核心结论，每条20-50字"],\n'
-            '  "sentiment_summary": "口碑与情绪总结",\n'
-            '  "strength_points": "优势亮点，可多句",\n'
-            '  "weakness_points": "待改善项，可多句",\n'
-            '  "recommendation": "可执行的 GEO 优化建议",\n'
+            '  "executive_summary": "120-220字执行摘要，含周期结论与1句行动方向",\n'
+            '  "highlights": ["4-6条核心结论，每条25-60字"],\n'
+            '  "sentiment_summary": "口碑与情绪总结，80-150字",\n'
+            '  "strength_points": "优势亮点，2-4句",\n'
+            '  "weakness_points": "待改善项，2-4句",\n'
+            '  "recommendation": "可执行的 GEO 优化建议，分点叙述",\n'
             '  "health_score": 0-100 的整数'
         )
-        if lead_analytics:
+        if lead_analytics or periodic_report:
+            section_hint = (
+                "分语义词排名与竞品对比" if lead_analytics else "分平台排名与竞品对比"
+            )
             json_schema += (
                 ',\n'
                 '  "report_sections": {\n'
-                '    "industry_analysis": "行业与搜索意图分析",\n'
-                '    "ranking_analysis": "分语义词排名与竞品对比",\n'
-                '    "mention_analysis": "提及率与曝光分析",\n'
-                '    "source_analysis": "引用网站与信源覆盖",\n'
-                '    "action_recommendations": "分渠道 GEO 优化建议"\n'
+                f'    "industry_analysis": "行业与 AI 搜索意图分析，120-200字",\n'
+                f'    "ranking_analysis": "{section_hint}，120-200字",\n'
+                '    "mention_analysis": "提及率与曝光分析，100-180字",\n'
+                '    "source_analysis": "引用网站与信源覆盖，100-180字",\n'
+                '    "action_recommendations": "分4条可执行 GEO 优化建议，每条以 1. 2. 3. 4. 开头"\n'
                 "  }"
             )
         json_schema += "\n}"
@@ -322,7 +327,7 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.25,
-            max_tokens=2600 if lead_analytics else 1800,
+            max_tokens=3200 if (lead_analytics or periodic_report) else 1800,
             source="report-insights",
         )
         payload = self._parse_json_payload(content)

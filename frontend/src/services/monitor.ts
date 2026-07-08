@@ -81,7 +81,10 @@ export interface MonitorSubtask {
   keyword_group?: string | null
   schedule_label?: string | null
   schedule_key?: string | null
+  schedule_window_key?: string | null
   schedule_source?: string | null
+  region_code?: string | null
+  region_label?: string | null
   brand_name?: string | null
   task_created_at?: string | null
   needs_backfill?: boolean
@@ -164,6 +167,8 @@ export interface ScheduledMonitorPreview {
 export interface RankingMatrixColumn {
   prompt: string
   group_name: string | null
+  monitor_keyword?: string | null
+  group_id?: number | null
 }
 
 export interface RankingMatrixCellSnapshot {

@@ -2,7 +2,7 @@ import { http } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx'
 
-export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'annual' | 'comparison' | 'periodic'
+export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'comparison' | 'periodic'
 export type ReportStatus = 'draft' | 'published' | 'archived'
 
 export interface ReportListItem {
@@ -104,13 +104,13 @@ export interface UpdateReportPayload {
   diagnosis?: Partial<ReportDiagnosisBlock>
 }
 
-export const REPORT_TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
-  { value: 'diagnosis', label: '企业诊断' },
-  { value: 'weekly', label: '监测周报' },
-  { value: 'monthly', label: '监测月报' },
-  { value: 'annual', label: '监测年报' },
-  { value: 'comparison', label: '对比报告' },
+/** 运营端手动生成：仅品牌诊断报告 */
+export const MANUAL_REPORT_TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
+  { value: 'diagnosis', label: '品牌诊断报告' },
 ]
+
+/** @deprecated 使用 MANUAL_REPORT_TYPE_OPTIONS；保留兼容旧引用 */
+export const REPORT_TYPE_OPTIONS = MANUAL_REPORT_TYPE_OPTIONS
 
 export async function getReportList(params?: { tenant_id?: number; report_type?: string }): Promise<ReportListItem[]> {
   const response = await http.get('/v1/reports/list', { params })

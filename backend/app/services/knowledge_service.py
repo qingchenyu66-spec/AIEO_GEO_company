@@ -99,7 +99,7 @@ async def save_knowledge_file(
         status="uploaded",
     )
     db.add(record)
-    db.commit()
+    db.flush()
     db.refresh(record)
     return record
 
@@ -115,7 +115,7 @@ def delete_knowledge_file(db: Session, current: CurrentSession, file_id: int) ->
         raise ValueError("文件不存在")
     _assert_knowledge_record_access(db, current, record)
     record.deleted = True
-    db.commit()
+    db.flush()
 
 
 def knowledge_file_to_dict(record: KnowledgeFile) -> dict:

@@ -164,10 +164,23 @@ def create_approval_request(
     return record
 
 
-def approval_to_dict(db: Session, record: OperationApproval) -> dict[str, Any]:
-    requester = db.scalar(select(User).where(User.id == record.requester_user_id))
-    reviewer = db.scalar(select(User).where(User.id == record.reviewer_user_id)) if record.reviewer_user_id else None
-    tenant = db.scalar(select(Tenant).where(Tenant.id == record.tenant_id)) if record.tenant_id else None
+def approval_to_dict(
+    db: Session,
+    record: OperationApproval,
+    *,
+    users_by_id: dict[int, User] | None = None,
+    tenants_by_id: dict[int, Tenant] | None = None,
+) -> dict[str, Any]:
+    if users_by_id is not None:
+        requester = users_by_id.get(record.requester_user_id)
+        reviewer = users_by_id.get(record.reviewer_user_id) if record.reviewer_user_id else None
+    else:
+        requester = db.scalar(select(User).where(User.id == record.requester_user_id))
+        reviewer = db.scalar(select(User).where(User.id == record.reviewer_user_id)) if record.reviewer_user_id else None
+    if tenants_by_id is not None:
+        tenant = tenants_by_id.get(record.tenant_id) if record.tenant_id else None
+    else:
+        tenant = db.scalar(select(Tenant).where(Tenant.id == record.tenant_id)) if record.tenant_id else None
     return {
         "id": record.id,
         "operation_key": record.operation_key,
@@ -308,7 +321,25 @@ def list_approvals(
     elif not can_review_approvals(db, current):
         raise PermissionError("当前账号无权查看审批单")
     rows = list(db.scalars(stmt))
-    return [approval_to_dict(db, item) for item in rows]
+    user_ids = {item.requester_user_id for item in rows}
+    user_ids.update(item.reviewer_user_id for item in rows if item.reviewer_user_id)
+    tenant_ids = {item.tenant_id for item in rows if item.tenant_id}
+    users_by_id: dict[int, User] = {}
+    tenants_by_id: dict[int, Tenant] = {}
+    if user_ids:
+        users_by_id = {
+            user.id: user
+            for user in db.scalars(select(User).where(User.id.in_(user_ids)))
+        }
+    if tenant_ids:
+        tenants_by_id = {
+            tenant.id: tenant
+            for tenant in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids)))
+        }
+    return [
+        approval_to_dict(db, item, users_by_id=users_by_id, tenants_by_id=tenants_by_id)
+        for item in rows
+    ]
 
 
 def count_pending_approvals(db: Session, current: CurrentSession) -> int:
@@ -402,10 +433,12 @@ def approve_and_execute(
 
     ensure_can_review(db, current)
     record = db.scalar(
-        select(OperationApproval).where(
+        select(OperationApproval)
+        .where(
             OperationApproval.id == approval_id,
             OperationApproval.deleted.is_(False),
         )
+        .with_for_update()
     )
     if record is None:
         raise ValueError("审批单不存在")

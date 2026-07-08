@@ -5,7 +5,7 @@ import { sortPlatformRows } from '../platformOrder'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { platformAccentColor } from '../platformMeta'
 import type { PlatformMatrix } from '../../../services/platforms'
-import { formatDateTime } from '../portalUtils'
+import { formatDateTime, externalLink } from '../portalUtils'
 
 const props = defineProps<{
   matrix: PlatformMatrix | null
@@ -50,11 +50,11 @@ const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || [])
         <div class="platform-matrix-header-actions">
           <p v-if="metaLine" class="platform-matrix-meta-line">{{ metaLine }}</p>
           <a
-            v-if="matrix?.catalog_source_url"
+            v-if="externalLink(matrix?.catalog_source_url)"
             class="platform-matrix-doc-link"
-            :href="matrix.catalog_source_url"
+            :href="externalLink(matrix?.catalog_source_url)!"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
           >平台目录文档</a>
           <button type="button" class="platform-matrix-refresh-btn" :disabled="loading" @click="emit('refresh')">
             <RefreshCw :class="{ 'is-spinning': loading }" />

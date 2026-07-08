@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import Any
 
-from sqlalchemy import desc, func as sa_func, select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
@@ -16,14 +16,18 @@ from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.models.report import GeoReport
 from app.models.tenant import Tenant
 from app.services.brand_service import active_keyword_groups, brand_exposure_terms, ensure_tenant, get_brand_asset, list_competitors, tenant_purchased_platforms
+from app.services.lead_diagnosis_service import aggregate_tenant_diagnosis
 from app.services.monitor_service import TERMINAL_STATUSES, _is_valid_citation_source, _matched_source_keywords
 from app.services.report_ai_service import enrich_report_narrative
+from app.services.report_period_content_service import build_premium_content, build_report_modules
+from app.services.report_period_service import MANUAL_REPORT_TYPES, period_label as build_period_label
 from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
 
 REPORT_TYPE_LABELS = {
     "diagnosis": "企业诊断",
     "weekly": "监测周报",
     "monthly": "监测月报",
+    "quarterly": "监测季报",
     "annual": "监测年报",
     "comparison": "对比报告",
     "periodic": "周期报告",
@@ -81,26 +85,59 @@ def _tenant_brand_name(db: Session, tenant_id: int) -> str:
     return asset.brand_name or asset.company_full_name
 
 
-def build_tenant_monitor_snapshot(db: Session, tenant_id: int) -> dict[str, Any]:
+def build_tenant_monitor_snapshot(
+    db: Session,
+    tenant_id: int,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
     """汇总企业监测数据，供报告生成与预览使用。"""
     asset = get_brand_asset(db, tenant_id)
     competitors = list_competitors(db, tenant_id)
     purchased_platforms = set(tenant_purchased_platforms(db, tenant_id, asset))
 
-    task_rows = list(
-        db.scalars(
-            select(GeoMonitorTask)
-            .where(GeoMonitorTask.tenant_id == tenant_id, GeoMonitorTask.deleted.is_(False))
-            .order_by(GeoMonitorTask.id.desc())
-            .limit(120)
-        )
-    )
-    task_ids = [item.task_id for item in task_rows]
     subtasks: list[GeoMonitorSubtask] = []
-    if task_ids:
+    task_rows: list[GeoMonitorTask] = []
+    if start_date is not None and end_date is not None:
+        start_dt = datetime.combine(start_date, time.min)
+        end_dt = datetime.combine(end_date, time.max)
         subtasks = list(
-            db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
+            db.scalars(
+                select(GeoMonitorSubtask)
+                .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+                .where(
+                    GeoMonitorTask.tenant_id == tenant_id,
+                    GeoMonitorTask.deleted.is_(False),
+                    GeoMonitorSubtask.updated_at >= start_dt,
+                    GeoMonitorSubtask.updated_at <= end_dt,
+                )
+            )
         )
+        task_ids = list({item.task_id for item in subtasks})
+        if task_ids:
+            task_rows = list(
+                db.scalars(
+                    select(GeoMonitorTask).where(
+                        GeoMonitorTask.task_id.in_(task_ids),
+                        GeoMonitorTask.deleted.is_(False),
+                    )
+                )
+            )
+    else:
+        task_rows = list(
+            db.scalars(
+                select(GeoMonitorTask)
+                .where(GeoMonitorTask.tenant_id == tenant_id, GeoMonitorTask.deleted.is_(False))
+                .order_by(GeoMonitorTask.id.desc())
+                .limit(120)
+            )
+        )
+        task_ids = [item.task_id for item in task_rows]
+        if task_ids:
+            subtasks = list(
+                db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
+            )
 
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
     completed_ids = {item.id for item in completed}
@@ -269,10 +306,214 @@ def _default_report_title(report_type: str, brand_name: str) -> str:
         "diagnosis": "GEO 企业诊断报告",
         "weekly": "GEO 监测周报",
         "monthly": "GEO 监测月报",
+        "quarterly": "GEO 监测季报",
         "annual": "GEO 监测年报",
         "comparison": "竞品对比报告",
         "periodic": "周期监测报告",
     }.get(report_type, "GEO 监测报告")
+
+
+def _build_report_content(
+    *,
+    brand_name: str,
+    company_name: str | None,
+    report_type: str,
+    period_label: str,
+    period_start: date | None,
+    period_end: date | None,
+    generated_at: datetime,
+    snapshot: dict[str, Any],
+    highlights: list[str],
+    diagnosis_block: dict[str, Any],
+    ai_insights: dict[str, Any],
+    kpis: dict[str, Any],
+    report_sections: dict[str, str] | None = None,
+    premium_content: dict[str, Any] | None = None,
+    report_modules: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    content: dict[str, Any] = {
+        "brand_name": brand_name,
+        "company_name": company_name,
+        "period_label": period_label,
+        "generated_at": generated_at.isoformat(),
+        "kpis": kpis,
+        "diagnosis": diagnosis_block,
+        "ai_insights": ai_insights,
+        "monitor_snapshot": {
+            "sentiment_counts": snapshot.get("sentiment_counts"),
+            "platform_stats": snapshot.get("platform_stats"),
+            "top_sources": snapshot.get("top_sources"),
+            "highlights": highlights,
+            "competitor_count": snapshot.get("competitor_count"),
+            "platform_count": snapshot.get("platform_count"),
+        },
+    }
+    if period_start is not None:
+        content["period_start"] = period_start.isoformat()
+    if period_end is not None:
+        content["period_end"] = period_end.isoformat()
+    content["auto_generated"] = report_type in {"weekly", "monthly", "quarterly", "annual"}
+    if report_sections:
+        content["report_sections"] = report_sections
+    if premium_content:
+        content["premium_content"] = premium_content
+    if report_modules:
+        content["report_modules"] = report_modules
+    return content
+
+
+_RICH_MONITOR_SNAPSHOT_KEYS = (
+    "prompt_analytics",
+    "rank_trend",
+    "brand_city_rankings",
+    "matrix_rows",
+    "source_analysis",
+    "tracked_entities",
+)
+
+
+def _merge_rich_monitor_snapshot(content: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    monitor = dict(content.get("monitor_snapshot") or {})
+    for key in _RICH_MONITOR_SNAPSHOT_KEYS:
+        value = snapshot.get(key)
+        if value:
+            monitor[key] = value
+    content["monitor_snapshot"] = monitor
+    content["diagnosis_pipeline"] = "lead_diagnosis"
+    return content
+
+
+def compose_tenant_diagnosis_report_bundle(
+    db: Session,
+    tenant_id: int,
+    *,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
+    """报告中心企业诊断：与售前诊断共用 aggregate_lead_diagnosis 汇总与 8 模块正文。"""
+    result = aggregate_tenant_diagnosis(db, tenant_id)
+    monitor = dict(result.get("monitor_snapshot") or {})
+    kpis = dict(result.get("kpis") or {})
+    diagnosis_block = dict(result.get("diagnosis") or {})
+    ai_insights = dict(result.get("ai_insights") or {})
+    highlights = list(monitor.get("highlights") or ai_insights.get("highlights") or [])
+    brand_name = str(result.get("brand_name") or _tenant_brand_name(db, tenant_id))
+    company_name = result.get("company_name")
+    period_label = str(result.get("period_label") or _period_label_for_type("diagnosis", datetime.now()))
+    now = generated_at or datetime.now()
+
+    competitors = list_competitors(db, tenant_id)
+    competitor_names = [item.name for item in competitors if item.name]
+    platform_stats = list(monitor.get("platform_stats") or [])
+    sentiment_counts = dict(monitor.get("sentiment_counts") or {})
+    top_sources = list(monitor.get("top_sources") or [])
+
+    snapshot = {
+        **monitor,
+        "kpis": kpis,
+        "brand_name": brand_name,
+        "company_name": company_name,
+        "highlights": highlights,
+        "competitor_count": len(competitor_names),
+        "platform_count": len(platform_stats),
+    }
+
+    report_sections = dict(result.get("report_sections") or {})
+    report_modules = build_report_modules(
+        brand_name=brand_name,
+        company_name=company_name,
+        report_type="diagnosis",
+        period_label=period_label,
+        period_start=None,
+        period_end=None,
+        kpis=kpis,
+        platform_stats=platform_stats,
+        sentiment_counts=sentiment_counts,
+        top_sources=top_sources,
+        competitor_names=competitor_names,
+        diagnosis=diagnosis_block,
+        highlights=highlights,
+    )
+    report_modules["legacy_sections"] = report_sections
+
+    premium_content = build_premium_content(
+        brand_name=brand_name,
+        company_name=company_name,
+        report_type="diagnosis",
+        period_label=period_label,
+        kpis=kpis,
+        platform_stats=platform_stats,
+        diagnosis=diagnosis_block,
+        report_sections=report_sections,
+        executive_summary=ai_insights.get("executive_summary"),
+        highlights=highlights,
+        report_modules=report_modules,
+        sentiment_counts=sentiment_counts,
+        top_sources=top_sources,
+        competitor_names=competitor_names,
+    )
+
+    diagnosis_block["diagnosis_title"] = sanitize_display_text(
+        diagnosis_block.get("diagnosis_title"),
+        _default_diagnosis_title(brand_name, "diagnosis"),
+    )
+
+    completed_count = kpis.get("completed_count") or kpis.get("subtask_count") or 0
+    report_title = _default_report_title("diagnosis", brand_name)
+    data_summary = f"基于 {completed_count} 条已完成监测子任务 · {period_label}"
+
+    content = _build_report_content(
+        brand_name=brand_name,
+        company_name=company_name,
+        report_type="diagnosis",
+        period_label=period_label,
+        period_start=None,
+        period_end=None,
+        generated_at=now,
+        snapshot=snapshot,
+        highlights=highlights,
+        diagnosis_block=diagnosis_block,
+        ai_insights=ai_insights,
+        kpis=kpis,
+        report_sections=report_sections or None,
+        premium_content=premium_content or None,
+        report_modules=report_modules,
+    )
+    content = _merge_rich_monitor_snapshot(content, snapshot)
+
+    return {
+        "report_title": report_title,
+        "data_summary": data_summary,
+        "content": content,
+    }
+
+
+def refresh_diagnosis_report_for_tenant(
+    db: Session,
+    *,
+    report_id: int,
+    tenant_id: int,
+    generated_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    """原地刷新企业诊断报告正文（走售前诊断汇总链路）。"""
+    report = db.scalar(
+        select(GeoReport).where(
+            GeoReport.id == report_id,
+            GeoReport.tenant_id == tenant_id,
+            GeoReport.report_type == "diagnosis",
+            GeoReport.deleted.is_(False),
+        )
+    )
+    if report is None:
+        return None
+
+    bundle = compose_tenant_diagnosis_report_bundle(db, tenant_id, generated_at=generated_at)
+    report.report_title = bundle["report_title"]
+    report.data_summary = bundle["data_summary"]
+    report.report_content_json = bundle["content"]
+    db.commit()
+    db.refresh(report)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    return _serialize_report_row(report, tenant.name if tenant else None)
 
 
 def _ensure_platform_operator(current: CurrentSession) -> None:
@@ -339,7 +580,13 @@ def get_report_detail(db: Session, report_id: int, current: CurrentSession) -> d
     return payload
 
 
-def generate_report(db: Session, payload: dict[str, Any], current: CurrentSession) -> dict[str, Any]:
+def generate_report(
+    db: Session,
+    payload: dict[str, Any],
+    current: CurrentSession,
+    *,
+    auto_commit: bool = True,
+) -> dict[str, Any]:
     _check_report_action(db, current, "can_create")
     tenant_id = payload.get("tenant_id")
     if not tenant_id:
@@ -348,72 +595,81 @@ def generate_report(db: Session, payload: dict[str, Any], current: CurrentSessio
     ensure_tenant(db, tenant_id)
     ensure_sales_tenant_access(db, current, tenant_id)
 
-    diagnosis = db.scalar(
-        select(BrandDiagnosis)
-        .where(BrandDiagnosis.tenant_id == tenant_id, BrandDiagnosis.deleted.is_(False))
-        .order_by(desc(BrandDiagnosis.id))
-        .limit(1)
-    )
-    snapshot = build_tenant_monitor_snapshot(db, tenant_id)
-    brand_name = snapshot.get("brand_name") or _tenant_brand_name(db, tenant_id)
-    competitors = list_competitors(db, tenant_id)
-    competitor_names = [item.name for item in competitors if item.name]
-    kpis = dict(snapshot.get("kpis") or {})
-
-    existing_diagnosis = None
-    if diagnosis:
-        existing_diagnosis = {
-            "health_score": diagnosis.health_score,
-            "sentiment_summary": diagnosis.sentiment_summary,
-            "strength_points": diagnosis.strength_points,
-            "weakness_points": diagnosis.weakness_points,
-            "recommendation": diagnosis.recommendation,
-            "diagnosis_title": diagnosis.diagnosis_title,
-        }
-        kpis["health_score"] = diagnosis.health_score
-
     report_type = str(payload.get("report_type") or "diagnosis")
-    now = datetime.now()
-    period_label = _period_label_for_type(report_type, now)
+    if report_type not in MANUAL_REPORT_TYPES:
+        raise ValueError("运营端仅支持手动生成品牌诊断报告，周期报告由系统自动生成")
 
-    highlights, diagnosis_block, ai_insights, kpis = enrich_report_narrative(
-        brand_name=brand_name,
-        company_name=snapshot.get("company_name"),
-        report_type=report_type,
-        period_label=period_label,
-        snapshot=snapshot,
-        competitor_names=competitor_names,
-        existing_diagnosis=existing_diagnosis,
-    )
+    if report_type == "diagnosis":
+        bundle = compose_tenant_diagnosis_report_bundle(db, tenant_id)
+        report_title = str(payload.get("report_title") or bundle["report_title"]).strip() or bundle["report_title"]
+        content = bundle["content"]
+        data_summary = bundle["data_summary"]
+    else:
+        diagnosis = db.scalar(
+            select(BrandDiagnosis)
+            .where(BrandDiagnosis.tenant_id == tenant_id, BrandDiagnosis.deleted.is_(False))
+            .order_by(desc(BrandDiagnosis.id))
+            .limit(1)
+        )
+        snapshot = build_tenant_monitor_snapshot(db, tenant_id)
+        brand_name = snapshot.get("brand_name") or _tenant_brand_name(db, tenant_id)
+        competitors = list_competitors(db, tenant_id)
+        competitor_names = [item.name for item in competitors if item.name]
+        kpis = dict(snapshot.get("kpis") or {})
 
-    default_title = _default_report_title(report_type, brand_name)
-    report_title = str(payload.get("report_title") or default_title).strip() or default_title
+        existing_diagnosis = None
+        if diagnosis:
+            existing_diagnosis = {
+                "health_score": diagnosis.health_score,
+                "sentiment_summary": diagnosis.sentiment_summary,
+                "strength_points": diagnosis.strength_points,
+                "weakness_points": diagnosis.weakness_points,
+                "recommendation": diagnosis.recommendation,
+                "diagnosis_title": diagnosis.diagnosis_title,
+            }
+            kpis["health_score"] = diagnosis.health_score
 
-    diagnosis_block["diagnosis_title"] = sanitize_display_text(
-        diagnosis_block.get("diagnosis_title"),
-        _default_diagnosis_title(brand_name, report_type),
-    )
+        now = datetime.now()
+        period_label = _period_label_for_type(report_type, now)
 
-    completed_count = kpis.get("completed_count") or 0
-    data_summary = f"基于 {completed_count} 条已完成监测子任务 · {period_label}"
+        highlights, diagnosis_block, ai_insights, kpis, report_sections, premium_content, report_modules = enrich_report_narrative(
+            brand_name=brand_name,
+            company_name=snapshot.get("company_name"),
+            report_type=report_type,
+            period_label=period_label,
+            snapshot=snapshot,
+            competitor_names=competitor_names,
+            existing_diagnosis=existing_diagnosis,
+        )
 
-    content: dict[str, Any] = {
-        "brand_name": brand_name,
-        "company_name": snapshot.get("company_name"),
-        "period_label": period_label,
-        "generated_at": now.isoformat(),
-        "kpis": kpis,
-        "diagnosis": diagnosis_block,
-        "ai_insights": ai_insights,
-        "monitor_snapshot": {
-            "sentiment_counts": snapshot.get("sentiment_counts"),
-            "platform_stats": snapshot.get("platform_stats"),
-            "top_sources": snapshot.get("top_sources"),
-            "highlights": highlights,
-            "competitor_count": snapshot.get("competitor_count"),
-            "platform_count": snapshot.get("platform_count"),
-        },
-    }
+        default_title = _default_report_title(report_type, brand_name)
+        report_title = str(payload.get("report_title") or default_title).strip() or default_title
+
+        diagnosis_block["diagnosis_title"] = sanitize_display_text(
+            diagnosis_block.get("diagnosis_title"),
+            _default_diagnosis_title(brand_name, report_type),
+        )
+
+        completed_count = kpis.get("completed_count") or 0
+        data_summary = f"基于 {completed_count} 条已完成监测子任务 · {period_label}"
+
+        content = _build_report_content(
+            brand_name=brand_name,
+            company_name=snapshot.get("company_name"),
+            report_type=report_type,
+            period_label=period_label,
+            period_start=None,
+            period_end=None,
+            generated_at=now,
+            snapshot=snapshot,
+            highlights=highlights,
+            diagnosis_block=diagnosis_block,
+            ai_insights=ai_insights,
+            kpis=kpis,
+            report_sections=report_sections or None,
+            premium_content=premium_content or None,
+            report_modules=report_modules,
+        )
 
     report = GeoReport(
         tenant_id=tenant_id,
@@ -425,13 +681,176 @@ def generate_report(db: Session, payload: dict[str, Any], current: CurrentSessio
         created_by=current.user.id,
     )
     db.add(report)
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
+    db.refresh(report)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    return _serialize_report_row(report, tenant.name if tenant else None)
+
+
+def _compose_scheduled_report_bundle(
+    db: Session,
+    *,
+    tenant_id: int,
+    report_type: str,
+    period_start: date,
+    period_end: date,
+    generated_at: datetime | None = None,
+    snapshot_override: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """组装周期报告标题、摘要与正文 JSON；无样本且未注入 snapshot 时返回 None。"""
+    snapshot = snapshot_override or build_tenant_monitor_snapshot(
+        db,
+        tenant_id,
+        start_date=period_start,
+        end_date=period_end,
+    )
+    completed_count = int((snapshot.get("kpis") or {}).get("completed_count") or 0)
+    if snapshot_override is None and completed_count <= 0:
+        return None
+
+    brand_name = snapshot.get("brand_name") or _tenant_brand_name(db, tenant_id)
+    competitors = list_competitors(db, tenant_id)
+    competitor_names = [item.name for item in competitors if item.name]
+    kpis = dict(snapshot.get("kpis") or {})
+
+    label = build_period_label(report_type, period_start, period_end)
+    now = generated_at or datetime.now()
+
+    highlights, diagnosis_block, ai_insights, kpis, report_sections, premium_content, report_modules = enrich_report_narrative(
+        brand_name=brand_name,
+        company_name=snapshot.get("company_name"),
+        report_type=report_type,
+        period_label=label,
+        snapshot=snapshot,
+        competitor_names=competitor_names,
+        existing_diagnosis=None,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    from app.services.report_period_service import default_report_title as scheduled_default_title
+
+    report_title = scheduled_default_title(report_type, brand_name, period_start, period_end)
+    diagnosis_block["diagnosis_title"] = sanitize_display_text(
+        diagnosis_block.get("diagnosis_title"),
+        _default_diagnosis_title(brand_name, report_type),
+    )
+
+    data_summary = f"基于 {completed_count} 条已完成监测子任务 · {label}"
+    content = _build_report_content(
+        brand_name=brand_name,
+        company_name=snapshot.get("company_name"),
+        report_type=report_type,
+        period_label=label,
+        period_start=period_start,
+        period_end=period_end,
+        generated_at=now,
+        snapshot=snapshot,
+        highlights=highlights,
+        diagnosis_block=diagnosis_block,
+        ai_insights=ai_insights,
+        kpis=kpis,
+        report_sections=report_sections or None,
+        premium_content=premium_content or None,
+        report_modules=report_modules,
+    )
+
+    return {
+        "report_title": report_title,
+        "data_summary": data_summary,
+        "content": content,
+    }
+
+
+def refresh_scheduled_report_for_tenant(
+    db: Session,
+    *,
+    report_id: int,
+    period_start: date,
+    period_end: date,
+    generated_at: datetime | None = None,
+    snapshot_override: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """原地刷新已发布周期报告正文（保留 id/period_key，用于 demo 重灌与内容升级）。"""
+    report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
+    if report is None:
+        return None
+
+    bundle = _compose_scheduled_report_bundle(
+        db,
+        tenant_id=report.tenant_id,
+        report_type=report.report_type,
+        period_start=period_start,
+        period_end=period_end,
+        generated_at=generated_at,
+        snapshot_override=snapshot_override,
+    )
+    if bundle is None:
+        return None
+
+    report.report_title = bundle["report_title"]
+    report.data_summary = bundle["data_summary"]
+    report.report_content_json = bundle["content"]
+    report.status = "published"
+    db.commit()
+    db.refresh(report)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
+    return _serialize_report_row(report, tenant.name if tenant else None)
+
+
+def generate_scheduled_report_for_tenant(
+    db: Session,
+    *,
+    tenant_id: int,
+    report_type: str,
+    period_start: date,
+    period_end: date,
+    period_key: str,
+    generated_at: datetime | None = None,
+    snapshot_override: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """自动生成周期报告并直接发布；周期内无已完成子任务则跳过（可用 snapshot_override 注入演示数据）。"""
+    ensure_tenant(db, tenant_id)
+    bundle = _compose_scheduled_report_bundle(
+        db,
+        tenant_id=tenant_id,
+        report_type=report_type,
+        period_start=period_start,
+        period_end=period_end,
+        generated_at=generated_at,
+        snapshot_override=snapshot_override,
+    )
+    if bundle is None:
+        return None
+
+    report = GeoReport(
+        tenant_id=tenant_id,
+        report_title=bundle["report_title"],
+        report_type=report_type,
+        status="published",
+        period_key=period_key,
+        data_summary=bundle["data_summary"],
+        report_content_json=bundle["content"],
+        created_by=None,
+    )
+    db.add(report)
     db.commit()
     db.refresh(report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
 
-def update_report(db: Session, report_id: int, payload: dict[str, Any], current: CurrentSession) -> dict[str, Any]:
+def update_report(
+    db: Session,
+    report_id: int,
+    payload: dict[str, Any],
+    current: CurrentSession,
+    *,
+    auto_commit: bool = True,
+) -> dict[str, Any]:
     _check_report_action(db, current, "can_update")
     report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
     if report is None:
@@ -470,7 +889,10 @@ def update_report(db: Session, report_id: int, payload: dict[str, Any], current:
         content["monitor_snapshot"] = snapshot
 
     report.report_content_json = content
-    db.commit()
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     result = _serialize_report_row(report, tenant.name if tenant else None)
@@ -478,14 +900,23 @@ def update_report(db: Session, report_id: int, payload: dict[str, Any], current:
     return result
 
 
-def publish_report(db: Session, report_id: int, current: CurrentSession) -> dict[str, Any]:
+def publish_report(
+    db: Session,
+    report_id: int,
+    current: CurrentSession,
+    *,
+    auto_commit: bool = True,
+) -> dict[str, Any]:
     _check_report_action(db, current, "can_update")
     report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
     if report is None:
         raise ValueError("报告不存在")
     guard_tenant_resource_access(db, current, report.tenant_id)
     report.status = "published"
-    db.commit()
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)

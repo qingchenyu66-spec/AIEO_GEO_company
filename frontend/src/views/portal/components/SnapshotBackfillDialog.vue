@@ -4,6 +4,7 @@ import type { MonitorSubtask } from '../../../services/monitor'
 import { submitSnapshotBackfill } from '../../../services/snapshotBackfill'
 import { notifyOperationError } from '../../../utils/requestError'
 import { platformLabelMap } from '../portalMaps'
+import { parseSnapshotBackfillMentionPosition } from '../snapshotBackfillDisplay'
 
 const props = defineProps<{
   visible: boolean
@@ -19,7 +20,7 @@ const submitting = ref(false)
 const form = reactive({
   snapshot_url: '',
   answer_content: '',
-  mention_position: '' as string,
+  mention_position: '' as string | number,
 })
 
 const dialogVisible = computed({
@@ -49,11 +50,10 @@ async function handleSubmit() {
   if (!props.subtask?.subtask_id) return
   submitting.value = true
   try {
-    const mentionRaw = form.mention_position.trim()
     const result = await submitSnapshotBackfill(props.subtask.subtask_id, {
       snapshot_url: form.snapshot_url.trim(),
       answer_content: form.answer_content.trim(),
-      mention_position: mentionRaw ? Number(mentionRaw) : null,
+      mention_position: parseSnapshotBackfillMentionPosition(form.mention_position),
     })
     emit('success', result.subtask)
     dialogVisible.value = false

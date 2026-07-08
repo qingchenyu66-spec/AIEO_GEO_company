@@ -2,6 +2,12 @@ import { http } from './http'
 
 export type LeadDiagnosisStatus = 'pending' | 'collecting' | 'ready' | 'failed'
 
+export interface LeadDiagnosisCreator {
+  user_id: number
+  display_name: string
+  username?: string | null
+}
+
 export interface LeadDiagnosisRun {
   id: number
   schedule_key: string
@@ -15,6 +21,14 @@ export interface LeadDiagnosisRun {
   updated_at: string
 }
 
+export interface LeadDiagnosisSchedulePlanItem {
+  day: string
+  slot: string
+  schedule_key: string
+  schedule_label: string
+  region_code?: string | null
+}
+
 export interface LeadDiagnosisItem {
   id: number
   brand_name: string
@@ -26,6 +40,8 @@ export interface LeadDiagnosisItem {
   region_codes?: string[]
   schedule_times: string[]
   schedule_days?: number
+  schedule_calendar_days?: number
+  plan_end_date?: string
   schedule_total_count?: number
   diagnosis_date: string
   status: LeadDiagnosisStatus
@@ -34,6 +50,8 @@ export interface LeadDiagnosisItem {
   avg_rank?: number | null
   run_count: number
   completed_run_count: number
+  created_by_user_id?: number | null
+  creator?: LeadDiagnosisCreator | null
   created_at: string
   updated_at: string
 }
@@ -41,6 +59,7 @@ export interface LeadDiagnosisItem {
 export interface LeadDiagnosisDetail extends LeadDiagnosisItem {
   diagnosis_result?: Record<string, unknown> | null
   runs?: LeadDiagnosisRun[]
+  schedule_plan?: LeadDiagnosisSchedulePlanItem[]
 }
 
 export interface CreateLeadDiagnosisPayload {
@@ -89,8 +108,16 @@ export async function refreshLeadDiagnosis(leadId: number): Promise<LeadDiagnosi
   return response.data.data
 }
 
-export async function submitLeadDiagnosisRun(leadId: number, force = false): Promise<Record<string, unknown>> {
-  const response = await http.post(`/v1/lead-diagnosis/${leadId}/submit-run`, null, { params: { force } })
+export async function submitLeadDiagnosisRun(
+  leadId: number,
+  options: { force?: boolean; scheduleKey?: string } = {},
+): Promise<Record<string, unknown>> {
+  const response = await http.post(`/v1/lead-diagnosis/${leadId}/submit-run`, null, {
+    params: {
+      force: options.force ?? false,
+      schedule_key: options.scheduleKey,
+    },
+  })
   return response.data.data
 }
 

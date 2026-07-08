@@ -36,3 +36,5 @@ def test_lead_diagnosis_list_returns_200_with_region_code_field() -> None:
         phone = rows[0].get("contact_phone")
         if phone:
             assert "****" in phone or "*" in phone
+        if rows[0].get("creator"):
+            assert "display_name" in rows[0]["creator"]

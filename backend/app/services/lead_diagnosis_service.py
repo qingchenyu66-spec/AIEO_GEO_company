@@ -14,7 +14,10 @@ from kombu.exceptions import OperationalError
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
+from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
+from app.models.user import User
+from app.models.tenant import Tenant
 from app.core.lead_diagnosis_config import (
     DEFAULT_LEAD_SCHEDULE_TIMES,
     LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
@@ -177,6 +180,30 @@ class DueLeadRun:
     region_code: str | None = None
 
 
+def can_view_lead_creator_info(db: Session, current: CurrentSession) -> bool:
+    """运营/管理员可查看创建人；销售仅访问本人任务，列表不重复展示创建人。"""
+    return not is_sales_identity(db, current.identity)
+
+
+def _creator_users_map(db: Session, user_ids: set[int]) -> dict[int, User]:
+    if not user_ids:
+        return {}
+    return {
+        row.id: row
+        for row in db.scalars(select(User).where(User.id.in_(user_ids)))
+    }
+
+
+def _serialize_creator(user: User | None) -> dict[str, Any] | None:
+    if user is None:
+        return None
+    return {
+        "user_id": user.id,
+        "display_name": (user.display_name or "").strip() or user.username,
+        "username": user.username,
+    }
+
+
 def require_lead_diagnosis_access(db: Session, current: CurrentSession, action: str = "can_export") -> None:
     if current.identity.identity_type != "PLATFORM":
         raise PermissionError("仅平台运营端可访问售前诊断")
@@ -219,6 +246,69 @@ def _schedule_total_count(lead: LeadDiagnosis) -> int:
     return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead)) * region_count
 
 
+def _schedule_rounds_per_region(lead: LeadDiagnosis) -> int:
+    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead))
+
+
+def _schedule_anchor(lead: LeadDiagnosis) -> datetime:
+    """抓取计划起点：创建时刻（跳过创建前已过的时段）。"""
+    if lead.created_at:
+        return lead.created_at.replace(tzinfo=None) if lead.created_at.tzinfo else lead.created_at
+    return datetime.combine(lead.diagnosis_date, time.min)
+
+
+def _slot_scheduled_at(day: date, slot: str) -> datetime | None:
+    slot_time = _slot_time(slot)
+    if slot_time is None:
+        return None
+    return datetime.combine(day, slot_time)
+
+
+def _iter_schedule_slot_rounds(lead: LeadDiagnosis) -> Iterator[tuple[date, str]]:
+    """按时间顺序产出计入「九次」的 (日期, 时段)，创建前已过的时段跳过并顺延。"""
+    slots = _schedule_slots(lead)
+    rounds_needed = _schedule_rounds_per_region(lead)
+    anchor = _schedule_anchor(lead)
+    emitted = 0
+    day_offset = 0
+    while emitted < rounds_needed and day_offset < 366:
+        day = lead.diagnosis_date + timedelta(days=day_offset)
+        for slot in slots:
+            scheduled = _slot_scheduled_at(day, slot)
+            if scheduled is None or scheduled < anchor:
+                continue
+            yield day, slot
+            emitted += 1
+            if emitted >= rounds_needed:
+                return
+        day_offset += 1
+
+
+def _plan_end_date(lead: LeadDiagnosis) -> date:
+    last_day = lead.diagnosis_date
+    for day, _slot in _iter_schedule_slot_rounds(lead):
+        last_day = day
+    return last_day
+
+
+def _schedule_calendar_days(lead: LeadDiagnosis) -> int:
+    days = {day for day, _slot in _iter_schedule_slot_rounds(lead)}
+    return len(days) or LEAD_SCHEDULE_DAYS
+
+
+def _serialize_schedule_plan(lead: LeadDiagnosis) -> list[dict[str, Any]]:
+    return [
+        {
+            "day": day.isoformat(),
+            "slot": slot,
+            "schedule_key": schedule_key,
+            "schedule_label": schedule_label,
+            "region_code": region_code,
+        }
+        for day, slot, schedule_key, schedule_label, region_code in _iter_schedule_plan(lead)
+    ]
+
+
 def _append_region_to_schedule(key: str, label: str, region_code: str | None) -> tuple[str, str]:
     if not region_code:
         return key, label
@@ -228,14 +318,11 @@ def _append_region_to_schedule(key: str, label: str, region_code: str | None) ->
 
 def _iter_schedule_plan(lead: LeadDiagnosis) -> Iterator[tuple[date, str, str, str, str | None]]:
     """按时间顺序产出 (day, slot, schedule_key, schedule_label, region_code)。"""
-    slots = _schedule_slots(lead)
-    for day_offset in range(LEAD_SCHEDULE_DAYS):
-        day = lead.diagnosis_date + timedelta(days=day_offset)
-        for slot in slots:
-            key, label = _build_schedule_key(day, slot)
-            for region_code in region_submission_targets(lead.region_codes_json):
-                schedule_key, schedule_label = _append_region_to_schedule(key, label, region_code)
-                yield day, slot, schedule_key, schedule_label, region_code
+    for day, slot in _iter_schedule_slot_rounds(lead):
+        key, label = _build_schedule_key(day, slot)
+        for region_code in region_submission_targets(lead.region_codes_json):
+            schedule_key, schedule_label = _append_region_to_schedule(key, label, region_code)
+            yield day, slot, schedule_key, schedule_label, region_code
 
 
 def _expected_schedule_keys(lead: LeadDiagnosis) -> set[str]:
@@ -294,7 +381,14 @@ def _lead_region_codes(lead: LeadDiagnosis, region_code: str | None = None) -> l
     return [code] if code else None
 
 
-def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False, mask_contact: bool = False) -> dict[str, Any]:
+def _serialize_lead(
+    lead: LeadDiagnosis,
+    *,
+    include_result: bool = False,
+    mask_contact: bool = False,
+    include_creator: bool = False,
+    creator: User | None = None,
+) -> dict[str, Any]:
     result = lead.diagnosis_result_json or {}
     kpis = result.get("kpis") or {}
     contact_phone = mask_phone(lead.contact_phone) if mask_contact else lead.contact_phone
@@ -309,6 +403,8 @@ def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False, mask_c
         "region_codes": normalize_region_codes(lead.region_codes_json or []),
         "schedule_times": _schedule_slots(lead),
         "schedule_days": LEAD_SCHEDULE_DAYS,
+        "schedule_calendar_days": _schedule_calendar_days(lead),
+        "plan_end_date": _plan_end_date(lead).isoformat(),
         "schedule_total_count": _schedule_total_count(lead),
         "diagnosis_date": lead.diagnosis_date.isoformat(),
         "status": lead.status,
@@ -322,9 +418,19 @@ def _serialize_lead(lead: LeadDiagnosis, *, include_result: bool = False, mask_c
         "mention_rate": kpis.get("mention_rate"),
         "avg_rank": kpis.get("avg_rank"),
     }
+    if include_creator:
+        if creator is not None:
+            payload["creator"] = _serialize_creator(creator)
+        elif lead.created_by_user_id:
+            payload["creator"] = {
+                "user_id": lead.created_by_user_id,
+                "display_name": f"用户 #{lead.created_by_user_id}",
+                "username": None,
+            }
     if include_result:
         payload["diagnosis_result"] = result
         payload["runs"] = [_serialize_run(item) for item in sorted(lead.runs or [], key=lambda row: row.schedule_key)]
+        payload["schedule_plan"] = _serialize_schedule_plan(lead)
     return payload
 
 
@@ -349,7 +455,20 @@ def list_lead_diagnoses(db: Session, current: CurrentSession, *, keyword: str | 
             or needle in (row.contact_name or "").lower()
             or needle in (row.contact_phone or "").lower()
         ]
-    return [_serialize_lead(row, mask_contact=True) for row in rows]
+    show_creator = can_view_lead_creator_info(db, current)
+    creator_map = _creator_users_map(
+        db,
+        {row.created_by_user_id for row in rows if row.created_by_user_id},
+    ) if show_creator else {}
+    return [
+        _serialize_lead(
+            row,
+            mask_contact=True,
+            include_creator=show_creator,
+            creator=creator_map.get(row.created_by_user_id) if row.created_by_user_id else None,
+        )
+        for row in rows
+    ]
 
 
 def get_lead_diagnosis(
@@ -363,7 +482,18 @@ def get_lead_diagnosis(
     lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
-    return _serialize_lead(lead, include_result=True)
+    show_creator = current is not None and can_view_lead_creator_info(db, current)
+    creator = None
+    if show_creator and lead.created_by_user_id:
+        creator = db.get(User, lead.created_by_user_id)
+    mask_contact = bool(current is not None and is_sales_identity(db, current.identity))
+    return _serialize_lead(
+        lead,
+        include_result=True,
+        mask_contact=mask_contact,
+        include_creator=show_creator,
+        creator=creator,
+    )
 
 
 def normalize_lead_brand_name(brand_name: str | None) -> str:
@@ -440,9 +570,11 @@ def create_lead_diagnosis(
     db.refresh(lead)
 
     if payload.start_immediately:
-        submit_due_lead_run(db, current, lead.id, force=True)
+        lead.status = "collecting"
+        db.commit()
+        submit_due_lead_run(db, current, lead.id, force=False)
 
-    return get_lead_diagnosis(db, lead.id)
+    return get_lead_diagnosis(db, lead.id, current=current)
 
 
 def update_lead_diagnosis(
@@ -705,7 +837,7 @@ def refresh_lead_diagnosis_runs(
     if changed:
         db.commit()
     maybe_finalize_lead_diagnosis(db, lead_id)
-    return get_lead_diagnosis(db, lead_id)
+    return get_lead_diagnosis(db, lead_id, current=current)
 
 
 def _all_slots_attempted(lead: LeadDiagnosis) -> bool:
@@ -908,7 +1040,7 @@ def aggregate_lead_diagnosis(
         })
 
     top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:12]
-    plan_end = lead.diagnosis_date + timedelta(days=LEAD_SCHEDULE_DAYS - 1)
+    plan_end = _plan_end_date(lead)
     schedule_round_count = len({run.schedule_key for run in (lead.runs or []) if run.status == "completed"})
     total_rounds = _schedule_total_count(lead)
 
@@ -1055,6 +1187,296 @@ def _rule_diagnosis_block(
         "weakness_points": "部分平台/问题场景下排名与提及率仍有提升空间，建议补充权威信源与对比内容。",
         "recommendation": "建议签约后开启持续监测，针对低提及平台补充结构化内容与第三方引用。",
     }
+
+
+def _schedule_from_monitor_task(task: GeoMonitorTask) -> tuple[str, str]:
+    moment = task.created_at or datetime.now()
+    return (
+        moment.strftime("%Y%m%d-%H%M"),
+        moment.strftime("%Y-%m-%d %H:%M"),
+    )
+
+
+def _completed_tenant_monitor_tasks(db: Session, tenant_id: int, *, max_rounds: int = 9) -> list[GeoMonitorTask]:
+    tasks = list(
+        db.scalars(
+            select(GeoMonitorTask)
+            .where(
+                GeoMonitorTask.tenant_id == tenant_id,
+                GeoMonitorTask.deleted.is_(False),
+                GeoMonitorTask.status == "completed",
+            )
+            .order_by(GeoMonitorTask.created_at.asc())
+        )
+    )
+    ready: list[GeoMonitorTask] = []
+    for task in tasks:
+        total = db.scalar(
+            select(func.count())
+            .select_from(GeoMonitorSubtask)
+            .where(GeoMonitorSubtask.task_id == task.task_id)
+        ) or 0
+        completed = db.scalar(
+            select(func.count())
+            .select_from(GeoMonitorSubtask)
+            .where(
+                GeoMonitorSubtask.task_id == task.task_id,
+                GeoMonitorSubtask.status == "completed",
+            )
+        ) or 0
+        if total > 0 and completed == total:
+            ready.append(task)
+    return ready[-max_rounds:]
+
+
+def find_tenant_lead_diagnosis(db: Session, tenant_id: int) -> LeadDiagnosis | None:
+    """查找与企业监测数据关联、且已汇总的售前诊断记录。"""
+    lead = db.scalar(
+        select(LeadDiagnosis)
+        .where(
+            LeadDiagnosis.converted_tenant_id == tenant_id,
+            LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosis.status == "ready",
+        )
+        .order_by(desc(LeadDiagnosis.id))
+        .limit(1)
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+    if lead is not None:
+        return lead
+
+    return db.scalar(
+        select(LeadDiagnosis)
+        .join(LeadDiagnosisRun, LeadDiagnosisRun.lead_diagnosis_id == LeadDiagnosis.id)
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == LeadDiagnosisRun.task_id)
+        .where(
+            GeoMonitorTask.tenant_id == tenant_id,
+            GeoMonitorTask.deleted.is_(False),
+            LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosis.status == "ready",
+        )
+        .order_by(desc(LeadDiagnosis.id))
+        .limit(1)
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+
+
+def _build_ephemeral_lead_from_tenant_tasks(
+    db: Session,
+    *,
+    tenant_id: int,
+    tenant: Tenant,
+    asset: BrandAsset,
+    tasks: list[GeoMonitorTask],
+) -> LeadDiagnosis:
+    prompts = list(
+        dict.fromkeys(
+            item
+            for task in reversed(tasks)
+            for item in (task.prompts_json or [])
+            if str(item).strip()
+        )
+    )[:5]
+    competitors = [
+        row.name
+        for row in db.scalars(
+            select(BrandCompetitor).where(
+                BrandCompetitor.tenant_id == tenant_id,
+                BrandCompetitor.deleted.is_(False),
+                BrandCompetitor.status.is_(True),
+            )
+        )
+        if row.name
+    ]
+    lead = LeadDiagnosis(
+        brand_name=(asset.brand_name or asset.company_full_name or tenant.name).strip(),
+        contact_note=f"基于 {tenant.name} 历史监测数据（{len(tasks)} 轮已完成任务）",
+        prompts_json=prompts,
+        competitors_json=competitors[:10],
+        region_codes_json=list(asset.region_codes_json or []),
+        schedule_times_json=list(asset.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES),
+        diagnosis_date=(tasks[0].created_at or datetime.now()).date(),
+        status="ready",
+        converted_tenant_id=tenant_id,
+    )
+    lead.runs = [
+        LeadDiagnosisRun(
+            lead_diagnosis_id=0,
+            schedule_key=schedule_key,
+            schedule_label=schedule_label,
+            task_id=task.task_id,
+            status="completed",
+            prompt_count=len(task.prompts_json or []),
+            platform_count=len(task.platforms_json or []),
+        )
+        for task in tasks
+        for schedule_key, schedule_label in [_schedule_from_monitor_task(task)]
+    ]
+    return lead
+
+
+def _task_region_map_for_task_ids(db: Session, task_ids: list[str]) -> dict[str, list[str] | None]:
+    if not task_ids:
+        return {}
+    tasks = {
+        row.task_id: row
+        for row in db.scalars(
+            select(GeoMonitorTask).where(
+                GeoMonitorTask.task_id.in_(task_ids),
+                GeoMonitorTask.deleted.is_(False),
+            )
+        )
+    }
+    return _task_region_map(tasks)
+
+
+def aggregate_tenant_diagnosis(db: Session, tenant_id: int) -> dict[str, Any]:
+    """与企业售前诊断导出共用 aggregate_lead_diagnosis 汇总链路。"""
+    lead = find_tenant_lead_diagnosis(db, tenant_id)
+    if lead is not None:
+        subtasks = _load_subtasks(db, lead)
+        if subtasks:
+            task_ids = [run.task_id for run in (lead.runs or []) if run.task_id]
+            return aggregate_lead_diagnosis(
+                lead,
+                subtasks,
+                task_region_map=_task_region_map_for_task_ids(db, task_ids),
+            )
+
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError(f"企业不存在: tenant_id={tenant_id}")
+
+    asset = db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant_id, BrandAsset.deleted.is_(False)))
+    if asset is None:
+        raise ValueError(f"企业 {tenant.name} 尚未配置品牌资产")
+
+    tasks = _completed_tenant_monitor_tasks(db, tenant_id)
+    if not tasks:
+        raise ValueError(f"企业 {tenant.name} 没有全部完成的监测任务，无法生成诊断报告")
+
+    ephemeral = _build_ephemeral_lead_from_tenant_tasks(
+        db,
+        tenant_id=tenant_id,
+        tenant=tenant,
+        asset=asset,
+        tasks=tasks,
+    )
+    task_ids = [run.task_id for run in (ephemeral.runs or []) if run.task_id]
+    subtasks = list(
+        db.scalars(
+            select(GeoMonitorSubtask)
+            .where(GeoMonitorSubtask.task_id.in_(task_ids))
+            .order_by(GeoMonitorSubtask.id.asc())
+        )
+    )
+    if not subtasks:
+        raise ValueError("关联监测子任务为空，无法汇总诊断")
+
+    return aggregate_lead_diagnosis(
+        ephemeral,
+        subtasks,
+        task_region_map=_task_region_map_for_task_ids(db, task_ids),
+    )
+
+
+def import_tenant_lead_diagnosis(
+    db: Session,
+    *,
+    tenant_id: int,
+    contact_note: str | None = None,
+    max_rounds: int = 9,
+    created_by_user_id: int | None = None,
+) -> LeadDiagnosis:
+    """从企业已完成监测任务生成并持久化售前诊断（与 import 脚本同源）。"""
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise ValueError(f"企业不存在: tenant_id={tenant_id}")
+
+    asset = db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant_id, BrandAsset.deleted.is_(False)))
+    if asset is None:
+        raise ValueError(f"企业 {tenant.name} 尚未配置品牌资产")
+
+    tasks = _completed_tenant_monitor_tasks(db, tenant_id, max_rounds=max_rounds)
+    if not tasks:
+        raise ValueError(f"企业 {tenant.name} 没有全部完成的监测任务，无法生成诊断")
+
+    prompts = list(
+        dict.fromkeys(item for task in reversed(tasks) for item in (task.prompts_json or []) if str(item).strip())
+    )[:5]
+    if not prompts:
+        raise ValueError("已完成监测任务中未找到检测问题")
+
+    competitors = [
+        row.name
+        for row in db.scalars(
+            select(BrandCompetitor).where(
+                BrandCompetitor.tenant_id == tenant_id,
+                BrandCompetitor.deleted.is_(False),
+                BrandCompetitor.status.is_(True),
+            )
+        )
+        if row.name
+    ]
+
+    lead = LeadDiagnosis(
+        brand_name=(asset.brand_name or asset.company_full_name or tenant.name).strip(),
+        contact_note=contact_note or f"基于 {tenant.name} 历史监测数据（{len(tasks)} 轮已完成任务）自动生成",
+        prompts_json=prompts,
+        competitors_json=competitors[:10],
+        region_codes_json=list(asset.region_codes_json or []),
+        schedule_times_json=list(asset.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES),
+        diagnosis_date=tasks[0].created_at.date(),
+        status="collecting",
+        converted_tenant_id=tenant_id,
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(lead)
+    db.flush()
+
+    for task in tasks:
+        schedule_key, schedule_label = _schedule_from_monitor_task(task)
+        db.add(
+            LeadDiagnosisRun(
+                lead_diagnosis_id=lead.id,
+                schedule_key=schedule_key,
+                schedule_label=schedule_label,
+                task_id=task.task_id,
+                status="completed",
+                prompt_count=len(task.prompts_json or []),
+                platform_count=len(task.platforms_json or []),
+            )
+        )
+
+    db.commit()
+    db.refresh(lead)
+
+    lead = db.scalar(
+        select(LeadDiagnosis)
+        .where(LeadDiagnosis.id == lead.id)
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+    if lead is None:
+        raise ValueError("售前诊断创建失败")
+
+    subtasks = _load_subtasks(db, lead)
+    if not subtasks:
+        lead.status = "failed"
+        db.commit()
+        raise ValueError("关联监测子任务为空，无法汇总")
+
+    task_ids = [run.task_id for run in (lead.runs or []) if run.task_id]
+    result = aggregate_lead_diagnosis(
+        lead,
+        subtasks,
+        task_region_map=_task_region_map_for_task_ids(db, task_ids),
+    )
+    lead.diagnosis_result_json = result
+    lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
+    lead.status = "ready"
+    db.commit()
+    db.refresh(lead)
+    return lead
 
 
 def build_lead_diagnosis_export(

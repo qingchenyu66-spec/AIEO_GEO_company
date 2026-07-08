@@ -69,10 +69,6 @@ function notifyError(error: unknown, context: string) {
   notifyOperationError(error, context, errorMessage)
 }
 
-function textToList(value: string) {
-  return value.split(/[\n,，;；]/).map(item => item.trim()).filter(Boolean)
-}
-
 export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const auth = useAuthStore()
   const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
@@ -199,8 +195,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       const ownerMatched = !canFilterBySales.value
         || ownerFilter === 'all'
         || (ownerFilter === 'none' && tenant.owner_user_id == null)
-        || tenant.owner_user_id === ownerFilter
-        || (typeof ownerFilter === 'string' && ownerFilter !== 'all' && ownerFilter !== 'none' && tenant.owner_user_id === Number(ownerFilter))
+        || (typeof ownerFilter === 'number' && tenant.owner_user_id === ownerFilter)
       return keywordMatched && statusMatched && ownerMatched
     })
   })
@@ -279,12 +274,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       if (endDate.getTime() < today.getTime()) return 'stopped'
     }
     return 'active'
-  }
-
-  function numberList(value: string, min: number, max: number) {
-    return textToList(value)
-      .map(item => Number(item))
-      .filter(item => Number.isInteger(item) && item >= min && item <= max)
   }
 
   function makeKeywordGroup(monitorKeyword = '', exposureTerms: string[] = []): BrandKeywordGroup {

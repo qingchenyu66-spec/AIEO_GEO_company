@@ -75,3 +75,13 @@ def region_submission_targets(codes: list[str] | None) -> list[str | None]:
     if not normalized:
         return [None]
     return list(normalized)
+
+
+def extract_region_code_from_schedule_key(schedule_key: str | None) -> str | None:
+    """从调度键后缀 `-rg330000` 解析省级编码（兼容历史任务未落库 region_code_json）。"""
+    text = str(schedule_key or "").strip()
+    if "-rg" not in text:
+        return None
+    code = text.split("-rg", 1)[1].split("-", 1)[0].strip()
+    normalized = normalize_region_codes([code]) if code else []
+    return normalized[0] if normalized else None

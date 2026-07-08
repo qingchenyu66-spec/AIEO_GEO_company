@@ -22,6 +22,7 @@ from app.services.knowledge_service import (
     resolve_knowledge_file_path,
     save_knowledge_file,
 )
+from app.services.menu_permission_service import require_knowledge_permission
 from app.services.operation_log_service import write_business_audit
 
 router = APIRouter(prefix="/knowledge")
@@ -35,7 +36,10 @@ def knowledge_files(
 ) -> ApiResponse[list[dict]]:
     """查询企业知识库文件；客户只能查看自身企业。"""
     try:
+        require_knowledge_permission(db, current, "can_export")
         records = list_knowledge_files(db, current, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except Exception as exc:
         raise_read_endpoint_error(exc, context="knowledge.files")
     return ApiResponse(data=[serialize_knowledge_file(item) for item in records])
@@ -50,27 +54,29 @@ async def upload_knowledge_file(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """上传企业知识库原文件；可选自动触发 DeepSeek 解析。"""
+    record = None
     try:
+        require_knowledge_permission(db, current, "can_create")
         record = await save_knowledge_file(db, current, file, tenant_id)
         if settings.deepseek_knowledge_auto_parse_on_upload and settings.deepseek_knowledge_parse_enabled:
             try:
                 record = schedule_knowledge_parse(db, record.id)
             except ValueError:
                 db.refresh(record)
+        write_business_audit(
+            db,
+            current,
+            "知识库上传",
+            f"上传资料：{record.original_name}（{record.file_size} 字节）",
+            request=request,
+            target_module="知识库",
+            target_id=record.id,
+            tenant_id=record.tenant_id,
+        )
+        db.commit()
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="knowledge.upload")
-    write_business_audit(
-        db,
-        current,
-        "知识库上传",
-        f"上传资料：{record.original_name}（{record.file_size} 字节）",
-        request=request,
-        target_module="知识库",
-        target_id=record.id,
-        tenant_id=record.tenant_id,
-    )
-    db.commit()
     return ApiResponse(data=serialize_knowledge_file(record))
 
 
@@ -82,6 +88,7 @@ def knowledge_file_content(
 ) -> ApiResponse[dict]:
     """读取知识库原文件全文，供前端完整预览。"""
     try:
+        require_knowledge_permission(db, current, "can_export")
         data = read_knowledge_file_text(db, current, file_id)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="knowledge.content")
@@ -96,6 +103,7 @@ def download_knowledge_file(
 ) -> FileResponse:
     """下载知识库原文件。"""
     try:
+        require_knowledge_permission(db, current, "can_export")
         record, file_path = resolve_knowledge_file_path(db, current, file_id)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="knowledge.download")
@@ -117,6 +125,7 @@ def parse_knowledge_file_endpoint(
 ) -> ApiResponse[dict]:
     """手动触发 DeepSeek 解析指定资料。"""
     try:
+        require_knowledge_permission(db, current, "can_update")
         assert_knowledge_file_access(db, current, file_id)
         record = schedule_knowledge_parse(db, file_id)
     except Exception as exc:
@@ -155,19 +164,24 @@ def remove_knowledge_file(
     file_name = record.original_name
     file_tenant_id = record.tenant_id
     try:
+        require_knowledge_permission(db, current, "can_update")
         delete_knowledge_file(db, current, file_id)
+        write_business_audit(
+            db,
+            current,
+            "知识库删除",
+            f"删除资料：{file_name}",
+            request=request,
+            target_module="知识库",
+            target_id=file_id,
+            tenant_id=file_tenant_id,
+            risk_level="关注",
+        )
+        db.commit()
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except Exception as exc:
+        db.rollback()
         raise_read_endpoint_error(exc, context="knowledge.delete")
-    write_business_audit(
-        db,
-        current,
-        "知识库删除",
-        f"删除资料：{file_name}",
-        request=request,
-        target_module="知识库",
-        target_id=file_id,
-        tenant_id=file_tenant_id,
-        risk_level="关注",
-    )
-    db.commit()
     return ApiResponse(data={"id": file_id})

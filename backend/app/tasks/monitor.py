@@ -161,6 +161,9 @@ def submit_schedule_group_task(
         return result
     except Ignore:
         raise
+    except RuntimeError as exc:
+        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
+        return {"status": "skipped", "message": str(exc)}
     except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
@@ -402,6 +405,9 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
             )
             finalize_due_lead_diagnoses(db)
             return {"task_id": task_id, "status": "synced", "task_status": task.status, "detail": detail}
+        except RuntimeError as exc:
+            logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, exc)
+            return {"task_id": task_id, "status": "skipped", "message": str(exc)}
         except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
             logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, exc)
             raise self.retry(exc=exc)
@@ -409,3 +415,33 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
             clear_sync_live()
             _clear_enqueued_mark(f"sync:{task_id}")
             db.close()
+
+
+@celery_app.task(name="app.tasks.monitor.scan_due_scheduled_reports", ignore_result=True)
+def scan_due_scheduled_reports() -> dict[str, Any]:
+    """每日扫描并生成到期的周报/月报/季报/年报，直接发布至客户端。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    lock_key = _scan_lock_key("scan-scheduled-reports", bucket_minutes=60)
+    with redis_lock(lock_key, ttl_seconds=3600) as acquired:
+        if not acquired:
+            return {"status": "locked", "message": "已有其他进程正在生成周期报告"}
+
+        from app.services.report_schedule_service import run_due_scheduled_reports
+
+        db = SessionLocal()
+        try:
+            result = run_due_scheduled_reports(db)
+        finally:
+            db.close()
+
+    record_beat_scan("app.tasks.monitor.scan_due_scheduled_reports", result)
+    logger.info(
+        "scan_due_scheduled_reports due=%s generated=%s skipped=%s errors=%s",
+        result.get("due_types"),
+        result.get("generated"),
+        result.get("skipped"),
+        len(result.get("errors") or []),
+    )
+    return result

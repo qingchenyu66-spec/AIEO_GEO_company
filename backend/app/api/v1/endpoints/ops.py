@@ -1,14 +1,16 @@
 ﻿"""操作日志和系统配置API端点。"""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session, require_platform
+from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.models.ops import OperationLog
 from app.schemas.common import ApiResponse
+from app.services.menu_permission_service import require_platform_menu_permission
 from app.services.operation_log_service import query_operation_logs, serialize_operation_logs
 
 router = APIRouter(prefix="/ops")
@@ -27,7 +29,19 @@ def list_operation_logs(
 ) -> ApiResponse[dict]:
     """操作日志分页列表，支持按天数、操作类型、关键词和企业筛选。"""
     require_platform(current)
-    since = datetime.utcnow() - timedelta(days=days)
+    try:
+        require_platform_menu_permission(
+            db,
+            current,
+            "platform.logs",
+            "can_export",
+            detail="当前账号无权查看操作日志",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="ops.logs")
+    since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
     rows, total = query_operation_logs(
         db,
         since=since,

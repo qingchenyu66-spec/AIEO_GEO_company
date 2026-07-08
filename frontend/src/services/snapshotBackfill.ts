@@ -27,8 +27,11 @@ export interface SnapshotBackfillPendingItem {
   page_screenshot?: string | null
   lead_diagnosis_id?: number | null
   schedule_key?: string | null
+  schedule_window_key?: string | null
   schedule_label?: string | null
   schedule_source?: string | null
+  region_code?: string | null
+  region_label?: string | null
   brand_name?: string | null
 }
 
@@ -67,8 +70,12 @@ export interface SnapshotBackfillListResult {
   summary: SnapshotBackfillListSummary
 }
 
-export async function getPendingSnapshotBackfills(query: SnapshotBackfillQuery = {}): Promise<SnapshotBackfillListResult> {
+export async function getPendingSnapshotBackfills(
+  query: SnapshotBackfillQuery = {},
+  options?: { signal?: AbortSignal },
+): Promise<SnapshotBackfillListResult> {
   const response = await http.get('/v1/monitor/snapshot-backfill/pending', {
+    signal: options?.signal,
     params: {
       limit: query.limit ?? 40,
       offset: query.offset ?? 0,

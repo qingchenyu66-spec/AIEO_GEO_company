@@ -21,7 +21,10 @@ export function mergeSnapshotBackfillItem(
     keyword_group: subtask.keyword_group ?? partial.keyword_group,
     schedule_label: subtask.schedule_label ?? partial.schedule_label,
     schedule_key: subtask.schedule_key ?? partial.schedule_key,
+    schedule_window_key: subtask.schedule_window_key ?? partial.schedule_window_key,
     schedule_source: subtask.schedule_source ?? partial.schedule_source,
+    region_code: subtask.region_code ?? partial.region_code,
+    region_label: subtask.region_label ?? partial.region_label,
     brand_name: subtask.brand_name ?? partial.brand_name,
     task_created_at: subtask.task_created_at ?? partial.task_created_at,
     updated_at: subtask.updated_at ?? partial.updated_at,
@@ -52,4 +55,12 @@ export function snapshotBackfillRankDisplay(
 export function snapshotBackfillBatchLabel(item: SnapshotBackfillPendingItem | null) {
   if (!item) return '—'
   return item.schedule_label || '—'
+}
+
+/** number 型 input 的 v-model 可能为 number，提交前统一解析为排名或 null。 */
+export function parseSnapshotBackfillMentionPosition(value: string | number | null | undefined): number | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
 }

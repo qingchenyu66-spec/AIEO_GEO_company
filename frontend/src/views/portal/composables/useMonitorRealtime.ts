@@ -40,6 +40,7 @@ import {
   type RankingMatrix,
   type RankingMatrixCell,
   type RankingMatrixCellSnapshot,
+  type RankingMatrixColumn,
   type RankingMatrixRow,
 } from '../../../services/monitor'
 import {
@@ -50,6 +51,12 @@ import {
 } from '../portalMaps'
 import { sortPlatformCodes } from '../platformOrder'
 import { formatExposureLabel, formatRank, sanitizeCustomerScheduleLabel } from '../portalUtils'
+import {
+  sliceMatrixByPlatform,
+  type MatrixChartType,
+  type MatrixLayoutMode,
+} from './rankingMatrixChartUtils'
+import { loadEchartsRuntime } from '../../../utils/echartsLoader'
 
 export type MonitorViewMode = 'list' | 'matrix'
 export type RealtimeDatePreset = '7d' | '30d' | 'custom'
@@ -164,6 +171,66 @@ function matrixCellRankClass(rank: number | null | undefined) {
   return 'rank-low'
 }
 
+function resolveMatrixColumnMonitorKeyword(
+  column: RankingMatrixColumn,
+  groups: BrandKeywordGroup[],
+  options: RankingMatrix['keyword_group_options'] = [],
+): string | null {
+  const fromApi = (column.monitor_keyword || '').trim()
+  if (fromApi) return fromApi
+  if (column.group_id != null) {
+    const matched = groups.find(group => group.id === column.group_id)
+    if (matched) {
+      const explicit = (matched.monitor_keyword || '').trim()
+      if (explicit) return explicit
+    }
+  }
+  const text = (column.prompt || '').trim()
+  if (!text) return null
+  let best: { score: number; keyword: string } | null = null
+  for (const group of groups) {
+    const explicit = (group.monitor_keyword || '').trim()
+    const keywords = keywordGroupMonitorKeywords(group)
+    const candidates = explicit ? [explicit, ...keywords] : keywords
+    for (const keyword of candidates) {
+      const token = (keyword || '').trim()
+      if (!token) continue
+      let score = -1
+      if (text === token) score = 2000 + token.length
+      else if (text.includes(token)) score = 1500 + token.length
+      else if (token.includes(text)) score = 1400 + text.length
+      if (score >= 0 && (!best || score > best.score)) {
+        best = { score, keyword: explicit || token }
+      }
+    }
+  }
+  if (best) return best.keyword
+  for (const option of options || []) {
+    const keywords = option.monitor_keywords?.length
+      ? option.monitor_keywords
+      : [option.monitor_keyword]
+    for (const keyword of keywords) {
+      const token = (keyword || '').trim()
+      if (token && (text === token || text.includes(token))) return token
+    }
+  }
+  return null
+}
+
+function enrichRankingMatrixColumns(
+  matrix: RankingMatrix,
+  groups: BrandKeywordGroup[],
+): RankingMatrix {
+  return {
+    ...matrix,
+    columns: matrix.columns.map(column => ({
+      ...column,
+      monitor_keyword: (column.monitor_keyword || '').trim()
+        || resolveMatrixColumnMonitorKeyword(column, groups, matrix.keyword_group_options),
+    })),
+  }
+}
+
 export function useMonitorRealtime(externalTenantId: number | null = null) {
   const route = useRoute()
   const router = useRouter()
@@ -195,6 +262,12 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const viewMode = ref<MonitorViewMode>('matrix')
   const rankingMatrix = ref<RankingMatrix | null>(null)
   const loadingMatrix = ref(false)
+  const matrixChartType = ref<MatrixChartType>('bar')
+
+  watch(matrixChartType, (type) => {
+    if (type === 'table') matrixChartType.value = 'bar'
+  })
+  const activeMatrixPlatform = ref('')
   const datePreset = ref<MonitorDatePreset>('7d')
   const configExpanded = ref(false)
 
@@ -436,6 +509,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       }
     }
 
+    matrix = enrichRankingMatrixColumns(matrix, monitorGroupOptions.value)
+
     const exactPrompt = filters.exactPrompt.trim()
     if (!exactPrompt) return matrix
     const columns = matrix.columns.filter(col => (col.prompt || '').trim() === exactPrompt)
@@ -542,6 +617,92 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   })
 
   const latestMatrixWindowKey = computed(() => rankingMatrix.value?.rows[0]?.schedule_window_key || '')
+
+  const matrixLayoutMode = computed<MatrixLayoutMode>(() => {
+    if (filters.platform.trim()) return 'single'
+    const count = platformOptions.value.length || rankingMatrixView.value?.purchased_platforms?.length || 1
+    if (count <= 1) return 'single'
+    if (count === 2) return 'dual'
+    return 'multi'
+  })
+
+  const matrixFilterSummary = computed(() => {
+    const matrix = rankingMatrixView.value
+    const groupLabel = selectedKeywordGroup.value
+      ? keywordGroupFilterValue(selectedKeywordGroup.value, selectedKeywordGroup.value.sort_order ?? 0)
+      : '全部'
+    const platformLabel = filters.platform.trim()
+      ? (platformLabelMap[filters.platform] || filters.platform)
+      : `${platformOptions.value.length} 平台 · 当前 ${platformLabelMap[activeMatrixPlatform.value] || activeMatrixPlatform.value || '—'}`
+    const dayCount = matrix
+      ? new Set(matrix.rows.map(row => row.day_key || row.schedule_window_key || '').filter(Boolean)).size
+      : 0
+    return {
+      date: `${filters.startDate.slice(5)} ~ ${filters.endDate.slice(5)}`,
+      platform: platformLabel,
+      group: groupLabel,
+      monitorKeyword: filters.monitorKeyword.trim() || '全部',
+      exposureTerm: filters.exposureTerm.trim() || '全部',
+      columnCount: matrix?.columns.length ?? 0,
+      dayCount,
+    }
+  })
+
+  function pickDefaultMatrixPlatform(matrix: RankingMatrix) {
+    const purchased = platformOptions.value.length
+      ? platformOptions.value
+      : (matrix.purchased_platforms || [])
+    const rowPlatforms = new Set(
+      matrix.rows.map(row => row.platform).filter(Boolean) as string[],
+    )
+    const withRows = matrix.all_platforms
+      ? purchased.filter(code => rowPlatforms.has(code))
+      : purchased
+    const list = withRows.length ? withRows : purchased
+    for (const code of list) {
+      const slice = sliceMatrixByPlatform(matrix, code)
+      if (slice.columns.length && slice.rows.length) return code
+    }
+    return list[0] || matrix.platform || ''
+  }
+
+  function ensureActiveMatrixPlatform() {
+    const matrix = rankingMatrixView.value
+    if (!matrix) return
+    if (filters.platform.trim()) {
+      activeMatrixPlatform.value = filters.platform.trim()
+      return
+    }
+    const current = activeMatrixPlatform.value.trim()
+    const purchased = platformOptions.value.length
+      ? platformOptions.value
+      : (matrix.purchased_platforms || [])
+    const rowPlatforms = new Set(
+      matrix.rows.map(row => row.platform).filter(Boolean) as string[],
+    )
+    const withRows = matrix.all_platforms
+      ? purchased.filter(code => rowPlatforms.has(code))
+      : purchased
+    const list = withRows.length ? withRows : purchased
+    if (!current || !list.includes(current)) {
+      activeMatrixPlatform.value = pickDefaultMatrixPlatform(matrix)
+    }
+  }
+
+  function openMatrixChartCell(payload: {
+    row: RankingMatrixRow
+    prompt: string
+    cell: RankingMatrixCell | undefined
+  }) {
+    void selectMatrixCell(
+      payload.row.task_id,
+      payload.row.platform,
+      payload.row.snapshot_at,
+      payload.row.schedule_label,
+      payload.prompt,
+      payload.cell,
+    )
+  }
 
   // formatRank / formatExposureLabel 见 portalUtils，与快照补录等页面共用
 
@@ -742,7 +903,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     }
   }
 
-  async function loadMonitorTasks() {
+  async function loadMonitorTasks(options: { loadTaskDetail?: boolean } = {}) {
+    const loadTaskDetail = options.loadTaskDetail ?? true
     loadingMonitor.value = true
     const taskIdFromQuery = String(route.query.task_id || '').trim()
     const subtaskIdFromQuery = String(route.query.subtask_id || '').trim()
@@ -759,7 +921,12 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       applyInsightsQuery()
       if (taskIdFromQuery) {
         await selectMonitorTask(taskIdFromQuery)
-      } else if (!monitorDetail.value && monitorTasks.value[0]?.task_id) {
+      } else if (
+        loadTaskDetail
+        && viewMode.value === 'list'
+        && !monitorDetail.value
+        && monitorTasks.value[0]?.task_id
+      ) {
         await selectMonitorTask(monitorTasks.value[0].task_id)
       }
       if (subtaskIdFromQuery) {
@@ -789,6 +956,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         monitor_keyword: filters.monitorKeyword.trim() || undefined,
         exposure_term: filters.exposureTerm.trim() || undefined,
       }))
+      ensureActiveMatrixPlatform()
     } catch (error: unknown) {
       notifyOperationError(error, '排名矩阵加载失败')
     } finally {
@@ -796,14 +964,21 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     }
   }
 
+  let detailSeq = 0
+  let snapshotDetailSeq = 0
+
   async function selectMonitorTask(taskId: string) {
+    const seq = ++detailSeq
     loadingMonitor.value = true
     try {
-      monitorDetail.value = await withRetry(() => getMonitorTaskDetail(taskId))
+      const data = await withRetry(() => getMonitorTaskDetail(taskId))
+      if (seq !== detailSeq) return
+      monitorDetail.value = data
     } catch (error: unknown) {
+      if (seq !== detailSeq) return
       notifyOperationError(error, '任务详情加载失败')
     } finally {
-      loadingMonitor.value = false
+      if (seq === detailSeq) loadingMonitor.value = false
     }
   }
 
@@ -811,6 +986,9 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     viewMode.value = mode
     if (mode === 'matrix' && !rankingMatrix.value && !loadingMatrix.value) {
       void loadRankingMatrix()
+    }
+    if (mode === 'list' && !monitorDetail.value && monitorTasks.value[0]?.task_id) {
+      void selectMonitorTask(monitorTasks.value[0].task_id)
     }
   }
 
@@ -855,9 +1033,13 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     }
     expandedSnapshotId.value = snapshot.subtask_id
     loadingSnapshotId.value = snapshot.subtask_id
+    const seq = ++snapshotDetailSeq
     try {
-      detailSubtask.value = await withRetry(() => getMonitorSubtask(snapshot.subtask_id))
+      const subtask = await withRetry(() => getMonitorSubtask(snapshot.subtask_id))
+      if (seq !== snapshotDetailSeq) return
+      detailSubtask.value = subtask
     } catch (error: unknown) {
+      if (seq !== snapshotDetailSeq) return
       if (snapshot.page_screenshot) {
         detailSubtask.value = {
           subtask_id: snapshot.subtask_id,
@@ -887,7 +1069,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         detailSubtask.value = null
       }
     } finally {
-      loadingSnapshotId.value = null
+      if (seq === snapshotDetailSeq) loadingSnapshotId.value = null
     }
   }
 
@@ -976,7 +1158,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   }
 
   function refreshCurrentView() {
-    void loadMonitorTasks()
+    void loadMonitorTasks({ loadTaskDetail: viewMode.value === 'list' })
     if (viewMode.value === 'matrix') {
       void loadRankingMatrix()
     }
@@ -1037,6 +1219,28 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     },
   )
 
+  watch(
+    () => filters.platform,
+    (platform) => {
+      if (platform.trim()) {
+        activeMatrixPlatform.value = platform.trim()
+      } else {
+        ensureActiveMatrixPlatform()
+      }
+    },
+  )
+
+  watch(rankingMatrixView, () => {
+    ensureActiveMatrixPlatform()
+  }, { deep: true })
+
+  watch(platformOptions, (list) => {
+    if (filters.platform.trim() || !list.length) return
+    if (!activeMatrixPlatform.value.trim()) {
+      activeMatrixPlatform.value = list[0]
+    }
+  })
+
   const matrixDrawerSnapshots = computed(() => {
     const cell = detailContext.value?.cell
     return cell ? matrixCellSnapshots(cell) : []
@@ -1046,14 +1250,30 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   onMounted(async () => {
     applyInsightsQuery()
-    await loadMonitorTasks()
-    if (!String(route.query.subtask_id || '').trim()) {
-      await loadRankingMatrix()
+    const subtaskDeepLink = String(route.query.subtask_id || '').trim()
+
+    void loadEchartsRuntime('matrix')
+
+    if (subtaskDeepLink) {
+      await loadMonitorTasks()
+      return
     }
+
+    if (viewMode.value === 'matrix') {
+      loadingMatrix.value = true
+      await Promise.all([
+        loadRankingMatrix(),
+        loadMonitorTasks({ loadTaskDetail: false }),
+      ])
+      return
+    }
+
+    await loadMonitorTasks()
+    await loadRankingMatrix()
   })
 
   const stopMonitorRefresh = onMonitorRefresh(() => {
-    void loadMonitorTasks()
+    void loadMonitorTasks({ loadTaskDetail: viewMode.value === 'list' })
     if (viewMode.value === 'matrix') {
       void loadRankingMatrix()
     }
@@ -1092,6 +1312,10 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     viewMode,
     rankingMatrix,
     rankingMatrixView,
+    matrixChartType,
+    activeMatrixPlatform,
+    matrixLayoutMode,
+    matrixFilterSummary,
     loadingMatrix,
     loadingDetail,
     detailVisible,
@@ -1106,6 +1330,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     selectMonitorTask,
     switchViewMode,
     selectMatrixCell,
+    openMatrixChartCell,
     toggleMatrixSnapshot,
     matrixDrawerSnapshots,
     isMatrixDrawerMode,

@@ -273,6 +273,27 @@
   font-size: 12px;
 }
 
+.lead-rail-creator {
+  color: #5a7394;
+  font-size: 11px;
+}
+
+.lead-config-group {
+  display: grid;
+  gap: 10px;
+}
+
+.lead-config-group + .lead-config-group {
+  margin-top: 18px;
+}
+
+.lead-config-group h4 {
+  margin: 0;
+  color: #17395f;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .lead-rail-progress {
   display: flex;
   gap: 5px;
@@ -612,6 +633,13 @@
   display: block;
   margin-top: 4px;
   color: #6a7f9a;
+}
+
+.lead-slot-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .lead-report-layout {

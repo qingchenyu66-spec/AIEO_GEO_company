@@ -43,7 +43,11 @@ from app.services.snapshot_backfill_service import (
 )
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
-from app.services.menu_permission_service import require_snapshot_backfill_permission
+from app.services.menu_permission_service import (
+    has_identity_menu_permission,
+    require_platform_menu_permission,
+    require_snapshot_backfill_permission,
+)
 from app.services.tenant_scope import (
     ensure_sales_tenant_access,
     sales_owned_lead_diagnosis_task_ids,
@@ -92,6 +96,12 @@ def create_monitor_task(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """提交模力指数检测任务，并把任务摘要保存到本地库。"""
+    require_platform(current, detail="仅平台运营端可以提交 GEO 检测任务")
+    if not (
+        has_identity_menu_permission(db, current.identity.id, "platform.lead_diagnosis", "can_create")
+        or has_identity_menu_permission(db, current.identity.id, "platform.audit.schedule", "can_update")
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权提交 GEO 检测任务")
     try:
         task = submit_monitor_task(db, payload, current)
     except MolizhishuApiError as exc:
@@ -296,6 +306,9 @@ def monitor_subtask_snapshot_backfill(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="monitor.snapshot_backfill")
     return ApiResponse(data=data)
 
 
@@ -385,6 +398,10 @@ def scheduled_monitor_run_due(
         scoped_tenant_id, scoped_tenant_ids = _resolve_schedule_tenant_scope(db, current, tenant_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if force and not has_identity_menu_permission(
+        db, current.identity.id, "platform.audit.schedule", "can_update"
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权强制执行定时监测")
     try:
         result = run_due_scheduled_tasks(
             db,

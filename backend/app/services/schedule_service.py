@@ -17,6 +17,7 @@ from app.services.brand_service import active_keyword_groups, keyword_group_moni
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
+from app.services.platform_matrix_service import prepare_daily_platform_matrix_before_submit
 from app.core.region_catalog import normalize_region_codes, region_submission_targets
 
 
@@ -117,11 +118,16 @@ def enumerate_due_schedule_groups(
         stmt = stmt.where(BrandAsset.tenant_id.in_(tenant_ids))
     elif tenant_id:
         stmt = stmt.where(BrandAsset.tenant_id == tenant_id)
-    for asset in db.scalars(stmt):
+    assets = list(db.scalars(stmt))
+    tenant_ids = {asset.tenant_id for asset in assets}
+    keyword_groups_cache = {
+        tenant: active_keyword_groups(db, tenant) for tenant in tenant_ids
+    }
+    for asset in assets:
         schedule_key = matched_schedule_key(asset, now, force=force, tolerance_minutes=settings.schedule_tolerance_minutes)
         if not schedule_key:
             continue
-        keyword_groups = active_keyword_groups(db, asset.tenant_id)
+        keyword_groups = keyword_groups_cache.get(asset.tenant_id) or []
         per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
         for group in keyword_groups:
             for region_code in region_submission_targets(asset.region_codes_json):

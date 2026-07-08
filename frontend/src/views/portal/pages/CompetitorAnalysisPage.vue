@@ -22,7 +22,6 @@ const sentimentTrendChartRef = ref<HTMLDivElement | null>(null)
 const sentimentWordCloudRef = ref<HTMLDivElement | null>(null)
 
 const {
-  brandAsset,
   isCustomerView,
   trendPreset,
   trendStartDate,
@@ -55,7 +54,6 @@ const {
   exportCsv,
   togglePlatform,
   drillDownToRealtime,
-  drillDownToSnapshot,
 } = useBrandInsights({ mentionTrendChartRef, sentimentTrendChartRef, sentimentWordCloudRef })
 
 const datePresets: Array<{ value: CompetitorDatePreset; label: string }> = [

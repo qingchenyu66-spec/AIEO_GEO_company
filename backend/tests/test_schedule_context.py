@@ -9,6 +9,7 @@ def test_resolve_task_schedule_context_prefers_lead_diagnosis_batch() -> None:
         task_id="task-lead",
         monitor_keywords="电梯广告",
         created_at=datetime(2026, 7, 2, 8, 53, 0),
+        region_code_json=[],
     )
     lead_run = SimpleNamespace(
         schedule_key="20260701-1630",
@@ -34,6 +35,7 @@ def test_tenant_task_with_lead_run_is_tenant_monitor_not_lead_diagnosis() -> Non
         tenant_id=6,
         monitor_keywords="电梯广告",
         created_at=datetime(2026, 7, 2, 8, 53, 0),
+        region_code_json=[],
     )
     lead_run = SimpleNamespace(
         schedule_key="20260701-1630",

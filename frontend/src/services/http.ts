@@ -66,6 +66,22 @@ http.interceptors.response.use(
       return Promise.reject(error)
     }
 
+    if (status === 403) {
+      if (!(error.config as { silentError?: boolean } | undefined)?.silentError) {
+        const message = error.response?.data?.detail || '当前账号无权执行此操作'
+        ElMessage.warning(typeof message === 'string' ? message : '当前账号无权执行此操作')
+      }
+      return Promise.reject(error)
+    }
+
+    if (status && status >= 500) {
+      if (!(error.config as { silentError?: boolean } | undefined)?.silentError) {
+        const message = error.response?.data?.detail || '服务暂时不可用，请稍后重试'
+        ElMessage.error(typeof message === 'string' ? message : '服务暂时不可用，请稍后重试')
+      }
+      return Promise.reject(error)
+    }
+
     return Promise.reject(error)
   },
 )

@@ -71,12 +71,40 @@ export function stripReportCompanyPrefix(
   for (const name of names) {
     const company = (name || '').trim()
     if (!company) continue
-    for (const sep of [' · ', '·', ' - ', '－', '-']) {
+    for (const sep of [' · ', '·', ' - ', '－']) {
       const prefix = `${company}${sep}`
       if (text.startsWith(prefix)) return text.slice(prefix.length).trim()
     }
   }
-  const matched = text.match(/^[^·\-－]{2,40}\s*[·\-－]\s*(.+)$/)
-  if (matched) return matched[1].trim()
   return text
 }
+
+const DIAGNOSIS_COVER_TITLE = 'GEO企业诊断报告'
+const TITLE_PAREN_MARKERS = ['（', ' (', '('] as const
+
+function stripDiagnosisTitleSuffix(text: string): string {
+  let cut = text.length
+  for (const marker of TITLE_PAREN_MARKERS) {
+    const pos = text.indexOf(marker)
+    if (pos !== -1) cut = Math.min(cut, pos)
+  }
+  if (cut < text.length) {
+    return text.slice(0, cut).trim()
+  }
+  return text
+}
+
+/** 报告中心展示用标题：诊断报告去掉括号内的周期/抓取说明（详情区单独展示）。 */
+export function formatReportDisplayTitle(item: {
+  report_title: string
+  report_type?: string | null
+  tenant_name?: string | null
+}) {
+  let text = stripReportCompanyPrefix(item.report_title, [item.tenant_name])
+  if (item.report_type === 'diagnosis') {
+    text = stripDiagnosisTitleSuffix(text) || DIAGNOSIS_COVER_TITLE
+  }
+  return text || item.report_title.trim()
+}
+
+export { safeExternalUrl as externalLink } from '../../utils/safeUrl'

@@ -179,6 +179,7 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
 
 
 def _user_create_changes(db: Session, body: dict[str, Any]) -> list[dict[str, str]]:
+    tenant_ids: list[int] = []
     tenant_names: list[str] = []
     for item in body.get("identities") or []:
         if not isinstance(item, dict):
@@ -188,9 +189,13 @@ def _user_create_changes(db: Session, body: dict[str, Any]) -> list[dict[str, st
         if tname:
             tenant_names.append(str(tname))
         elif tid:
-            tenant = db.scalar(select(Tenant).where(Tenant.id == int(tid)))
-            if tenant:
-                tenant_names.append(tenant.name)
+            tenant_ids.append(int(tid))
+    if tenant_ids:
+        name_map = {
+            tenant.id: tenant.name
+            for tenant in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids)))
+        }
+        tenant_names.extend(name_map[tid] for tid in tenant_ids if tid in name_map)
     return [
         _change("操作类型", after="新建用户账号", kind="info"),
         _change("登录账号", after=str(body.get("username") or "—"), kind="add"),
