@@ -3,7 +3,13 @@
 > 目标环境：阿里云 ECS「GEO」+ 域名 `www.aieokj.com`  
 > 文档日期：2026-07-09  
 > 仓库：`https://github.com/livingFather/AIEO_GEO.git`  
-> **本文不含真实密钥**；密钥只放服务器环境变量 / 密钥管理，勿提交 Git。
+> **本文不含真实密钥**；密钥只放服务器环境变量 / 密钥管理，勿提交 Git。  
+>
+> **部署进度（2026-07-09 14:05 CST）**  
+> - 已完成：软件基线、代码同步、MySQL/Redis、迁移+seed、前端 build、systemd（api/beat/submit/sync/default）、Nginx:80  
+> - 公网验收：`http://101.200.152.71/` → 200；`/api/v1/health` → `database: ready`  
+> - 待你完成：DNS A 记录 → `101.200.152.71`；安全组确认 80/443；DNS 生效后执行 `certbot --nginx`  
+> - 演示账号（seed）：`demo` / `platform` / `client`（密码见本地 seed 文档，生产请立即改密）
 
 ---
 
