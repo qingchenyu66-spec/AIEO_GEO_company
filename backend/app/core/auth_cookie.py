@@ -18,7 +18,9 @@ def generate_csrf_token() -> str:
 
 
 def _cookie_secure() -> bool:
-    return settings.auth_cookie_secure or settings.is_production
+    # Controlled only by AUTH_COOKIE_SECURE. Do not force Secure from APP_ENV:
+    # HTTP cutover (IP / pre-cert) would drop cookies and look like "login failed".
+    return bool(settings.auth_cookie_secure)
 
 
 def set_auth_cookie(response: Response, token: str) -> None:
