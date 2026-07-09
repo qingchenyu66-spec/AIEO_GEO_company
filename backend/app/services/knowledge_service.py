@@ -73,19 +73,38 @@ async def save_knowledge_file(
     if file_ext not in ALLOWED_EXTENSIONS:
         raise ValueError("仅支持 PDF、Word、Markdown 和 TXT 文件")
 
-    content = await upload.read()
-    file_size = len(content)
-    if file_size == 0:
-        raise ValueError("不能上传空文件")
-    if file_size > MAX_FILE_SIZE:
-        raise ValueError("单个文件不能超过 30MB")
-    _validate_file_signature(file_ext, content)
-
+    # Stream to disk in chunks; abort as soon as size exceeds the cap (CWE-400).
     tenant_dir = STORAGE_ROOT / str(resolved_tenant_id)
     tenant_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid4().hex}{file_ext}"
     storage_path = Path(str(resolved_tenant_id)) / stored_name
-    (STORAGE_ROOT / storage_path).write_bytes(content)
+    target = STORAGE_ROOT / storage_path
+    file_size = 0
+    head = b""
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > MAX_FILE_SIZE:
+                    raise ValueError("单个文件不能超过 30MB")
+                if len(head) < 16:
+                    need = 16 - len(head)
+                    head += chunk[:need]
+                out.write(chunk)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    if file_size == 0:
+        target.unlink(missing_ok=True)
+        raise ValueError("不能上传空文件")
+    try:
+        _validate_file_signature(file_ext, head)
+    except ValueError:
+        target.unlink(missing_ok=True)
+        raise
 
     record = KnowledgeFile(
         tenant_id=resolved_tenant_id,

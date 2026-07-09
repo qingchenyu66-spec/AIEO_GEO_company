@@ -91,7 +91,7 @@ def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
     )
     if position is None:
         return False
-    return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+    return position.position_code == "PLATFORM_SALES"
 
 
 def guard_sales_tenant(db: Session, current: CurrentSession, tenant_id: int) -> None:
@@ -295,7 +295,7 @@ def write_management_log(
 def position_code_from_name(identity_type: str, name: str) -> str:
     import hashlib
 
-    digest = hashlib.md5(f"{identity_type}:{name}".encode("utf-8")).hexdigest()[:8].upper()
+    digest = hashlib.sha256(f"{identity_type}:{name}".encode("utf-8")).hexdigest()[:8].upper()
     return f"{identity_type}_POS_{digest}"
 
 

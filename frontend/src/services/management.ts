@@ -334,7 +334,10 @@ export async function createManagedUser(payload: CreateUserPayload): Promise<unk
   return response.data.data
 }
 
-export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'>
+export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'> & {
+  /** Explicit soft-delete; omitted identities are kept (PATCH semantics). */
+  remove_identity_types?: IdentityType[]
+}
 
 export async function updateManagedUser(userId: number, payload: UpdateUserPayload): Promise<unknown> {
   const response = await http.put(`/v1/management/users/${userId}`, payload)

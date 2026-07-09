@@ -60,7 +60,7 @@ def _resolve_font_path() -> str | None:
 
 def _stable_color(text: str, polarity: Literal["positive", "negative"]) -> str:
     palette = _POSITIVE_PALETTE if polarity == "positive" else _NEGATIVE_PALETTE
-    digest = hashlib.md5(text.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return palette[int(digest[:8], 16) % len(palette)]
 
 

@@ -60,15 +60,20 @@ def _enqueue_task(task, *, task_id: str, kwargs: dict[str, Any]) -> bool:
 
 
 def _mark_enqueued_once(key: str, *, ttl_seconds: int = 600) -> bool:
-    """用 Redis 短期标记防止同一业务任务被重复塞进队列。"""
+    """用 Redis 短期标记防止同一业务任务被重复塞进队列。
+
+    Redis 不可用时 fail-closed（本轮跳过），避免多 Beat 重复投递；
+    Celery broker 本身也依赖 Redis，长期不可用时任务本就不会跑。
+    """
     client = get_redis_client()
     if client is None:
-        return True
+        logger.warning("enqueue dedupe skipped (redis unavailable), key=%s", key)
+        return False
     try:
         return bool(client.set(prefixed_key(f"celery:enqueued:{key}"), "1", ex=ttl_seconds, nx=True))
     except RedisError as exc:
         logger.warning("mark celery enqueue key failed, key=%s, error=%s", key, exc)
-        return True
+        return False
 
 
 def _clear_enqueued_mark(key: str) -> None:

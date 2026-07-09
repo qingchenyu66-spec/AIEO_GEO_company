@@ -36,7 +36,8 @@ def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
     )
     if position is None:
         return False
-    return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+    # 权限判断使用稳定编码，避免职位名称被改后导致销售可见全部企业。
+    return position.position_code == "PLATFORM_SALES"
 
 
 def ensure_sales_tenant_access(db: Session, current: CurrentSession, tenant_id: int) -> None:

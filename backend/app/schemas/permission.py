@@ -99,10 +99,15 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
-    """平台端维护用户资料和权限。"""
+    """平台端维护用户资料和权限。
+
+    identities：upsert 列表。未出现在列表中的已有身份默认保留。
+    remove_identity_types：仅当显式传入时才软删对应身份（防误删双身份）。
+    """
 
     display_name: str = Field(min_length=2, max_length=50)
     identities: list[UserIdentityCreateItem] = Field(min_length=1)
+    remove_identity_types: list[str] = Field(default_factory=list)
 
 
 class PasswordResetRequest(BaseModel):

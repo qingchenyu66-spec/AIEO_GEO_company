@@ -25,10 +25,10 @@ _SKIP_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
+# management 仍有显式 write_operation_log；knowledge/reports 此前整段跳过导致缺口。
+# 仅跳过 management，避免与显式日志双写；knowledge/reports 走中间件兜底。
 _SKIP_EXPLICIT_AUDIT_PREFIXES = (
     "/api/v1/management/",
-    "/api/v1/knowledge/",
-    "/api/v1/reports/",
 )
 _SKIP_PATHS = frozenset({"/", "/api/v1/auth/login", "/api/v1/auth/select-identity"})
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -115,8 +115,6 @@ class OperationAuditMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         response = await call_next(request)
-        if response.status_code >= 400:
-            return response
 
         operator_name, operator_user_id, tenant_id_from_token = resolve_audit_operator(request)
         tenant_id = tenant_id_from_token
@@ -124,15 +122,20 @@ class OperationAuditMiddleware(BaseHTTPMiddleware):
         if tenant_query and tenant_query.isdigit():
             tenant_id = int(tenant_query)
 
+        failed = response.status_code >= 400
+        description = build_audit_description(request)
+        if failed:
+            description = f"[HTTP {response.status_code}] {description}"
+
         db = SessionLocal()
         try:
             db.add(
                 OperationLog(
                     operator_name=operator_name[:64],
                     action_type=action_type_for_method(request.method),
-                    description=build_audit_description(request)[:500],
+                    description=description[:500],
                     ip_address=_client_ip(request),
-                    risk_level="普通",
+                    risk_level="警告" if failed else "普通",
                     target_module=module_from_api_path(request.url.path),
                     tenant_id=tenant_id,
                     operator_user_id=operator_user_id,

@@ -82,7 +82,7 @@ def get_managed_user(
 
 
 def _tenant_code_from_name(name: str) -> str:
-    digest = hashlib.md5(name.encode("utf-8")).hexdigest()[:10].upper()
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:10].upper()
     return f"TENANT_{digest}"
 
 
@@ -299,9 +299,16 @@ def update_managed_user(
         raise ValueError("同一用户不能重复添加相同登录身份")
 
     user.display_name = payload.display_name
-    keep_types = set(identity_types)
+    remove_types = {item.strip().upper() for item in payload.remove_identity_types if item and item.strip()}
+    invalid_remove = remove_types - {"PLATFORM", "CUSTOMER"}
+    if invalid_remove:
+        raise ValueError(f"无效的 remove_identity_types: {', '.join(sorted(invalid_remove))}")
+    if remove_types & set(identity_types):
+        raise ValueError("不能同时 upsert 并删除同一登录身份")
     for identity in user.identities:
-        if identity.identity_type not in keep_types:
+        if identity.deleted:
+            continue
+        if identity.identity_type in remove_types:
             identity.deleted = True
             identity.status = False
             db.query(UserIdentityMenu).filter(UserIdentityMenu.identity_id == identity.id).delete(synchronize_session=False)
@@ -360,7 +367,7 @@ def restore_managed_user(db: Session, user_id: int, current_user: User, current_
 def _is_sales_position(position: Position | None) -> bool:
     if position is None or position.deleted:
         return False
-    return position.position_code == "PLATFORM_SALES" or position.position_name == "销售"
+    return position.position_code == "PLATFORM_SALES"
 
 
 def user_has_platform_sales_identity(db: Session, user_id: int) -> bool:
@@ -390,10 +397,7 @@ def list_platform_sales_users(db: Session) -> list[dict]:
             UserIdentity.status.is_(True),
             UserIdentity.identity_type == "PLATFORM",
             Position.deleted.is_(False),
-            or_(
-                Position.position_code == "PLATFORM_SALES",
-                Position.position_name == "销售",
-            ),
+            Position.position_code == "PLATFORM_SALES",
         )
         .distinct()
         .order_by(User.display_name.asc(), User.id.asc())

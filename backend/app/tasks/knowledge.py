@@ -22,3 +22,14 @@ def parse_knowledge_file_task(file_id: int) -> dict[str, str]:
         return {"status": "failed", "file_id": str(file_id), "error": str(exc)}
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.knowledge.fail_stale_knowledge_parses", ignore_result=True)
+def fail_stale_knowledge_parses_task(timeout_minutes: int | None = None) -> dict[str, int]:
+    from app.services.knowledge_parse_service import fail_stale_knowledge_parses
+
+    db = SessionLocal()
+    try:
+        return fail_stale_knowledge_parses(db, timeout_minutes=timeout_minutes)
+    finally:
+        db.close()

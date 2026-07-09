@@ -111,8 +111,8 @@ export function useKnowledgeBase() {
   function validateFile(file: File) {
     const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
     const bare = ext.replace(/^\./, '')
-    const normalized = normalizeExt(bare)
-    if (!['pdf', 'doc', 'md', 'txt'].includes(normalized)) {
+    const allowed = new Set(['pdf', 'doc', 'docx', 'md', 'txt'])
+    if (!allowed.has(bare)) {
       throw new Error('仅支持 PDF、Word、Markdown 和 TXT 文件')
     }
     if (file.size === 0) throw new Error('不能上传空文件')

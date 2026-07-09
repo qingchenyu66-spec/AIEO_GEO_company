@@ -176,7 +176,8 @@ def list_pending_monitor_task_ids(
                 ),
             )
         )
-    stmt = stmt.order_by(GeoMonitorTask.updated_at.desc(), GeoMonitorTask.id.desc()).limit(limit)
+    # Oldest-first so backlog cannot starve early pending tasks (CWE-400).
+    stmt = stmt.order_by(GeoMonitorTask.updated_at.asc(), GeoMonitorTask.id.asc()).limit(limit)
     return list(db.scalars(stmt))
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -107,12 +107,46 @@ def request_knowledge_parse(db: Session, file_id: int) -> KnowledgeFile:
     if record is None:
         raise ValueError("文件不存在")
     if record.parse_status == "parsing":
-        return record
+        # Allow re-queue if the previous attempt is already past the timeout window.
+        timeout_min = max(1, settings.knowledge_parse_timeout_minutes)
+        stale_before = datetime.now() - timedelta(minutes=timeout_min)
+        if record.updated_at and record.updated_at > stale_before:
+            return record
     record.parse_status = "parsing"
     record.parse_error = None
     db.commit()
     db.refresh(record)
     return record
+
+
+def fail_stale_knowledge_parses(
+    db: Session,
+    *,
+    timeout_minutes: int | None = None,
+    limit: int = 100,
+) -> dict[str, int]:
+    """Mark stuck parsing rows as failed so the UI does not spin forever."""
+    minutes = max(1, timeout_minutes or settings.knowledge_parse_timeout_minutes)
+    cutoff = datetime.now() - timedelta(minutes=minutes)
+    rows = list(
+        db.scalars(
+            select(KnowledgeFile)
+            .where(
+                KnowledgeFile.deleted.is_(False),
+                KnowledgeFile.parse_status == "parsing",
+                KnowledgeFile.updated_at < cutoff,
+            )
+            .order_by(KnowledgeFile.updated_at.asc())
+            .limit(max(1, limit))
+        )
+    )
+    for record in rows:
+        record.parse_status = "failed"
+        record.parse_error = f"解析超时（超过 {minutes} 分钟未完成），请重试"
+        record.parsed_at = None
+    if rows:
+        db.commit()
+    return {"checked": len(rows), "failed": len(rows)}
 
 
 def schedule_knowledge_parse(db: Session, file_id: int) -> KnowledgeFile:

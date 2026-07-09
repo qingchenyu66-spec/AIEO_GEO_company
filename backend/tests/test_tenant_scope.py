@@ -101,3 +101,15 @@ def test_resolve_and_guard_rejects_foreign():
     db = _sales_db(tenant_id=8, owner_user_id=2)
     with pytest.raises(PermissionError):
         resolve_and_guard_tenant_id(db, _sales_current(user_id=1), 8)
+
+
+def test_chinese_title_alone_is_not_sales_scope():
+    """CWE-863: renaming job title must not expand access; code is authoritative."""
+    from app.services.tenant_scope import is_sales_identity
+
+    db = MagicMock()
+    position = SimpleNamespace(position_code="PLATFORM_OPS", position_name="销售")
+    identity = SimpleNamespace(identity_type="PLATFORM", position_id=1)
+    db.scalar.return_value = position
+    assert is_sales_identity(db, identity) is False
+

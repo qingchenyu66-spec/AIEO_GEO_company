@@ -1,13 +1,20 @@
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Do not publish 6379 to the host; Redis stays on the compose network only.
+    # For local debugging you may temporarily add: ports: ["6379:6379"]
     volumes:
       - redis_data:/data
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-geo_redis_dev}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-geo_redis_dev}"]
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}",
+      ]
 
   api:
     build:
@@ -18,9 +25,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
       SCHEDULE_TOLERANCE_MINUTES: "60"
       MOLIZHISHU_SUBMIT_RATE_PER_MINUTE: "30"
       MOLIZHISHU_SYNC_RATE_PER_MINUTE: "60"
@@ -40,9 +47,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
     depends_on:
       - redis
 
@@ -55,9 +62,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
     depends_on:
       - redis
 
@@ -70,9 +77,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
     depends_on:
       - redis
 
@@ -85,9 +92,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
     depends_on:
       - redis
 
@@ -100,9 +107,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
     depends_on:
       - redis
 
@@ -115,9 +122,9 @@ services:
       - .env
     environment:
       REDIS_ENABLED: "true"
-      REDIS_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-geo_redis_dev}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
       FLOWER_URL: http://127.0.0.1:5555
     depends_on:
       - redis
@@ -127,8 +134,7 @@ services:
 volumes:
   redis_data:
 
-# 50 家企业同点估算（4 词组/家）：
-# - 200 条 submit，全局限流 30/min → 约 7 分钟入模力指数
-# - 2 个 submit worker × concurrency 4 → 最多 8 路并行，但仍受 Redis 全局限流约束
-# - sync 全局限流 60/min，2 个 sync worker 负责长尾轮询
-# 扩容：复制 submit/sync worker 服务，或 docker compose up --scale celery-worker-submit-a=2
+# Capacity note (50 tenants x 4 keyword groups):
+# - ~200 submit jobs at 30/min ~ 7 minutes into Molizhishu
+# - 2 submit workers x concurrency 4, still gated by Redis global rate limit
+# - sync rate 60/min; scale submit/sync services as needed

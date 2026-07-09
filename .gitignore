@@ -6,6 +6,9 @@ __pycache__/
 .coverage
 backend/.venv/
 backend/.env
+e2e/.env.rpa
+*.local.env
+*.env.local
 backend/storage/
 backend/celerybeat-schedule*
 frontend/node_modules/

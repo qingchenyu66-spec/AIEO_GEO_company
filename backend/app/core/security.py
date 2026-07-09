@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -40,5 +41,5 @@ def create_token(subject: int, scope: str, expires_minutes: int, **claims: Any) 
 def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise ValueError("登录状态无效或已过期") from exc

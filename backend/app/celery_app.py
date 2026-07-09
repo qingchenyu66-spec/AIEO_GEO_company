@@ -32,6 +32,7 @@ celery_app.conf.update(
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
         "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
+        "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
     },
     beat_schedule={
         "scan-due-schedules": {
@@ -62,6 +63,10 @@ celery_app.conf.update(
         "scan-due-scheduled-reports": {
             "task": "app.tasks.monitor.scan_due_scheduled_reports",
             "schedule": crontab(hour=20, minute=0),
+        },
+        "fail-stale-knowledge-parses": {
+            "task": "app.tasks.knowledge.fail_stale_knowledge_parses",
+            "schedule": crontab(minute="*/5"),
         },
     },
 )

@@ -227,9 +227,15 @@ export function useUserManagement(options: UserManagementOptions) {
   async function saveEditUser() {
     if (!editingUser.value || !validateEditForm()) return
     try {
+      const identities = identityPayloadFromForm(editForm)
+      const keepTypes = new Set(identities.map(item => item.identity_type))
+      const remove_identity_types = editingUser.value.identities
+        .map(identity => identity.identity_type)
+        .filter((type): type is IdentityType => !keepTypes.has(type))
       const result = await updateManagedUser(editingUser.value.id, {
         display_name: editForm.display_name,
-        identities: identityPayloadFromForm(editForm),
+        identities,
+        remove_identity_types,
       })
       if (isPendingApproval(result)) {
         const msg = pendingApprovalMessage(result, '已提交审批，通过后修改才会生效')

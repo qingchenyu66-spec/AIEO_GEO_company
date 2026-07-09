@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     deepseek_knowledge_parse_enabled: bool = True
     deepseek_knowledge_auto_parse_on_upload: bool = False
     deepseek_knowledge_parse_max_chars: int = 12000
+    # Stuck "parsing" rows older than this are marked failed by beat sweeper.
+    knowledge_parse_timeout_minutes: int = 10
 
     model_config = SettingsConfigDict(
         env_file=".env",
