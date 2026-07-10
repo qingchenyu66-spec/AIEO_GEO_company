@@ -1,4 +1,4 @@
-"""周期报告时间窗口——周六至周五为一周，月/季/年按自然周期。"""
+"""周期报告时间窗口——生成日凌晨统计上一自然周/月/季/年。"""
 
 from __future__ import annotations
 
@@ -14,32 +14,37 @@ def last_day_of_month(value: date) -> date:
 
 
 def weekly_period(anchor: date) -> tuple[date, date]:
-    """以周五为周期结束日，统计上周六 00:00 至本周五 23:59。"""
-    end = anchor
+    """生成日为周一：统计上一自然周（周一至周日）。"""
+    end = anchor - timedelta(days=1)
     start = end - timedelta(days=6)
     return start, end
 
 
 def monthly_period(anchor: date) -> tuple[date, date]:
-    start = anchor.replace(day=1)
-    end = last_day_of_month(anchor)
+    """生成日为当月 1 号：统计上一自然月。"""
+    end = anchor - timedelta(days=1)
+    start = end.replace(day=1)
     return start, end
 
 
 def quarterly_period(anchor: date) -> tuple[date, date]:
-    quarter = (anchor.month - 1) // 3
+    """生成日为季度首月 1 号（1/4/7/10 月）：统计上一自然季度。"""
+    end = anchor - timedelta(days=1)
+    quarter = (end.month - 1) // 3
     start_month = quarter * 3 + 1
-    end_month = start_month + 2
-    start = date(anchor.year, start_month, 1)
-    end = last_day_of_month(date(anchor.year, end_month, 1))
+    start = date(end.year, start_month, 1)
+    end = last_day_of_month(date(end.year, start_month + 2, 1))
     return start, end
 
 
 def annual_period(anchor: date) -> tuple[date, date]:
-    return date(anchor.year, 1, 1), date(anchor.year, 12, 31)
+    """生成日为 1 月 1 号：统计上一自然年。"""
+    year = anchor.year - 1
+    return date(year, 1, 1), date(year, 12, 31)
 
 
 def period_bounds(report_type: str, anchor: date) -> tuple[date, date]:
+    """anchor 为自动生成任务触发日，返回该次报告应覆盖的数据统计区间。"""
     if report_type == "weekly":
         return weekly_period(anchor)
     if report_type == "monthly":
@@ -117,14 +122,14 @@ def bounds_from_period_key(report_type: str, key: str) -> tuple[date, date] | No
 
 
 def due_scheduled_report_types(today: date) -> list[str]:
-    """判断某日应触发的自动报告类型。"""
+    """判断某日应触发的自动报告类型（凌晨任务触发日）。"""
     due: list[str] = []
-    if today.weekday() == 4:
+    if today.weekday() == 0:
         due.append("weekly")
-    if today == last_day_of_month(today):
+    if today.day == 1:
         due.append("monthly")
-        if today.month in {3, 6, 9, 12}:
+        if today.month in {1, 4, 7, 10}:
             due.append("quarterly")
-        if today.month == 12:
+        if today.month == 1:
             due.append("annual")
     return due

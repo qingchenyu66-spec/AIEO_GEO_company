@@ -27,32 +27,11 @@ DEFAULT_TENANT_CODE = "AIDIYA_REAL"
 REPORT_TYPES = ("weekly", "monthly", "quarterly", "annual")
 
 ANCHOR_OFFSETS = {
-    "weekly": lambda today: _last_friday(today),
-    "monthly": lambda today: _last_month_end(today),
-    "quarterly": lambda today: _last_quarter_end(today),
-    "annual": lambda today: date(today.year - 1, 12, 31),
+    "weekly": lambda today: today - timedelta(days=today.weekday()),
+    "monthly": lambda today: today.replace(day=1),
+    "quarterly": lambda today: date(today.year, ((today.month - 1) // 3) * 3 + 1, 1),
+    "annual": lambda today: date(today.year, 1, 1),
 }
-
-
-def _last_friday(today: date) -> date:
-    weekday = today.weekday()
-    days_since_friday = (weekday - 4) % 7
-    if days_since_friday == 0 and today.weekday() == 4:
-        return today
-    return today - timedelta(days=days_since_friday or 7)
-
-
-def _last_month_end(today: date) -> date:
-    first_this_month = today.replace(day=1)
-    return first_this_month - timedelta(days=1)
-
-
-def _last_quarter_end(today: date) -> date:
-    month = today.month
-    quarter_end_month = ((month - 1) // 3) * 3
-    if quarter_end_month == 0:
-        return date(today.year - 1, 12, 31)
-    return date(today.year, quarter_end_month, 1) - timedelta(days=1)
 
 
 def _resolve_tenant_id(db, *, tenant_id: int | None, tenant_code: str | None) -> int:

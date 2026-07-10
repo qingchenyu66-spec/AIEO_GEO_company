@@ -62,7 +62,7 @@ celery_app.conf.update(
         },
         "scan-due-scheduled-reports": {
             "task": "app.tasks.monitor.scan_due_scheduled_reports",
-            "schedule": crontab(hour=20, minute=0),
+            "schedule": crontab(hour=0, minute=5),
         },
         "fail-stale-knowledge-parses": {
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",

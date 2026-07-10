@@ -84,7 +84,7 @@ def run_due_scheduled_reports(
                     period_start=start,
                     period_end=end,
                     period_key=key,
-                    generated_at=datetime.combine(today, time(hour=20, minute=0)),
+                    generated_at=datetime.combine(today, time(hour=0, minute=5)),
                 )
                 if created is None:
                     skipped += 1
