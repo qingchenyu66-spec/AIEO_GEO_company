@@ -29,7 +29,7 @@ alembic upgrade head
 
 echo "==> frontend build"
 cd "$ROOT/frontend"
-npm ci
+npm ci --legacy-peer-deps
 npm run build
 
 echo "==> restart services"
