@@ -14,7 +14,7 @@ export const hiddenEnterprisePermissionMenus = [
   'platform.audit.competitors',
   'platform.audit.files',
 ]
-export const hiddenUserPermissionMenus = [USER_CREATE_PLATFORM_MENU, USER_CREATE_CUSTOMER_MENU]
+export const hiddenUserPermissionMenus: string[] = []
 
 export function normalizeMenuCode(code: string) {
   return code === 'platform.users' ? USER_LIST_MENU : code

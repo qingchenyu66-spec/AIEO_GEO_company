@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from app.services.menu_permission_service import (
+    ROUTE_ONLY_MENU_CODES,
     ensure_identity_menus_from_position,
     sanitize_menu_grant_flags,
     sync_identity_menus_for_position,
@@ -23,6 +24,27 @@ def test_audit_list_allows_stop_service_delete_flag():
         "can_update": True,
         "can_delete": True,
         "can_export": True,
+    }
+
+
+def test_users_create_menu_is_route_only_not_assignable():
+    assert "platform.users.create" in ROUTE_ONLY_MENU_CODES
+
+
+def test_users_create_child_does_not_get_export_flag():
+    flags = sanitize_menu_grant_flags(
+        "platform.users.create.platform",
+        "PLATFORM",
+        can_create=True,
+        can_update=True,
+        can_delete=True,
+        can_export=True,
+    )
+    assert flags == {
+        "can_create": True,
+        "can_update": False,
+        "can_delete": False,
+        "can_export": False,
     }
 
 

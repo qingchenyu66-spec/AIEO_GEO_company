@@ -2,7 +2,7 @@
 import { Building2, HelpCircle, ShieldCheck } from '@lucide/vue'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 import { menuIcon } from './menuIcons'
-import { actionsForMenu, actionLabelForMenu } from './menuPermissionMatrix'
+import { actionsForMenu, actionLabelForMenu, countPermissionRows } from './menuPermissionMatrix'
 
 const admin = usePlatformAdminInject()
 const {
@@ -64,18 +64,26 @@ function actionOptions(type: 'PLATFORM' | 'CUSTOMER', menuCode: string) {
       <div v-for="group in permissionModules" :key="group.key" class="permission-group">
         <div class="permission-group-head">
           <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-          <span>{{ group.menus.filter(menu => admin.menuGrants[menu.id] && (admin.menuGrants[menu.id].can_export || admin.menuGrants[menu.id].can_create || admin.menuGrants[menu.id].can_update || admin.menuGrants[menu.id].can_delete)).length }}/{{ group.menus.length }}</span>
+          <span>{{ countPermissionRows(group.rows, admin.menuGrants).active }}/{{ countPermissionRows(group.rows, admin.menuGrants).total }}</span>
         </div>
-        <div v-for="menu in group.menus" :key="menu.id" class="permission-action-row">
-          <div class="permission-action-title">
-            <component :is="menuIcon(menu)" />
-            <span>{{ menu.menu_name }}</span>
+        <div
+          v-for="row in group.rows"
+          :key="`${row.menu.id}-${row.headerOnly ? 'header' : 'item'}`"
+          class="permission-action-row"
+          :class="{ 'permission-action-row-nested': row.indent > 0, 'permission-action-row-header': row.headerOnly }"
+        >
+          <div class="permission-action-title" :style="row.indent ? { paddingLeft: `${row.indent * 18}px` } : undefined">
+            <component :is="menuIcon(row.menu)" />
+            <span>{{ row.menu.menu_name }}</span>
           </div>
-          <div class="permission-action-options">
-            <label v-for="action in actionOptions(positionForm.identity_type, menu.menu_code)" :key="`${menu.id}-${action}`" class="permission-action-chip">
-              <input v-model="admin.menuGrants[menu.id][action]" type="checkbox" />
-              <span>{{ actionLabelForMenu(menu.menu_code, action) }}</span>
+          <div v-if="!row.headerOnly" class="permission-action-options">
+            <label v-for="action in actionOptions(positionForm.identity_type, row.menu.menu_code)" :key="`${row.menu.id}-${action}`" class="permission-action-chip">
+              <input v-model="admin.menuGrants[row.menu.id][action]" type="checkbox" />
+              <span>{{ actionLabelForMenu(row.menu.menu_code, action) }}</span>
             </label>
+          </div>
+          <div v-else class="permission-action-options permission-action-options-muted">
+            <span>勾选下方子项以授权新增平台或客户账号</span>
           </div>
         </div>
       </div>

@@ -63,6 +63,7 @@ from app.services.management_service import (
     update_managed_user,
 )
 from app.services.menu_permission_service import (
+    has_any_identity_menu_permission,
     has_identity_menu_permission,
     position_menu_grants,
     position_menu_grants_map,
@@ -136,6 +137,22 @@ def _require_platform_menu(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=detail or "当前账号无权执行此操作",
         )
+
+
+def _require_user_assignable_read(db: Session, current: CurrentSession, detail: str) -> None:
+    """用户新增/列表页加载职位、角色、菜单选项时的只读数据。"""
+    identity_id = current.identity.id
+    if has_identity_menu_permission(db, identity_id, "platform.positions", "can_export"):
+        return
+    checks = (
+        ("platform.users.list", ("can_export", "can_update", "can_delete")),
+        ("platform.users.create.platform", ("can_create",)),
+        ("platform.users.create.customer", ("can_create",)),
+    )
+    for menu_code, actions in checks:
+        if has_any_identity_menu_permission(db, identity_id, menu_code, actions):
+            return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
 def require_user_identity_create_permission(
@@ -359,7 +376,7 @@ def management_menus(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看菜单配置")
+    _require_user_assignable_read(db, current, "当前账号无权查看菜单配置")
     menus = [
         MenuInfo(
             id=menu.id,
@@ -382,7 +399,7 @@ def management_roles(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看角色配置")
+    _require_user_assignable_read(db, current, "当前账号无权查看角色配置")
     roles = [
         RoleInfo(
             id=role.id,
@@ -403,7 +420,7 @@ def management_positions(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_platform_menu(db, current, "platform.positions", "can_export", "当前账号无权查看职位列表")
+    _require_user_assignable_read(db, current, "当前账号无权查看职位列表")
     positions = list_positions_by_identity_type(db, identity_type)
     return ApiResponse(data=positions_to_dicts(db, positions))
 

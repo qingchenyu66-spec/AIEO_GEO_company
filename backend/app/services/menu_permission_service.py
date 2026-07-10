@@ -20,13 +20,14 @@ ROUTE_PARENT_BY_CHILD: dict[str, str] = {
     "platform.audit.competitors": "platform.audit",
     "platform.audit.files": "platform.audit",
     "platform.users.list": "platform.users",
-    "platform.users.create.platform": "platform.users",
-    "platform.users.create.customer": "platform.users",
+    "platform.users.create.platform": "platform.users.create",
+    "platform.users.create.customer": "platform.users.create",
+    "platform.users.create": "platform.users",
     "platform.positions": "platform.users",
 }
 
 # 职位权限配置里不单独勾选的路由父菜单（只配置子项动作，父菜单自动推导）
-ROUTE_ONLY_MENU_CODES = frozenset({"platform.audit", "platform.users"})
+ROUTE_ONLY_MENU_CODES = frozenset({"platform.audit", "platform.users", "platform.users.create"})
 
 REPORT_MENU_BY_IDENTITY = {
     "PLATFORM": "platform.reports",
@@ -236,12 +237,14 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
         )
         by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
 
-    missing_parents = {
-        parent_code
-        for code in by_code
-        if (parent_code := ROUTE_PARENT_BY_CHILD.get(code)) and parent_code not in by_code
-    }
-    if missing_parents:
+    while True:
+        missing_parents = {
+            parent_code
+            for code in by_code
+            if (parent_code := ROUTE_PARENT_BY_CHILD.get(code)) and parent_code not in by_code
+        }
+        if not missing_parents:
+            break
         parent_rows = db.execute(
             select(Menu, MenuConfig)
             .outerjoin(
@@ -260,7 +263,7 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
         parent_lookup = {menu.menu_code: _menu_display(menu, config) for menu, config in parent_rows}
         for code, item in list(by_code.items()):
             parent_code = ROUTE_PARENT_BY_CHILD.get(code)
-            if not parent_code:
+            if not parent_code or parent_code in by_code:
                 continue
             parent_base = parent_lookup.get(parent_code)
             if parent_base is None:
@@ -349,7 +352,7 @@ def sync_position_menu_grants(
             if item.menu_id not in valid_menu_ids:
                 continue
             menu_code = menu_code_map.get(item.menu_id, "")
-            if is_retired_menu_code(menu_code):
+            if is_retired_menu_code(menu_code) or menu_code in ROUTE_ONLY_MENU_CODES:
                 continue
             flags = sanitize_menu_grant_flags(
                 menu_code,

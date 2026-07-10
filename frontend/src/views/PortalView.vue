@@ -19,6 +19,8 @@ import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
   USER_CREATE_MENU,
+  USER_CREATE_PLATFORM_MENU,
+  USER_CREATE_CUSTOMER_MENU,
   USER_LIST_MENU,
   POSITION_MENU,
   hiddenCustomerMenus,
@@ -54,7 +56,21 @@ const router = useRouter()
 const route = useRoute()
 const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
-const allowedMenuCodes = computed(() => auth.allowedMenus.map(item => item.menu_code))
+
+function userCreateRouteAllowed(menus: MenuInfo[]) {
+  return menus.some(menu => (
+    (menu.menu_code === USER_CREATE_PLATFORM_MENU || menu.menu_code === USER_CREATE_CUSTOMER_MENU)
+    && menu.can_create
+  ))
+}
+
+const allowedMenuCodes = computed(() => {
+  const codes = auth.allowedMenus.map(item => item.menu_code)
+  if (userCreateRouteAllowed(auth.allowedMenus) && !codes.includes(USER_CREATE_MENU)) {
+    return [...codes, USER_CREATE_MENU]
+  }
+  return codes
+})
 const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(router, route, defaultMenuCode, allowedMenuCodes)
 provide(PortalNavigateKey, navigateToMenu)
 const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU)
@@ -109,7 +125,7 @@ const {
   notifyError,
 } = platformAdmin
 
-const hasUserCreateMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === USER_CREATE_MENU) && creatableIdentityTypes.value.length > 0)
+const hasUserCreateMenu = computed(() => creatableIdentityTypes.value.length > 0)
 const hasUserListMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === USER_LIST_MENU || item.menu_code === 'platform.users'))
 const hasPositionMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === POSITION_MENU))
 const hasApprovalMenu = computed(() => auth.allowedMenus.some(item => item.menu_code === 'platform.approvals'))

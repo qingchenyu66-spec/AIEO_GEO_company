@@ -2,6 +2,7 @@ import type { IdentityType, MenuInfo } from '../../services/auth'
 import {
   POSITION_MENU,
   USER_CREATE_CUSTOMER_MENU,
+  USER_CREATE_MENU,
   USER_CREATE_PLATFORM_MENU,
   USER_LIST_MENU,
   hiddenPlatformMenus,
@@ -80,7 +81,15 @@ export type MenuGrantFlags = Record<PermissionAction, boolean>
 
 export type MenuGrantState = Record<number, MenuGrantFlags>
 
-export const ROUTE_ONLY_MENU_CODES = new Set(['platform.audit', 'platform.users'])
+export const ROUTE_ONLY_MENU_CODES = new Set(['platform.audit', 'platform.users', USER_CREATE_MENU])
+
+export const USER_CREATE_CHILD_MENUS = [USER_CREATE_PLATFORM_MENU, USER_CREATE_CUSTOMER_MENU] as const
+
+export type PermissionMenuRow = {
+  menu: MenuInfo
+  indent: number
+  headerOnly?: boolean
+}
 
 const HIDDEN_ASSIGNABLE = new Set([
   ...hiddenPlatformMenus,
@@ -105,6 +114,64 @@ export function assignablePermissionMenus(type: IdentityType, menus: MenuInfo[])
     && !ROUTE_ONLY_MENU_CODES.has(menu.menu_code)
     && !HIDDEN_ASSIGNABLE.has(menu.menu_code)
   ))
+}
+
+function syntheticUserCreateHeader(): MenuInfo {
+  return {
+    id: 0,
+    menu_code: USER_CREATE_MENU,
+    menu_name: '用户新增',
+    identity_type: 'PLATFORM',
+    route_path: '/platform/users/create',
+    icon: 'Users',
+    sort_order: 31,
+    can_create: false,
+    can_update: false,
+    can_delete: false,
+    can_export: false,
+  }
+}
+
+export function permissionMenuRows(menus: MenuInfo[]): PermissionMenuRow[] {
+  const byCode = new Map(menus.map(menu => [menu.menu_code, menu]))
+  const childCodes = new Set<string>(USER_CREATE_CHILD_MENUS)
+  const rows: PermissionMenuRow[] = []
+  let userCreateBlockDone = false
+
+  const appendUserCreateBlock = () => {
+    const children = USER_CREATE_CHILD_MENUS
+      .map(code => byCode.get(code))
+      .filter((menu): menu is MenuInfo => Boolean(menu))
+    if (!children.length) return
+    rows.push({
+      menu: byCode.get(USER_CREATE_MENU) || syntheticUserCreateHeader(),
+      indent: 0,
+      headerOnly: true,
+    })
+    for (const child of children) {
+      rows.push({ menu: child, indent: 1 })
+    }
+    userCreateBlockDone = true
+  }
+
+  for (const menu of menus) {
+    if (menu.menu_code === USER_CREATE_MENU) {
+      if (!userCreateBlockDone) appendUserCreateBlock()
+      continue
+    }
+    if (childCodes.has(menu.menu_code)) {
+      if (!userCreateBlockDone) appendUserCreateBlock()
+      continue
+    }
+    rows.push({ menu, indent: 0 })
+  }
+  return rows
+}
+
+export function countPermissionRows(rows: PermissionMenuRow[], grants: MenuGrantState) {
+  const actionable = rows.filter(row => !row.headerOnly)
+  const active = actionable.filter(row => grantHasAccess(grants[row.menu.id] || emptyGrant()))
+  return { active: active.length, total: actionable.length }
 }
 
 export function actionsForMenu(menuCode: string, type: IdentityType): PermissionAction[] {
@@ -181,10 +248,14 @@ export function permissionModulesFor(type: IdentityType, menus: MenuInfo[]) {
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   return order
     .filter(key => buckets[key]?.length)
-    .map(key => ({
-      key,
-      title: permissionGroupTitle(type, key),
-      note: permissionGroupNote(type, key),
-      menus: buckets[key].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
-    }))
+    .map(key => {
+      const menus = buckets[key].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
+      return {
+        key,
+        title: permissionGroupTitle(type, key),
+        note: permissionGroupNote(type, key),
+        menus,
+        rows: permissionMenuRows(menus),
+      }
+    })
 }

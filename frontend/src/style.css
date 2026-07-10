@@ -2035,7 +2035,19 @@ button:disabled {
   font-size:12px;
   cursor:pointer;
 }
-.permission-action-chip input { accent-color:#2871db; }
+.permission-action-row-header {
+  background:#f8fbff;
+}
+.permission-action-row-header .permission-action-title {
+  color:#1d4f91;
+}
+.permission-action-options-muted {
+  color:#64748b;
+  font-size:12px;
+}
+.permission-action-row-nested .permission-action-title svg {
+  width:14px;
+}
 .user-filter-bar {
   display:grid;
   grid-template-columns: minmax(260px,1.4fr) minmax(200px,1fr) minmax(150px,.75fr) minmax(140px,.7fr) auto auto auto;
