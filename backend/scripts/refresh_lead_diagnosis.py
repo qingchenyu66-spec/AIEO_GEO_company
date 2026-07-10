@@ -44,10 +44,11 @@ def main() -> None:
         )
         lead.status = "ready"
         db.commit()
+        snapshot = result.get("monitor_snapshot") or {}
         print(
             f"refreshed lead_id={lead.id} brand={lead.brand_name} "
-            f"competitors={len(result.get('competitors') or [])} "
-            f"prompts={len(result.get('prompt_analytics') or [])}"
+            f"competitors={len(lead.competitors_json or [])} "
+            f"prompts={len(snapshot.get('prompt_analytics') or [])}"
         )
     finally:
         db.close()
