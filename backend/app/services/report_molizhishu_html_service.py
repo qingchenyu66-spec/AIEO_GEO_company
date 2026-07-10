@@ -1,3 +1,9 @@
+"""售前诊断 HTML 导出（无 Playwright）。"""
+
+from __future__ import annotations
+
+from typing import Any
+
 from app.services.report_molizhishu_pdf_service import render_molizhishu_report_html
 
 __all__ = ["build_molizhishu_html", "render_molizhishu_report_html"]
