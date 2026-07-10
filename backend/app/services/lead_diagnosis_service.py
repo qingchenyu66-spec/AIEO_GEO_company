@@ -42,7 +42,59 @@ from app.services.report_export_service import build_report_export
 ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
 LEAD_RUN_STALE_MINUTES = 10
+LEAD_MAX_PARALLEL_SUBMITS = 2
 LEAD_DIAGNOSIS_TASK_SUBTITLE = "售前诊断"
+
+
+def _slot_is_future(day: date, slot: str, now: datetime) -> bool:
+    scheduled = _slot_scheduled_at(day, slot)
+    return scheduled is not None and now < scheduled
+
+
+def _active_inflight_run_count(lead: LeadDiagnosis, tasks: dict[str, GeoMonitorTask]) -> int:
+    """仍在模力侧抓取中的批次（pending/submitted 且 task 未终态）。"""
+    count = 0
+    for run in lead.runs or []:
+        if run.status not in {"pending", "submitted"}:
+            continue
+        task = tasks.get(run.task_id or "")
+        if task is None:
+            count += 1
+            continue
+        if task.status in TERMINAL_STATUSES:
+            continue
+        count += 1
+    return count
+
+
+def abort_lead_diagnosis(
+    db: Session,
+    lead_id: int,
+    *,
+    reason: str = "管理员重置",
+) -> LeadDiagnosis:
+    lead = db.scalar(
+        select(LeadDiagnosis)
+        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
+        .options(selectinload(LeadDiagnosis.runs))
+    )
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    tasks = _task_map(db, lead)
+    for run in lead.runs or []:
+        if run.status not in {"pending", "submitted"}:
+            continue
+        run.status = "failed"
+        run.error_message = reason
+        task = tasks.get(run.task_id or "")
+        if task is not None and task.status not in TERMINAL_STATUSES:
+            task.status = "stopped"
+            task.last_error = reason
+    if lead.status in ACTIVE_STATUSES:
+        lead.status = "failed"
+    db.commit()
+    db.refresh(lead)
+    return lead
 
 
 def lead_diagnosis_cost_rank_label(brand_name: str | None) -> str:
@@ -710,6 +762,13 @@ def submit_due_lead_run(
     if lead.status not in ACTIVE_STATUSES:
         raise ValueError("当前诊断已结束，无法继续抓取")
 
+    tasks = _task_map(db, lead)
+    inflight = _active_inflight_run_count(lead, tasks)
+    if inflight >= LEAD_MAX_PARALLEL_SUBMITS:
+        raise ValueError(
+            f"当前已有 {inflight} 个批次在抓取中，请等待至少一个完成后再提交（上限 {LEAD_MAX_PARALLEL_SUBMITS}）"
+        )
+
     due_items = list(enumerate_due_lead_runs(db, lead_id=lead_id, force=force))
     if schedule_key:
         due_items = [item for item in due_items if item.schedule_key == schedule_key]
@@ -726,6 +785,10 @@ def submit_due_lead_run(
             if schedule_key and full_key != schedule_key:
                 continue
             if full_key in existing_keys:
+                continue
+            if _slot_is_future(_day, _slot, now):
+                if schedule_key:
+                    raise ValueError("该时段尚未到点，请等待自动执行或补抓已错过的时段")
                 continue
             due_items = [DueLeadRun(lead_id=lead.id, schedule_key=full_key, schedule_label=full_label, region_code=region_code)]
             break

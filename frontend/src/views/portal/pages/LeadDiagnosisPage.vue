@@ -68,6 +68,8 @@ const {
   scheduleTimeline,
   schedulePlanSummary,
   progressPercent,
+  activeInflightRunCount,
+  isLeadScheduleSlotDue,
   healthTone,
   selectRecord,
   openCreatePanel,
@@ -479,11 +481,13 @@ onUnmounted(() => {
                     <small v-if="slot.run">
                       {{ slot.run.prompt_count }} 问题 x {{ slot.run.platform_count }} 平台 · {{ runStatusLabels[slot.run.status] || slot.run.status }}
                     </small>
+                    <small v-else-if="activeInflightRunCount >= 2">已有 2 个批次在抓取，请等待完成后再手动提交。</small>
+                    <small v-else-if="!isLeadScheduleSlotDue(slot.day, slot.slot)">未到计划时间，系统将自动执行。</small>
                     <small v-else>等待到点自动执行，或点击右侧「抓取此次」。</small>
                   </div>
                   <div class="lead-slot-actions">
                     <button
-                      v-if="canCreate && detail?.status !== 'ready' && canRunScheduleSlot(slot.state)"
+                      v-if="canCreate && detail?.status !== 'ready' && canRunScheduleSlot(slot.state, slot)"
                       type="button"
                       class="lead-secondary-btn small"
                       :disabled="submittingSlotKey === slot.schedule_key"

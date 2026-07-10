@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.lead_diagnosis_prompts import normalize_lead_prompts
+
 
 LeadDiagnosisStatus = Literal["pending", "collecting", "ready", "failed"]
 
@@ -21,12 +23,7 @@ class LeadDiagnosisCreateRequest(BaseModel):
     @field_validator("prompts")
     @classmethod
     def normalize_prompts(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item and item.strip()]
-        if not cleaned:
-            raise ValueError("至少填写一个检测问题")
-        if len(cleaned) > 5:
-            raise ValueError("最多支持 5 个检测问题")
-        return cleaned
+        return normalize_lead_prompts(value)
 
     @field_validator("competitors")
     @classmethod

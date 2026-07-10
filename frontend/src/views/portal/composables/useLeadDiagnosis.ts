@@ -29,6 +29,18 @@ export function formatLeadCreator(
   return name
 }
 
+export function isPlaceholderLeadPrompt(text: string) {
+  const value = text.trim()
+  return value.startsWith('例如：') || value.startsWith('例如:') || /xxx/i.test(value)
+}
+
+export function isLeadScheduleSlotDue(day: string, slot: string) {
+  const [year, month, dayNum] = day.split('-').map(part => Number.parseInt(part, 10))
+  const [hour, minute] = slot.split(':').map(part => Number.parseInt(part, 10))
+  const scheduled = new Date(year, month - 1, dayNum, hour, minute, 0, 0)
+  return scheduled.getTime() <= Date.now()
+}
+
 export const PROMPT_TEMPLATES = [
   { label: '产品推荐', value: '例如：XXX有哪些产品值得推荐？' },
   { label: '排名查询', value: '例如：XXX在同类品牌里排名怎么样？' },
@@ -338,6 +350,11 @@ export function useLeadDiagnosis() {
       ElMessage.warning('请至少填写一个检测问题')
       return
     }
+    if (prompts.some(isPlaceholderLeadPrompt)) {
+      ElMessage.warning('请填写真实检测问题，不要使用「例如：」模板或 XXX 占位')
+      createStep.value = 2
+      return
+    }
     saving.value = true
     try {
       const competitors = createForm.value.competitors
@@ -389,9 +406,15 @@ export function useLeadDiagnosis() {
     }
   }
 
-  function canRunScheduleSlot(state: string) {
+  const activeInflightRunCount = computed(() => (
+    (detail.value?.runs || []).filter(run => run.status === 'submitted' || run.status === 'pending').length
+  ))
+
+  function canRunScheduleSlot(state: string, entry?: { day: string; slot: string }) {
     if (state === 'completed' || state === 'skipped') return false
     if (state === 'submitted' || state === 'pending') return false
+    if (activeInflightRunCount.value >= 2) return false
+    if (entry && !isLeadScheduleSlotDue(entry.day, entry.slot)) return false
     return true
   }
 
@@ -476,6 +499,8 @@ export function useLeadDiagnosis() {
     scheduleTimeline,
     schedulePlanSummary,
     progressPercent,
+    activeInflightRunCount,
+    isLeadScheduleSlotDue,
     healthTone,
     loadRecords,
     selectRecord,
