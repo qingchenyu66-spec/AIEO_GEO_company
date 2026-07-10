@@ -347,9 +347,21 @@ curl -sS -o /dev/null -w "%{http_code}\n" https://www.aieokj.com/
 
 ## 13. 回滚与更新
 
+### 13.1 日常更新（推荐）
+
+生产机已接入 Git，Deploy Key 配置见 [`scripts/PROD-DEPLOY.md`](../scripts/PROD-DEPLOY.md)。
+
 ```bash
 cd /opt/geo/AIEO_GEO
-git fetch origin && git checkout <tag或commit>
+bash scripts/deploy_prod.sh
+```
+
+### 13.2 回滚到指定版本
+
+```bash
+cd /opt/geo/AIEO_GEO
+git fetch origin
+git checkout <tag或commit>
 cd backend && source .venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head
@@ -357,6 +369,10 @@ cd ../frontend && npm ci && npm run build
 sudo systemctl restart geo-api geo-celery-beat geo-celery-submit geo-celery-sync geo-celery-default
 sudo systemctl reload nginx
 ```
+
+### 13.3 无 Git 时的应急（不推荐）
+
+从开发机 `scp` 变更文件 + 手动 `alembic upgrade` + `npm run build`，易漏文件；仅作临时热修。
 
 ---
 
@@ -376,7 +392,8 @@ sudo systemctl reload nginx
 | 文件 | 说明 |
 |------|------|
 | `deploy/nginx/www.aieokj.com.conf` | 本域名 Nginx |
-| `deploy/nginx/geo-monitor.conf` | 通用模板 |
+| `scripts/PROD-DEPLOY.md` | 生产机 git pull / Deploy Key |
+| `scripts/deploy_prod.sh` | 一键更新脚本 |
 | `backend/.env.example` | 环境变量说明 |
 | `SECURITY.md` | 生产安全硬性要求 |
 | `docs/ARCHITECTURE-ADR.md` | 架构决策与基线 |

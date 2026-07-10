@@ -13,7 +13,10 @@ if [[ ! -d .git ]]; then
 fi
 
 echo "==> git pull"
-git fetch origin main
+if ! GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch origin main; then
+  echo "ERROR: git fetch 失败。请先在 GitHub 添加 Deploy Key，见 scripts/PROD-DEPLOY.md" >&2
+  exit 1
+fi
 git checkout main
 git pull --ff-only origin main
 
