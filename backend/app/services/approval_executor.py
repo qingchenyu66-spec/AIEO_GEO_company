@@ -30,6 +30,11 @@ from app.services.management_service import (
     update_managed_user,
 )
 from app.services.report_service import generate_report, publish_report, update_report
+from app.services.tenant_account_service import (
+    mark_tenant_inactive,
+    restore_tenant_customer_accounts,
+    sync_tenant_accounts_for_service_state,
+)
 from app.services.tenant_scope import resolve_and_guard_tenant_id
 
 
@@ -127,6 +132,10 @@ def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationA
     )
     db.add(tenant)
     db.flush()
+    if not tenant.status:
+        if tenant.stop_reason == "expired" and tenant.stopped_at is None:
+            tenant.stopped_at = datetime.now(UTC)
+        sync_tenant_accounts_for_service_state(db, tenant)
     return {"id": tenant.id, "name": tenant.name, "code": tenant.code}
 
 
@@ -160,6 +169,9 @@ def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationA
         if tenant.status:
             tenant.stopped_at = None
             tenant.stopped_by = None
+        elif tenant.stop_reason == "expired" and tenant.stopped_at is None:
+            tenant.stopped_at = datetime.now(UTC)
+    sync_tenant_accounts_for_service_state(db, tenant)
     db.flush()
     return {"id": tenant.id, "name": tenant.name}
 
@@ -171,28 +183,13 @@ def _exec_tenant_delete(db: Session, current: CurrentSession, record: OperationA
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise ValueError("企业不存在")
-    tenant.status = False
-    tenant.stop_reason = "canceled" if tenant.service_start_date and tenant.service_start_date > date.today() else "manual"
-    tenant.stopped_at = datetime.now(UTC)
-    tenant.stopped_by = current.user.id
-    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id, UserIdentity.deleted.is_(False))))
-    affected_user_ids: set[int] = set()
-    for identity in identities:
-        identity.status = False
-        identity.deleted = True
-        affected_user_ids.add(identity.user_id)
-    for user_id in affected_user_ids:
-        active_identity = db.scalar(
-            select(UserIdentity.id).where(
-                UserIdentity.user_id == user_id,
-                UserIdentity.status.is_(True),
-                UserIdentity.deleted.is_(False),
-            )
-        )
-        if active_identity is None:
-            user = db.get(User, user_id)
-            if user:
-                user.status = False
+    mark_tenant_inactive(
+        db,
+        tenant,
+        stop_reason="canceled" if tenant.service_start_date and tenant.service_start_date > date.today() else "manual",
+        stopped_by=current.user.id,
+        stopped_at=datetime.now(UTC),
+    )
     db.flush()
     return {"id": tenant.id, "status": tenant.status}
 
@@ -210,16 +207,7 @@ def _exec_tenant_restore(db: Session, current: CurrentSession, record: Operation
     tenant.stop_reason = None
     tenant.stopped_at = None
     tenant.stopped_by = None
-    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id)))
-    restored_user_ids: set[int] = set()
-    for identity in identities:
-        identity.status = True
-        identity.deleted = False
-        restored_user_ids.add(identity.user_id)
-    for user_id in restored_user_ids:
-        user = db.get(User, user_id)
-        if user and not user.deleted:
-            user.status = True
+    restore_tenant_customer_accounts(db, tenant_id)
     db.flush()
     return {"id": tenant.id, "status": tenant.status}
 

@@ -450,3 +450,31 @@ def scan_due_scheduled_reports() -> dict[str, Any]:
         len(result.get("errors") or []),
     )
     return result
+
+
+@celery_app.task(name="app.tasks.monitor.expire_overdue_tenant_services", ignore_result=True)
+def expire_overdue_tenant_services_task() -> dict[str, Any]:
+    """每日扫描合同到期企业，标记 expired 并禁用关联客户账号。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    lock_key = _scan_lock_key("expire-tenant-services", bucket_minutes=60)
+    with redis_lock(lock_key, ttl_seconds=3600) as acquired:
+        if not acquired:
+            return {"status": "locked"}
+
+        from app.services.tenant_account_service import expire_overdue_tenant_services
+
+        db = SessionLocal()
+        try:
+            handled = expire_overdue_tenant_services(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    record_beat_scan("app.tasks.monitor.expire_overdue_tenant_services", {"handled": handled})
+    logger.info("expire_overdue_tenant_services handled=%s", handled)
+    return {"status": "ok", "handled": handled}

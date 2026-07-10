@@ -69,6 +69,11 @@ from app.services.menu_permission_service import (
     sync_identity_menus_for_position,
     sync_position_menu_grants,
 )
+from app.services.tenant_account_service import (
+    mark_tenant_inactive,
+    restore_tenant_customer_accounts,
+    sync_tenant_accounts_for_service_state,
+)
 from app.services.permission_service import (
     list_menus_by_identity_type,
     list_positions_by_identity_type,
@@ -948,6 +953,10 @@ def management_create_tenant(
     )
     db.add(tenant)
     db.flush()
+    if not tenant.status:
+        if tenant.stop_reason == "expired" and tenant.stopped_at is None:
+            tenant.stopped_at = datetime.now()
+        sync_tenant_accounts_for_service_state(db, tenant)
     write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
@@ -999,6 +1008,9 @@ def management_update_tenant(
         if tenant.status:
             tenant.stopped_at = None
             tenant.stopped_by = None
+        elif tenant.stop_reason == "expired" and tenant.stopped_at is None:
+            tenant.stopped_at = datetime.now()
+    sync_tenant_accounts_for_service_state(db, tenant)
     changes: list[str] = []
     if old_name != name:
         changes.append(f"名称「{old_name}」→「{name}」")
@@ -1084,29 +1096,12 @@ def management_stop_tenant(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
 
-    tenant.status = False
-    tenant.stop_reason = "canceled" if tenant.service_start_date and tenant.service_start_date > date.today() else "manual"
-    tenant.stopped_at = datetime.now()
-    tenant.stopped_by = current.user.id
-    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id, UserIdentity.deleted.is_(False))))
-    affected_user_ids: set[int] = set()
-    for identity in identities:
-        identity.status = False
-        identity.deleted = True
-        affected_user_ids.add(identity.user_id)
-
-    for user_id in affected_user_ids:
-        active_identity = db.scalar(
-            select(UserIdentity.id).where(
-                UserIdentity.user_id == user_id,
-                UserIdentity.status.is_(True),
-                UserIdentity.deleted.is_(False),
-            )
-        )
-        if active_identity is None:
-            user = db.get(User, user_id)
-            if user:
-                user.status = False
+    mark_tenant_inactive(
+        db,
+        tenant,
+        stop_reason="canceled" if tenant.service_start_date and tenant.service_start_date > date.today() else "manual",
+        stopped_by=current.user.id,
+    )
 
     write_management_log(db, current, "企业停服", f"停止企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id, risk_level="关注")
     db.commit()
@@ -1132,18 +1127,7 @@ def management_restore_tenant(
     tenant.stop_reason = None
     tenant.stopped_at = None
     tenant.stopped_by = None
-
-    identities = list(db.scalars(select(UserIdentity).where(UserIdentity.tenant_id == tenant_id)))
-    restored_user_ids: set[int] = set()
-    for identity in identities:
-        identity.status = True
-        identity.deleted = False
-        restored_user_ids.add(identity.user_id)
-
-    for user_id in restored_user_ids:
-        user = db.get(User, user_id)
-        if user and not user.deleted:
-            user.status = True
+    restore_tenant_customer_accounts(db, tenant_id)
 
     write_management_log(db, current, "企业恢复", f"恢复企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()

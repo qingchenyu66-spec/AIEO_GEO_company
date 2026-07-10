@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
+from app.services.tenant_account_service import tenant_service_is_operational
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -58,6 +59,10 @@ def get_current_session(
     )
     if identity is None or not identity.user.status:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或身份已停用")
+    if identity.identity_type == "CUSTOMER" and (
+        identity.tenant is None or not tenant_service_is_operational(identity.tenant)
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="企业服务已停用或已到期，请联系运营人员")
     return CurrentSession(user=identity.user, identity=identity)
 
 

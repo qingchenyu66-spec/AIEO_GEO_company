@@ -31,6 +31,7 @@ celery_app.conf.update(
         "app.tasks.monitor.sync_one_monitor_task": {"queue": "sync"},
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
         "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
+        "app.tasks.monitor.expire_overdue_tenant_services": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
     },
@@ -63,6 +64,10 @@ celery_app.conf.update(
         "scan-due-scheduled-reports": {
             "task": "app.tasks.monitor.scan_due_scheduled_reports",
             "schedule": crontab(hour=0, minute=5),
+        },
+        "expire-overdue-tenant-services": {
+            "task": "app.tasks.monitor.expire_overdue_tenant_services",
+            "schedule": crontab(hour=0, minute=10),
         },
         "fail-stale-knowledge-parses": {
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",

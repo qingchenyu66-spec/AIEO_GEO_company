@@ -15,8 +15,15 @@ def get_user_by_username(db: Session, username: str) -> User | None:
     )
 
 
+from app.services.tenant_account_service import tenant_service_is_operational
+
+
 def active_identities(user: User) -> list[UserIdentity]:
-    return [item for item in user.identities if item.status and not item.deleted and (item.tenant is None or item.tenant.status)]
+    return [
+        item
+        for item in user.identities
+        if item.status and not item.deleted and (item.tenant is None or tenant_service_is_operational(item.tenant))
+    ]
 
 
 def authenticate(db: Session, username: str, password: str) -> tuple[User, list[UserIdentity]] | None:
