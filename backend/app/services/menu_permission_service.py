@@ -449,19 +449,44 @@ def sync_identity_menus_for_position(db: Session, position_id: int) -> int:
     return len(identity_ids)
 
 
+def _grant_signature_rows(rows) -> set[tuple[int, bool, bool, bool, bool]]:
+    signature: set[tuple[int, bool, bool, bool, bool]] = set()
+    for row in rows:
+        if not grant_has_access(
+            can_create=bool(row.can_create),
+            can_update=bool(row.can_update),
+            can_delete=bool(row.can_delete),
+            can_export=bool(row.can_export),
+        ):
+            continue
+        signature.add(
+            (
+                int(row.menu_id),
+                bool(row.can_create),
+                bool(row.can_update),
+                bool(row.can_delete),
+                bool(row.can_export),
+            )
+        )
+    return signature
+
+
+def identity_menus_match_position(db: Session, identity_id: int, position_id: int) -> bool:
+    position_rows = db.scalars(select(PositionMenu).where(PositionMenu.position_id == position_id))
+    identity_rows = db.scalars(select(UserIdentityMenu).where(UserIdentityMenu.identity_id == identity_id))
+    return _grant_signature_rows(position_rows) == _grant_signature_rows(identity_rows)
+
+
 def ensure_identity_menus_from_position(db: Session, identity: UserIdentity) -> bool:
-    """身份菜单为空但已绑定职位时，从职位模板补全（防止历史数据或同步失败）。"""
+    """已绑定职位时，身份菜单与职位模板不一致则从职位同步（登录/me 时自愈）。"""
     if identity.position_id is None:
-        return False
-    has_grant = db.scalar(
-        select(UserIdentityMenu.id).where(UserIdentityMenu.identity_id == identity.id).limit(1)
-    )
-    if has_grant is not None:
         return False
     position_has_grant = db.scalar(
         select(PositionMenu.id).where(PositionMenu.position_id == identity.position_id).limit(1)
     )
     if position_has_grant is None:
+        return False
+    if identity_menus_match_position(db, identity.id, identity.position_id):
         return False
     replace_identity_menus_from_position(db, identity.id, identity.position_id)
     return True

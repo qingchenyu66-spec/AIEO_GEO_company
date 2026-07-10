@@ -73,3 +73,73 @@ def test_sync_identity_menus_for_position_calls_replace(monkeypatch):
     count = sync_identity_menus_for_position(FakeSession(), 5)
     assert count == 2
     assert calls == [(11, 5), (12, 5)]
+
+
+def test_ensure_identity_menus_from_position_syncs_when_drift(monkeypatch):
+    replace_calls: list[tuple[int, int]] = []
+
+    def fake_match(db, identity_id, position_id):
+        return False
+
+    def fake_replace(db, identity_id, position_id, selected_menu_ids=None):
+        replace_calls.append((identity_id, position_id))
+
+    class FakeScalar:
+        def __init__(self, value):
+            self._value = value
+
+        def limit(self, _n):
+            return self
+
+        def __bool__(self):
+            return self._value is not None
+
+    class FakeSession:
+        def scalar(self, _stmt):
+            return FakeScalar(1)
+
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.identity_menus_match_position",
+        fake_match,
+    )
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.replace_identity_menus_from_position",
+        fake_replace,
+    )
+
+    identity = SimpleNamespace(id=9, position_id=3)
+    changed = ensure_identity_menus_from_position(FakeSession(), identity)
+    assert changed is True
+    assert replace_calls == [(9, 3)]
+
+
+def test_ensure_identity_menus_from_position_skips_when_matched(monkeypatch):
+    replace_calls: list[tuple[int, int]] = []
+
+    def fake_match(db, identity_id, position_id):
+        return True
+
+    def fake_replace(db, identity_id, position_id, selected_menu_ids=None):
+        replace_calls.append((identity_id, position_id))
+
+    class FakeScalar:
+        def limit(self, _n):
+            return self
+
+    class FakeSession:
+        def scalar(self, _stmt):
+            return FakeScalar()
+
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.identity_menus_match_position",
+        fake_match,
+    )
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.replace_identity_menus_from_position",
+        fake_replace,
+    )
+
+    identity = SimpleNamespace(id=9, position_id=3)
+    changed = ensure_identity_menus_from_position(FakeSession(), identity)
+    assert changed is False
+    assert replace_calls == []

@@ -139,19 +139,34 @@ def _require_platform_menu(
         )
 
 
-def _require_user_assignable_read(db: Session, current: CurrentSession, detail: str) -> None:
-    """用户新增/列表页加载职位、角色、菜单选项时的只读数据。"""
-    identity_id = current.identity.id
-    if has_identity_menu_permission(db, identity_id, "platform.positions", "can_export"):
-        return
+def _has_user_management_access(db: Session, identity_id: int) -> bool:
     checks = (
         ("platform.users.list", ("can_export", "can_update", "can_delete")),
         ("platform.users.create.platform", ("can_create",)),
         ("platform.users.create.customer", ("can_create",)),
     )
-    for menu_code, actions in checks:
-        if has_any_identity_menu_permission(db, identity_id, menu_code, actions):
-            return
+    return any(has_any_identity_menu_permission(db, identity_id, menu_code, actions) for menu_code, actions in checks)
+
+
+def _require_user_assignable_read(db: Session, current: CurrentSession, detail: str) -> None:
+    """用户新增/列表页加载职位、角色、菜单选项时的只读数据。"""
+    identity_id = current.identity.id
+    if has_identity_menu_permission(db, identity_id, "platform.positions", "can_export"):
+        return
+    if _has_user_management_access(db, identity_id):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def _require_tenant_list_read(db: Session, current: CurrentSession, detail: str) -> None:
+    """企业下拉等只读场景：有企业管理或用户管理权限即可。"""
+    identity_id = current.identity.id
+    if has_identity_menu_permission(db, identity_id, "platform.audit.list", "can_export"):
+        return
+    if _has_user_management_access(db, identity_id):
+        return
+    if has_any_identity_menu_permission(db, identity_id, "platform.snapshot_backfill", ("can_export", "can_update")):
+        return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
@@ -543,7 +558,7 @@ def management_tenants(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_platform_menu(db, current, "platform.audit.list", "can_export", "当前账号无权查看企业列表")
+    _require_tenant_list_read(db, current, "当前账号无权查看企业列表")
     stmt = select(Tenant).where(Tenant.deleted.is_(False)).order_by(Tenant.id.desc())
     if is_sales_identity(db, current.identity):
         stmt = stmt.where(Tenant.owner_user_id == current.user.id)

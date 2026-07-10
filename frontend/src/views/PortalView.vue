@@ -64,20 +64,40 @@ function userCreateRouteAllowed(menus: MenuInfo[]) {
   ))
 }
 
+function auditRouteAllowed(menus: MenuInfo[]) {
+  return menus.some(menu => (
+    menu.menu_code.startsWith('platform.audit.')
+    && (menu.can_export || menu.can_update || menu.can_create || menu.can_delete)
+  ))
+}
+
 const allowedMenuCodes = computed(() => {
   const codes = auth.allowedMenus.map(item => item.menu_code)
+  const extra: string[] = []
   if (userCreateRouteAllowed(auth.allowedMenus) && !codes.includes(USER_CREATE_MENU)) {
-    return [...codes, USER_CREATE_MENU]
+    extra.push(USER_CREATE_MENU)
   }
-  return codes
+  if (auditRouteAllowed(auth.allowedMenus) && !codes.includes('platform.audit')) {
+    extra.push('platform.audit')
+  }
+  return extra.length ? [...codes, ...extra] : codes
 })
 const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(router, route, defaultMenuCode, allowedMenuCodes)
 provide(PortalNavigateKey, navigateToMenu)
 const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU)
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
-const menus = computed(() => auth.allowedMenus
-  .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code)))
+const menus = computed(() => {
+  const filtered = auth.allowedMenus
+    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code))
+  if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
+    const auditChild = auth.allowedMenus.find(menu => menu.menu_code.startsWith('platform.audit.'))
+    if (auditChild) {
+      return [{ ...auditChild, menu_code: 'platform.audit', menu_name: '企业管理' }, ...filtered]
+    }
+  }
+  return filtered
+})
 const userManagementMenu = computed(() => menus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
@@ -175,7 +195,14 @@ function parseRouteTenantId(): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function shouldPrefetchBrandAsset() {
+  if (isBrandAssetPage.value || isRealtimeMonitorPage.value) return false
+  if (isUserListPage.value || isUserCreatePage.value || isPositionManagementPage.value || isApprovalPage.value) return false
+  return true
+}
+
 async function loadBrandAssetData() {
+  if (!shouldPrefetchBrandAsset()) return
   try {
     let tenantId: number | null = null
     if (isPlatform.value) {
