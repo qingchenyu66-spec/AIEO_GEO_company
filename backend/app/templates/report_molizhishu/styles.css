@@ -1,15 +1,15 @@
 /* 报告专用样式 */
 :root {
-    --primary: #2563eb;
-    --primary-dark: #1d4ed8;
-    --secondary: #7c3aed;
-    --accent: #06b6d4;
-    --dark: #0f172a;
-    --light: #f8fafc;
-    --gray: #64748b;
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
+    --primary: #1677ff;
+    --primary-dark: #1664cf;
+    --secondary: #15b8c8;
+    --accent: #2272d9;
+    --dark: #10233f;
+    --light: #f8fbff;
+    --gray: #667c99;
+    --success: #087a55;
+    --warning: #ad6800;
+    --danger: #b42318;
 }
 
 * {
@@ -508,12 +508,13 @@ body {
     width: 100%;
     min-width: 100%;
     table-layout: auto;
-    background: rgba(15, 23, 42, 0.7);
-    color: var(--light);
+    background: #ffffff;
+    color: var(--dark);
     border-radius: 8px;
     overflow: hidden;
     border-collapse: collapse;
     font-size: 0.9rem;
+    border: 1px solid #d9e6f5;
 }
 
 .RankTable thead {
@@ -530,16 +531,27 @@ body {
 
 .RankTable td {
     padding: 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid #d9e6f5;
     text-overflow: ellipsis;
 }
 
-.RankTable tr:last-child td {
-    border-bottom: none;
+.RankTable tr:hover {
+    background: #f2f8ff;
 }
 
-.RankTable tr:hover {
-    background: rgba(255, 255, 255, 0.05);
+.brand-cell-text {
+    color: var(--primary-dark);
+    font-weight: 700;
+}
+
+.muted-cell-text {
+    color: var(--gray);
+}
+
+.brand-row-outline {
+    border: 1px solid var(--primary);
+    border-radius: 6px;
+    padding: 2px;
 }
 
 .rank-cell {
@@ -559,7 +571,7 @@ body {
 .progress-container {
     width: 100%;
     height: 20px;
-    background: #e2e8f0;
+    background: #e5edf7;
     border-radius: 10px;
     overflow: hidden;
     position: relative;
@@ -577,8 +589,7 @@ body {
     transform: translateY(-50%);
     font-size: 11px;
     font-weight: 600;
-    color: white;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+    color: var(--dark);
     z-index: 2;
 }
 

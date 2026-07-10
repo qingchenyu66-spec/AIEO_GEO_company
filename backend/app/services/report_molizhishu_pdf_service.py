@@ -9,6 +9,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.services.report_molizhishu_context_service import build_molizhishu_report_context
+from app.services.report_molizhishu_theme import resolve_theme, theme_scope
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +23,29 @@ def _jinja_env() -> Environment:
     )
 
 
-def render_molizhishu_report_html(payload: dict[str, Any], platform_names: dict[str, str] | None = None) -> str:
-    context = build_molizhishu_report_context(payload, platform_names)
-    template = _jinja_env().get_template("report.html")
-    return template.render(**context)
+def render_molizhishu_report_html(
+    payload: dict[str, Any],
+    platform_names: dict[str, str] | None = None,
+    *,
+    theme: str = "b",
+) -> str:
+    theme_obj = resolve_theme(theme)
+    with theme_scope(theme_obj.id):
+        context = build_molizhishu_report_context(payload, platform_names)
+        context["theme_id"] = theme_obj.id
+        context["theme_label"] = theme_obj.label
+        context["theme_css"] = theme_obj.css_block()
+        template = _jinja_env().get_template("report.html")
+        return template.render(**context)
 
 
-def build_molizhishu_pdf(payload: dict[str, Any], platform_names: dict[str, str] | None = None) -> bytes:
-    html = render_molizhishu_report_html(payload, platform_names)
+def build_molizhishu_pdf(
+    payload: dict[str, Any],
+    platform_names: dict[str, str] | None = None,
+    *,
+    theme: str = "b",
+) -> bytes:
+    html = render_molizhishu_report_html(payload, platform_names, theme=theme)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:

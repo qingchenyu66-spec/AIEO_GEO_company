@@ -41,7 +41,7 @@ REPORT_TYPE_LABELS = {
 }
 
 PDF_FONT = "STSong-Light"
-ExportFormat = Literal["pdf", "docx"]
+ExportFormat = Literal["pdf", "docx", "html"]
 REPORT_HERO_TAGLINE = "GEO 全平台监测 · 竞品对标 · 决策级诊断"
 INSIGHT_SECTION_TITLE = "核心洞察"
 INSIGHT_SECTION_SUBTITLE = "基于多轮抓取、语义词矩阵与引用信源交叉验证"
@@ -963,21 +963,31 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
     return buffer.getvalue()
 
 
-def build_report_export(report: dict[str, Any], export_format: ExportFormat) -> tuple[bytes, str, str]:
+def build_report_export(report: dict[str, Any], export_format: ExportFormat, *, theme: str = "b") -> tuple[bytes | str, str, str]:
     """返回文件内容、文件名、MIME 类型。"""
     payload = _normalize_export_payload(report)
     platform_names = _platform_label_map()
     if export_format == "pdf":
-        content = _build_pdf_premium_or_fallback(payload, platform_names)
+        content = _build_pdf_premium_or_fallback(payload, platform_names, theme=theme)
         mime = "application/pdf"
+        suffix = "pdf"
+    elif export_format == "html":
+        from app.services.report_molizhishu_html_service import build_molizhishu_html
+
+        if payload.get("report_type") != "diagnosis":
+            raise ValueError("HTML 导出暂仅支持售前诊断报告")
+        content = build_molizhishu_html(payload, platform_names, theme=theme).encode("utf-8")
+        mime = "text/html; charset=utf-8"
+        suffix = "html"
     else:
         content = _build_docx(payload, platform_names)
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    filename = _safe_filename(payload["title"], export_format)
+        suffix = "docx"
+    filename = _safe_filename(payload["title"], suffix)
     return content, filename, mime
 
 
-def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
+def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict[str, str], *, theme: str = "b") -> bytes:
     """售前诊断走模力浅色模板；其余报告优先 Premium；Playwright 不可用时回退 ReportLab。"""
     import logging
 
@@ -988,7 +998,7 @@ def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict
     if payload.get("report_type") == "diagnosis":
         from app.services.report_molizhishu_pdf_service import build_molizhishu_pdf
 
-        return build_molizhishu_pdf(payload, platform_names)
+        return build_molizhishu_pdf(payload, platform_names, theme=theme)
 
     enriched = enrich_export_payload_for_premium(payload, report_type=payload.get("report_type"))
     try:

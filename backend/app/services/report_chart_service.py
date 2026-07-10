@@ -14,11 +14,10 @@ from matplotlib.ticker import MaxNLocator
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
 from app.services.report_premium_font_service import configure_matplotlib_cjk
+from app.services.report_molizhishu_theme import get_theme
 
 _CHART_DPI = 160
 _CHART_FIGSIZE = (7.2, 3.2)
-_PLATFORM_COLORS = ["#1f6feb", "#2272d9", "#3b8eed", "#58708f", "#17406a", "#45627f", "#6b8cae"]
-_ENTITY_LINE_COLORS = ["#ef4444", "#22c55e", "#3b82f6", "#f59e0b", "#8b5cf6"]
 
 
 def _configure_matplotlib() -> None:
@@ -80,13 +79,14 @@ def build_rank_trend_chart(rank_trend: list[dict[str, Any]]) -> bytes | None:
 
     fig, ax_rank = plt.subplots(figsize=_CHART_FIGSIZE)
     x = list(range(len(labels)))
+    theme = get_theme()
 
     rank_points = [(index, value) for index, value in enumerate(ranks) if value is not None]
     if rank_points:
         rx, ry = zip(*rank_points)
-        ax_rank.plot(rx, ry, color="#1f6feb", marker="o", linewidth=2.4, markersize=6, label="平均排名")
+        ax_rank.plot(rx, ry, color=theme.primary, marker="o", linewidth=2.4, markersize=6, label="平均排名")
         ax_rank.invert_yaxis()
-        ax_rank.set_ylabel("平均排名（越小越靠前）", color="#17406a")
+        ax_rank.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis)
         ax_rank.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
         ax_rank.grid(axis="y", linestyle="--", alpha=0.25)
 
@@ -94,13 +94,13 @@ def build_rank_trend_chart(rank_trend: list[dict[str, Any]]) -> bytes | None:
     rate_points = [(index, value) for index, value in enumerate(mention_rates) if value is not None]
     if rate_points:
         mx, my = zip(*rate_points)
-        ax_rate.plot(mx, my, color="#16a34a", marker="s", linewidth=2.0, markersize=5, label="提及率")
-        ax_rate.set_ylabel("提及率 (%)", color="#166534")
+        ax_rate.plot(mx, my, color=theme.success, marker="s", linewidth=2.0, markersize=5, label="提及率")
+        ax_rate.set_ylabel("提及率 (%)", color=theme.success)
         ax_rate.set_ylim(0, max(100, max(my) * 1.15 if my else 100))
 
     ax_rank.set_xticks(x)
     ax_rank.set_xticklabels(labels, fontsize=8)
-    ax_rank.set_title("平均排名趋势", fontsize=13, fontweight="bold", color="#12385f", pad=12)
+    ax_rank.set_title("平均排名趋势", fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
     ax_rank.spines["top"].set_visible(False)
 
     lines, legends = [], []
@@ -160,6 +160,7 @@ def build_entity_rank_trend_chart(
         return build_rank_trend_chart(trend_rows)
 
     _configure_matplotlib()
+    theme = get_theme()
     labels = [
         _short_schedule_label(row.get("schedule_label") or row.get("schedule_key"))
         for row in trend_rows
@@ -181,7 +182,7 @@ def build_entity_rank_trend_chart(
         if not points:
             continue
         px, py = zip(*points)
-        color = _ENTITY_LINE_COLORS[index % len(_ENTITY_LINE_COLORS)]
+        color = theme.entity_line_colors[index % len(theme.entity_line_colors)]
         linewidth = 2.8 if names_match(name, brand) else 2.0
         ax.plot(px, py, color=color, marker="o", linewidth=linewidth, markersize=5, label=name)
         for px_val, py_val in points:
@@ -199,12 +200,12 @@ def build_entity_rank_trend_chart(
     ax.set_ylim(max(max_rank + 1, 6), 0.5)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("平均排名（越小越靠前）", color="#17406a")
+    ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
     ax.grid(axis="y", linestyle="--", alpha=0.25)
-    ax.set_title(title, fontsize=13, fontweight="bold", color="#12385f", pad=12)
+    ax.set_title(title, fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
     if subtitle:
-        ax.text(0.01, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color="#58708f")
+        ax.text(0.01, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=theme.gray)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=8)
     ax.spines["top"].set_visible(False)
     fig.tight_layout()
@@ -222,21 +223,22 @@ def build_mention_rate_bar_chart(
     if not mention_table:
         return None
     _configure_matplotlib()
+    theme = get_theme()
     rows = sorted(mention_table, key=lambda item: float(item.get("mention_rate") or 0), reverse=True)[:limit]
     labels = [str(row.get("name") or "—") for row in rows]
     values = [float(row.get("mention_rate") or 0) for row in rows]
     bar_colors = []
     for row in rows:
         if row.get("is_brand"):
-            bar_colors.append("#22c55e")
+            bar_colors.append(theme.primary)
         elif row.get("is_competitor"):
-            bar_colors.append("#3b82f6")
+            bar_colors.append(theme.secondary)
         elif float(row.get("mention_rate") or 0) >= 60:
-            bar_colors.append("#86efac")
+            bar_colors.append("#21b981")
         elif float(row.get("mention_rate") or 0) >= 30:
-            bar_colors.append("#fde047")
+            bar_colors.append(theme.accent)
         else:
-            bar_colors.append("#fdba74")
+            bar_colors.append("#cfe5ff")
 
     fig, ax = plt.subplots(figsize=(7.2, max(2.8, len(rows) * 0.28)))
     y_pos = list(range(len(labels)))
@@ -245,8 +247,8 @@ def build_mention_rate_bar_chart(
     ax.set_yticklabels(labels, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlim(0, max(100, max(values) * 1.12 if values else 100))
-    ax.set_xlabel("提及率 (%)", color="#17406a")
-    ax.set_title(title, fontsize=12, fontweight="bold", color="#12385f", pad=10)
+    ax.set_xlabel("提及率 (%)", color=theme.chart_axis)
+    ax.set_title(title, fontsize=12, fontweight="bold", color=theme.chart_title, pad=10)
     ax.grid(axis="x", linestyle="--", alpha=0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -261,6 +263,7 @@ def build_platform_mention_chart(platform_stats: list[dict[str, Any]]) -> bytes 
     if not platform_stats:
         return None
     _configure_matplotlib()
+    theme = get_theme()
     names = _platform_label_map()
     rows = sorted(platform_stats, key=lambda item: float(item.get("mention_rate") or 0), reverse=True)
     labels = [names.get(str(row.get("platform") or ""), str(row.get("platform") or "—")) for row in rows]
@@ -268,14 +271,14 @@ def build_platform_mention_chart(platform_stats: list[dict[str, Any]]) -> bytes 
 
     fig, ax = plt.subplots(figsize=_CHART_FIGSIZE)
     y_pos = list(range(len(labels)))
-    colors = [_PLATFORM_COLORS[index % len(_PLATFORM_COLORS)] for index in range(len(labels))]
-    bars = ax.barh(y_pos, values, color=colors, height=0.62)
+    bar_colors = [theme.platform_colors[index % len(theme.platform_colors)] for index in range(len(labels))]
+    bars = ax.barh(y_pos, values, color=bar_colors, height=0.62)
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlim(0, max(100, max(values) * 1.12 if values else 100))
-    ax.set_xlabel("品牌提及率 (%)", color="#17406a")
-    ax.set_title("各平台品牌提及率", fontsize=13, fontweight="bold", color="#12385f", pad=12)
+    ax.set_xlabel("品牌提及率 (%)", color=theme.chart_axis)
+    ax.set_title("各平台品牌提及率", fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
     ax.grid(axis="x", linestyle="--", alpha=0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -287,7 +290,7 @@ def build_platform_mention_chart(platform_stats: list[dict[str, Any]]) -> bytes 
             f"{value:.1f}%",
             va="center",
             fontsize=8,
-            color="#334e6f",
+            color=theme.chart_axis,
         )
 
     fig.tight_layout()
@@ -309,10 +312,11 @@ def build_sentiment_pie_chart(sentiment_counts: dict[str, int]) -> bytes | None:
     if not filtered:
         return None
     _configure_matplotlib()
+    theme = get_theme()
     labels = list(filtered.keys())
     values = [float(filtered[label]) for label in labels]
-    colors_map = {"正面": "#34d399", "中性": "#94a3b8", "负面": "#f87171", "未知": "#cbd5e1"}
-    colors = [colors_map.get(label, "#3b82f6") for label in labels]
+    colors_map = {"正面": "#21b981", "中性": "#667c99", "负面": theme.danger, "未知": "#cfe5ff"}
+    pie_colors = [colors_map.get(label, theme.primary) for label in labels]
 
     fig, ax = plt.subplots(figsize=(4.8, 3.8))
     legend_labels = [f"{label} {filtered[label]}条" for label in labels]
@@ -325,7 +329,7 @@ def build_sentiment_pie_chart(sentiment_counts: dict[str, int]) -> bytes | None:
         labels=None,
         autopct=_autopct,
         startangle=90,
-        colors=colors,
+        colors=pie_colors,
         pctdistance=0.72,
         textprops={"fontsize": 8},
     )
@@ -342,7 +346,7 @@ def build_sentiment_pie_chart(sentiment_counts: dict[str, int]) -> bytes | None:
         fontsize=8,
         frameon=False,
     )
-    ax.set_title("舆情情绪占比分布", fontsize=12, fontweight="bold", color="#12385f", pad=10)
+    ax.set_title("舆情情绪占比分布", fontsize=12, fontweight="bold", color=theme.chart_title, pad=10)
     fig.tight_layout()
     return _figure_to_png(fig)
 
@@ -352,18 +356,19 @@ def build_source_bar_chart(top_sources: list[dict[str, Any]], *, limit: int = 8)
     if not top_sources:
         return None
     _configure_matplotlib()
+    theme = get_theme()
     rows = top_sources[:limit]
     labels = [str(row.get("title") or row.get("url") or "—")[:18] for row in rows]
     values = [float(row.get("count") or 0) for row in rows]
 
     fig, ax = plt.subplots(figsize=(6.8, max(2.8, len(rows) * 0.35)))
     y_pos = list(range(len(labels)))
-    bars = ax.barh(y_pos, values, color="#6366f1", height=0.62)
+    bars = ax.barh(y_pos, values, color=theme.primary, height=0.62)
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontsize=8)
     ax.invert_yaxis()
-    ax.set_xlabel("引用次数", color="#17406a")
-    ax.set_title("TOP 信源引用次数", fontsize=12, fontweight="bold", color="#12385f", pad=10)
+    ax.set_xlabel("引用次数", color=theme.chart_axis)
+    ax.set_title("TOP 信源引用次数", fontsize=12, fontweight="bold", color=theme.chart_title, pad=10)
     ax.grid(axis="x", linestyle="--", alpha=0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

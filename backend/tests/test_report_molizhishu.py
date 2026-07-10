@@ -204,15 +204,17 @@ def test_molizhishu_html_matches_reference_markers() -> None:
     assert "当天排名前三企业引用网站概览" in html
     assert "AI搜索平台品牌竞争力洞察" in html
     assert "progress-container" in html
-    assert 'background-color: #000000' in html
+    assert "report-theme-b" in html
+    assert "#1677ff" in html
+    assert 'background-color: #000000' not in html
 
 
 def test_matrix_and_mention_fragment_markup() -> None:
     matrix = render_matrix_table("t_divBrandRecent", "日期", ["语义词A"], [{"label": "2026-07-09", "cells": [2]}])
-    assert 'style="background-color:rgb(' in matrix
+    assert 'style="background-color:hsl(' in matrix
     mention = render_mention_table("report-list2-x", [{"name": "品牌", "sample_count": 16, "mention_count": 15, "mention_rate": 93.8, "is_brand": True}])
     assert "93.8%" in mention
-    assert "#FF6B6B" in mention
+    assert "brand-row-outline" in mention
 
     ctx = build_molizhishu_report_context(_demo_payload())
     assert ctx["competitor_text"] == "未指定竞品"

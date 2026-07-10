@@ -1672,7 +1672,17 @@ def build_lead_diagnosis_export(
             "competitors": detail.get("competitors") or [],
         },
     }
-    return build_report_export(report, "pdf" if export_format == "pdf" else "docx")
+    from app.services.report_export_service import ExportFormat, build_report_export
+
+    fmt = _resolve_export_format(export_format)
+    return build_report_export(report, fmt)  # type: ignore[arg-type]
+
+
+def _resolve_export_format(export_format: str) -> str:
+    normalized = (export_format or "pdf").lower()
+    if normalized in {"pdf", "docx", "html"}:
+        return normalized
+    raise ValueError(f"不支持的导出格式: {export_format}")
 
 
 def finalize_due_lead_diagnoses(db: Session) -> dict[str, Any]:

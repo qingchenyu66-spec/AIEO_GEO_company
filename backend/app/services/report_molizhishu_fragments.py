@@ -6,29 +6,15 @@ import html
 import re
 from typing import Any
 
+from app.services.report_molizhishu_theme import get_theme
+
 
 def _esc(text: Any) -> str:
     return html.escape(str(text or ""), quote=False)
 
 
 def rank_cell_bg(rank: Any) -> str | None:
-    if rank is None or rank == "":
-        return None
-    try:
-        value = float(rank)
-    except (TypeError, ValueError):
-        return None
-    green = int(max(120, 240 - (value - 1) * 18))
-    red = int(max(100, 144 - (value - 1) * 8))
-    blue = int(max(100, 128 - int((value - 1) * 6)))
-    return f"rgb({red}, {green}, {blue})"
-
-
-def mention_bar_hsl(rate: float) -> str:
-    hue = int(8 + rate * 1.12)
-    sat = int(79 - rate * 0.28)
-    light = int(61 - rate * 0.05)
-    return f"hsl({hue}, {sat}%, {light}%)"
+    return get_theme().rank_cell_bg(rank)
 
 
 def format_rank_display(rank: Any) -> str:
@@ -48,7 +34,7 @@ def render_matrix_cell(rank: Any) -> str:
     if rank is None or rank == "":
         return "<td>&nbsp;</td>"
     style = f' style="background-color:{bg}"' if bg else ""
-    return f"<td{style}><font color=\"black\">{format_rank_display(rank)}</font></td>"
+    return f"<td{style}>{format_rank_display(rank)}</td>"
 
 
 def render_matrix_table(table_id: str, row_header: str, prompts: list[str], rows: list[dict[str, Any]]) -> str:
@@ -71,13 +57,13 @@ def render_matrix_table(table_id: str, row_header: str, prompts: list[str], rows
 def _font_brand(text: str, *, brand: bool) -> str:
     if not brand:
         return _esc(text)
-    return f'<font color="#FF6B6B">{_esc(text)}</font>'
+    return f'<span class="brand-cell-text">{_esc(text)}</span>'
 
 
 def _font_type(text: str, *, muted: bool) -> str:
     if not muted:
         return _esc(text)
-    return f'<font color="#666666">{_esc(text)}</font>'
+    return f'<span class="muted-cell-text">{_esc(text)}</span>'
 
 
 def render_ranking_table(table_id: str, rows: list[dict[str, Any]]) -> str:
@@ -119,19 +105,17 @@ def render_ranking_table(table_id: str, rows: list[dict[str, Any]]) -> str:
 
 
 def render_progress_cell(rate: float, *, brand: bool) -> str:
+    theme = get_theme()
     width = max(0.0, min(100.0, float(rate)))
     display = f"{width:.1f}%"
+    fill = theme.mention_bar_fill(width)
     bar = (
-        '<div class="progress-container" style="width: 100%; background-color: #000000; border-radius: 4px; '
-        'overflow: hidden; height: 20px; position: relative;">'
-        f'<div class="progress-bar" style="width: {width}%; background-color: {mention_bar_hsl(width)}; '
-        'height: 100%; transition: width 0.3s ease-in-out;"></div>'
-        f'<span class="progress-text" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); '
-        f'font-size: 12px; font-weight: bold; color: #FFFFFF; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); '
-        f'z-index: 2;">{display}</span></div>'
+        '<div class="progress-container">'
+        f'<div class="progress-bar" style="width: {width}%; background: {fill};"></div>'
+        f'<span class="progress-text">{display}</span></div>'
     )
     if brand:
-        return f'<td><div style="border: 1px solid #FF6B6B; padding: 2px;">{bar}</div></td>'
+        return f'<td><div class="brand-row-outline">{bar}</div></td>'
     return f"<td>{bar}</td>"
 
 

@@ -7,9 +7,10 @@
     <style>
     {{ font_face_css | safe }}
     {% include 'styles.css' %}
+    {{ theme_css | safe }}
     </style>
 </head>
-<body>
+<body class="report-theme-{{ theme_id }}">
     <div class="report-container">
         <div class="report-header">
             <h1 class="report-title">AI搜索平台品牌分析报告</h1>
@@ -111,7 +112,7 @@
                 {% for block in ranking_blocks %}
                 <div class="report-list-item">
                     <div class="report-header report-list-header">
-                        <div>{{ block.index }}. 语义词: <font color="orange">{{ block.prompt }}</font></div>
+                        <div>{{ block.index }}. 语义词: <span class="prompt-accent">{{ block.prompt }}</span></div>
                     </div>
                     {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
                     {{ block.table_html | safe }}
@@ -126,7 +127,7 @@
                 {% for block in mention_blocks %}
                 <div class="report-list-item">
                     <div class="report-header">
-                        <div>{{ block.index }}: 语义词: <font color="orange">{{ block.prompt }}</font></div>
+                        <div>{{ block.index }}: 语义词: <span class="prompt-accent">{{ block.prompt }}</span></div>
                     </div>
                     {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
                     {{ block.table_html | safe }}
