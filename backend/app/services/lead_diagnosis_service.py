@@ -34,6 +34,7 @@ from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics
 from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.tenant_scope import is_sales_identity
 from app.services.report_text_sanitize import consolidate_top_sources, sanitize_source_title
+from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
 from app.services.report_export_service import build_report_export
