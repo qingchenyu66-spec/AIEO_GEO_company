@@ -99,11 +99,79 @@ def test_build_rank_trend_across_runs() -> None:
         ),
     ]
     result = build_lead_diagnosis_analytics(lead, subtasks, runs)
-    assert len(result["rank_trend"]) == 2
-    assert result["rank_trend"][0]["avg_rank"] == 4.0
-    assert result["rank_trend"][1]["avg_rank"] == 2.0
+    assert len(result["rank_trend"]) == 1
+    assert result["rank_trend"][0]["schedule_label"] == "2026-07-03"
+    assert result["rank_trend"][0]["avg_rank"] == 3.0
     assert "北森" in result["rank_trend"][0]["entities"]
     assert result["tracked_entities"][0] == "儒思HR"
+
+
+def test_build_rank_trend_spans_multiple_days() -> None:
+    lead = _LeadStub()
+    runs = [
+        _RunStub("202607030930", "2026-07-03 09:30", "task-1"),
+        _RunStub("202607040930", "2026-07-04 09:30", "task-2"),
+    ]
+    subtasks = [
+        _SubtaskStub(
+            prompt="HR课程性价比高的品牌推荐",
+            task_id="task-1",
+            mention_position=4,
+            all_rankings=[{"brandName": "儒思HR", "rank": 4}],
+        ),
+        _SubtaskStub(
+            prompt="HR课程性价比高的品牌推荐",
+            task_id="task-2",
+            mention_position=2,
+            all_rankings=[{"brandName": "儒思HR", "rank": 2}],
+        ),
+    ]
+    result = build_lead_diagnosis_analytics(lead, subtasks, runs)
+    assert len(result["rank_trend"]) == 2
+    assert [row["schedule_label"] for row in result["rank_trend"]] == ["2026-07-03", "2026-07-04"]
+    assert result["rank_trend"][0]["avg_rank"] == 4.0
+    assert result["rank_trend"][1]["avg_rank"] == 2.0
+
+
+def test_molizhishu_ranking_rows_only_include_tracked_entities() -> None:
+    from datetime import datetime
+
+    from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
+
+    class _Run:
+        schedule_key = "202607021634"
+        schedule_label = "2026-07-02 16:34"
+        task_id = "task-1"
+
+    class _Sub:
+        task_id = "task-1"
+        all_rankings_json = [
+            {"brandName": "分众传媒", "rank": 1},
+            {"brandName": "新潮传媒", "rank": 2},
+            {"brandName": "儒思HR", "rank": 3},
+        ]
+        updated_at = datetime(2026, 7, 2, 16, 34)
+
+    rows = _build_molizhishu_ranking_rows(
+        [_Sub()],
+        brand="儒思HR",
+        competitors=["北森"],
+        task_run_map={"task-1": _Run()},
+    )
+    names = {row["name"] for row in rows}
+    assert "儒思HR" in names
+    assert "新潮传媒" not in names
+
+
+def test_strict_entity_match_avoids_two_char_false_positive() -> None:
+    from app.services.lead_diagnosis_analytics import _is_tracked_entity
+
+    brand = "艾迪亚控股集团有限公司"
+    competitors = ["分众传媒", "白马户外媒体", "华铁传媒", "德高中国", "北京优视传媒"]
+    assert _is_tracked_entity("新潮传媒（已被分众收购）", brand, competitors) is False
+    assert _is_tracked_entity("北京信时光传媒", brand, competitors) is False
+    assert _is_tracked_entity("分众传媒（Focus Media）", brand, competitors) is True
+    assert _is_tracked_entity("艾迪亚传媒", brand, competitors) is True
 
 
 def test_build_brand_city_rankings_groups_by_region() -> None:

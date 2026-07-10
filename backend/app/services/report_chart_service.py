@@ -27,9 +27,11 @@ def _configure_matplotlib() -> None:
 
 def _short_schedule_label(label: Any) -> str:
     text = str(label or "").strip()
-    match = re.match(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2})", text)
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}:\d{2}))?", text)
     if match:
-        return f"{match.group(2)}-{match.group(3)}\n{match.group(4)}"
+        if match.group(4):
+            return f"{match.group(2)}-{match.group(3)}\n{match.group(4)}"
+        return f"{match.group(2)}-{match.group(3)}"
     if len(text) > 14:
         return text[:12] + "…"
     return text or "—"

@@ -5,9 +5,18 @@ import type {
   RankingMatrixColumn,
   RankingMatrixRow,
 } from '../../../services/monitor'
+import { formatRank } from '../portalUtils'
 
 export type MatrixChartType = 'bar' | 'heat' | 'table'
 export type MatrixLayoutMode = 'single' | 'dual' | 'multi'
+export type MatrixRankMode = 'day' | 'period'
+
+export type MatrixRankScope = {
+  mode: MatrixRankMode
+  dayKey: string
+  dayCount: number
+  label: string
+}
 
 export type MatrixPlatformSlice = {
   columns: RankingMatrixColumn[]
@@ -51,6 +60,86 @@ function rowDayKey(row: RankingMatrixRow) {
 
 export function matrixDayKeys(rows: RankingMatrixRow[]) {
   return [...new Set(rows.map(rowDayKey).filter(Boolean))].sort()
+}
+
+function averageRankValues(values: number[]) {
+  if (!values.length) return null
+  const total = values.reduce((sum, value) => sum + value, 0)
+  return Math.round((total / values.length) * 10) / 10
+}
+
+/** 单日 = 当日排名；区间 = 所选日期范围内按天均值再汇总为区间均值。 */
+export function buildMatrixRankScope(
+  rows: RankingMatrixRow[],
+  startDate: string,
+  endDate: string,
+): MatrixRankScope {
+  const start = (startDate || '').trim()
+  const end = (endDate || start).trim()
+  const dayKeys = matrixDayKeys(rows)
+  const inRange = dayKeys.filter(key => (!start || key >= start) && (!end || key <= end))
+  const scopedDays = inRange.length ? inRange : dayKeys
+
+  if (start && start === end) {
+    const dayKey = scopedDays.includes(start)
+      ? start
+      : (scopedDays.at(-1) || start)
+    return {
+      mode: 'day',
+      dayKey,
+      dayCount: dayKey ? 1 : 0,
+      label: dayKey || start,
+    }
+  }
+
+  const label = start && end
+    ? `${start.slice(5)} ~ ${end.slice(5)}`
+    : `${scopedDays.length}天`
+  return {
+    mode: 'period',
+    dayKey: '',
+    dayCount: scopedDays.length,
+    label,
+  }
+}
+
+function ranksForColumnInScope(
+  rows: RankingMatrixRow[],
+  column: RankingMatrixColumn,
+  scope: MatrixRankScope,
+) {
+  const sorted = sortMatrixRowsAsc(rows)
+  const pool = scope.mode === 'day' && scope.dayKey
+    ? sorted.filter(row => rowDayKey(row) === scope.dayKey)
+    : sorted
+  const ranks: number[] = []
+  for (const row of pool) {
+    const rank = resolveColumnCell(row, column)?.mention_position
+    if (rank != null) ranks.push(Number(rank))
+  }
+  return ranks
+}
+
+export function resolveScopedColumnRank(
+  rows: RankingMatrixRow[],
+  column: RankingMatrixColumn,
+  scope: MatrixRankScope,
+) {
+  if (scope.mode === 'day') {
+    return resolveColumnCell(resolveColumnRow(rows, column, scope.dayKey), column)?.mention_position ?? null
+  }
+  return averageRankValues(ranksForColumnInScope(rows, column, scope))
+}
+
+export function resolveScopedColumnRow(
+  rows: RankingMatrixRow[],
+  column: RankingMatrixColumn,
+  scope: MatrixRankScope,
+) {
+  if (scope.mode === 'day') {
+    return resolveColumnRow(rows, column, scope.dayKey)
+  }
+  return resolveColumnRow(rows, column, matrixDayKeys(rows).at(-1))
 }
 
 function columnGroupLabels(column: RankingMatrixColumn) {
@@ -123,6 +212,51 @@ export function resolveColumnRank(
   return resolveColumnCell(resolveColumnRow(rows, column, dayKey), column)?.mention_position ?? null
 }
 
+/** ponytail: 手测 rank scope 算法，改逻辑后可在 devtools 调用 */
+export function selfCheckMatrixRankScope() {
+  const cell = (mention_position: number): RankingMatrixCell => ({
+    subtask_id: 'x',
+    mention_position,
+    status: 'completed',
+    page_screenshot: null,
+    sentiment: null,
+    updated_at: null,
+  })
+  const rows: RankingMatrixRow[] = [
+    {
+      task_id: 't1',
+      platform: 'doubao',
+      day_key: '2026-06-01',
+      schedule_window_key: '2026-06-01',
+      schedule_label: '06-01',
+      snapshot_at: '2026-06-01',
+      cells: {
+        p1: cell(4),
+      },
+    },
+    {
+      task_id: 't1',
+      platform: 'doubao',
+      day_key: '2026-06-02',
+      schedule_window_key: '2026-06-02',
+      schedule_label: '06-02',
+      snapshot_at: '2026-06-02',
+      cells: {
+        p1: cell(2),
+      },
+    },
+  ]
+  const column: RankingMatrixColumn = { prompt: 'p1', group_name: null, monitor_keyword: null }
+  const dayScope = buildMatrixRankScope(rows, '2026-06-02', '2026-06-02')
+  const periodScope = buildMatrixRankScope(rows, '2026-06-01', '2026-06-02')
+  console.assert(dayScope.mode === 'day')
+  console.assert(resolveScopedColumnRank(rows, column, dayScope) === 2)
+  console.assert(periodScope.mode === 'period')
+  console.assert(resolveScopedColumnRank(rows, column, periodScope) === 3)
+  console.assert(computeMatrixBarAxisMax([{ rank: 9 }, { rank: 10 }]) === 10)
+  console.assert(computeMatrixBarAxisMax([{ rank: 12.5 }]) === 13)
+}
+
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {
   const rows = sortMatrixRowsAsc(
     matrix.rows.filter(row => (matrix.all_platforms ? row.platform === platform : true)),
@@ -142,9 +276,9 @@ export function previousMatrixRow(rows: RankingMatrixRow[]) {
   return rows.length > 1 ? rows[rows.length - 2] : null
 }
 
-export function matrixPlatformKpi(slice: MatrixPlatformSlice) {
+export function matrixPlatformKpi(slice: MatrixPlatformSlice, scope: MatrixRankScope) {
   if (!slice.columns.length || !slice.rows.length) return { top3: 0, avg: '—', none: 0 }
-  const ranks = slice.columns.map(column => resolveColumnRank(slice.rows, column))
+  const ranks = slice.columns.map(column => resolveScopedColumnRank(slice.rows, column, scope))
   const valid = ranks.filter((rank): rank is number => rank != null)
   return {
     top3: valid.filter(rank => rank <= 3).length,
@@ -176,16 +310,20 @@ function rankDeltaText(rank: number | null, prevRank: number | null) {
 export function buildKeywordDetailRows(
   slice: MatrixPlatformSlice,
   formatRank: (rank: number | null | undefined) => string,
+  scope: MatrixRankScope,
 ): MatrixKeywordDetailRow[] {
   const dayKeys = matrixDayKeys(slice.rows)
-  const latestDay = dayKeys.at(-1) || ''
-  const prevDay = dayKeys.length > 1 ? dayKeys[dayKeys.length - 2] : ''
+  const prevDay = scope.mode === 'day' && scope.dayKey
+    ? (dayKeys.filter(key => key < scope.dayKey).at(-1) || '')
+    : ''
   return slice.columns.map(column => {
-    const row = resolveColumnRow(slice.rows, column, latestDay)
+    const row = resolveScopedColumnRow(slice.rows, column, scope)
+    const rank = resolveScopedColumnRank(slice.rows, column, scope)
     const prevRow = prevDay ? resolveColumnRow(slice.rows, column, prevDay) : null
-    const rank = resolveColumnCell(row, column)?.mention_position ?? null
-    const prevRank = resolveColumnCell(prevRow, column)?.mention_position ?? null
-    const delta = rankDeltaText(rank, prevRank)
+    const prevRank = prevRow ? resolveColumnCell(prevRow, column)?.mention_position ?? null : null
+    const delta = scope.mode === 'day'
+      ? rankDeltaText(rank, prevRank)
+      : { text: '—', cls: 'delta-flat' as const }
     return {
       prompt: column.prompt,
       label: labelMatrixPrompt(column),
@@ -195,7 +333,7 @@ export function buildKeywordDetailRows(
       deltaCls: delta.cls,
       pillCls: rankPillClass(rank),
       row,
-      cell: resolveColumnCell(row, column),
+      cell: row ? resolveColumnCell(row, column) : undefined,
     }
   }).sort((left, right) => {
     if (left.rank == null && right.rank == null) return 0
@@ -235,6 +373,34 @@ function rankBarStyle(
     ]),
     labelColor: '#9a6200',
   }
+}
+
+const BAR_AXIS_MIN = 1
+const BAR_AXIS_FLOOR = 10
+
+/** 横轴上限：随数据最大排名扩展，避免 #8+ 全部顶格等长。 */
+export function computeMatrixBarAxisMax(items: Array<{ rank: number | null }>) {
+  const ranks = items
+    .map(item => item.rank)
+    .filter((rank): rank is number => rank != null && rank > 0)
+  const peak = ranks.length ? Math.max(...ranks) : BAR_AXIS_FLOOR
+  return Math.max(BAR_AXIS_FLOOR, Math.ceil(peak))
+}
+
+function matrixBarAxisTicks(axisMax: number) {
+  if (axisMax <= 6) {
+    return Array.from({ length: axisMax }, (_, index) => index + 1)
+  }
+  const step = axisMax <= 12 ? 2 : Math.ceil(axisMax / 6)
+  const ticks = new Set<number>([1, axisMax])
+  for (let value = step; value < axisMax; value += step) ticks.add(value)
+  return [...ticks].sort((left, right) => left - right)
+}
+
+function matrixBarRankTooltip(rank: number | null) {
+  if (rank == null) return 'AI 回答中未提及品牌'
+  if (Number.isInteger(rank)) return `AI 推荐列表约第 ${rank} 位`
+  return `AI 推荐列表约第 ${rank} 位（多轮均值）`
 }
 
 const BAR_ROW_PITCH = 44
@@ -297,18 +463,17 @@ export function resolveMatrixBarLayoutHint(
 export function buildMatrixBarOption(
   slice: MatrixPlatformSlice,
   runtime: EchartsRuntime,
-  scheduleLabel: string,
+  scopeLabel: string,
+  scope: MatrixRankScope,
   layoutHint?: MatrixBarLayoutHint,
 ) {
   const graphic = runtime.graphic!
-  const dayKeys = matrixDayKeys(slice.rows)
-  const latestDay = dayKeys.at(-1) || ''
   const items = slice.columns.map(column => {
-    const row = resolveColumnRow(slice.rows, column, latestDay)
+    const row = resolveScopedColumnRow(slice.rows, column, scope)
     return {
       prompt: column.prompt,
       label: labelMatrixPrompt(column),
-      rank: resolveColumnCell(row, column)?.mention_position ?? null,
+      rank: resolveScopedColumnRank(slice.rows, column, scope),
       row,
     }
   }).sort((left, right) => {
@@ -321,6 +486,8 @@ export function buildMatrixBarOption(
   const chartHeight = layoutHint?.chartHeight ?? matrixBarChartHeight(items.length)
   const rowPitch = layoutHint?.rowPitch ?? BAR_ROW_PITCH
   const grid = matrixBarGridMargins(items.length, chartHeight, rowPitch)
+  const axisMax = computeMatrixBarAxisMax(items)
+  const axisTicks = matrixBarAxisTicks(axisMax)
 
   return {
     height: chartHeight,
@@ -329,7 +496,7 @@ export function buildMatrixBarOption(
         left: 12,
         right: 64,
         top: grid.top,
-        bottom: grid.bottom,
+        bottom: grid.bottom + 8,
         containLabel: true,
       },
     tooltip: {
@@ -340,18 +507,28 @@ export function buildMatrixBarOption(
       formatter: (params: Array<{ dataIndex: number }>) => {
         const item = items[params[0]?.dataIndex ?? 0]
         if (!item) return ''
-        const txt = item.rank == null ? '未提及' : `#${item.rank}`
-        return `<b>${item.label}</b><br/>${scheduleLabel || '最新'} · ${txt}`
+        const prefix = scope.mode === 'day'
+          ? (scopeLabel || scope.dayKey || '当日')
+          : `${scopeLabel || '区间'} 均值`
+        return `<b>${item.label}</b><br/>${prefix}<br/>${matrixBarRankTooltip(item.rank)}`
       },
     },
     xAxis: {
       type: 'value',
-      min: 0.8,
-      max: 7,
+      min: BAR_AXIS_MIN,
+      max: axisMax,
       inverse: true,
+      name: '推荐排名（→ 1 最佳）',
+      nameLocation: 'middle',
+      nameGap: 28,
+      nameTextStyle: { color: '#8aa0ba', fontSize: 11, fontWeight: 600 },
       splitLine: { lineStyle: { type: 'dashed', color: '#e8f0f8' } },
       axisLabel: {
-        formatter: (value: number) => (value >= 7 ? '' : `#${Math.round(value)}`),
+        formatter: (value: number) => {
+          const rounded = Math.round(value)
+          if (!axisTicks.includes(rounded)) return ''
+          return String(rounded)
+        },
         color: '#8aa0ba',
         fontSize: 11,
       },
@@ -374,8 +551,11 @@ export function buildMatrixBarOption(
       barWidth: 18,
       data: items.map(item => {
         const style = rankBarStyle(item.rank, graphic)
+        const barValue = item.rank == null
+          ? axisMax + 0.35
+          : Math.min(item.rank, axisMax + 0.35)
         return {
-          value: item.rank == null ? 6.8 : item.rank,
+          value: barValue,
           itemStyle: { color: style.color, borderRadius: [0, 8, 8, 0] },
           label: { color: style.labelColor },
           prompt: item.prompt,
@@ -392,7 +572,7 @@ export function buildMatrixBarOption(
         fontSize: 12,
         formatter: (params: { dataIndex: number }) => {
           const item = items[params.dataIndex]
-          return item?.rank == null ? '—' : `#${item.rank}`
+          return item?.rank == null ? '—' : formatRank(item.rank)
         },
       },
     }],
@@ -423,7 +603,7 @@ export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
       textStyle: { color: '#fff', fontSize: 12 },
       formatter: (params: { data: [number, number, number] }) => {
         const [xIndex, yIndex, value] = params.data
-        return `<b>${keywords[yIndex] || '—'}</b><br/>${dates[xIndex] || '—'} · ${value < 0 ? '未提及' : `#${value}`}`
+        return `<b>${keywords[yIndex] || '—'}</b><br/>${dates[xIndex] || '—'} · ${value < 0 ? '未提及' : formatRank(value)}`
       },
     },
     xAxis: {
@@ -452,7 +632,7 @@ export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
       label: {
         show: true,
         formatter: (params: { data: [number, number, number] }) => (
-          params.data[2] < 0 ? '—' : `#${params.data[2]}`
+          params.data[2] < 0 ? '—' : formatRank(params.data[2])
         ),
         fontSize: 12,
         fontWeight: 800,

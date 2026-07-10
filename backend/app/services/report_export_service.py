@@ -287,13 +287,21 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "rank_trend": snapshot.get("rank_trend") or [],
         "tracked_entities": snapshot.get("tracked_entities") or [],
         "brand_city_rankings": snapshot.get("brand_city_rankings") or [],
+        "brand_date_matrix": snapshot.get("brand_date_matrix") or {},
+        "brand_city_matrix": snapshot.get("brand_city_matrix") or {},
         "report_sections": content.get("report_sections") or {},
+        "analysis_html": content.get("analysis_html") or "",
         "premium_content": content.get("premium_content") or {},
         "report_modules": content.get("report_modules") or {},
         "report_type": report.get("report_type") or "",
         "period_start": content.get("period_start"),
         "period_end": content.get("period_end"),
         "sentiment_counts": snapshot.get("sentiment_counts") or {},
+        "matrix_rows": snapshot.get("matrix_rows") or content.get("matrix_rows") or [],
+        "report_enrichment": content.get("report_enrichment") or snapshot.get("report_enrichment") or {},
+        "contact_phone": content.get("contact_phone") or "",
+        "contact_name": content.get("contact_name") or "",
+        "competitors": content.get("competitors") or [],
     }
 
 def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
@@ -970,13 +978,18 @@ def build_report_export(report: dict[str, Any], export_format: ExportFormat) -> 
 
 
 def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
-    """优先 Premium 深色模板；Playwright 不可用时回退 ReportLab。"""
+    """售前诊断走模力浅色模板；其余报告优先 Premium；Playwright 不可用时回退 ReportLab。"""
     import logging
 
     from app.services.report_premium_context_service import enrich_export_payload_for_premium
     from app.services.report_premium_pdf_service import build_premium_pdf
 
     logger = logging.getLogger(__name__)
+    if payload.get("report_type") == "diagnosis":
+        from app.services.report_molizhishu_pdf_service import build_molizhishu_pdf
+
+        return build_molizhishu_pdf(payload, platform_names)
+
     enriched = enrich_export_payload_for_premium(payload, report_type=payload.get("report_type"))
     try:
         return build_premium_pdf(enriched)

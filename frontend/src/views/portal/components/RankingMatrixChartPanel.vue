@@ -12,7 +12,7 @@ import {
   buildKeywordDetailRows,
   buildMatrixBarOption,
   buildMatrixHeatOption,
-  latestMatrixRow,
+  buildMatrixRankScope,
   matrixChartHeight,
   matrixDayKeys,
   matrixPlatformKpi,
@@ -22,6 +22,7 @@ import {
   sliceMatrixByPlatform,
   type MatrixChartType,
   type MatrixLayoutMode,
+  type MatrixRankScope,
 } from '../composables/rankingMatrixChartUtils'
 
 const props = defineProps<{
@@ -33,6 +34,8 @@ const props = defineProps<{
   platformLabelMap: Record<string, string>
   formatRank: (rank: number | null | undefined) => string
   displayScheduleLabel: (label: string | null | undefined, fallback?: string) => string
+  filterStartDate: string
+  filterEndDate: string
 }>()
 
 const emit = defineEmits<{
@@ -67,10 +70,19 @@ const availablePlatforms = computed(() => {
   return withData.length ? withData : purchased
 })
 
+const rankScope = computed<MatrixRankScope>(() => (
+  buildMatrixRankScope(
+    props.matrix?.rows || [],
+    props.filterStartDate,
+    props.filterEndDate,
+  )
+))
+
 const platformRailItems = computed(() => {
   const purchased = props.purchasedPlatforms.length
     ? props.purchasedPlatforms
     : (props.matrix?.purchased_platforms || [])
+  const scope = rankScope.value
   return purchased.map(code => {
     const slice = props.matrix ? sliceMatrixByPlatform(props.matrix, code) : null
     return {
@@ -78,7 +90,7 @@ const platformRailItems = computed(() => {
       name: props.platformLabelMap[code] || code,
       color: platformAccentColor(code),
       columnCount: slice?.columns.length ?? 0,
-      kpi: slice ? matrixPlatformKpi(slice) : { top3: 0, avg: '—', none: 0 },
+      kpi: slice ? matrixPlatformKpi(slice, scope) : { top3: 0, avg: '—', none: 0 },
       hasRows: platformHasRows(code),
     }
   })
@@ -105,19 +117,25 @@ const activeSlice = computed(() => {
 
 const keywordRows = computed(() => {
   if (!activeSlice.value) return []
-  return buildKeywordDetailRows(activeSlice.value, props.formatRank)
+  return buildKeywordDetailRows(activeSlice.value, props.formatRank, rankScope.value)
 })
 
-const latestScheduleLabel = computed(() => {
-  const row = latestMatrixRow(activeSlice.value?.rows || [])
-  if (!row) return '—'
-  return props.displayScheduleLabel(row.schedule_label || row.snapshot_at || row.day_key, '—')
+const scopeScheduleLabel = computed(() => {
+  const scope = rankScope.value
+  if (scope.mode === 'period') {
+    return `${scope.label} 区间均值 · ${scope.dayCount} 天`
+  }
+  return props.displayScheduleLabel(scope.dayKey || scope.label, '—')
 })
 
 const cardHint = computed(() => {
   if (!activeSlice.value) return ''
   if (props.chartType === 'bar') {
-    return `最新 ${latestScheduleLabel.value} · ${activeSlice.value.columns.length} 个监测词`
+    const scope = rankScope.value
+    const prefix = scope.mode === 'day'
+      ? scopeScheduleLabel.value
+      : `${scope.label} 区间均值`
+    return `${prefix} · ${activeSlice.value.columns.length} 个监测词`
   }
   return `${activeSlice.value.rows.length} 天 × ${activeSlice.value.columns.length} 词`
 })
@@ -143,7 +161,7 @@ const cardKpi = computed(() => matrixPlatformKpi(activeSlice.value || {
   columns: [],
   rows: [],
   platform: '',
-}))
+}, rankScope.value))
 
 function selectPlatform(code: string) {
   if (!platformHasRows(code)) return
@@ -194,7 +212,7 @@ async function renderChart() {
 
   const layoutHint = measureBarLayoutHint(slice.columns.length)
   const built = props.chartType === 'bar'
-    ? buildMatrixBarOption(slice, runtime, latestScheduleLabel.value, layoutHint)
+    ? buildMatrixBarOption(slice, runtime, scopeScheduleLabel.value, rankScope.value, layoutHint)
     : null
   const renderHeight = built?.height ?? chartHeight.value
   chartRef.value.style.height = `${renderHeight}px`
@@ -260,7 +278,15 @@ function disposeChart() {
 }
 
 watch(
-  () => [props.chartType, effectivePlatform.value, props.matrix, props.layoutMode, chartHeight.value] as const,
+  () => [
+    props.chartType,
+    effectivePlatform.value,
+    props.matrix,
+    props.layoutMode,
+    chartHeight.value,
+    props.filterStartDate,
+    props.filterEndDate,
+  ] as const,
   () => { void renderChart() },
   { deep: true, flush: 'post', immediate: true },
 )
@@ -340,6 +366,12 @@ defineExpose({ resizeChart })
           </div>
           <div class="matrix-chart-wrap">
             <div ref="chartRef" class="matrix-chart-canvas" />
+            <p v-if="chartType === 'bar'" class="matrix-chart-legend">
+              <span class="legend-top3">1~3 靠前</span>
+              <span class="legend-mid">4+ 待提升</span>
+              <span class="legend-none">— 未提及</span>
+              <span class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推</span>
+            </p>
           </div>
         </article>
 
@@ -349,15 +381,17 @@ defineExpose({ resizeChart })
         >
           <div class="matrix-keyword-rail-head">
             词组排名明细
-            <small>最新 {{ latestScheduleLabel }} · 较昨日变化</small>
+            <small>
+              {{ rankScope.mode === 'day' ? `${scopeScheduleLabel} · 较昨日变化` : `${scopeScheduleLabel}` }}
+            </small>
           </div>
           <div class="matrix-keyword-table-wrap">
             <table class="matrix-keyword-table">
               <thead>
                 <tr>
                   <th>监测词</th>
-                  <th>最新</th>
-                  <th>较昨日</th>
+                  <th>{{ rankScope.mode === 'day' ? '当日' : '区间均位' }}</th>
+                  <th>{{ rankScope.mode === 'day' ? '较昨日' : '变化' }}</th>
                 </tr>
               </thead>
               <tbody>

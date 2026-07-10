@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from app.services.report_text_sanitize import sanitize_entity_name
+
 CIRCLE_NUM_MAP = {
     "①": 1, "②": 2, "③": 3, "④": 4, "⑤": 5,
     "⑥": 6, "⑦": 7, "⑧": 8, "⑨": 9, "⑩": 10,
@@ -133,13 +135,14 @@ def ranking_entry_category(entry: dict[str, Any]) -> str | None:
 
 
 def ranking_entry_name(entry: dict[str, Any]) -> str:
-    return str(
+    raw = str(
         entry.get("name")
         or entry.get("brandName")
         or entry.get("brand")
         or entry.get("keyword")
         or "",
     ).strip()
+    return sanitize_entity_name(raw)
 
 
 def ranking_entry_explicit_rank(entry: dict[str, Any]) -> int | float | None:

@@ -336,7 +336,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
       <div class="realtime-chart-mode-bar">
         <div class="realtime-chart-mode-label">
           图表类型
-          <small>切换排名快照与走势热力</small>
+          <small>排名快照：单日=当日排名，区间=均值；走势热力按天对比</small>
         </div>
         <div class="realtime-chart-view-toggle">
           <button
@@ -379,6 +379,8 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         :platform-label-map="platformLabelMap"
         :format-rank="formatRank"
         :display-schedule-label="displayScheduleLabel"
+        :filter-start-date="filters.startDate"
+        :filter-end-date="filters.endDate"
         @update:active-platform="activeMatrixPlatform = $event"
         @open-cell="openMatrixChartCell"
       />

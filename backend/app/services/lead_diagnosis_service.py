@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterator
@@ -32,7 +33,7 @@ from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, build_rule_report_sections
 from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.tenant_scope import is_sales_identity
-from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
+from app.services.report_text_sanitize import consolidate_top_sources, sanitize_source_title
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
 from app.services.report_export_service import build_report_export
@@ -359,6 +360,47 @@ def _all_platform_configs() -> list[PlatformConfig]:
 
 def _competitor_payload(names: list[str]) -> list[CompetitorBrand]:
     return [CompetitorBrand(name=name) for name in names if name.strip()]
+
+
+def _normalize_brand_key(name: str | None) -> str:
+    return re.sub(r"\s+", "", str(name or "").strip().lower())
+
+
+def _resolve_lead_tenant_id(db: Session, lead: LeadDiagnosis) -> int | None:
+    if lead.converted_tenant_id:
+        return lead.converted_tenant_id
+    lead_key = _normalize_brand_key(lead.brand_name)
+    if not lead_key:
+        return None
+    for asset in db.scalars(select(BrandAsset).where(BrandAsset.deleted.is_(False))):
+        for candidate in (asset.brand_name, asset.company_full_name, asset.brand_short_name):
+            key = _normalize_brand_key(candidate)
+            if key and (key == lead_key or key in lead_key or lead_key in key):
+                return asset.tenant_id
+    return None
+
+
+def resolve_lead_competitors(db: Session, lead: LeadDiagnosis, *, sync_lead: bool = True) -> list[str]:
+    """读取企业当前生效竞品；售前诊断快照与后台不一致时同步回写。"""
+    tenant_id = _resolve_lead_tenant_id(db, lead)
+    if tenant_id:
+        names = [
+            str(row.name).strip()
+            for row in db.scalars(
+                select(BrandCompetitor).where(
+                    BrandCompetitor.tenant_id == tenant_id,
+                    BrandCompetitor.deleted.is_(False),
+                    BrandCompetitor.status.is_(True),
+                )
+            )
+            if row.name and str(row.name).strip()
+        ]
+        if names:
+            synced = names[:10]
+            if sync_lead and synced != (lead.competitors_json or []):
+                lead.competitors_json = synced
+            return synced
+    return [str(item).strip() for item in (lead.competitors_json or []) if str(item).strip()]
 
 
 def _serialize_run(run: LeadDiagnosisRun) -> dict[str, Any]:
@@ -890,6 +932,7 @@ def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
         lead,
         subtasks,
         task_region_map=_task_region_map(tasks),
+        db=db,
     )
     lead.diagnosis_result_json = result
     lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
@@ -935,6 +978,7 @@ def refresh_lead_diagnosis_after_backfill(db: Session, task_id: str) -> None:
             lead,
             subtasks,
             task_region_map=_task_region_map(tasks),
+            db=db,
         )
         lead.diagnosis_result_json = result
         lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
@@ -963,7 +1007,11 @@ def aggregate_lead_diagnosis(
     subtasks: list[GeoMonitorSubtask],
     *,
     task_region_map: dict[str, list[str] | None] | None = None,
+    db: Session | None = None,
 ) -> dict[str, Any]:
+    competitors = [str(item).strip() for item in (lead.competitors_json or []) if str(item).strip()]
+    if db is not None:
+        competitors = resolve_lead_competitors(db, lead)
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
     mentioned = [item for item in completed if item.mention_position]
     ranks = [item.mention_position for item in mentioned if item.mention_position]
@@ -1008,9 +1056,10 @@ def aggregate_lead_diagnosis(
             if not url:
                 continue
             key = str(url).split("?")[0]
+            clean_title = sanitize_source_title(source.get("title") or source.get("site"), url=key)
             row = source_map.setdefault(
                 key,
-                {"title": source.get("title") or source.get("site") or key, "url": url, "count": 0, "platforms": []},
+                {"title": clean_title, "url": url, "count": 0, "platforms": []},
             )
             row["count"] += 1
             if item.platform not in row["platforms"]:
@@ -1039,7 +1088,7 @@ def aggregate_lead_diagnosis(
             "avg_rank": round(sum(ranks) / len(ranks), 1) if ranks else None,
         })
 
-    top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:12]
+    top_sources = consolidate_top_sources(list(source_map.values()), limit=12)
     plan_end = _plan_end_date(lead)
     schedule_round_count = len({run.schedule_key for run in (lead.runs or []) if run.status == "completed"})
     total_rounds = _schedule_total_count(lead)
@@ -1048,6 +1097,7 @@ def aggregate_lead_diagnosis(
         lead,
         subtasks,
         lead.runs or [],
+        competitors=competitors,
         task_region_map=task_region_map,
     )
 
@@ -1079,7 +1129,33 @@ def aggregate_lead_diagnosis(
         kpis=kpis,
     )
 
+    from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+    from app.services.report_enrichment_service import (
+        build_report_enrichment,
+        merge_priority_actions,
+        merge_prompt_commentaries,
+    )
+
+    platform_names = {
+        str(item.get("code") or ""): str(item.get("name") or item.get("code") or "")
+        for item in get_supported_platform_catalog()
+    }
+    report_enrichment = build_report_enrichment(
+        brand=lead.brand_name,
+        competitors=competitors,
+        prompt_analytics=extended_analytics.get("prompt_analytics") or [],
+        matrix_rows=matrix_rows,
+        platform_stats=platform_stats,
+        platform_names=platform_names,
+        source_analysis=extended_analytics.get("source_analysis") or {},
+        top_sources=top_sources,
+        subtasks=subtasks,
+        sentiment_counts=sentiment_counts,
+        positive_rate=positive_rate,
+    )
+
     ai_insights: dict[str, Any] = {}
+    analysis_html: str | None = None
     client = DeepseekClient()
     if client.report_enabled:
         try:
@@ -1092,7 +1168,7 @@ def aggregate_lead_diagnosis(
                 platform_stats=platform_stats,
                 top_sources=top_sources,
                 sentiment_counts=sentiment_counts,
-                competitor_names=lead.competitors_json or [],
+                competitor_names=competitors,
                 rule_highlights=rule_highlights,
                 lead_analytics=extended_analytics,
             )
@@ -1102,6 +1178,22 @@ def aggregate_lead_diagnosis(
             }
             if ai.get("report_sections"):
                 report_sections = ai["report_sections"]
+            analysis_html = ai.get("analysis_html")
+            report_enrichment["prompt_commentaries"] = merge_prompt_commentaries(
+                report_enrichment.get("prompt_commentaries") or [],
+                ai.get("prompt_commentaries"),
+            )
+            if ai.get("platform_insight"):
+                report_enrichment["platform_insight"] = ai["platform_insight"]
+            ai_tips = ai.get("source_action_tips")
+            if isinstance(ai_tips, list) and ai_tips:
+                report_enrichment["source_action_tips"] = [
+                    str(item).strip() for item in ai_tips if str(item).strip()
+                ][:5]
+            report_enrichment["priority_actions"] = merge_priority_actions(
+                report_enrichment.get("priority_actions") or [],
+                ai.get("priority_actions"),
+            )
             if ai.get("health_score") is not None:
                 health_score = ai["health_score"]
             diagnosis_block.update({
@@ -1113,6 +1205,7 @@ def aggregate_lead_diagnosis(
             })
         except (DeepseekApiError, RuntimeError):
             ai_insights = {"highlights": rule_highlights}
+            analysis_html = None
 
     diagnosis_block["health_score"] = health_score
     kpis["health_score"] = health_score
@@ -1139,8 +1232,15 @@ def aggregate_lead_diagnosis(
             "rank_trend": extended_analytics.get("rank_trend") or [],
             "tracked_entities": extended_analytics.get("tracked_entities") or [],
             "brand_city_rankings": extended_analytics.get("brand_city_rankings") or [],
+            "brand_date_matrix": extended_analytics.get("brand_date_matrix") or {},
+            "brand_city_matrix": extended_analytics.get("brand_city_matrix") or {},
+            "matrix_rows": matrix_rows,
+            "report_enrichment": report_enrichment,
         },
+        "report_enrichment": report_enrichment,
+        "matrix_rows": matrix_rows,
         "report_sections": report_sections,
+        "analysis_html": analysis_html,
         "runs": [_serialize_run(run) for run in sorted(lead.runs or [], key=lambda row: row.schedule_key)],
     }
 
@@ -1341,6 +1441,7 @@ def aggregate_tenant_diagnosis(db: Session, tenant_id: int) -> dict[str, Any]:
                 lead,
                 subtasks,
                 task_region_map=_task_region_map_for_task_ids(db, task_ids),
+                db=db,
             )
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
@@ -1377,6 +1478,7 @@ def aggregate_tenant_diagnosis(db: Session, tenant_id: int) -> dict[str, Any]:
         ephemeral,
         subtasks,
         task_region_map=_task_region_map_for_task_ids(db, task_ids),
+        db=db,
     )
 
 
@@ -1470,6 +1572,7 @@ def import_tenant_lead_diagnosis(
         lead,
         subtasks,
         task_region_map=_task_region_map_for_task_ids(db, task_ids),
+        db=db,
     )
     lead.diagnosis_result_json = result
     lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
@@ -1498,7 +1601,12 @@ def build_lead_diagnosis_export(
         "tenant_name": detail["brand_name"],
         "data_summary": result.get("diagnosis", {}).get("sentiment_summary"),
         "created_at": detail.get("created_at"),
-        "report_content": result,
+        "report_content": {
+            **result,
+            "contact_phone": detail.get("contact_phone"),
+            "contact_name": detail.get("contact_name"),
+            "competitors": detail.get("competitors") or [],
+        },
     }
     return build_report_export(report, "pdf" if export_format == "pdf" else "docx")
 
