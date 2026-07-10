@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
-    <style>{% include 'styles.css' %}</style>
+    <style>
+    {{ font_face_css | safe }}
+    {% include 'styles.css' %}
+    </style>
 </head>
 <body>
     <div class="report-container">
@@ -13,10 +16,12 @@
             <p class="report-subtitle">品牌用户专属报表分析 - 专业版</p>
 
             <div class="report-meta">
+                {% if show_contact_meta %}
                 <div class="meta-item">
                     <div class="meta-label">手机号/合同号</div>
                     <div class="meta-value">{{ contact_label }}</div>
                 </div>
+                {% endif %}
                 <div class="meta-item">
                     <div class="meta-label">分析平台</div>
                     <div class="meta-value">{{ platform_label }}</div>
@@ -76,9 +81,9 @@
             {% endif %}
         </div>
 
-        <div class="report-section">
+        <div class="report-section chart-section">
             <h2 class="section-title">品牌排名趋势分析</h2>
-            <div class="report-section">
+            <div class="chart-grid">
                 {{ charts_html | safe }}
             </div>
         </div>
@@ -105,9 +110,8 @@
                 <h3 class="overview-subtitle">品牌及竞品排名列表</h3>
                 {% for block in ranking_blocks %}
                 <div class="report-list-item">
-                    <div class="report-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="report-header report-list-header">
                         <div>{{ block.index }}. 语义词: <font color="orange">{{ block.prompt }}</font></div>
-                        <button class="btn-import-snapshot" type="button">分享链接导入</button>
                     </div>
                     {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
                     {{ block.table_html | safe }}

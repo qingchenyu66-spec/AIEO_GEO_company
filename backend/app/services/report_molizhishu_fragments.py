@@ -367,7 +367,11 @@ def render_prompt_platform_matrix(matrix: dict[str, Any]) -> str:
                 cells.append("<td>—</td>")
             else:
                 mention_text = "—" if mention in (None, "") else f"{float(mention):.0f}%"
-                rank_text = "—" if rank in (None, "") else f"#{float(rank):.1f}"
+                if rank in (None, ""):
+                    rank_text = "—"
+                else:
+                    rank_value = float(rank)
+                    rank_text = str(int(rank_value)) if rank_value.is_integer() else f"{rank_value:.1f}"
                 cells.append(f"<td>{_esc(mention_text)} / {_esc(rank_text)}</td>")
         body.append(f"<tr><td class=\"prompt-cell\">{_esc(prompt)}</td>{''.join(cells)}</tr>")
     return (

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
 from app.services.report_molizhishu_context_service import build_molizhishu_report_context
-from app.services.report_molizhishu_fragments import render_matrix_table, render_mention_table
+from app.services.report_molizhishu_fragments import render_matrix_table, render_mention_table, render_prompt_platform_matrix
 from app.services.report_molizhishu_pdf_service import render_molizhishu_report_html
 
 
@@ -198,7 +198,8 @@ def test_molizhishu_html_matches_reference_markers() -> None:
     assert "分析平台" in html
     assert 'id="t_divBrandRecent"' in html
     assert 'id="t_divBrandCityRank"' in html
-    assert "分享链接导入" in html
+    assert "分享链接导入" not in html
+    assert "13031099925" in html
     assert "采集次数" in html
     assert "当天排名前三企业引用网站概览" in html
     assert "AI搜索平台品牌竞争力洞察" in html
@@ -216,3 +217,17 @@ def test_matrix_and_mention_fragment_markup() -> None:
     ctx = build_molizhishu_report_context(_demo_payload())
     assert ctx["competitor_text"] == "未指定竞品"
     assert ctx["platform_label"] == "DeepSeek 等 2 个平台"
+    assert ctx["show_contact_meta"] is True
+
+    no_contact = build_molizhishu_report_context({**_demo_payload(), "contact_phone": "", "contact_name": ""})
+    assert no_contact["show_contact_meta"] is False
+
+    matrix_html = render_prompt_platform_matrix(
+        {
+            "platforms": ["DeepSeek"],
+            "rows": [{"prompt": "测试词", "cells": [{"mention_rate": 38, "avg_rank": 6.0}]}],
+        }
+    )
+    assert "#6" not in matrix_html
+    assert "38%" in matrix_html
+    assert "6" in matrix_html

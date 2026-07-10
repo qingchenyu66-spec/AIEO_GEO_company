@@ -16,7 +16,7 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    font-family: 'GeoReportCJK', 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
 body {
@@ -609,32 +609,73 @@ body {
     color: transparent;
 }
 
-/* 打印优化 */
+/* 打印优化 — Playwright page.pdf 走 print 媒体 */
 @media print {
+    @page {
+        size: A4;
+        margin: 14mm 12mm 18mm;
+    }
+
     body {
         background: white;
     }
-    
+
     .report-container {
-        padding: 20px;
+        padding: 0;
         max-width: 100%;
     }
-    
+
+    .report-header {
+        page-break-after: avoid;
+    }
+
     .report-section {
         box-shadow: none;
-        border: 1px solid #ddd;
+        border: none;
+        page-break-inside: auto;
+        margin: 18px 0;
+    }
+
+    .overview-section {
+        page-break-inside: auto;
+    }
+
+    .section-title,
+    .overview-subtitle {
+        page-break-after: avoid;
+    }
+
+    .chart-container,
+    .kpi-grid .kpi-card,
+    .swot-item,
+    .report-table thead {
         page-break-inside: avoid;
     }
-    
-    .chart-image {
-        max-height: 300px;
-        object-fit: contain;
+
+    .chart-grid {
+        page-break-inside: auto;
     }
-    
+
+    .chart-image {
+        max-height: 260px;
+        object-fit: contain;
+        page-break-inside: avoid;
+    }
+
+    .report-table tr {
+        page-break-inside: avoid;
+    }
+
     .report-footer {
-        position: fixed;
-        bottom: 0;
-        width: 100%;
+        position: static;
+        width: auto;
+        margin-top: 28px;
+        padding: 16px 0 0;
+        page-break-before: auto;
+    }
+
+    .btn-import-snapshot {
+        display: none !important;
     }
 }
 
@@ -673,4 +714,13 @@ body {
 }
 
 .report-list-item { margin-bottom: 24px; }
-.btn-import-snapshot { padding: 6px 12px; border-radius: 6px; border: 1px solid #2563eb; background: #fff; color: #2563eb; font-size: 12px; cursor: default; }
+.report-list-header {
+    display: block;
+    margin-bottom: 8px;
+}
+.chart-grid {
+    margin-top: 8px;
+}
+.chart-section .section-title {
+    margin-bottom: 12px;
+}

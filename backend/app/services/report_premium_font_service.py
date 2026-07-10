@@ -9,6 +9,7 @@ _FONT_REGULAR_CANDIDATES = (
     Path("C:/Windows/Fonts/msyhbd.ttc"),
     Path("C:/Windows/Fonts/simhei.ttf"),
     Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+    Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
     Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     Path("/System/Library/Fonts/PingFang.ttc"),
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
@@ -29,6 +30,21 @@ def _first_existing(candidates: tuple[Path, ...]) -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def resolve_chart_font_path() -> Path | None:
+    return _first_existing(_FONT_REGULAR_CANDIDATES)
+
+
+def configure_matplotlib_cjk() -> str | None:
+    """Register a local CJK font with matplotlib; returns family name."""
+    path = resolve_chart_font_path()
+    if path is None:
+        return None
+    from matplotlib import font_manager
+
+    font_manager.fontManager.addfont(str(path))
+    return font_manager.FontProperties(fname=str(path)).get_name()
 
 
 def build_font_face_css() -> str:

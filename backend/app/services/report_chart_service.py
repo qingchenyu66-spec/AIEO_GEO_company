@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_premium_font_service import configure_matplotlib_cjk
 
 _CHART_DPI = 160
 _CHART_FIGSIZE = (7.2, 3.2)
@@ -21,7 +22,11 @@ _ENTITY_LINE_COLORS = ["#ef4444", "#22c55e", "#3b82f6", "#f59e0b", "#8b5cf6"]
 
 
 def _configure_matplotlib() -> None:
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+    family = configure_matplotlib_cjk()
+    if family:
+        plt.rcParams["font.sans-serif"] = [family, "DejaVu Sans"]
+    else:
+        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
 

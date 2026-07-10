@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_premium_font_service import build_font_face_css
 from app.services.report_chart_service import build_entity_rank_trend_chart, build_rank_trend_chart
 from app.services.report_molizhishu_fragments import (
     render_analysis_html,
@@ -243,11 +244,15 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
     if not highlights:
         highlights = diagnosis.get("highlights") or []
 
+    contact_label = str(payload.get("contact_phone") or payload.get("contact_name") or "").strip()
+
     return {
         "page_title": f"AI搜索平台品牌分析报告_{brand}_{platform_label}_{ts_suffix}",
+        "font_face_css": build_font_face_css(),
         "brand_name": brand,
         "competitor_text": _competitor_label(competitors),
-        "contact_label": payload.get("contact_phone") or payload.get("contact_name") or "—",
+        "contact_label": contact_label,
+        "show_contact_meta": bool(contact_label),
         "platform_label": platform_label,
         "period_range": period_range,
         "generated_at": generated_at,
