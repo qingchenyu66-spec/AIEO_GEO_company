@@ -409,7 +409,10 @@ onUnmounted(() => {
               <button v-if="canCreate && detail?.status !== 'ready'" type="button" class="lead-secondary-btn small" @click="handleForceRun">
                 <Zap :size="16" /> 立即抓取下一档
               </button>
-              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport">
+              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-secondary-btn small" :disabled="exporting" @click="handleExport('html')">
+                <Download :size="16" /> {{ exporting ? '导出中...' : '下载 HTML' }}
+              </button>
+              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport('pdf')">
                 <Download :size="16" /> {{ exporting ? '导出中...' : '下载 PDF' }}
               </button>
             </div>

@@ -121,7 +121,7 @@ export async function submitLeadDiagnosisRun(
   return response.data.data
 }
 
-export async function downloadLeadDiagnosisExport(leadId: number, format: 'pdf' | 'docx' = 'pdf') {
+export async function downloadLeadDiagnosisExport(leadId: number, format: 'pdf' | 'docx' | 'html' = 'pdf') {
   const response = await http.get(`/v1/lead-diagnosis/${leadId}/export`, {
     params: { format },
     responseType: 'blob',

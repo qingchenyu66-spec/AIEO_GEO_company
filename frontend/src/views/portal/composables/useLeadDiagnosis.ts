@@ -433,14 +433,14 @@ export function useLeadDiagnosis() {
     }
   }
 
-  async function handleExport() {
+  async function handleExport(format: 'pdf' | 'html' = 'pdf') {
     if (!selectedId.value || detail.value?.status !== 'ready') return
     exporting.value = true
     try {
-      const filename = await downloadLeadDiagnosisExport(selectedId.value, 'pdf')
-      ElMessage.success(`PDF 已下载：${filename}`)
+      const filename = await downloadLeadDiagnosisExport(selectedId.value, format)
+      ElMessage.success(`${format === 'html' ? 'HTML' : 'PDF'} 已下载：${filename}`)
     } catch (error: unknown) {
-      notifyOperationError(error, '导出 PDF 失败')
+      notifyOperationError(error, format === 'html' ? '导出 HTML 失败' : '导出 PDF 失败')
     } finally {
       exporting.value = false
     }
