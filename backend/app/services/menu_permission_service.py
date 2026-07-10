@@ -47,7 +47,7 @@ def is_retired_menu_code(menu_code: str) -> bool:
 # 与前端 menuPermissionMatrix 对齐：各菜单允许的动作
 MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.dashboard": frozenset({"can_export"}),
-    "platform.audit.list": frozenset({"can_export"}),
+    "platform.audit.list": frozenset({"can_export", "can_update", "can_delete"}),
     "platform.audit.profile": frozenset({"can_export", "can_update"}),
     "platform.audit.keywords": frozenset({"can_export", "can_update"}),
     "platform.audit.models": frozenset({"can_export", "can_update"}),
@@ -86,7 +86,9 @@ def _allowed_actions_for_menu(menu_code: str, identity_type: str) -> frozenset[s
     if menu_code in MENU_ALLOWED_ACTIONS:
         return MENU_ALLOWED_ACTIONS[menu_code]
     if menu_code.startswith("platform.audit."):
-        return frozenset({"can_export"}) if menu_code == "platform.audit.list" else frozenset({"can_export", "can_update"})
+        if menu_code == "platform.audit.list":
+            return frozenset({"can_export", "can_update", "can_delete"})
+        return frozenset({"can_export", "can_update"})
     if identity_type == "CUSTOMER":
         return frozenset({"can_export"})
     return frozenset({"can_export"})

@@ -58,6 +58,8 @@ const {
   enterpriseFormServiceLabel,
   visibleEnterpriseTabs,
   canEditEnterpriseTab,
+  canCreateTenant,
+  canEditTenantList,
   isTenantExpired,
   isTenantPending,
   tenantServiceLabel,
@@ -132,7 +134,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </div>
         <div class="detail-actions">
           <button class="filter-reset-btn" :disabled="loadingBrand" @click="loadEnterpriseList">刷新企业</button>
-          <button class="primary-btn small-btn" @click="tenantDialog = true">新增企业</button>
+          <button v-if="canCreateTenant" class="primary-btn small-btn" @click="tenantDialog = true">新增企业</button>
         </div>
       </div>
       <div class="enterprise-filter-bar">
@@ -193,7 +195,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           </div>
           <div class="enterprise-actions">
             <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
-            <button type="button" class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+            <button v-if="canEditTenantList" type="button" class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
             <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
             <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
             <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>

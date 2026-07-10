@@ -29,7 +29,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
       ? '客户侧仅在知识库开放上传，其余模块以展示、查看和导出为主。'
       : '客户侧菜单默认面向展示，不开放企业资料和任务创建入口。'
   }
-  if (key === 'audit') return '企业资料、监测词、购买模型、监控计划和竞品配置可在这里拆分授权。'
+  if (key === 'audit') return '企业列表可单独控制新增/编辑、停止服务；资料、监测词、监控计划、竞品和上传文件可拆分授权。购买模型合并在企业资料中维护。'
   if (key === 'analysis') return '报告中心支持查看/导出、生成与编辑发布；客户侧默认仅查看已发布报告。'
   if (key === 'users') return '包含用户新增、用户列表、职位管理和操作审批；销售通常仅可查看自己的申请，运营/管理员可审批。'
   if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'

@@ -87,6 +87,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return Boolean(grant?.can_update)
   }
 
+  const canCreateTenant = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
+  const canEditTenantList = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
+
   const visibleEnterpriseTabs = computed(() => ([
     { code: 'profile', name: '企业资料' },
     { code: 'keywords', name: '监测词配置' },
@@ -239,12 +242,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   function canStopTenantService(tenant: TenantInfo) {
+    if (!menuGrant(enterprisePermissionCodeMap.list)?.can_delete) return false
     if (isTenantExpired(tenant)) return false
     if (isTenantPending(tenant) && tenant.stop_reason !== 'canceled') return true
     return tenant.status
   }
 
   function canRestoreTenantService(tenant: TenantInfo) {
+    if (!menuGrant(enterprisePermissionCodeMap.list)?.can_update) return false
     return !tenant.status && ['manual', 'canceled'].includes(tenant.stop_reason || '') && !isTenantExpired(tenant)
   }
 
@@ -1028,6 +1033,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     visibleEnterpriseTabs,
     canViewEnterpriseTab,
     canEditEnterpriseTab,
+    canCreateTenant,
+    canEditTenantList,
     isTenantExpired,
     isTenantPending,
     tenantServiceLabel,

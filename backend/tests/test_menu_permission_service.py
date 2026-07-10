@@ -2,7 +2,28 @@
 
 from types import SimpleNamespace
 
-from app.services.menu_permission_service import ensure_identity_menus_from_position, sync_identity_menus_for_position
+from app.services.menu_permission_service import (
+    ensure_identity_menus_from_position,
+    sanitize_menu_grant_flags,
+    sync_identity_menus_for_position,
+)
+
+
+def test_audit_list_allows_stop_service_delete_flag():
+    flags = sanitize_menu_grant_flags(
+        "platform.audit.list",
+        "PLATFORM",
+        can_create=False,
+        can_update=True,
+        can_delete=True,
+        can_export=True,
+    )
+    assert flags == {
+        "can_create": False,
+        "can_update": True,
+        "can_delete": True,
+        "can_export": True,
+    }
 
 
 def test_sync_identity_menus_for_position_calls_replace(monkeypatch):

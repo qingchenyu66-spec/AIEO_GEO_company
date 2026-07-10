@@ -20,7 +20,7 @@ export const PERMISSION_ACTION_LABELS: Record<PermissionAction, string> = {
 const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'platform.dashboard': ['can_export'],
 
-  'platform.audit.list': ['can_export'],
+  'platform.audit.list': ['can_export', 'can_update', 'can_delete'],
   'platform.audit.profile': ['can_export', 'can_update'],
   'platform.audit.keywords': ['can_export', 'can_update'],
   'platform.audit.models': ['can_export', 'can_update'],
@@ -56,6 +56,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
 }
 
 const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string>>> = {
+  'platform.audit.list': { can_export: '查看', can_update: '新增/编辑', can_delete: '停止服务' },
   'platform.audit.profile': { can_export: '查看', can_update: '编辑资料' },
   'platform.audit.keywords': { can_export: '查看', can_update: '编辑监测词' },
   'platform.audit.models': { can_export: '查看', can_update: '编辑平台范围' },
@@ -109,7 +110,9 @@ export function assignablePermissionMenus(type: IdentityType, menus: MenuInfo[])
 export function actionsForMenu(menuCode: string, type: IdentityType): PermissionAction[] {
   if (MENU_ACTIONS[menuCode]) return MENU_ACTIONS[menuCode]
   if (menuCode.startsWith('platform.audit.')) {
-    return menuCode === 'platform.audit.list' ? ['can_export'] : ['can_export', 'can_update']
+    return menuCode === 'platform.audit.list'
+      ? ['can_export', 'can_update', 'can_delete']
+      : ['can_export', 'can_update']
   }
   if (type === 'CUSTOMER') return ['can_export']
   return ['can_export']
