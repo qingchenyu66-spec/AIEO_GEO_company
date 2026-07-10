@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
@@ -136,6 +137,34 @@ def test_dual_identity_login_and_select(auth_seed: dict[str, str]) -> None:
     )
     assert switched.status_code == 200
     assert switched.json()["data"]["identity"]["identity_type"] == "CUSTOMER"
+
+
+def test_stopped_tenant_login_shows_service_message(auth_seed: dict[str, str]) -> None:
+    db = SessionLocal()
+    try:
+        user = db.scalar(
+            select(User)
+            .options(joinedload(User.identities).joinedload(UserIdentity.tenant))
+            .where(User.username == auth_seed["single_username"])
+        )
+        assert user is not None
+        tenant = next(item.tenant for item in user.identities if item.tenant_id is not None)
+        tenant.status = False
+        tenant.stop_reason = "manual"
+        user.status = False
+        for identity in user.identities:
+            identity.status = False
+            identity.deleted = True
+        db.commit()
+    finally:
+        db.close()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": auth_seed["single_username"], "password": auth_seed["password"]},
+    )
+    assert login.status_code == 401
+    assert login.json()["detail"] == "企业服务已停止，请联系运营人员"
 
 
 def test_single_identity_login(auth_seed: dict[str, str]) -> None:

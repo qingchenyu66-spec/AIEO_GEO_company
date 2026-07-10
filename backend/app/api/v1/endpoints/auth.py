@@ -19,7 +19,7 @@ from app.models.user_identity import UserIdentity
 from app.models.permission import Position
 from app.schemas.auth import IdentityInfo, IdentitySelectRequest, IdentitySwitchRequest, LoginRequest
 from app.schemas.common import ApiResponse
-from app.services.auth_service import authenticate, create_access_token, create_identity_ticket
+from app.services.auth_service import LoginRejected, authenticate, create_access_token, create_identity_ticket
 from app.services.menu_permission_service import ensure_identity_menus_from_position
 from app.services.permission_service import get_identity_menus
 
@@ -83,7 +83,10 @@ def _clear_session_cookies(response: Response) -> None:
 @router.post("/login", response_model=ApiResponse[dict])
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> ApiResponse[dict]:
     enforce_login_rate_limit(request)
-    result = authenticate(db, payload.username, payload.password)
+    try:
+        result = authenticate(db, payload.username, payload.password)
+    except LoginRejected as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.detail) from exc
     if result is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")
     user, identities = result
