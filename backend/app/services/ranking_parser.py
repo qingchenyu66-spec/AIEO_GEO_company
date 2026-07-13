@@ -46,6 +46,18 @@ _SUBCATEGORY_HINTS = (
 )
 
 
+def _normalize_answer_layout(text: str) -> str:
+    """Split inline bullets crushed onto one line (common in yuanbao/doubao HTML export)."""
+    normalized = re.sub(r"<[^>]+>", "\n", text or "")
+    normalized = re.sub(r"\r", "\n", normalized)
+    normalized = re.sub(r"(\[[^\]]*\])\s*-\s*", r"\1\n- ", normalized)
+    normalized = re.sub(r"(?<=[。；！？])-\s*", "\n- ", normalized)
+    # ponytail: `-**Name**` / `...- **Name**` without newline
+    normalized = re.sub(r"(?<=\S)-\s*\*\*", "\n- **", normalized)
+    normalized = re.sub(r"(?<=\S)-\s+(?=\*\*)", "\n- ", normalized)
+    return normalized
+
+
 def _clean_item_name(text: str) -> str:
     value = re.sub(r"\*\*", "", text or "")
     value = re.sub(r"\[\[[^\]]+\]\]", "", value)
@@ -64,6 +76,14 @@ def _extract_list_item_name(text: str) -> str:
         tail = region_match.group(1).strip()
         tail = re.split(r"[（(]", tail)[0].strip()
         company = re.split(r"[、，,/／]", tail)[0].strip()
+        cleaned = _clean_item_name(company)
+        if cleaned:
+            return cleaned
+    raw = re.sub(r"^\*\*([^*]+)\*\*", r"\1", raw)
+    if "：" in raw or ":" in raw:
+        head = re.split(r"[：:]", raw, maxsplit=1)[0].strip()
+        head = re.split(r"[（(]", head)[0].strip()
+        company = re.split(r"[、，,/／]", head)[0].strip()
         cleaned = _clean_item_name(company)
         if cleaned:
             return cleaned
@@ -354,8 +374,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     if not text:
         return []
 
-    normalized = re.sub(r"<[^>]+>", "\n", text)
-    normalized = re.sub(r"\r", "\n", normalized)
+    normalized = _normalize_answer_layout(text)
 
     results: list[dict[str, Any]] = []
     current_category: str | None = None

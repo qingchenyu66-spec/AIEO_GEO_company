@@ -12,7 +12,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from app.core.config import settings
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
-from app.services.brand_service import _is_industry_monitor_keyword, get_brand_asset, keyword_group_to_dict, list_keyword_groups
+from app.services.brand_service import _is_industry_monitor_keyword, get_brand_asset, keyword_group_to_dict, list_keyword_groups, ranking_task_is_industry_scoped
 from app.services.monitor_service import (
     _ranking_match_terms,
     _resolve_brand_rank_detail,
@@ -60,7 +60,7 @@ def _subtask_needs_llm_fallback(db: Session, subtask: GeoMonitorSubtask, task: G
         brand_terms = [keyword] if keyword else []
     monitor_keyword = str(task.monitor_keywords or "").strip()
     resolution = _resolve_brand_rank_detail(subtask, monitor_keyword, brand_terms, asset)
-    is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
+    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
     return should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task)
 
 

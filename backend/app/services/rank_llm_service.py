@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
-from app.services.brand_service import BrandAsset, _is_industry_monitor_keyword
+from app.services.brand_service import BrandAsset, _is_industry_monitor_keyword, ranking_task_is_industry_scoped
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.monitor_service import BrandRankResolution, _subtask_answer_plaintext
 
@@ -40,6 +40,8 @@ def should_trigger_llm_fallback(
     if is_industry_task and resolution.rank > 10:
         return True
     if resolution.source == "appearance":
+        return True
+    if is_industry_task and resolution.source == "api":
         return True
     return False
 
@@ -175,7 +177,7 @@ def resolve_rank_with_optional_llm(
     asset: BrandAsset | None,
 ) -> BrandRankResolution:
     monitor_keyword = str(task.monitor_keywords or "").strip()
-    is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
+    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
     if not should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task):
         return resolution
 

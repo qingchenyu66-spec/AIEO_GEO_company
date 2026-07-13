@@ -514,6 +514,20 @@ def _is_industry_monitor_keyword(text: str, asset: BrandAsset) -> bool:
     return any(token.casefold() in keyword.casefold() for token in scene_tokens)
 
 
+def ranking_task_is_industry_scoped(
+    monitor_keywords: str | None,
+    prompt: str | None,
+    asset: BrandAsset | None,
+) -> bool:
+    """任务是否场景/行业排名监测（prompt 或 monitor_keywords 任一为场景词即可）。"""
+    if asset is None:
+        return False
+    for text in (str(monitor_keywords or "").strip(), str(prompt or "").strip()):
+        if text and _is_industry_monitor_keyword(text, asset):
+            return True
+    return False
+
+
 def brand_exposure_terms(asset: BrandAsset, groups: list[dict[str, Any]]) -> list[str]:
     """收集品牌词组的露出词，排除行业词组里的行业词。"""
     terms: list[str] = []

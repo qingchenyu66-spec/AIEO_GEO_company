@@ -1,13 +1,16 @@
 from types import SimpleNamespace
 
 from app.services.monitor_service import (
+    BrandRankResolution,
     _filter_matrix_columns_for_scope,
     _filter_subtasks_by_exposure_term,
     _keyword_groups_for_exposure_term,
     _prompt_keyword_match_score,
     _resolve_brand_rank,
+    _resolve_brand_rank_detail,
     _resolve_prompt_monitor_keyword,
 )
+from app.services.rank_llm_service import should_trigger_llm_fallback
 
 
 def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:
@@ -58,6 +61,41 @@ def test_exposure_term_filter_matches_keyword_group_not_prompt_substring() -> No
     filtered = _filter_subtasks_by_exposure_term(subtasks, "艾迪亚", groups)
     assert len(filtered) == 1
     assert filtered[0].prompt == "地铁广告公司推荐"
+
+
+def test_resolve_brand_rank_blocks_api_when_prompt_is_scene_keyword() -> None:
+    text = """
+## 综合性/下沉市场运营商
+- **华君传媒**：在二三线城市有优势。
+- **艾迪亚控股 / 上海澜翼传媒**：侧重公交车身全场景整合。
+"""
+    asset = SimpleNamespace(
+        brand_name="艾迪亚控股集团有限公司",
+        brand_short_name="艾迪亚",
+        company_full_name="艾迪亚控股集团有限公司",
+    )
+    subtask = SimpleNamespace(
+        prompt="公交广告公司哪家好",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=13,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "艾迪亚控股集团有限公司",
+        ["艾迪亚", "艾迪亚控股"],
+        asset=asset,
+    )
+    assert detail.mentioned is True
+    assert detail.source != "api"
+    assert detail.rank == 2
+
+
+def test_should_trigger_llm_for_api_rank_on_scene_prompt() -> None:
+    resolution = BrandRankResolution(rank=13, mentioned=True, source="api", confidence=0.6)
+    assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
 
 
 def test_resolve_brand_rank_trusts_manual_snapshot_rank() -> None:

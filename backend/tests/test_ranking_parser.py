@@ -276,3 +276,25 @@ def test_parse_markdown_h3_subcategory_then_region_bullets():
     assert aidiya[0]["name"] == "艾迪亚控股"
     assert aidiya[0]["rank"] == 2
     assert "区域优质工程商" in str(aidiya[0]["category"])
+
+
+def test_parse_yuanbao_crushed_bus_bullets_section_local_rank():
+    text = """
+## 全国性/跨国头部集团（适合全国联投、高端品牌）
+- **德高中国 (JCDecaux)**：全球户外广告巨头。[citation:1]
+## 重点城市公交集团直属公司（适合单城深耕）
+-**北京**：北京巴士传媒股份有限公司[citation:2]- **上海**：上海公共交通广告有限公司[citation:2]
+## 综合性/下沉市场运营商（适合性价比、下沉市场）
+- **华君传媒**：在二三线城市有优势。[citation:3]- **艾迪亚控股 / 上海澜翼传媒**：侧重公交车身全场景整合。[citation:3]
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["rank"] == 2
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "公交广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 2

@@ -36,6 +36,7 @@ from app.services.brand_service import (
     list_keyword_groups,
     molizhishu_brand_payload,
     molizhishu_monitor_terms,
+    ranking_task_is_industry_scoped,
     tenant_purchased_platforms,
 )
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
@@ -2264,7 +2265,7 @@ def _resolve_brand_rank_detail(
         )
 
     monitor_keyword = str(monitor_keywords or "").strip()
-    is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
+    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
     scope = _ranking_scope_text(monitor_keyword, subtask.prompt)
     answer_text = _subtask_answer_plaintext(subtask)
     has_parsed_entries = bool(_collect_ranking_entries(subtask))
