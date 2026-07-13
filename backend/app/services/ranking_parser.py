@@ -206,7 +206,12 @@ def _split_combined_header_brands(text: str) -> list[str]:
     # 一、行业双寡头 这类章节标题不要拆成多个品牌
     if SECTION_TITLE_RE.match(cleaned):
         return []
-    parts = re.split(r"[、，,]", cleaned)
+    if _looks_like_subcategory_header(cleaned):
+        return []
+    head = re.sub(r"[（(][^）)]*[)）]", "", cleaned).strip()
+    if "、" not in head and "，" not in head:
+        return []
+    parts = re.split(r"[、，,]", head)
     names = [_clean_item_name(part.strip()) for part in parts if part.strip()]
     if len(names) < 2:
         return []
@@ -409,6 +414,12 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 appearance_counters.setdefault(current_section, 0)
                 in_company_block = False
                 continue
+            if level == 3 and _looks_like_subcategory_header(content):
+                current_section = _extract_category_name(line)
+                current_category = current_section
+                appearance_counters.setdefault(current_section, 0)
+                in_company_block = False
+                continue
             combined = _split_combined_header_brands(content)
             if combined:
                 for index, name in enumerate(combined, 1):
@@ -418,12 +429,6 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             if _is_subsection_label(content):
                 current_category = _extract_category_name(line)
                 in_company_block = True
-                continue
-            if level == 3 and _looks_like_subcategory_header(content):
-                current_section = _extract_category_name(line)
-                current_category = current_section
-                appearance_counters.setdefault(current_section, 0)
-                in_company_block = False
                 continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True

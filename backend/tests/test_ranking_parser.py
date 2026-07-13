@@ -262,7 +262,7 @@ def test_parse_markdown_h3_subcategory_then_region_bullets():
 ### 头部上市大厂（大型地标）
 1. 利亚德 LEYARD
 2. 洲明科技 Unilumin
-### 区域优质工程商（本地落地）
+### 区域优质工程商（本地落地、售后响应快）
 - 华东：杭州华见科技
 - 西南：艾迪亚控股（利亚德/洲明双一级代理，重庆、贵州商圈大屏）
 
