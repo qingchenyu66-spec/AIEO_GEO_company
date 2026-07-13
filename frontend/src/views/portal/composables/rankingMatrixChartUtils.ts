@@ -68,6 +68,13 @@ function averageRankValues(values: number[]) {
   return Math.round((total / values.length) * 10) / 10
 }
 
+/** 与 tooltip「约第 N 位」一致：区间/当日均值四舍五入后在 Top3 即计为进前三。 */
+export function rankCountsAsTopThree(rank: number | null | undefined) {
+  if (rank == null || !Number.isFinite(rank)) return false
+  const rounded = Math.round(rank)
+  return rounded >= 1 && rounded <= 3
+}
+
 /** 单日 = 当日排名；区间 = 所选日期范围内按天均值再汇总为区间均值。 */
 export function buildMatrixRankScope(
   rows: RankingMatrixRow[],
@@ -329,6 +336,8 @@ export function selfCheckMatrixRankScope() {
   ]
   const mentionScope = buildMatrixRankScope(mentionRows, '2026-06-01', '2026-06-02')
   console.assert(resolveScopedColumnMentionStats(mentionRows, mentionColumn, mentionScope).rate === 50)
+  console.assert(rankCountsAsTopThree(3.2) === true)
+  console.assert(rankCountsAsTopThree(3.6) === false)
 }
 
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {
@@ -355,7 +364,7 @@ export function matrixPlatformKpi(slice: MatrixPlatformSlice, scope: MatrixRankS
   const ranks = slice.columns.map(column => resolveScopedColumnRank(slice.rows, column, scope))
   const valid = ranks.filter((rank): rank is number => rank != null)
   return {
-    top3: valid.filter(rank => rank <= 3).length,
+    top3: valid.filter(rank => rankCountsAsTopThree(rank)).length,
     none: ranks.filter(rank => rank == null).length,
     avg: valid.length
       ? (valid.reduce((sum, rank) => sum + rank, 0) / valid.length).toFixed(1)
@@ -365,8 +374,9 @@ export function matrixPlatformKpi(slice: MatrixPlatformSlice, scope: MatrixRankS
 
 function rankPillClass(rank: number | null) {
   if (rank == null) return 'none' as const
-  if (rank === 1) return 'top1' as const
-  if (rank <= 3) return 'top3' as const
+  const rounded = Math.round(rank)
+  if (rounded === 1) return 'top1' as const
+  if (rounded >= 2 && rounded <= 3) return 'top3' as const
   return 'mid' as const
 }
 
@@ -422,7 +432,8 @@ function rankBarStyle(
   graphic: NonNullable<EchartsRuntime['graphic']>,
 ) {
   if (rank == null) return { color: '#dce5f0', labelColor: '#8aa0ba' }
-  if (rank === 1) {
+  const rounded = Math.round(rank)
+  if (rounded === 1) {
     return {
       color: new graphic.LinearGradient(0, 0, 1, 0, [
         { offset: 0, color: '#0a916d' },
@@ -431,7 +442,7 @@ function rankBarStyle(
       labelColor: '#0a5c42',
     }
   }
-  if (rank <= 3) {
+  if (rounded >= 2 && rounded <= 3) {
     return {
       color: new graphic.LinearGradient(0, 0, 1, 0, [
         { offset: 0, color: '#6dd4b0' },
