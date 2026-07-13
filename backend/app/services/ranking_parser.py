@@ -26,7 +26,7 @@ LIST_ITEM_RE = re.compile(
     r")\s*(.+)$"
 )
 
-BULLET_ITEM_RE = re.compile(r"^[-*•·▪]\s*(.+)$")
+BULLET_ITEM_RE = re.compile(r"^[-•·▪]\s*(.+)$|^\*(?!\*)\s*(.+)$")
 
 PROSE_RANK_RE = re.compile(
     r"第([一二三四五六七八九十\d]+)[个位名项]?[，,：:\s]+([^，,。；;\n]{2,50})"
@@ -320,7 +320,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
 
         bullet = BULLET_ITEM_RE.match(line)
         if bullet:
-            append_item(bullet.group(1), None)
+            append_item(bullet.group(1) or bullet.group(2) or "", None)
             continue
 
     if not results:
@@ -329,6 +329,160 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             append_item(match.group(2), rank)
 
     return results
+
+
+_SCOPE_NOISE_RE = re.compile(r"推荐|哪家好|哪个|怎么选|怎么样|排行|榜单|有哪些|是什么")
+_MAJOR_SECTION_RE = re.compile(r"^[一二三四五六七八九十百]+[、.．]\s*\S")
+
+
+def _scope_match_tokens(scope: str) -> list[str]:
+    cleaned = _SCOPE_NOISE_RE.sub(" ", str(scope or ""))
+    tokens: list[str] = []
+    for match in re.finditer(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{2,}", cleaned):
+        token = match.group(0).strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _text_overlap_score(left: str, right: str) -> int:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text or not right_text:
+        return -1
+    if left_text == right_text:
+        return 2000 + len(left_text)
+    if left_text in right_text:
+        return 1500 + len(left_text)
+    if right_text in left_text:
+        return 1400 + len(right_text)
+    prefix = 0
+    for left_char, right_char in zip(left_text, right_text):
+        if left_char != right_char:
+            break
+        prefix += 1
+    if prefix >= 4:
+        return 500 + prefix
+    left_fold = left_text.casefold()
+    score = 0
+    for token in _scope_match_tokens(right_text):
+        if token.casefold() in left_fold:
+            score += 100 + len(token)
+    return score
+
+
+def _scene_alignment_bonus(category: str, scope: str) -> int:
+    category_text = str(category or "").casefold()
+    scope_text = str(scope or "").casefold()
+    bonus = 0
+    media_scope = any(token in scope_text for token in ("广告", "传媒", "媒体", "大屏", "户外"))
+    factory_scope = any(token in scope_text for token in ("显示屏", "生产", "工程", "厂家", "厂商"))
+    if media_scope and any(token in category_text for token in ("传媒", "媒体", "运营商", "广告", "户外", "大屏")):
+        bonus += 250
+    if factory_scope and any(token in category_text for token in ("显示屏", "生产", "工程", "厂家", "厂商")):
+        bonus += 250
+    if media_scope and any(token in category_text for token in ("显示屏", "生产", "工程", "厂家", "厂商")):
+        bonus -= 120
+    if factory_scope and any(token in category_text for token in ("传媒", "媒体", "运营商", "户外")):
+        bonus -= 120
+    return bonus
+
+
+def ranking_category_scope_score(category: str | None, scope: str) -> int:
+    """Score how well a parsed category matches monitor keyword / prompt."""
+    category_text = str(category or "").strip()
+    scope_text = str(scope or "").strip()
+    if not category_text or not scope_text:
+        return -1
+    direct = _text_overlap_score(category_text, scope_text)
+    reverse = _text_overlap_score(scope_text, category_text)
+    base = max(direct, reverse)
+    bonus = _scene_alignment_bonus(category_text, scope_text)
+    return base + bonus if base >= 0 else bonus
+
+
+def _entries_in_scope(entries: list[dict[str, Any]], scope: str) -> tuple[list[dict[str, Any]], bool]:
+    """Return entries whose category best matches scope; scoped=True when filter applied."""
+    scope_text = str(scope or "").strip()
+    if not scope_text:
+        return entries, False
+    categories = {str(entry.get("category") or "").strip() for entry in entries}
+    categories.discard("")
+    if not categories:
+        return entries, False
+    scores = {category: ranking_category_scope_score(category, scope_text) for category in categories}
+    best = max(scores.values(), default=-1)
+    if best < 100:
+        return entries, False
+    threshold = max(best * 0.45, 100)
+    allowed = {category for category, score in scores.items() if score >= threshold}
+    scoped = [entry for entry in entries if str(entry.get("category") or "").strip() in allowed]
+    return scoped or entries, True
+
+
+def find_best_brand_rank_scoped(
+    entries: list[dict[str, Any]],
+    match_name: Callable[[str], bool],
+    scope: str,
+    *,
+    skip_name: Callable[[str], bool] | None = None,
+) -> tuple[int | float | None, bool]:
+    """Prefer ranks inside categories that match monitor keyword / prompt."""
+    scoped_entries, filtered = _entries_in_scope(entries, scope)
+    rank, matched = find_best_brand_rank(scoped_entries, match_name, skip_name=skip_name)
+    if filtered:
+        return rank, matched
+    return find_best_brand_rank(entries, match_name, skip_name=skip_name)
+
+
+def _is_major_section_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    header = _parse_markdown_header(stripped)
+    if header:
+        level, content = header
+        return level == 2 or bool(SECTION_TITLE_RE.match(content))
+    return bool(_MAJOR_SECTION_RE.match(stripped))
+
+
+def appearance_order_rank_scoped(
+    text: str,
+    match_line: Callable[[str], bool],
+    scope: str,
+) -> int | None:
+    """Rank by appearance order inside the scope-best major section only."""
+    scope_text = str(scope or "").strip()
+    if not scope_text:
+        return None
+    lines = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip() for raw in text.splitlines()]
+    section_ranges: list[tuple[int, int, int]] = []
+    current_start: int | None = None
+    current_score = -1
+    for index, line in enumerate(lines):
+        if not line or not _is_major_section_line(line):
+            continue
+        if current_start is not None:
+            section_ranges.append((current_start, index, current_score))
+        current_start = index
+        current_score = ranking_category_scope_score(_extract_category_name(line), scope_text)
+    if current_start is not None:
+        section_ranges.append((current_start, len(lines), current_score))
+    if not section_ranges:
+        return None
+    start, end, best_score = max(section_ranges, key=lambda item: item[2])
+    if best_score < 100:
+        return None
+    order = 0
+    for line in lines[start + 1:end]:
+        if not line or len(line) > 120:
+            continue
+        if _is_category_header(line) or _is_major_section_line(line):
+            continue
+        order += 1
+        if match_line(line):
+            return order
+    return None
 
 
 def find_best_brand_rank(

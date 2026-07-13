@@ -1,4 +1,11 @@
-from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
+from app.services.ranking_parser import (
+    appearance_order_rank_scoped,
+    find_best_brand_rank,
+    find_best_brand_rank_scoped,
+    normalize_structured_rankings,
+    parse_answer_rankings,
+    ranking_category_scope_score,
+)
 
 
 def test_parse_categorized_numbered_lists():
@@ -123,3 +130,69 @@ def test_parse_elevator_markdown_sections_use_category_local_rank():
     assert aidiya
     assert aidiya[0]["rank"] == 1
     assert "全案整合" in str(aidiya[0]["category"])
+
+
+def test_parse_bold_subsection_headers_as_categories():
+    text = """
+一、LED 显示屏生产 / 工程厂家
+**头部上市大厂**
+1. 利亚德 LEYARD
+2. 洲明科技 Unilumin
+**高性价比量产大厂**
+1. 强力巨彩
+2. 元亨光电
+
+二、全国 LED 大屏媒体运营商
+1. 郁金香传媒
+2. 艾迪亚控股
+"""
+    entries = parse_answer_rankings(text)
+    assert not any("头部上市" in item["name"] for item in entries)
+    head = [item for item in entries if item["category"] == "头部上市大厂"]
+    assert [item["name"] for item in head] == ["利亚德 LEYARD", "洲明科技 Unilumin"]
+    media = [item for item in entries if "艾迪亚" in item["name"]]
+    assert media[0]["rank"] == 2
+    assert media[0]["category"] == "全国 LED 大屏媒体运营商"
+
+
+def test_scoped_rank_prefers_monitor_keyword_section():
+    text = """
+一、LED 显示屏生产 / 工程厂家
+1. 利亚德
+2. 洲明
+
+二、全国 LED 大屏媒体运营商
+1. 郁金香传媒
+2. 艾迪亚控股
+"""
+    entries = parse_answer_rankings(text)
+    scope = "LED广告公司推荐"
+    assert ranking_category_scope_score("全国 LED 大屏媒体运营商", scope) > ranking_category_scope_score(
+        "LED 显示屏生产 / 工程厂家", scope
+    )
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        scope,
+    )
+    assert matched is True
+    assert rank == 2
+
+
+def test_scoped_appearance_order_uses_matching_section():
+    text = """
+一、LED 显示屏生产 / 工程厂家
+1. 利亚德
+2. 洲明
+3. 艾比森
+
+二、全国 LED 大屏媒体运营商
+1. 郁金香传媒
+2. 艾迪亚控股
+"""
+    rank = appearance_order_rank_scoped(
+        text,
+        lambda line: "艾迪亚" in line,
+        "LED广告公司推荐",
+    )
+    assert rank == 2

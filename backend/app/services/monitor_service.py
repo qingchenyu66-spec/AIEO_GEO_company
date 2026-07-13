@@ -38,7 +38,13 @@ from app.services.brand_service import (
     tenant_purchased_platforms,
 )
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
-from app.services.ranking_parser import find_best_brand_rank, normalize_structured_rankings, parse_answer_rankings
+from app.services.ranking_parser import (
+    appearance_order_rank_scoped,
+    find_best_brand_rank,
+    find_best_brand_rank_scoped,
+    normalize_structured_rankings,
+    parse_answer_rankings,
+)
 from app.services.tenant_scope import assert_monitor_task_access, ensure_sales_tenant_access, sales_owned_tenant_ids
 from app.services.schedule_context import (
     prompt_monitor_intent,
@@ -2085,10 +2091,20 @@ def _collect_ranking_entries(subtask: GeoMonitorSubtask) -> list[dict[str, Any]]
     return entries
 
 
+def _ranking_scope_text(monitor_keywords: str | None, prompt: str | None) -> str:
+    return " ".join(
+        part.strip()
+        for part in (str(monitor_keywords or "").strip(), str(prompt or "").strip())
+        if part and str(part).strip()
+    )
+
+
 def _find_brand_in_rankings(
     subtask: GeoMonitorSubtask,
     brand_terms: list[str],
     asset: BrandAsset | None,
+    *,
+    monitor_keywords: str | None = None,
 ) -> tuple[int | float | None, bool]:
     """Match exposure terms in structured or parsed answer rankings (category-local rank)."""
 
@@ -2099,6 +2115,7 @@ def _find_brand_in_rankings(
         return asset is not None and _is_industry_monitor_keyword(name, asset)
 
     text = _subtask_answer_plaintext(subtask)
+    scope = _ranking_scope_text(monitor_keywords, subtask.prompt)
     merged: list[dict[str, Any]] = []
     for entries in (
         normalize_structured_rankings(subtask.all_rankings_json or []),
@@ -2106,12 +2123,25 @@ def _find_brand_in_rankings(
     ):
         merged.extend(entries)
     if merged:
-        return find_best_brand_rank(merged, match_name, skip_name=skip_name)
+        return find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
     return None, False
 
 
-def _appearance_order_rank(text: str, brand_terms: list[str]) -> int | None:
-    """When answer has no category/numbered list, rank by first short-line appearance order."""
+def _appearance_order_rank(
+    text: str,
+    brand_terms: list[str],
+    scope: str | None = None,
+) -> int | None:
+    """When answer has no category/numbered list, rank by appearance order in scope section."""
+    if scope:
+        scoped = appearance_order_rank_scoped(
+            text,
+            lambda line: _brand_appears_in_text(line, brand_terms),
+            scope,
+        )
+        if scoped is not None:
+            return scoped
+
     order = 0
     for raw_line in text.splitlines():
         line = re.sub(r"<[^>]+>", " ", raw_line)
@@ -2150,24 +2180,34 @@ def _resolve_brand_rank(
 
     monitor_keyword = str(monitor_keywords or "").strip()
     is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
+    scope = _ranking_scope_text(monitor_keyword, subtask.prompt)
+    answer_text = _subtask_answer_plaintext(subtask)
 
-    rank_from_list, in_ranking_list = _find_brand_in_rankings(subtask, brand_terms, asset)
+    rank_from_list, in_ranking_list = _find_brand_in_rankings(
+        subtask,
+        brand_terms,
+        asset,
+        monitor_keywords=monitor_keyword,
+    )
     if rank_from_list is not None:
         return rank_from_list, True
     if in_ranking_list:
         return None, True
 
     if _collect_ranking_entries(subtask):
+        if has_brand_in_text:
+            appearance_rank = _appearance_order_rank(answer_text, brand_terms, scope)
+            if appearance_rank is not None:
+                return appearance_rank, True
         return None, False
+
+    if has_brand_in_text:
+        appearance_rank = _appearance_order_rank(answer_text, brand_terms, scope)
+        if appearance_rank is not None:
+            return appearance_rank, True
 
     if is_industry_task:
         return None, has_brand_in_text
-
-    # Fallback: plain appearance order in answer when no list/category rank was parsed.
-    if has_brand_in_text:
-        appearance_rank = _appearance_order_rank(_subtask_answer_plaintext(subtask), brand_terms)
-        if appearance_rank is not None:
-            return appearance_rank, True
 
     if subtask.mention_position is not None and has_brand_in_text:
         return subtask.mention_position, True
