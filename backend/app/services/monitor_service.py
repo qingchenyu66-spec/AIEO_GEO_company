@@ -1289,6 +1289,39 @@ def _resolve_keyword_group_filter(
     return next((group for group in keyword_groups if _group_filter_matches(group, text)), None)
 
 
+def _keyword_groups_for_exposure_term(
+    exposure_term: str,
+    keyword_groups: list[dict[str, Any]],
+    *,
+    asset: BrandAsset | None = None,
+) -> list[dict[str, Any]]:
+    """露出词下拉项对应词组；监测 prompt 是行业词，不能靠 prompt 子串匹配。"""
+    text = str(exposure_term or "").strip()
+    if not text:
+        return []
+    matched = [
+        group for group in keyword_groups
+        if group.get("status", True)
+        and text in [str(term or "").strip() for term in (group.get("exposure_terms") or [])]
+    ]
+    if matched:
+        return matched
+    if asset is not None:
+        asset_terms = {
+            str(asset.brand_short_name or "").strip(),
+            str(asset.brand_name or "").strip(),
+            str(asset.company_full_name or "").strip(),
+            *[str(item or "").strip() for item in (asset.aliases_json or [])],
+        }
+        asset_terms.discard("")
+        if text in asset_terms:
+            return [
+                group for group in keyword_groups
+                if group.get("status", True) and keyword_group_monitor_keywords(group)
+            ]
+    return []
+
+
 def _filter_subtasks_by_keyword_group(
     subtasks: list[GeoMonitorSubtask],
     keyword_group: str,
@@ -1324,10 +1357,26 @@ def _filter_subtasks_by_monitor_keyword(
 def _filter_subtasks_by_exposure_term(
     subtasks: list[GeoMonitorSubtask],
     exposure_term: str,
+    keyword_groups: list[dict[str, Any]],
+    *,
+    asset: BrandAsset | None = None,
 ) -> list[GeoMonitorSubtask]:
     text = str(exposure_term or "").strip()
     if not text:
         return subtasks
+    groups = _keyword_groups_for_exposure_term(text, keyword_groups, asset=asset)
+    if groups:
+        return [
+            item for item in subtasks
+            if any(
+                _prompt_belongs_to_group(
+                    item.prompt or "",
+                    keyword_group_monitor_keywords(group),
+                    group.get("exposure_terms") or [],
+                )
+                for group in groups
+            )
+        ]
     return [item for item in subtasks if text in (item.prompt or "")]
 
 
@@ -1338,6 +1387,7 @@ def _filter_subtasks_by_scope(
     monitor_keyword: str | None,
     exposure_term: str | None,
     keyword_groups: list[dict[str, Any]],
+    asset: BrandAsset | None = None,
 ) -> list[GeoMonitorSubtask]:
     result = subtasks
     group_filter = str(keyword_group or "").strip()
@@ -1348,7 +1398,12 @@ def _filter_subtasks_by_scope(
     if monitor_filter:
         result = _filter_subtasks_by_monitor_keyword(result, monitor_filter)
     if exposure_filter:
-        result = _filter_subtasks_by_exposure_term(result, exposure_filter)
+        result = _filter_subtasks_by_exposure_term(
+            result,
+            exposure_filter,
+            keyword_groups,
+            asset=asset,
+        )
     return result
 
 
@@ -2193,6 +2248,7 @@ def ranking_matrix(
             monitor_keyword=scoped_monitor or None,
             exposure_term=scoped_exposure or None,
             keyword_groups=keyword_groups,
+            asset=asset,
         )
     elif legacy_group_filter:
         subtasks = _filter_subtasks_by_monitor_group(subtasks, legacy_group_filter, keyword_groups)

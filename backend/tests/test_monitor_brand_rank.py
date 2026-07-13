@@ -1,6 +1,11 @@
 from types import SimpleNamespace
 
-from app.services.monitor_service import _filter_matrix_columns_for_scope, _resolve_brand_rank
+from app.services.monitor_service import (
+    _filter_matrix_columns_for_scope,
+    _filter_subtasks_by_exposure_term,
+    _keyword_groups_for_exposure_term,
+    _resolve_brand_rank,
+)
 
 
 def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:
@@ -23,6 +28,34 @@ def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:
 def test_filter_matrix_columns_for_scope_no_filter_keeps_all() -> None:
     columns = [{"prompt": "a"}, {"prompt": "b"}]
     assert _filter_matrix_columns_for_scope(columns, {"a": None}, keyword_group=None, monitor_keyword=None, exposure_term=None) == columns
+
+
+def test_exposure_term_filter_matches_keyword_group_not_prompt_substring() -> None:
+    from types import SimpleNamespace
+
+    groups = [
+        {
+            "status": True,
+            "monitor_keyword": "地铁广告公司推荐",
+            "monitor_keywords": ["地铁广告公司推荐"],
+            "exposure_terms": ["艾迪亚"],
+        },
+        {
+            "status": True,
+            "monitor_keyword": "LED广告公司推荐",
+            "monitor_keywords": ["LED广告公司推荐"],
+            "exposure_terms": ["另一品牌"],
+        },
+    ]
+    matched = _keyword_groups_for_exposure_term("艾迪亚", groups)
+    assert len(matched) == 1
+    subtasks = [
+        SimpleNamespace(prompt="地铁广告公司推荐"),
+        SimpleNamespace(prompt="LED广告公司推荐"),
+    ]
+    filtered = _filter_subtasks_by_exposure_term(subtasks, "艾迪亚", groups)
+    assert len(filtered) == 1
+    assert filtered[0].prompt == "地铁广告公司推荐"
 
 
 def test_resolve_brand_rank_trusts_manual_snapshot_rank() -> None:

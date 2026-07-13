@@ -123,10 +123,37 @@ function findMonitorGroupByFilter(
   return findKeywordGroupBySelectValue(filterValue, groups) || findKeywordGroupByFilter(filterValue, groups)
 }
 
+function groupsForExposureTerm(
+  exposureTerm: string,
+  groups: BrandKeywordGroup[],
+  asset: BrandAsset | null,
+): BrandKeywordGroup[] {
+  const text = exposureTerm.trim()
+  if (!text) return []
+  const matched = groups.filter(
+    group => group.status !== false && (group.exposure_terms || []).includes(text),
+  )
+  if (matched.length) return matched
+  if (asset) {
+    const assetTerms = new Set(
+      [asset.brand_short_name, asset.brand_name, ...(asset.aliases || [])]
+        .map(item => (item || '').trim())
+        .filter(Boolean),
+    )
+    if (assetTerms.has(text)) {
+      return groups.filter(
+        group => group.status !== false && keywordGroupMonitorKeywords(group).length > 0,
+      )
+    }
+  }
+  return []
+}
+
 function promptMatchesScopeFilters(
   prompt: string,
   groups: BrandKeywordGroup[],
   scope: { keywordGroup: string; monitorKeyword: string; exposureTerm: string },
+  asset: BrandAsset | null = null,
 ) {
   const groupFilter = scope.keywordGroup.trim()
   const monitorFilter = scope.monitorKeyword.trim()
@@ -139,7 +166,14 @@ function promptMatchesScopeFilters(
     const text = (prompt || '').trim()
     if (text !== monitorFilter && !text.toLowerCase().includes(monitorFilter.toLowerCase())) return false
   }
-  if (exposureFilter && !(prompt || '').includes(exposureFilter)) return false
+  if (exposureFilter) {
+    const matchedGroups = groupsForExposureTerm(exposureFilter, groups, asset)
+    if (matchedGroups.length) {
+      if (!matchedGroups.some(group => promptBelongsToGroup(prompt, group))) return false
+    } else if (!(prompt || '').includes(exposureFilter)) {
+      return false
+    }
+  }
   return true
 }
 
@@ -147,10 +181,11 @@ function taskMatchesScopeFilters(
   task: MonitorTask,
   groups: BrandKeywordGroup[],
   scope: { keywordGroup: string; monitorKeyword: string; exposureTerm: string },
+  asset: BrandAsset | null = null,
 ) {
   if (!scope.keywordGroup.trim() && !scope.monitorKeyword.trim() && !scope.exposureTerm.trim()) return true
   const prompts = task.prompts || []
-  return prompts.some(prompt => promptMatchesScopeFilters(prompt, groups, scope))
+  return prompts.some(prompt => promptMatchesScopeFilters(prompt, groups, scope, asset))
 }
 
 function defaultDateRange(days = 7) {
@@ -486,6 +521,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         item.prompt || '',
         monitorGroupOptions.value,
         filterScope.value,
+        brandAsset.value,
       )
       return platformMatched && statusMatched && exactMatched && scopeMatched
     })
@@ -529,6 +565,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
           task,
           monitorGroupOptions.value,
           filterScope.value,
+          brandAsset.value,
         )),
       }))
       .filter(group => group.tasks.length > 0)
