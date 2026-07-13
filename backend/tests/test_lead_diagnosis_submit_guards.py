@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +32,7 @@ def test_slot_is_future() -> None:
 
 
 def test_submit_rejects_future_force_slot() -> None:
+    future_day = date.today() + timedelta(days=1)
     lead = LeadDiagnosis(
         id=5,
         brand_name="艾迪亚",
@@ -39,9 +40,9 @@ def test_submit_rejects_future_force_slot() -> None:
         competitors_json=[],
         region_codes_json=[],
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
-        diagnosis_date=date(2026, 7, 10),
+        diagnosis_date=future_day,
         status="collecting",
-        created_at=datetime(2026, 7, 10, 10, 0, 0),
+        created_at=datetime.combine(date.today(), datetime.min.time()),
         runs=[],
     )
     db = MagicMock()
@@ -60,7 +61,7 @@ def test_submit_rejects_future_force_slot() -> None:
                 db,
                 current,
                 5,
-                schedule_key="20260710-1430",
+                schedule_key=f"{future_day:%Y%m%d}-1430",
                 force=True,
             )
 
