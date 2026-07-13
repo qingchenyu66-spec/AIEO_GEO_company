@@ -195,12 +195,12 @@ def preview_report_html(
 @router.get("/{report_id}/export/{export_format}")
 def export_report(
     report_id: int,
-    export_format: Literal["pdf", "docx"],
+    export_format: Literal["pdf", "docx", "html"],
     request: Request,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> Response:
-    """导出报告为 PDF 或 Word。"""
+    """导出报告为 PDF、Word 或 HTML（周期/诊断模板）。"""
     try:
         from app.services.menu_permission_service import require_report_permission
 

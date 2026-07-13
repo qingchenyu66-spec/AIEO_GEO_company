@@ -227,6 +227,10 @@ function diagnosisTitleText(title: string | null | undefined) {
               <Download />
               PDF
             </button>
+            <button v-if="canExportReport && usesHtmlTemplatePreview" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
+              <FileText />
+              HTML
+            </button>
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
               <FileType />
               Word
@@ -279,6 +283,10 @@ function diagnosisTitleText(title: string | null | undefined) {
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
               导出 PDF
+            </button>
+            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
+              <FileText />
+              导出 HTML
             </button>
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
               <FileType />

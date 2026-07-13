@@ -310,7 +310,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
     exporting.value = true
     try {
       await withRetry(() => downloadReportExport(selectedReportId.value!, format))
-      ElMessage.success(format === 'pdf' ? 'PDF 已下载' : 'Word 已下载')
+      const label = format === 'pdf' ? 'PDF' : format === 'html' ? 'HTML' : 'Word'
+      ElMessage.success(`${label} 已下载`)
     } catch (error: unknown) {
       ElMessage.error(`报告导出失败：${errorMessage(error)}`)
     } finally {

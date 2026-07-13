@@ -1,6 +1,6 @@
 import { http } from './http'
 
-export type ReportExportFormat = 'pdf' | 'docx'
+export type ReportExportFormat = 'pdf' | 'docx' | 'html'
 
 export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'diagnosis'] as const
 
