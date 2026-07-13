@@ -82,7 +82,7 @@ function diagnosisTitleText(title: string | null | undefined) {
 </script>
 
 <template>
-  <section class="report-page">
+  <section class="report-page" :class="{ 'is-customer-reports': !isPlatform }">
     <header class="report-sticky-bar">
       <div class="report-sticky-inner">
         <div class="report-sticky-row">

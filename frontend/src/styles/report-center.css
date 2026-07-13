@@ -616,3 +616,27 @@
   border: 0;
   background: #f5f7fb;
 }
+
+/* 客户端：预览区加高，iframe 内滚动阅读完整报告 */
+.report-page.is-customer-reports .report-preview-panel {
+  max-height: calc(100dvh - 40px);
+  min-height: min(920px, calc(100dvh - 88px));
+}
+
+.report-page.is-customer-reports .report-list-panel {
+  max-height: min(760px, calc(100dvh - 100px));
+}
+
+.report-page.is-customer-reports .report-preview-panel > .report-preview-body.report-html-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: min(820px, calc(100dvh - 200px));
+  overflow: hidden;
+}
+
+.report-page.is-customer-reports .report-html-frame {
+  min-height: 720px;
+  height: calc(100dvh - 248px);
+  max-height: none;
+}
