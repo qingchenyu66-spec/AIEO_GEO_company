@@ -65,6 +65,9 @@
             {% if overview_competitor_html %}
             <h3 class="overview-subtitle">竞品格局对比</h3>
             {{ overview_competitor_html | safe }}
+            {% if overview_competitor_strategy_html %}
+            {{ overview_competitor_strategy_html | safe }}
+            {% endif %}
             {% endif %}
             {% if overview_platform_html %}
             <h3 class="overview-subtitle">分平台表现</h3>
@@ -133,13 +136,6 @@
                     {{ block.table_html | safe }}
                 </div>
                 {% endfor %}
-            </div>
-            {% endif %}
-
-            {% if answer_excerpts_html %}
-            <div class="table-section">
-                <h3 class="overview-subtitle">AI 回答摘录</h3>
-                {{ answer_excerpts_html | safe }}
             </div>
             {% endif %}
 

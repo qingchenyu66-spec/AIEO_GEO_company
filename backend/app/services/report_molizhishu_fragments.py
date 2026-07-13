@@ -351,6 +351,27 @@ def render_competitor_landscape_table(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def render_competitor_strategy(analysis: dict[str, Any]) -> str:
+    if not analysis or not analysis.get("rows"):
+        return ""
+    summary = _esc(analysis.get("management_summary") or "")
+    actions = [str(item).strip() for item in analysis.get("actions") or [] if str(item).strip()]
+    action_items = "".join(f"<li>{_esc(item)}</li>" for item in actions)
+    return (
+        '<div class="competitor-strategy">'
+        '<div class="competitor-summary-card"><h4>竞争格局摘要</h4>'
+        f'<p>{summary}</p></div>'
+        '<div class="competitor-action-card"><h4>运营建议动作</h4>'
+        f'<ol>{action_items}</ol></div>'
+        '<div class="rank-risk-legend"><strong>排名风险说明：</strong>'
+        '<span class="rank-risk rank-risk-good">前三名：达标</span>'
+        '<span class="rank-risk rank-risk-watch">第4-5名：关注</span>'
+        '<span class="rank-risk rank-risk-warning">第6-7名：警告</span>'
+        '<span class="rank-risk rank-risk-danger">第8名以后：高风险</span>'
+        '</div></div>'
+    )
+
+
 def render_prompt_platform_matrix(matrix: dict[str, Any]) -> str:
     platforms = matrix.get("platforms") or []
     rows = matrix.get("rows") or []
@@ -397,22 +418,6 @@ def render_tip_list(tips: list[str]) -> str:
         return ""
     items = "".join(f"<li>{item if item.startswith('<') else _esc(item)}</li>" for item in cleaned)
     return f'<ul class="action-tip-list">{items}</ul>'
-
-
-def render_answer_excerpts(excerpts: list[dict[str, Any]], platform_names: dict[str, str]) -> str:
-    if not excerpts:
-        return ""
-    blocks = []
-    for index, row in enumerate(excerpts, start=1):
-        platform = platform_names.get(str(row.get("platform") or "")) or row.get("platform") or "—"
-        blocks.append(
-            '<div class="excerpt-card">'
-            f'<div class="excerpt-meta">#{index} · {_esc(row.get("prompt") or "")} · '
-            f'{_esc(platform)} · 排名 {_esc(row.get("rank") or "—")}</div>'
-            f'<blockquote class="excerpt-quote">{_esc(row.get("excerpt") or "")}</blockquote>'
-            "</div>"
-        )
-    return "".join(blocks)
 
 
 def render_prompt_comment(text: str | None) -> str:

@@ -269,3 +269,27 @@ def test_mention_table_uses_company_color_for_each_progress_bar() -> None:
 
     assert "--entity-color: #0057D9" in html
     assert "--entity-color: #F28E2B" in html
+
+
+def test_report_adds_competitor_strategy_and_removes_answer_excerpts() -> None:
+    payload = _demo_payload()
+    payload["competitors"] = ["分众传媒", "白马户外媒体"]
+    payload["report_enrichment"] = {
+        "competitor_landscape": [
+            {"name": "春全合珠宝", "avg_rank": 4.2, "mention_rate": 8.8, "is_brand": True},
+            {"name": "分众传媒", "avg_rank": 1.4, "mention_rate": 93.8},
+            {"name": "白马户外媒体", "avg_rank": 5.1, "mention_rate": 2.5},
+        ],
+        "answer_excerpts": [
+            {"prompt": "测试问题", "platform": "deepseek", "rank": 4, "excerpt": "不应出现在报告中"},
+        ],
+    }
+
+    html = render_molizhishu_report_html(payload)
+
+    assert "竞争格局摘要" in html
+    assert "运营建议动作" in html
+    assert "排名风险说明" in html
+    assert "AI 回答摘录" not in html
+    assert "不应出现在报告中" not in html
+    assert "excerpt-card" not in html

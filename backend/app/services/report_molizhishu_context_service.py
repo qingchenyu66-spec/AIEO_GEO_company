@@ -9,12 +9,13 @@ from typing import Any
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
 from app.services.report_premium_font_service import build_font_face_css
+from app.services.report_competitor_visuals import build_competitor_analysis
 from app.services.report_chart_service import build_entity_rank_trend_chart, build_rank_trend_chart
 from app.services.report_molizhishu_fragments import (
     render_analysis_html,
-    render_answer_excerpts,
     render_chart_block,
     render_competitor_landscape_table,
+    render_competitor_strategy,
     render_diagnosis_swot,
     render_executive_block,
     render_insight_paragraph,
@@ -245,6 +246,19 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
         highlights = diagnosis.get("highlights") or []
 
     contact_label = str(payload.get("contact_phone") or payload.get("contact_name") or "").strip()
+    competitor_rows = enrichment.get("competitor_landscape") or []
+    competitor_analysis = build_competitor_analysis(
+        brand_name=brand,
+        rows=competitor_rows,
+        platform_stats=[
+            {
+                **row,
+                "name": platform_names.get(str(row.get("platform") or "")) or row.get("platform"),
+            }
+            for row in platform_stats
+        ],
+        prompt_analytics=prompt_analytics,
+    )
 
     return {
         "page_title": f"AI搜索平台品牌分析报告_{brand}_{platform_label}_{ts_suffix}",
@@ -283,16 +297,13 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
         "overview_platform_insight_html": render_insight_paragraph(enrichment.get("platform_insight")),
         "overview_prompt_html": render_prompt_scorecard(prompt_analytics),
         "overview_competitor_html": render_competitor_landscape_table(
-            enrichment.get("competitor_landscape") or []
+            competitor_rows
         ),
+        "overview_competitor_strategy_html": render_competitor_strategy(competitor_analysis),
         "overview_matrix_html": render_prompt_platform_matrix(
             enrichment.get("prompt_platform_matrix") or {}
         ),
         "source_action_tips_html": render_tip_list(enrichment.get("source_action_tips") or []),
-        "answer_excerpts_html": render_answer_excerpts(
-            enrichment.get("answer_excerpts") or [],
-            platform_names,
-        ),
         "charts_html": _build_charts_html(
             rank_trend=payload.get("rank_trend") or [],
             prompt_analytics=prompt_analytics,
