@@ -567,6 +567,42 @@ body {
     color: var(--accent);
 }
 
+.entity-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--entity-color);
+    border: 1px solid rgba(0, 0, 0, 0.18);
+}
+
+.entity-role {
+    display: inline-block;
+    margin-left: 7px;
+    padding: 1px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    color: #475569;
+    font-size: 11px;
+}
+
+.rank-risk {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.rank-risk-good { background: #dcfce7; color: #166534; }
+.rank-risk-watch { background: #fef3c7; color: #92400e; }
+.rank-risk-warning { background: #ffedd5; color: #c2410c; }
+.rank-risk-danger { background: #fee2e2; color: #b91c1c; }
+.rank-risk-neutral { background: #e5e7eb; color: #4b5563; }
+
 /* 进度条样式 */
 .progress-container {
     width: 100%;
@@ -591,6 +627,19 @@ body {
     font-weight: 600;
     color: var(--dark);
     z-index: 2;
+}
+
+@media print {
+    .entity-swatch,
+    .rank-risk,
+    .entity-role {
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+    }
+
+    .rank-risk {
+        border: 1px solid currentColor;
+    }
 }
 
 /* 页脚 */

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_competitor_visuals import entity_visual_style
 from app.services.report_premium_font_service import configure_matplotlib_cjk
 from app.services.report_molizhishu_theme import get_theme
 
@@ -169,7 +170,7 @@ def build_entity_rank_trend_chart(
     x = list(range(len(labels)))
     max_rank = 1.0
 
-    for index, name in enumerate(entities[:5]):
+    for name in entities[:5]:
         points = []
         for point_index, row in enumerate(trend_rows):
             entities_map = row.get("entities") or {}
@@ -182,9 +183,18 @@ def build_entity_rank_trend_chart(
         if not points:
             continue
         px, py = zip(*points)
-        color = theme.entity_line_colors[index % len(theme.entity_line_colors)]
-        linewidth = 2.8 if names_match(name, brand) else 2.0
-        ax.plot(px, py, color=color, marker="o", linewidth=linewidth, markersize=5, label=name)
+        style = entity_visual_style(name, brand_name=brand)
+        linewidth = 2.8 if names_match(name, brand) else 2.2
+        ax.plot(
+            px,
+            py,
+            color=style.color,
+            linestyle=style.line_style,
+            marker=style.marker,
+            linewidth=linewidth,
+            markersize=6,
+            label=name,
+        )
         for px_val, py_val in points:
             ax.annotate(
                 f"{py_val:.1f}",
@@ -193,7 +203,7 @@ def build_entity_rank_trend_chart(
                 xytext=(0, 8),
                 ha="center",
                 fontsize=7,
-                color=color,
+                color=style.color,
             )
 
     ax.invert_yaxis()
@@ -227,18 +237,10 @@ def build_mention_rate_bar_chart(
     rows = sorted(mention_table, key=lambda item: float(item.get("mention_rate") or 0), reverse=True)[:limit]
     labels = [str(row.get("name") or "—") for row in rows]
     values = [float(row.get("mention_rate") or 0) for row in rows]
-    bar_colors = []
-    for row in rows:
-        if row.get("is_brand"):
-            bar_colors.append(theme.primary)
-        elif row.get("is_competitor"):
-            bar_colors.append(theme.secondary)
-        elif float(row.get("mention_rate") or 0) >= 60:
-            bar_colors.append("#21b981")
-        elif float(row.get("mention_rate") or 0) >= 30:
-            bar_colors.append(theme.accent)
-        else:
-            bar_colors.append("#cfe5ff")
+    bar_colors = [
+        entity_visual_style(str(row.get("name") or ""), brand_name=brand).color
+        for row in rows
+    ]
 
     fig, ax = plt.subplots(figsize=(7.2, max(2.8, len(rows) * 0.28)))
     y_pos = list(range(len(labels)))

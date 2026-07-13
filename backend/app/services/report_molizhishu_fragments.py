@@ -6,6 +6,7 @@ import html
 import re
 from typing import Any
 
+from app.services.report_competitor_visuals import classify_rank_risk, entity_visual_style
 from app.services.report_molizhishu_theme import get_theme
 
 
@@ -104,14 +105,19 @@ def render_ranking_table(table_id: str, rows: list[dict[str, Any]]) -> str:
     )
 
 
-def render_progress_cell(rate: float, *, brand: bool) -> str:
-    theme = get_theme()
+def render_progress_cell(
+    rate: float,
+    *,
+    brand: bool,
+    entity_name: str,
+    brand_name: str | None,
+) -> str:
     width = max(0.0, min(100.0, float(rate)))
     display = f"{width:.1f}%"
-    fill = theme.mention_bar_fill(width)
+    fill = entity_visual_style(entity_name, brand_name=brand_name).color
     bar = (
-        '<div class="progress-container">'
-        f'<div class="progress-bar" style="width: {width}%; background: {fill};"></div>'
+        f'<div class="progress-container" style="--entity-color: {fill};">'
+        f'<div class="progress-bar" style="width: {width}%; background: var(--entity-color);"></div>'
         f'<span class="progress-text">{display}</span></div>'
     )
     if brand:
@@ -123,15 +129,17 @@ def render_mention_table(table_id: str, rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
     body = []
+    brand_name = next((str(row.get("name") or "") for row in rows if row.get("is_brand")), None)
     for row in rows:
         brand = bool(row.get("is_brand"))
+        entity_name = str(row.get("name") or "")
         rate = float(row.get("mention_rate") or 0)
         body.append(
             "<tr>"
             f"<td>{_font_brand(str(row.get('name') or ''), brand=brand)}</td>"
             f"<td>{_font_brand(str(row.get('sample_count') or 0), brand=brand)}</td>"
             f"<td>{_font_brand(str(row.get('mention_count') or 0), brand=brand)}</td>"
-            f"{render_progress_cell(rate, brand=brand)}"
+            f"{render_progress_cell(rate, brand=brand, entity_name=entity_name, brand_name=brand_name)}"
             "</tr>"
         )
     return (
@@ -315,16 +323,25 @@ def render_competitor_landscape_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
     body = []
+    brand_name = next((str(row.get("name") or "") for row in rows if row.get("is_brand")), None)
     for row in rows:
         brand = bool(row.get("is_brand"))
-        name_cell = _font_brand(str(row.get("name") or ""), brand=brand) if brand else _esc(row.get("name"))
+        entity_name = str(row.get("name") or "")
+        style = entity_visual_style(entity_name, brand_name=brand_name)
+        name_text = _font_brand(entity_name, brand=brand) if brand else _esc(entity_name)
+        role = "本品牌" if brand else "竞品"
+        name_cell = (
+            f'<span class="entity-swatch" style="--entity-color: {style.color};"></span>'
+            f'{name_text}<span class="entity-role">{role}</span>'
+        )
         avg_rank = row.get("avg_rank")
         rank_text = "—" if avg_rank in (None, "") else f"{float(avg_rank):.1f}"
+        risk = classify_rank_risk(avg_rank)
         body.append(
-            "<tr>"
+            f'<tr data-entity-color="{style.color}">'
             f"<td>{name_cell}</td>"
             f"<td>{float(row.get('mention_rate') or 0):.1f}%</td>"
-            f"<td>{_esc(rank_text)}</td>"
+            f'<td>{_esc(rank_text)} <span class="rank-risk rank-risk-{risk.level}">{_esc(risk.label)}</span></td>'
             "</tr>"
         )
     return (

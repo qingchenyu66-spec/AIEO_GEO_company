@@ -4,7 +4,12 @@ from datetime import datetime
 
 from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
 from app.services.report_molizhishu_context_service import build_molizhishu_report_context
-from app.services.report_molizhishu_fragments import render_matrix_table, render_mention_table, render_prompt_platform_matrix
+from app.services.report_molizhishu_fragments import (
+    render_competitor_landscape_table,
+    render_matrix_table,
+    render_mention_table,
+    render_prompt_platform_matrix,
+)
 from app.services.report_molizhishu_pdf_service import render_molizhishu_report_html
 
 
@@ -233,3 +238,34 @@ def test_matrix_and_mention_fragment_markup() -> None:
     assert "#6" not in matrix_html
     assert "38%" in matrix_html
     assert "6" in matrix_html
+
+
+def test_competitor_landscape_has_entity_colors_and_visible_rank_risk() -> None:
+    html = render_competitor_landscape_table(
+        [
+            {"name": "艾迪亚控股集团有限公司", "mention_rate": 8.8, "avg_rank": 4.2, "is_brand": True},
+            {"name": "分众传媒", "mention_rate": 93.8, "avg_rank": 1.2},
+            {"name": "白马户外媒体", "mention_rate": 3.8, "avg_rank": 6.1},
+        ]
+    )
+
+    assert 'data-entity-color="#0057D9"' in html
+    assert 'data-entity-color="#F28E2B"' in html
+    assert 'data-entity-color="#009E73"' in html
+    assert "rank-risk-good" in html
+    assert "rank-risk-watch" in html
+    assert "rank-risk-warning" in html
+    assert "达标（前三）" in html
+
+
+def test_mention_table_uses_company_color_for_each_progress_bar() -> None:
+    html = render_mention_table(
+        "competitor-bars",
+        [
+            {"name": "艾迪亚控股集团有限公司", "sample_count": 80, "mention_count": 7, "mention_rate": 8.8, "is_brand": True},
+            {"name": "分众传媒", "sample_count": 80, "mention_count": 75, "mention_rate": 93.8, "is_competitor": True},
+        ],
+    )
+
+    assert "--entity-color: #0057D9" in html
+    assert "--entity-color: #F28E2B" in html

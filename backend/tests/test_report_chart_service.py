@@ -1,5 +1,7 @@
 """Tests for report chart PNG generation."""
 
+from matplotlib.axes import Axes
+
 from app.services.report_chart_service import (
     build_entity_rank_trend_chart,
     build_mention_rate_bar_chart,
@@ -39,6 +41,39 @@ def test_build_entity_rank_trend_chart_returns_png() -> None:
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_entity_rank_trend_uses_distinct_company_styles(monkeypatch) -> None:
+    calls: list[dict] = []
+    original_plot = Axes.plot
+
+    def recording_plot(self, *args, **kwargs):
+        if kwargs.get("label"):
+            calls.append(kwargs.copy())
+        return original_plot(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "plot", recording_plot)
+    rows = [
+        {
+            "schedule_label": "2026-07-03 09:30",
+            "entities": {
+                "艾迪亚控股集团有限公司": 4.2,
+                "分众传媒": 1.2,
+                "白马户外媒体": 5.1,
+                "华铁传媒": 3.8,
+            },
+        }
+    ]
+
+    build_entity_rank_trend_chart(
+        rows,
+        brand="艾迪亚控股集团有限公司",
+        tracked_entities=list(rows[0]["entities"]),
+    )
+
+    assert [call["color"] for call in calls] == ["#0057D9", "#F28E2B", "#009E73", "#C43C92"]
+    assert len({call["linestyle"] for call in calls}) == 4
+    assert len({call["marker"] for call in calls}) == 4
+
+
 def test_build_mention_rate_bar_chart_returns_png() -> None:
     png = build_mention_rate_bar_chart(
         [
@@ -50,6 +85,28 @@ def test_build_mention_rate_bar_chart_returns_png() -> None:
     )
     assert png is not None
     assert len(png) > 1000
+
+
+def test_mention_rate_bars_use_entity_colors(monkeypatch) -> None:
+    captured: dict = {}
+    original_barh = Axes.barh
+
+    def recording_barh(self, *args, **kwargs):
+        captured.update(kwargs)
+        return original_barh(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "barh", recording_barh)
+    build_mention_rate_bar_chart(
+        [
+            {"name": "艾迪亚控股集团有限公司", "mention_rate": 8.8, "is_brand": True},
+            {"name": "分众传媒", "mention_rate": 93.8, "is_competitor": True},
+            {"name": "白马户外媒体", "mention_rate": 3.8, "is_competitor": True},
+        ],
+        title="竞品提及率",
+        brand="艾迪亚控股集团有限公司",
+    )
+
+    assert captured["color"] == ["#F28E2B", "#0057D9", "#009E73"]
 
 
 def test_build_sentiment_pie_chart_skips_zero_unknown() -> None:
