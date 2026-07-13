@@ -4,7 +4,9 @@ from app.services.monitor_service import (
     _filter_matrix_columns_for_scope,
     _filter_subtasks_by_exposure_term,
     _keyword_groups_for_exposure_term,
+    _prompt_keyword_match_score,
     _resolve_brand_rank,
+    _resolve_prompt_monitor_keyword,
 )
 
 
@@ -100,3 +102,28 @@ def test_resolve_brand_rank_ignores_industry_list_without_brand() -> None:
     rank, mentioned = _resolve_brand_rank(subtask, "电梯广告", brand_terms, asset=None)
     assert rank is None
     assert mentioned is False
+
+
+def test_prompt_keyword_match_score_accepts_industry_variant_suffix() -> None:
+    assert _prompt_keyword_match_score("公交广告公司推荐", "公交广告公司哪家好") >= 500
+    assert _prompt_keyword_match_score("地铁广告公司哪家好", "地铁广告公司推荐") >= 500
+
+
+def test_resolve_prompt_monitor_keyword_maps_variant_prompt_to_configured_keyword() -> None:
+    groups = [
+        {
+            "status": True,
+            "monitor_keyword": "电梯广告公司推荐",
+            "monitor_keywords": [
+                "电梯广告公司推荐",
+                "机场广告公司哪家好",
+                "高铁广告公司哪家好",
+                "公交广告公司哪家好",
+                "地铁广告公司推荐",
+                "LED广告公司推荐",
+            ],
+        }
+    ]
+    assert _resolve_prompt_monitor_keyword("公交广告公司推荐", groups) == "公交广告公司哪家好"
+    assert _resolve_prompt_monitor_keyword("地铁广告公司哪家好", groups) == "地铁广告公司推荐"
+    assert _resolve_prompt_monitor_keyword("LED广告公司推荐", groups) == "LED广告公司推荐"

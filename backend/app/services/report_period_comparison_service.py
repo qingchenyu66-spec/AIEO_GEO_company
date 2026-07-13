@@ -24,7 +24,7 @@ from app.services.competitor_analytics_service import aggregate_competitor_perio
 from app.services.monitor_service import (
     TERMINAL_STATUSES,
     _matrix_group_monitor_label,
-    _prompt_monitor_keyword,
+    _resolve_prompt_monitor_keyword,
 )
 from app.services.report_period_content_service import build_report_modules
 from app.services.report_period_service import PERIOD_COMPARISON_REPORT_TYPES, period_bounds, period_label
@@ -1745,7 +1745,7 @@ def _active_keyword_group_rows(db, tenant_id: int) -> list:
 
 
 def _keyword_key(row: GeoMonitorSubtask, groups: list) -> str:
-    label = _prompt_monitor_keyword(row.prompt or "", groups)
+    label = _resolve_prompt_monitor_keyword(row.prompt or "", groups)
     if label:
         return label
     prompt = (row.prompt or "").strip()
@@ -1871,14 +1871,12 @@ def build_keyword_analytics(
     for row in prev_rows:
         prev_map[_keyword_key(row, groups)].append(row)
 
-    ordered_keys: list[str] = []
-    for group in sorted(groups, key=lambda item: int(item.sort_order or 0)):
-        label = _matrix_group_monitor_label(group)
-        if label and label not in ordered_keys:
-            ordered_keys.append(label)
+    ordered_keys = collect_tenant_monitor_keywords(db, tenant_id)
+    seen_keys = set(ordered_keys)
     for key in sorted(cur_map.keys()):
-        if key not in ordered_keys:
+        if key not in seen_keys:
             ordered_keys.append(key)
+            seen_keys.add(key)
 
     rows: list[dict[str, Any]] = []
     for key in ordered_keys:
@@ -1940,11 +1938,7 @@ def build_keyword_analytics(
         cur_map,
     )
 
-    configured = [
-        _matrix_group_monitor_label(group)
-        for group in sorted(groups, key=lambda item: int(item.sort_order or 0))
-    ]
-    configured = [item for item in configured if item]
+    configured = collect_tenant_monitor_keywords(db, tenant_id)
 
     return {
         "rows": rows,

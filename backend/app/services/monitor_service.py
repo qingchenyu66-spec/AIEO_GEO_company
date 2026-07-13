@@ -1469,6 +1469,54 @@ def _prompt_monitor_keyword(prompt: str, groups: list[BrandKeywordGroup]) -> str
     return _matrix_group_monitor_label(group) or None
 
 
+def _common_keyword_prefix_len(left: str, right: str) -> int:
+    count = 0
+    for left_char, right_char in zip(left, right):
+        if left_char != right_char:
+            break
+        count += 1
+    return count
+
+
+def _prompt_keyword_match_score(prompt: str, keyword: str) -> int:
+    text = (prompt or "").strip()
+    token = (keyword or "").strip()
+    if not text or not token:
+        return -1
+    if text == token:
+        return 2000 + len(token)
+    if token in text:
+        return 1500 + len(token)
+    if text in token:
+        return 1400 + len(text)
+    prefix = _common_keyword_prefix_len(text, token)
+    # ponytail: 行业问法常只有「推荐/哪家好」差异，前缀 ≥4 字即视为同一监控词
+    if prefix >= 4:
+        return 500 + prefix
+    return -1
+
+
+def _resolve_prompt_monitor_keyword(prompt: str, groups: list[BrandKeywordGroup]) -> str | None:
+    """将监测问题归到词组内具体 monitor keyword（非词组主标签）。"""
+    text = (prompt or "").strip()
+    if not text:
+        return None
+    ranked: list[tuple[int, str]] = []
+    for group in groups:
+        if getattr(group, "deleted", False) or not getattr(group, "status", True):
+            continue
+        for keyword in keyword_group_monitor_keywords(group):
+            score = _prompt_keyword_match_score(text, str(keyword or "").strip())
+            if score >= 0:
+                ranked.append((score, str(keyword).strip()))
+    if ranked:
+        return max(ranked, key=lambda item: (item[0], len(item[1])))[1]
+    group = _resolve_prompt_keyword_group(prompt, groups)
+    if group is None:
+        return None
+    return _matrix_group_monitor_label(group) or None
+
+
 def _matrix_group_monitor_label(group: BrandKeywordGroup) -> str:
     """矩阵图 Y 轴标签：优先用词组独立配置的 monitor_keyword，避免共用监测问题文案。"""
     explicit = str(group.monitor_keyword or "").strip()
