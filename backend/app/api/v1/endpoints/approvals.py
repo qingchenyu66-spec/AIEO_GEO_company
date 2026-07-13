@@ -21,13 +21,13 @@ router = APIRouter(prefix="/approvals")
 
 @router.get("", response_model=ApiResponse[list[dict]])
 def approval_list(
-    status: str | None = Query(default=None),
+    approval_status: str | None = Query(default=None, alias="status"),
     mine_only: bool = Query(default=False),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     try:
-        rows = list_approvals(db, current, status=status, mine_only=mine_only)
+        rows = list_approvals(db, current, status=approval_status, mine_only=mine_only)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except Exception as exc:

@@ -15,10 +15,14 @@ from app.services.permission_service import (
     replace_identity_menus,
     replace_identity_menus_from_position,
 )
+from app.services.tenant_scope import is_sales_identity
 
 
-def can_manage_all_users(identity: UserIdentity) -> bool:
-    return identity.identity_type == "PLATFORM" and identity.role_code == "PLATFORM_ADMIN"
+def can_manage_all_users(db: Session, identity: UserIdentity) -> bool:
+    """平台非销售身份可管理全部用户；销售仅看自己创建的账号。"""
+    if identity.identity_type != "PLATFORM":
+        return False
+    return not is_sales_identity(db, identity)
 
 
 def list_managed_users(
@@ -38,7 +42,7 @@ def list_managed_users(
         .where(User.deleted.is_(deleted))
         .order_by(User.id.desc())
     )
-    if not can_manage_all_users(current_identity):
+    if not can_manage_all_users(db, current_identity):
         stmt = stmt.where(User.created_by == current_user.id)
     if status is not None:
         stmt = stmt.where(User.status.is_(status))
@@ -76,7 +80,7 @@ def get_managed_user(
     )
     if user is None:
         raise ValueError("用户不存在")
-    if not can_manage_all_users(current_identity) and user.created_by != current_user.id:
+    if not can_manage_all_users(db, current_identity) and user.created_by != current_user.id:
         raise ValueError("无权管理该用户")
     return user
 

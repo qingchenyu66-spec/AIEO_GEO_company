@@ -718,6 +718,16 @@ def evaluate_queue_alerts(snapshot: dict[str, Any] | None = None, *, persist: bo
         _persist_alert_snapshot(snapshot, alerts)
         for alert in alerts:
             _emit_alert(alert)
+        from app.core.database import SessionLocal
+        from app.services.system_notification_service import resolve_stale_monitor_alert_notifications
+
+        db = SessionLocal()
+        try:
+            resolve_stale_monitor_alert_notifications(db, alerts)
+        except Exception:
+            logger.exception("Failed to resolve stale monitor alert notifications")
+        finally:
+            db.close()
     return alerts
 
 

@@ -96,6 +96,14 @@ async function handleRead(item: SystemNotification) {
       backfill: '1',
     })
     open.value = false
+    return
+  }
+  if (item.category === 'report_published' && item.payload) {
+    const payload = item.payload
+    portalNavigate('customer.reports', false, {
+      reportId: String(payload.report_id || ''),
+    })
+    open.value = false
   }
 }
 

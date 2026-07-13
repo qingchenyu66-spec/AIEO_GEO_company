@@ -11,16 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
 from app.models.approval import OperationApproval
-from app.models.permission import Position
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.services.approval_preview_service import build_approval_preview
+from app.services.menu_permission_service import has_identity_menu_permission
 from app.services.tenant_scope import is_sales_identity
 
 logger = logging.getLogger(__name__)
 
-APPROVER_POSITION_CODES = frozenset({"PLATFORM_ADMIN", "PLATFORM_OPERATION"})
 MODULE_LABELS = {
     "user": "用户管理",
     "tenant": "企业管理",
@@ -64,17 +63,14 @@ def requires_sales_approval(db: Session, current: CurrentSession) -> bool:
 
 
 def can_review_approvals(db: Session, current: CurrentSession) -> bool:
-    if current.identity.identity_type != "PLATFORM" or current.identity.position_id is None:
+    if current.identity.identity_type != "PLATFORM":
         return False
-    position = db.scalar(
-        select(Position).where(
-            Position.id == current.identity.position_id,
-            Position.deleted.is_(False),
-        )
+    return has_identity_menu_permission(
+        db,
+        current.identity.id,
+        "platform.approvals",
+        "can_update",
     )
-    if position is None:
-        return False
-    return position.position_code in APPROVER_POSITION_CODES
 
 
 def ensure_can_review(db: Session, current: CurrentSession) -> None:

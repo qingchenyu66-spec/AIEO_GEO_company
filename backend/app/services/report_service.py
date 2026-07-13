@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time
 from typing import Any
 
@@ -23,6 +24,8 @@ from app.services.report_period_content_service import build_premium_content, bu
 from app.services.report_period_service import MANUAL_REPORT_TYPES, period_label as build_period_label
 from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
 
+logger = logging.getLogger(__name__)
+
 REPORT_TYPE_LABELS = {
     "diagnosis": "企业诊断",
     "weekly": "监测周报",
@@ -38,6 +41,23 @@ REPORT_STATUS_LABELS = {
     "published": "已发布",
     "archived": "已归档",
 }
+
+
+def _notify_report_published(db: Session, report: GeoReport, *, auto_commit: bool = True) -> None:
+    from app.services.system_notification_service import upsert_report_published_notification
+
+    try:
+        upsert_report_published_notification(
+            db,
+            tenant_id=report.tenant_id,
+            report_id=report.id,
+            report_title=report.report_title,
+            report_type=report.report_type,
+            type_label=REPORT_TYPE_LABELS.get(report.report_type, "报告"),
+            auto_commit=auto_commit,
+        )
+    except Exception:
+        logger.exception("Failed to push report published notification report_id=%s", report.id)
 
 
 def sanitize_display_text(value: str | None, fallback: str | None = None) -> str | None:
@@ -839,6 +859,7 @@ def generate_scheduled_report_for_tenant(
     db.add(report)
     db.commit()
     db.refresh(report)
+    _notify_report_published(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
@@ -918,5 +939,6 @@ def publish_report(
     else:
         db.flush()
     db.refresh(report)
+    _notify_report_published(db, report, auto_commit=auto_commit)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
