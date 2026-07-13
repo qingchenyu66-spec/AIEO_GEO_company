@@ -96,6 +96,89 @@ def _is_markdown_table_line(line: str) -> bool:
     return bool(re.match(r"^[\|\s:\-]+$", stripped))
 
 
+def _is_table_separator_row(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    return bool(re.match(r"^[\|\s:\-]+$", stripped))
+
+
+def _split_markdown_table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+_TABLE_COMPANY_HEADERS = ("企业名称", "公司名称", "公司名", "品牌名称", "机构名称")
+_TABLE_COMPANY_FALLBACK = ("公司", "企业", "品牌")
+_TABLE_RANK_HEADERS = ("排名", "序号", "位次", "rank", "no")
+
+
+def _normalize_table_header(cell: str) -> str:
+    return re.sub(r"\s+", "", _clean_item_name(cell)).casefold()
+
+
+def _header_matches_company(column: str) -> bool:
+    norm = _normalize_table_header(column)
+    if any(token.casefold() in norm or norm in token.casefold() for token in _TABLE_COMPANY_HEADERS):
+        return True
+    return norm in {token.casefold() for token in _TABLE_COMPANY_FALLBACK}
+
+
+def _header_matches_rank(column: str) -> bool:
+    norm = _normalize_table_header(column)
+    return any(token.casefold() in norm for token in _TABLE_RANK_HEADERS)
+
+
+def _resolve_table_columns(header_cells: list[str]) -> tuple[int | None, int | None]:
+    company_col: int | None = None
+    rank_col: int | None = None
+    for index, cell in enumerate(header_cells):
+        if _header_matches_company(cell):
+            company_col = index
+        if _header_matches_rank(cell):
+            rank_col = index
+    if company_col is None:
+        return None, None
+    return company_col, rank_col
+
+
+def _parse_markdown_table_block(
+    lines: list[str],
+    append_item: Callable[..., None],
+    category: str | None,
+) -> bool:
+    """Parse company rows from a markdown table; rank by row order under category."""
+    parsed_lines = [
+        line.strip()
+        for line in lines
+        if line.strip() and not _is_table_separator_row(line)
+    ]
+    if len(parsed_lines) < 2:
+        return False
+    header_cells = _split_markdown_table_cells(parsed_lines[0])
+    company_col, rank_col = _resolve_table_columns(header_cells)
+    if company_col is None:
+        return False
+    row_rank = 0
+    for row in parsed_lines[1:]:
+        cells = _split_markdown_table_cells(row)
+        if company_col >= len(cells):
+            continue
+        name = _clean_item_name(cells[company_col])
+        if not name or _header_matches_company(name):
+            continue
+        row_rank += 1
+        explicit_rank = None
+        if rank_col is not None and rank_col < len(cells):
+            explicit_rank = _parse_rank_token(cells[rank_col])
+        append_item(name, explicit_rank if explicit_rank is not None else row_rank, category=category)
+    return row_rank > 0
+
+
 def _split_combined_header_brands(text: str) -> list[str]:
     """### 艾迪亚控股、澜翼传媒、麦迪威广告 → 多个品牌名（同段并列排名）。"""
     cleaned = re.sub(r"^#+\s*", "", (text or "").strip())
@@ -258,12 +341,28 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             appearance_counters[bucket] = max(appearance_counters.get(bucket, 0), rank)
         results.append({"name": cleaned, "rank": rank, "category": bucket})
 
+    table_buffer: list[str] = []
+
+    def flush_table_buffer() -> None:
+        nonlocal table_buffer
+        if not table_buffer:
+            return
+        _parse_markdown_table_block(
+            table_buffer,
+            append_item,
+            current_section or current_category,
+        )
+        table_buffer = []
+
     for raw_line in normalized.splitlines():
         line = raw_line.strip()
         if not line:
+            flush_table_buffer()
             continue
         if _is_markdown_table_line(line):
+            table_buffer.append(line)
             continue
+        flush_table_buffer()
 
         header = _parse_markdown_header(line)
         if header:
@@ -322,6 +421,8 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         if bullet:
             append_item(bullet.group(1) or bullet.group(2) or "", None)
             continue
+
+    flush_table_buffer()
 
     if not results:
         for match in PROSE_RANK_RE.finditer(normalized):

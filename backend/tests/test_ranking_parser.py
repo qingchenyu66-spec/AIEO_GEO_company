@@ -37,12 +37,46 @@ def test_parse_bullet_list_uses_appearance_order():
     assert entries[1]["rank"] == 2
 
 
-def test_parse_skips_markdown_table_rows():
+def test_parse_markdown_company_table_under_section():
+    text = """
+二、特色优势服务商
+| 企业名称 | 核心特色 | 适配场景 |
+| --- | --- | --- |
+| 雅仕维 | 香港1993年成立 | 机场+户外 |
+| 中视博弈 | 170+机场 | 多机场 |
+| 艾迪亚控股 | 综合媒体集团 | 全链路方案 |
+"""
+    entries = parse_answer_rankings(text)
+    section = [item for item in entries if item["category"] == "特色优势服务商"]
+    assert [item["name"] for item in section] == ["雅仕维", "中视博弈", "艾迪亚控股"]
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]][0]
+    assert aidiya["rank"] == 3
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "机场广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 3
+
+
+def test_parse_rank_company_table_uses_explicit_rank_column():
     text = """
 | 排名 | 公司 |
 | --- | --- |
 | 1 | 艾迪亚 |
 | 2 | 分众传媒 |
+"""
+    entries = parse_answer_rankings(text)
+    assert [item["name"] for item in entries] == ["艾迪亚", "分众传媒"]
+    assert entries[0]["rank"] == 1
+
+
+def test_parse_ignores_table_without_company_header():
+    text = """
+| 指标 | 数值 |
+| --- | --- |
+| 曝光 | 100万 |
 
 1. 真正第一名
 2. 真正第二名
