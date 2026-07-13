@@ -12,14 +12,17 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from app.core.config import settings
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+from app.services.brand_service import _is_industry_monitor_keyword, get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.monitor_service import (
+    _ranking_match_terms,
+    _resolve_brand_rank_detail,
     _subtask_answer_plaintext,
     recompute_subtask_rank_from_answer,
 )
 from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
 from app.services.ranking_parser import parse_answer_rankings
-from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
-from app.services.brand_service import get_brand_asset
+from app.services.rank_llm_service import should_trigger_llm_fallback
+from app.services.schedule_context import lead_diagnosis_runs_for_tasks, prompt_monitor_intent, schedule_runs_for_tasks
 from app.services.monitor_stats_service import _detect_stat_date
 
 
@@ -42,6 +45,70 @@ def _subtask_day(db: Session, subtask: GeoMonitorSubtask, task: GeoMonitorTask) 
     )
 
 
+def _subtask_needs_llm_fallback(db: Session, subtask: GeoMonitorSubtask, task: GeoMonitorTask) -> bool:
+    if prompt_monitor_intent(subtask.prompt) != "ranking":
+        return False
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    groups = (
+        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+        if task.tenant_id
+        else []
+    )
+    brand_terms = _ranking_match_terms(asset, groups)
+    if not brand_terms:
+        keyword = str(task.monitor_keywords or "").strip()
+        brand_terms = [keyword] if keyword else []
+    monitor_keyword = str(task.monitor_keywords or "").strip()
+    resolution = _resolve_brand_rank_detail(subtask, monitor_keyword, brand_terms, asset)
+    is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
+    return should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task)
+
+
+def _recompute_subtask_row(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    dry_run: bool,
+    llm_fallback_only: bool,
+) -> dict | None:
+    day = _subtask_day(db, subtask, task)
+    if llm_fallback_only and not _subtask_needs_llm_fallback(db, subtask, task):
+        return None
+
+    previous = subtask.mention_position
+    parsed = parse_answer_rankings(_subtask_answer_plaintext(subtask))
+    subtask.all_rankings_json = (
+        [{"name": entry.get("name"), "rank": entry.get("rank"), "category": entry.get("category")} for entry in parsed]
+        if parsed
+        else None
+    )
+    recompute_subtask_rank_from_answer(db, subtask, task)
+    current = subtask.mention_position
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    rank_resolution = raw.get("rank_resolution") if isinstance(raw.get("rank_resolution"), dict) else {}
+    if previous == current and not (llm_fallback_only and rank_resolution.get("source") == "llm"):
+        return None
+
+    item = {
+        "subtask_id": subtask.subtask_id,
+        "platform": subtask.platform,
+        "prompt": subtask.prompt,
+        "day": day.isoformat() if day else None,
+        "before": previous,
+        "after": current,
+        "rank_source": rank_resolution.get("source"),
+    }
+    if not dry_run:
+        refresh_stats_after_subtask_backfill(
+            db,
+            task=task,
+            subtask=subtask,
+            previous_stat_date=day,
+        )
+    return item
+
+
 def recompute_for_tenant(
     db: Session,
     *,
@@ -49,6 +116,7 @@ def recompute_for_tenant(
     since: date | None = None,
     until: date | None = None,
     dry_run: bool = False,
+    llm_fallback_only: bool = False,
 ) -> list[dict]:
     rows = db.execute(
         select(GeoMonitorSubtask, GeoMonitorTask)
@@ -69,33 +137,11 @@ def recompute_for_tenant(
             continue
         if until and day and day > until:
             continue
-
-        previous = subtask.mention_position
-        parsed = parse_answer_rankings(_subtask_answer_plaintext(subtask))
-        subtask.all_rankings_json = (
-            [{"name": entry.get("name"), "rank": entry.get("rank"), "category": entry.get("category")} for entry in parsed]
-            if parsed
-            else None
+        item = _recompute_subtask_row(
+            db, subtask, task, dry_run=dry_run, llm_fallback_only=llm_fallback_only,
         )
-        recompute_subtask_rank_from_answer(db, subtask, task)
-        current = subtask.mention_position
-        if previous != current:
-            item = {
-                "subtask_id": subtask.subtask_id,
-                "platform": subtask.platform,
-                "prompt": subtask.prompt,
-                "day": day.isoformat() if day else None,
-                "before": previous,
-                "after": current,
-            }
+        if item:
             changed.append(item)
-            if not dry_run:
-                refresh_stats_after_subtask_backfill(
-                    db,
-                    task=task,
-                    subtask=subtask,
-                    previous_stat_date=day,
-                )
 
     if not dry_run:
         db.commit()
@@ -112,6 +158,7 @@ def recompute_for_keyword(
     since: date | None = None,
     until: date | None = None,
     dry_run: bool = False,
+    llm_fallback_only: bool = False,
 ) -> list[dict]:
     token = (keyword or "").strip()
     if not token:
@@ -141,33 +188,11 @@ def recompute_for_keyword(
         if until and day and day > until:
             continue
 
-        previous = subtask.mention_position
-        parsed = parse_answer_rankings(_subtask_answer_plaintext(subtask))
-        subtask.all_rankings_json = (
-            [{"name": entry.get("name"), "rank": entry.get("rank"), "category": entry.get("category")} for entry in parsed]
-            if parsed
-            else None
+        item = _recompute_subtask_row(
+            db, subtask, task, dry_run=dry_run, llm_fallback_only=llm_fallback_only,
         )
-        recompute_subtask_rank_from_answer(db, subtask, task)
-        current = subtask.mention_position
-        if previous != current:
-            item = {
-                "subtask_id": subtask.subtask_id,
-                "platform": subtask.platform,
-                "prompt": subtask.prompt,
-                "day": day.isoformat() if day else None,
-                "before": previous,
-                "after": current,
-            }
+        if item:
             changed.append(item)
-            if not dry_run:
-                previous_day = day
-                refresh_stats_after_subtask_backfill(
-                    db,
-                    task=task,
-                    subtask=subtask,
-                    previous_stat_date=previous_day,
-                )
 
     if not dry_run:
         db.commit()
@@ -181,6 +206,11 @@ def main() -> None:
     parser.add_argument("--tenant-id", type=int, required=True)
     parser.add_argument("--keyword", help="monitor keyword / prompt substring filter")
     parser.add_argument("--all", action="store_true", help="recompute all completed subtasks for tenant")
+    parser.add_argument(
+        "--llm-fallback-only",
+        action="store_true",
+        help="only recompute subtasks that need DeepSeek rank fallback",
+    )
     parser.add_argument("--since", help="YYYY-MM-DD")
     parser.add_argument("--until", help="YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true")
@@ -194,26 +224,21 @@ def main() -> None:
     )
     db = sessionmaker(bind=engine)()
     try:
+        common = {
+            "tenant_id": args.tenant_id,
+            "since": _parse_day(args.since),
+            "until": _parse_day(args.until),
+            "dry_run": args.dry_run,
+            "llm_fallback_only": args.llm_fallback_only,
+        }
         if args.all:
-            changed = recompute_for_tenant(
-                db,
-                tenant_id=args.tenant_id,
-                since=_parse_day(args.since),
-                until=_parse_day(args.until),
-                dry_run=args.dry_run,
-            )
+            changed = recompute_for_tenant(db, **common)
             scope = f"tenant={args.tenant_id} ALL"
         else:
-            changed = recompute_for_keyword(
-                db,
-                tenant_id=args.tenant_id,
-                keyword=args.keyword,
-                since=_parse_day(args.since),
-                until=_parse_day(args.until),
-                dry_run=args.dry_run,
-            )
+            changed = recompute_for_keyword(db, keyword=args.keyword, **common)
             scope = f"tenant={args.tenant_id} keyword={args.keyword!r}"
-        print(f"{scope} changed={len(changed)} dry_run={args.dry_run}")
+        suffix = " llm_fallback_only" if args.llm_fallback_only else ""
+        print(f"{scope}{suffix} changed={len(changed)} dry_run={args.dry_run}")
         for item in changed:
             print(item)
     finally:

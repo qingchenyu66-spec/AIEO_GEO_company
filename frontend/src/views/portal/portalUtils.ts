@@ -18,6 +18,33 @@ export function formatRank(value: number | null | undefined) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
+export type RankSource =
+  | 'structured'
+  | 'appearance'
+  | 'api'
+  | 'manual'
+  | 'llm'
+  | 'none'
+  | 'exposure'
+  | string
+
+/** 排名解析来源（矩阵 tooltip / 详情抽屉） */
+export function formatRankSourceLabel(source?: RankSource | null, category?: string | null) {
+  const map: Record<string, string> = {
+    structured: '分段/表格解析',
+    appearance: '章节露出序',
+    api: 'API 位次',
+    manual: '人工补录',
+    llm: 'AI 解析',
+    none: '无排名',
+    exposure: '曝光监测',
+  }
+  const label = map[String(source || '').trim()] || ''
+  if (!label) return ''
+  const section = String(category || '').trim()
+  return section ? `${label} · ${section}` : label
+}
+
 export function formatExposureLabel(mentioned?: boolean | null) {
   return mentioned ? '已提及' : '未提及'
 }
@@ -26,6 +53,8 @@ export interface MonitorRankDisplay {
   prompt_intent?: string | null
   mention_position?: number | null
   brand_mentioned?: boolean | null
+  rank_source?: RankSource | null
+  rank_category?: string | null
 }
 
 /** 快照补录卡片等指标区：列头已有「排名」时只展示数字 */

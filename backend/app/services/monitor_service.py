@@ -1900,6 +1900,10 @@ def _matrix_cell_snapshot(sample: dict[str, Any]) -> dict[str, Any]:
         "status": sample.get("status"),
         "page_screenshot": sample.get("page_screenshot"),
         "sentiment": sample.get("sentiment"),
+        "rank_source": sample.get("rank_source"),
+        "rank_confidence": sample.get("rank_confidence"),
+        "rank_category": sample.get("rank_category"),
+        "rank_basis": sample.get("rank_basis"),
     }
 
 
@@ -1931,6 +1935,10 @@ def _finalize_matrix_cell(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "updated_at": latest.get("updated_at"),
         "sample_count": len(samples),
         "rank_sample_count": len(ranks),
+        "rank_source": latest.get("rank_source"),
+        "rank_confidence": latest.get("rank_confidence"),
+        "rank_category": latest.get("rank_category"),
+        "rank_basis": latest.get("rank_basis"),
         "snapshots": snapshots,
     }
 

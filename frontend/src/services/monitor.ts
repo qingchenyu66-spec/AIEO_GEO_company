@@ -69,6 +69,10 @@ export interface MonitorSubtask {
   brand_rank?: number | null
   brand_mentioned?: boolean
   prompt_intent?: 'ranking' | 'exposure'
+  rank_source?: string | null
+  rank_confidence?: number | null
+  rank_category?: string | null
+  rank_basis?: string | null
   sentiment: string | null
   competitor_rankings: Array<Record<string, unknown>>
   all_rankings: Array<Record<string, unknown>>
@@ -179,6 +183,10 @@ export interface RankingMatrixCellSnapshot {
   brand_mentioned?: boolean
   monitor_keyword?: string | null
   prompt_intent?: 'ranking' | 'exposure'
+  rank_source?: string | null
+  rank_confidence?: number | null
+  rank_category?: string | null
+  rank_basis?: string | null
   schedule_window_key?: string | null
   schedule_label?: string | null
   schedule_source?: 'run' | 'inferred' | 'created_at' | 'lead_diagnosis' | null
@@ -195,6 +203,10 @@ export interface RankingMatrixCell {
   brand_mentioned?: boolean
   monitor_keyword?: string | null
   prompt_intent?: 'ranking' | 'exposure'
+  rank_source?: string | null
+  rank_confidence?: number | null
+  rank_category?: string | null
+  rank_basis?: string | null
   status: string
   page_screenshot: string | null
   sentiment: string | null

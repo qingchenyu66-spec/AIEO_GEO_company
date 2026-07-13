@@ -50,7 +50,7 @@ import {
   sentimentLabelMap,
 } from '../portalMaps'
 import { sortPlatformCodes } from '../platformOrder'
-import { formatExposureLabel, formatRank, sanitizeCustomerScheduleLabel } from '../portalUtils'
+import { formatExposureLabel, formatRank, formatRankSourceLabel, sanitizeCustomerScheduleLabel } from '../portalUtils'
 import {
   sliceMatrixByPlatform,
   type MatrixChartType,
@@ -106,10 +106,13 @@ function matrixCellSnapshots(cell: RankingMatrixCell): RankingMatrixCellSnapshot
 
 function matrixCellTitle(cell: RankingMatrixCell | undefined) {
   if (!cell) return ''
+  const parts: string[] = []
   if ((cell.rank_sample_count || cell.sample_count || 0) > 1) {
-    return `当日 ${cell.rank_sample_count || cell.sample_count} 次监测均值`
+    parts.push(`当日 ${cell.rank_sample_count || cell.sample_count} 次监测均值`)
   }
-  return ''
+  const sourceLabel = formatRankSourceLabel(cell.rank_source, cell.rank_category)
+  if (sourceLabel) parts.push(sourceLabel)
+  return parts.join(' · ')
 }
 
 function formatMonitorGroupLabel(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
@@ -1380,6 +1383,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     resetFilters,
     exportMatrixCsv,
     formatRank,
+    formatRankSourceLabel,
     formatExposureLabel,
     matrixCellTitle,
     formatTaskTime,
