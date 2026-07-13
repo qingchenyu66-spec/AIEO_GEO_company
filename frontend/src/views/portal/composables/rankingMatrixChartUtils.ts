@@ -103,21 +103,63 @@ export function buildMatrixRankScope(
   }
 }
 
+function rowsInRankScope(rows: RankingMatrixRow[], scope: MatrixRankScope) {
+  const sorted = sortMatrixRowsAsc(rows)
+  if (scope.mode === 'day' && scope.dayKey) {
+    return sorted.filter(row => rowDayKey(row) === scope.dayKey)
+  }
+  return sorted
+}
+
 function ranksForColumnInScope(
   rows: RankingMatrixRow[],
   column: RankingMatrixColumn,
   scope: MatrixRankScope,
 ) {
-  const sorted = sortMatrixRowsAsc(rows)
-  const pool = scope.mode === 'day' && scope.dayKey
-    ? sorted.filter(row => rowDayKey(row) === scope.dayKey)
-    : sorted
   const ranks: number[] = []
-  for (const row of pool) {
+  for (const row of rowsInRankScope(rows, scope)) {
     const rank = resolveColumnCell(row, column)?.mention_position
     if (rank != null) ranks.push(Number(rank))
   }
   return ranks
+}
+
+export type MatrixMentionStats = {
+  mentioned: number
+  total: number
+  rate: number | null
+}
+
+function mentionStatsFromCell(cell: RankingMatrixCell | undefined): { mentioned: number; total: number } {
+  if (!cell) return { mentioned: 0, total: 0 }
+  const total = Math.max(1, cell.sample_count ?? 1)
+  const mentioned = cell.rank_sample_count ?? (
+    cell.brand_mentioned || cell.mention_position != null ? total : 0
+  )
+  return { mentioned: Math.min(mentioned, total), total }
+}
+
+/** 与监测页「露出率」同口径：区间内被提及的监测次数 / 总监测次数。 */
+export function resolveScopedColumnMentionStats(
+  rows: RankingMatrixRow[],
+  column: RankingMatrixColumn,
+  scope: MatrixRankScope,
+): MatrixMentionStats {
+  let mentioned = 0
+  let total = 0
+  for (const row of rowsInRankScope(rows, scope)) {
+    const cell = resolveColumnCell(row, column)
+    if (!cell) continue
+    const stats = mentionStatsFromCell(cell)
+    mentioned += stats.mentioned
+    total += stats.total
+  }
+  if (!total) return { mentioned: 0, total: 0, rate: null }
+  return {
+    mentioned,
+    total,
+    rate: Math.round(mentioned / total * 1000) / 10,
+  }
 }
 
 export function resolveScopedColumnRank(
@@ -253,6 +295,40 @@ export function selfCheckMatrixRankScope() {
   console.assert(resolveScopedColumnRank(rows, column, periodScope) === 3)
   console.assert(computeMatrixBarAxisMax([{ rank: 9 }, { rank: 10 }]) === 10)
   console.assert(computeMatrixBarAxisMax([{ rank: 12.5 }]) === 13)
+  const mentionCell = (mentioned: boolean, sampleCount = 1): RankingMatrixCell => ({
+    subtask_id: 'x',
+    mention_position: mentioned ? 3 : null,
+    brand_mentioned: mentioned,
+    status: 'completed',
+    page_screenshot: null,
+    sentiment: null,
+    updated_at: null,
+    sample_count: sampleCount,
+    rank_sample_count: mentioned ? sampleCount : 0,
+  })
+  const mentionColumn: RankingMatrixColumn = { prompt: 'p1', group_name: null, monitor_keyword: null }
+  const mentionRows: RankingMatrixRow[] = [
+    {
+      task_id: 't1',
+      platform: 'doubao',
+      day_key: '2026-06-01',
+      schedule_window_key: '2026-06-01',
+      schedule_label: '06-01',
+      snapshot_at: '2026-06-01',
+      cells: { p1: mentionCell(true, 2) },
+    },
+    {
+      task_id: 't1',
+      platform: 'doubao',
+      day_key: '2026-06-02',
+      schedule_window_key: '2026-06-02',
+      schedule_label: '06-02',
+      snapshot_at: '2026-06-02',
+      cells: { p1: mentionCell(false, 2) },
+    },
+  ]
+  const mentionScope = buildMatrixRankScope(mentionRows, '2026-06-01', '2026-06-02')
+  console.assert(resolveScopedColumnMentionStats(mentionRows, mentionColumn, mentionScope).rate === 50)
 }
 
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {
@@ -401,6 +477,11 @@ function matrixBarRankTooltip(rank: number | null) {
   return `AI 推荐列表约第 ${rank} 位（多轮均值）`
 }
 
+function matrixBarMentionTooltip(stats: MatrixMentionStats) {
+  if (stats.rate == null) return '品牌曝光率 —'
+  return `品牌曝光率 ${stats.rate}%（${stats.mentioned}/${stats.total} 次监测提及）`
+}
+
 const BAR_ROW_PITCH = 44
 const BAR_CHART_PAD = 80
 const BAR_CHART_MIN = 420
@@ -473,6 +554,7 @@ export function buildMatrixBarOption(
       label: labelMatrixPrompt(column),
       rank: resolveScopedColumnRank(slice.rows, column, scope),
       row,
+      column,
     }
   }).sort((left, right) => {
     if (left.rank == null && right.rank == null) return 0
@@ -508,7 +590,10 @@ export function buildMatrixBarOption(
         const prefix = scope.mode === 'day'
           ? (scopeLabel || scope.dayKey || '当日')
           : `${scopeLabel || '区间'} 均值`
-        return `<b>${item.label}</b><br/>${prefix}<br/>${matrixBarRankTooltip(item.rank)}`
+        const mention = matrixBarMentionTooltip(
+          resolveScopedColumnMentionStats(slice.rows, item.column, scope),
+        )
+        return `<b>${item.label}</b><br/>${prefix}<br/>${matrixBarRankTooltip(item.rank)}<br/>${mention}`
       },
     },
     xAxis: {
