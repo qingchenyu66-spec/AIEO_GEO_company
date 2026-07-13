@@ -1,5 +1,6 @@
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -2168,22 +2169,91 @@ def _is_category_header_line(line: str) -> bool:
     return _is_category_header(line)
 
 
-def _resolve_brand_rank(
+@dataclass(frozen=True)
+class BrandRankResolution:
+    rank: int | float | None
+    mentioned: bool
+    source: str
+    confidence: float = 1.0
+    category: str | None = None
+    rank_basis: str | None = None
+    evidence: str | None = None
+
+
+def _matched_brand_category(
+    subtask: GeoMonitorSubtask,
+    brand_terms: list[str],
+    rank: int | float,
+) -> str | None:
+    target = float(rank)
+    for entry in _collect_ranking_entries(subtask):
+        name = str(entry.get("name") or "").strip()
+        if not name or not _name_matches_brand(name, brand_terms):
+            continue
+        entry_rank = entry.get("rank")
+        if entry_rank is None:
+            continue
+        try:
+            if float(entry_rank) == target:
+                category = str(entry.get("category") or "").strip()
+                return category or None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _resolve_brand_rank_detail(
     subtask: GeoMonitorSubtask,
     monitor_keywords: str | None,
     brand_terms: list[str],
     asset: BrandAsset | None = None,
-) -> tuple[int | float | None, bool]:
-    """Return brand list rank for ranking prompts; exposure prompts only report mention."""
+) -> BrandRankResolution:
+    """Resolve brand rank with provenance for matrix display and LLM fallback."""
     combined_text = _subtask_brand_text(subtask)
     has_brand_in_text = _brand_appears_in_text(combined_text, brand_terms)
     if prompt_monitor_intent(subtask.prompt) != "ranking":
-        return None, has_brand_in_text
+        return BrandRankResolution(
+            rank=None,
+            mentioned=has_brand_in_text,
+            source="exposure",
+            confidence=1.0,
+        )
 
     raw = getattr(subtask, "raw_result_json", None)
     raw = raw if isinstance(raw, dict) else {}
     if raw.get("source") == "manual_snapshot" and subtask.mention_position is not None:
-        return subtask.mention_position, True
+        return BrandRankResolution(
+            rank=subtask.mention_position,
+            mentioned=True,
+            source="manual",
+            confidence=1.0,
+        )
+
+    stored_resolution = raw.get("rank_resolution")
+    if isinstance(stored_resolution, dict) and stored_resolution.get("source") == "llm":
+        rank_raw = stored_resolution.get("rank")
+        rank_value: int | float | None
+        if rank_raw is None:
+            rank_value = None
+        else:
+            try:
+                parsed = float(rank_raw)
+                rank_value = int(parsed) if parsed.is_integer() else parsed
+            except (TypeError, ValueError):
+                rank_value = None
+        try:
+            confidence = float(stored_resolution.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return BrandRankResolution(
+            rank=rank_value,
+            mentioned=bool(stored_resolution.get("mentioned")),
+            source="llm",
+            confidence=max(0.0, min(1.0, confidence)),
+            category=str(stored_resolution.get("category") or "").strip() or None,
+            rank_basis=str(stored_resolution.get("rank_basis") or "").strip() or None,
+            evidence=str(stored_resolution.get("evidence") or "").strip() or None,
+        )
 
     monitor_keyword = str(monitor_keywords or "").strip()
     is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
@@ -2198,11 +2268,24 @@ def _resolve_brand_rank(
         monitor_keywords=monitor_keyword,
     )
     if rank_from_list is not None:
-        return rank_from_list, True
+        category = _matched_brand_category(subtask, brand_terms, rank_from_list)
+        basis = "table" if "|" in answer_text and "企业" in answer_text else "section"
+        return BrandRankResolution(
+            rank=rank_from_list,
+            mentioned=True,
+            source="structured",
+            confidence=0.95,
+            category=category,
+            rank_basis=basis,
+        )
     if in_ranking_list:
-        return None, True
+        return BrandRankResolution(
+            rank=None,
+            mentioned=True,
+            source="structured",
+            confidence=0.5,
+        )
 
-    # ② 正文有品牌但结构化未命中 → 在品牌所在章节内按列表/bullet 行计数
     if has_brand_in_text:
         appearance_rank = _appearance_order_rank(
             answer_text,
@@ -2211,16 +2294,46 @@ def _resolve_brand_rank(
             allow_global=not has_parsed_entries,
         )
         if appearance_rank is not None:
-            return appearance_rank, True
+            return BrandRankResolution(
+                rank=appearance_rank,
+                mentioned=True,
+                source="appearance",
+                confidence=0.55,
+            )
 
-    # ③ 无列表结构且非场景词：才回退 API 原始 mention_position
     if is_industry_task:
-        return None, has_brand_in_text
+        return BrandRankResolution(
+            rank=None,
+            mentioned=has_brand_in_text,
+            source="none",
+            confidence=0.9 if not has_brand_in_text else 0.4,
+        )
 
     if subtask.mention_position is not None and has_brand_in_text:
-        return subtask.mention_position, True
+        return BrandRankResolution(
+            rank=subtask.mention_position,
+            mentioned=True,
+            source="api",
+            confidence=0.6,
+        )
 
-    return None, has_brand_in_text
+    return BrandRankResolution(
+        rank=None,
+        mentioned=has_brand_in_text,
+        source="none",
+        confidence=0.9 if not has_brand_in_text else 0.3,
+    )
+
+
+def _resolve_brand_rank(
+    subtask: GeoMonitorSubtask,
+    monitor_keywords: str | None,
+    brand_terms: list[str],
+    asset: BrandAsset | None = None,
+) -> tuple[int | float | None, bool]:
+    """Return brand list rank for ranking prompts; exposure prompts only report mention."""
+    detail = _resolve_brand_rank_detail(subtask, monitor_keywords, brand_terms, asset)
+    return detail.rank, detail.mentioned
 
 
 def _matrix_cell_rank(
@@ -2230,14 +2343,18 @@ def _matrix_cell_rank(
     keyword_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ranking_terms = _ranking_match_terms(asset, keyword_groups)
-    brand_rank, brand_mentioned = _resolve_brand_rank(subtask, monitor_keywords, ranking_terms, asset)
+    detail = _resolve_brand_rank_detail(subtask, monitor_keywords, ranking_terms, asset)
     return {
-        "mention_position": brand_rank,
+        "mention_position": detail.rank,
         "raw_mention_position": subtask.mention_position,
-        "brand_mentioned": brand_mentioned,
+        "brand_mentioned": detail.mentioned,
         "monitor_keyword": monitor_keywords,
         "ranking_terms": ranking_terms,
         "prompt_intent": prompt_monitor_intent(subtask.prompt),
+        "rank_source": detail.source,
+        "rank_confidence": detail.confidence,
+        "rank_category": detail.category,
+        "rank_basis": detail.rank_basis,
     }
 
 
@@ -2256,6 +2373,10 @@ def serialize_subtask_for_display(
     data["brand_rank"] = rank_payload["mention_position"]
     data["mention_position"] = rank_payload["mention_position"]
     data["prompt_intent"] = rank_payload["prompt_intent"]
+    data["rank_source"] = rank_payload.get("rank_source")
+    data["rank_confidence"] = rank_payload.get("rank_confidence")
+    data["rank_category"] = rank_payload.get("rank_category")
+    data["rank_basis"] = rank_payload.get("rank_basis")
     return data
 
 
@@ -3253,7 +3374,18 @@ def recompute_subtask_rank_from_answer(
             if text and text not in brand_terms:
                 brand_terms.append(text)
 
-    rank, _mentioned = _resolve_brand_rank(subtask, task.monitor_keywords, brand_terms, asset)
+    resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
+    from app.services.rank_llm_service import persist_rank_resolution, resolve_rank_with_optional_llm
+
+    resolution = resolve_rank_with_optional_llm(
+        subtask=subtask,
+        task=task,
+        resolution=resolution,
+        brand_terms=brand_terms,
+        asset=asset,
+    )
+    persist_rank_resolution(subtask, resolution)
+    rank = resolution.rank
     if rank is not None:
         subtask.mention_position = int(rank) if float(rank).is_integer() else rank
     else:

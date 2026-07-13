@@ -41,6 +41,10 @@ class DeepseekClient:
     def knowledge_enabled(self) -> bool:
         return bool(self.api_key) and settings.deepseek_knowledge_parse_enabled
 
+    @property
+    def rank_fallback_enabled(self) -> bool:
+        return bool(self.api_key) and settings.deepseek_rank_fallback_enabled
+
     def _headers(self) -> dict[str, str]:
         if not self.api_key:
             raise DeepseekApiError("未配置 DEEPSEEK_API_KEY")
@@ -503,6 +507,60 @@ class DeepseekClient:
             "model": self.model,
             "sections": sections,
         }
+
+    def extract_brand_rank_from_answer(
+        self,
+        *,
+        brand_terms: list[str],
+        monitor_keyword: str,
+        prompt: str,
+        answer_text: str,
+        truncated: bool = False,
+    ) -> dict[str, Any]:
+        """Extract brand list rank from a monitor answer using ranking rules."""
+        aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
+        truncate_note = "（正文已截断）" if truncated else ""
+        system_prompt = (
+            "你是 GEO 品牌监测排名分析助手。请根据 AI 回答正文，判断目标品牌在「与监测词最相关的小节/表格」中的推荐位次。"
+            "排名规则：\n"
+            "1. 优先看与监测词/问题语义最匹配的 ##/### 小节或表格；在该小节内按 1. 2. 3. 或表格行序计数。\n"
+            "2. 若存在 Markdown 表格且含企业名列，按表格行序排名。\n"
+            "3. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null。\n"
+            "4. 不要把全篇第一次出现的段落序号当作排名；不要跨小节累计。\n"
+            "5. 只输出 JSON，不要解释。"
+        )
+        user_prompt = (
+            f"监测词：{monitor_keyword}\n"
+            f"问题：{prompt}\n"
+            f"目标品牌及别名：{aliases}\n"
+            f"{truncate_note}\n\n"
+            "回答正文：\n"
+            f"{answer_text}\n\n"
+            "输出 JSON：\n"
+            "{\n"
+            '  "brand_mentioned": true,\n'
+            '  "rank": 4,\n'
+            '  "category": "区域优质工程商",\n'
+            '  "rank_basis": "section_list",\n'
+            '  "confidence": 0.92,\n'
+            '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
+            "}\n"
+            "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
+            "confidence 范围 0~1。"
+        )
+        content = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=512,
+            source="rank_fallback",
+        )
+        payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            raise DeepseekApiError("DeepSeek 排名解析返回不是 JSON 对象")
+        return payload
 
     @staticmethod
     def _normalize_knowledge_sections(raw: Any) -> list[dict[str, Any]]:

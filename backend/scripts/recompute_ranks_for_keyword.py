@@ -42,6 +42,68 @@ def _subtask_day(db: Session, subtask: GeoMonitorSubtask, task: GeoMonitorTask) 
     )
 
 
+def recompute_for_tenant(
+    db: Session,
+    *,
+    tenant_id: int,
+    since: date | None = None,
+    until: date | None = None,
+    dry_run: bool = False,
+) -> list[dict]:
+    rows = db.execute(
+        select(GeoMonitorSubtask, GeoMonitorTask)
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .where(
+            GeoMonitorTask.tenant_id == tenant_id,
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorSubtask.status == "completed",
+            GeoMonitorSubtask.answer_content.isnot(None),
+        )
+        .order_by(GeoMonitorSubtask.updated_at.desc())
+    ).all()
+
+    changed: list[dict] = []
+    for subtask, task in rows:
+        day = _subtask_day(db, subtask, task)
+        if since and day and day < since:
+            continue
+        if until and day and day > until:
+            continue
+
+        previous = subtask.mention_position
+        parsed = parse_answer_rankings(_subtask_answer_plaintext(subtask))
+        subtask.all_rankings_json = (
+            [{"name": entry.get("name"), "rank": entry.get("rank"), "category": entry.get("category")} for entry in parsed]
+            if parsed
+            else None
+        )
+        recompute_subtask_rank_from_answer(db, subtask, task)
+        current = subtask.mention_position
+        if previous != current:
+            item = {
+                "subtask_id": subtask.subtask_id,
+                "platform": subtask.platform,
+                "prompt": subtask.prompt,
+                "day": day.isoformat() if day else None,
+                "before": previous,
+                "after": current,
+            }
+            changed.append(item)
+            if not dry_run:
+                refresh_stats_after_subtask_backfill(
+                    db,
+                    task=task,
+                    subtask=subtask,
+                    previous_stat_date=day,
+                )
+
+    if not dry_run:
+        db.commit()
+    else:
+        db.rollback()
+    return changed
+
+
 def recompute_for_keyword(
     db: Session,
     *,
@@ -117,11 +179,14 @@ def recompute_for_keyword(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recompute ranks from stored monitor answers")
     parser.add_argument("--tenant-id", type=int, required=True)
-    parser.add_argument("--keyword", required=True)
+    parser.add_argument("--keyword", help="monitor keyword / prompt substring filter")
+    parser.add_argument("--all", action="store_true", help="recompute all completed subtasks for tenant")
     parser.add_argument("--since", help="YYYY-MM-DD")
     parser.add_argument("--until", help="YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if not args.all and not args.keyword:
+        parser.error("provide --keyword or --all")
 
     engine = create_engine(
         f"mysql+pymysql://{settings.database_user}:{settings.database_password}"
@@ -129,15 +194,26 @@ def main() -> None:
     )
     db = sessionmaker(bind=engine)()
     try:
-        changed = recompute_for_keyword(
-            db,
-            tenant_id=args.tenant_id,
-            keyword=args.keyword,
-            since=_parse_day(args.since),
-            until=_parse_day(args.until),
-            dry_run=args.dry_run,
-        )
-        print(f"tenant={args.tenant_id} keyword={args.keyword!r} changed={len(changed)} dry_run={args.dry_run}")
+        if args.all:
+            changed = recompute_for_tenant(
+                db,
+                tenant_id=args.tenant_id,
+                since=_parse_day(args.since),
+                until=_parse_day(args.until),
+                dry_run=args.dry_run,
+            )
+            scope = f"tenant={args.tenant_id} ALL"
+        else:
+            changed = recompute_for_keyword(
+                db,
+                tenant_id=args.tenant_id,
+                keyword=args.keyword,
+                since=_parse_day(args.since),
+                until=_parse_day(args.until),
+                dry_run=args.dry_run,
+            )
+            scope = f"tenant={args.tenant_id} keyword={args.keyword!r}"
+        print(f"{scope} changed={len(changed)} dry_run={args.dry_run}")
         for item in changed:
             print(item)
     finally:
