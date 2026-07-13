@@ -86,7 +86,33 @@ def test_find_best_brand_rank_prefers_category_over_flat_global():
     assert rank == 1
 
 
-def test_parse_combined_header_brands():
+def test_parse_elevator_markdown_sections_use_category_local_rank():
+    text = """
+## 一、行业双寡头
+### 1. 分众传媒
+- 商务楼宇资源垄断
+### 2. 新潮传媒
+## 二、中腰部全国梯媒
+### 3. 喜屏传媒
+### 4. 城市纵横
+## 三、全域整合型传媒
+### 艾迪亚控股集团
+全国90%核心城市布局
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["rank"] == 1
+    assert "全域整合" in str(aidiya[0]["category"])
+    focus = [item for item in entries if "分众" in item["name"]]
+    assert focus and focus[0]["rank"] == 1
+    assert "双寡头" in str(focus[0]["category"])
+    rank, matched = find_best_brand_rank(
+        [{"name": "艾迪亚控股集团", "rank": 7, "category": None}, *aidiya],
+        lambda name: "艾迪亚" in name,
+    )
+    assert matched is True
+    assert rank == 1
     text = """
 ## 三、全案整合代理商（中小品牌）
 ### 艾迪亚控股、澜翼传媒、麦迪威广告
