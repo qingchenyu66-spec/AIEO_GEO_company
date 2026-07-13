@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 
 DESKTOP = Path.home() / "Desktop"
+OUT_DIR = Path(os.environ.get("GEO_MANUAL_OUT", DESKTOP))
 TODAY = date.today().isoformat()
 CUSTOMER_FILENAME = "GEO Monitor-\u5ba2\u6237\u4f01\u4e1a\u7aef\u7528\u6237\u624b\u518c.docx"
 OPS_FILENAME = "GEO Monitor-\u8fd0\u8425\u7ba1\u7406\u7aef\u7528\u6237\u624b\u518c.docx"
@@ -326,35 +328,29 @@ def build_customer_manual() -> Path:
         doc,
         "报告中心",
         "/customer?menu=customer.reports",
-        "看运营已经「发布」给你的正式报告，在线预览、导出 PDF/Word、打印。",
+        "查看已发布的周期监测报告（周报/月报/季报/年报），在线预览、导出 PDF/HTML/Word、打印。企业诊断不对客户展示。",
         [
             ("顶部筛选", [
-                ("全部 / 品牌诊断 / 监测周报 / 月报 / 季报 / 年报", "按报告类型筛选。"),
+                ("全部 / 监测周报 / 月报 / 季报 / 年报", "按报告类型筛选（不含企业诊断）。"),
                 ("搜索框", "搜报告标题或摘要。"),
                 ("刷新", "重新加载列表。"),
             ]),
             ("左侧：报告列表", [
                 ("报告卡片", "标题、健康分、类型标签、已发布标记、摘要、生成时间、提及率。点选一份。"),
-                ("空列表提示", "「暂无已发布报告，请联系运营为您生成并发布。」"),
+                ("空列表提示", "「暂无已发布的周期监测报告，请联系运营。」"),
             ]),
             ("右侧：报告预览", [
-                ("PDF / Word / 打印", "导出或打印当前报告（需有导出权限）。"),
-                ("报告标题与类型标签", "正式报告名称和周期。"),
-                ("执行摘要、数据摘要", "报告开头概述。"),
-                ("四个 KPI", "健康分、品牌提及率、平均排名、引用信源。"),
-                ("核心结论", "要点列表。"),
-                ("品牌诊断块", "优势亮点、待改善项、优化建议。"),
-                ("各平台表现表", "平台、完成数、提及率、平均排名。"),
-                ("高频引用信源", "带链接和引用次数。"),
-                ("下载附件", "若有附件链接可下载。"),
+                ("PDF / HTML / Word / 打印", "导出或打印当前报告（需有导出权限）。"),
+                ("HTML 模板预览", "周期报告完整版式 iframe 预览。"),
+                ("KPI、平台表、信源等", "旧版报告类型的结构化摘要。"),
             ]),
         ],
         usage_steps=[
             "左侧选类型或搜索找到报告。",
             "点一份报告，右侧预览。",
-            "确认无误后点 PDF 或 Word 下载，或打印给领导。",
+            "需要交付文件时点 PDF、HTML 或 Word 下载。",
         ],
-        tips=["草稿报告客户看不到，必须运营点「发布」。"],
+        tips=["周期报告由系统自动生成并发布；无需客户侧操作。"],
     )
 
     _page_section(
@@ -390,7 +386,7 @@ def build_customer_manual() -> Path:
     )
 
     _footer(doc)
-    path = DESKTOP / CUSTOMER_FILENAME
+    path = OUT_DIR / CUSTOMER_FILENAME
     doc.save(path)
     return path
 
@@ -774,7 +770,7 @@ def build_ops_manual() -> Path:
         doc,
         "报告中心",
         "/platform?menu=platform.reports",
-        "给客户出正式报告。运营端比客户端多了：选企业、编辑草稿、发布。",
+        "预览与导出企业报告。周期报告自动发布至客户端；企业诊断仅供运营内部使用（不同步至客户）。",
         [
             ("顶部", [
                 ("报告类型按钮", "全部/品牌诊断/周报/月报/季报/年报。"),
@@ -783,22 +779,19 @@ def build_ops_manual() -> Path:
                 ("刷新", "重载列表。"),
             ]),
             ("左侧列表", [
-                ("报告卡片", "比客户端多显示「企业名」标签和草稿状态。"),
+                ("报告卡片", "比客户端多显示「企业名」标签和草稿状态（诊断）。"),
             ]),
-            ("右侧预览/编辑", [
-                ("编辑", "进入可改标题、摘要、结论、建议等字段。"),
-                ("保存草稿", "暂存不发布。"),
-                ("保存并发布", "客户立即可见。"),
-                ("PDF / Word / 打印", "导出。"),
-                ("预览区块", "KPI、平台表、信源列表等同客户端。"),
+            ("右侧预览", [
+                ("PDF / HTML / Word / 打印", "导出与打印；HTML 与 iframe 预览同源。"),
+                ("HTML 模板预览", "周报/月报/季报/年报/诊断使用 V2 环比或诊断模板。"),
             ]),
         ],
         usage_steps=[
             "选企业和报告类型。",
-            "在企业管理生成，或本页找到草稿编辑。",
-            "内容确认后「保存并发布」。",
+            "在企业管理生成企业内部诊断（草稿，仅运营可见）。",
+            "周期报告由系统自动生成；模板变更通过代码发布部署。",
         ],
-        tips=["销售点发布可能进审批队列。"],
+        tips=["诊断报告不会出现在客户端报告中心。"],
     )
 
     _page_section(
@@ -907,13 +900,13 @@ def build_ops_manual() -> Path:
     )
 
     _footer(doc)
-    path = DESKTOP / OPS_FILENAME
+    path = OUT_DIR / OPS_FILENAME
     doc.save(path)
     return path
 
 
 def main() -> None:
-    DESKTOP.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     customer = build_customer_manual()
     ops = build_ops_manual()
     print(f"已生成：{customer}")

@@ -26,7 +26,7 @@
 | 私网 IP | `172.23.75.193` |
 | 带宽 | 3 Mbps（固定） |
 | 系统 | Ubuntu 24.04 64 位 |
-| SSH 私钥（本机） | `D:\py代码\新建文件夹\GEO.pem` |
+| SSH 私钥（本机） | `C:\Users\Administrator\.ssh\geo-aieokj.pem`（备份副本：`D:\py代码\新建文件夹\GEO.pem`） |
 | 正式域名 | `www.aieokj.com`（建议根域 `aieokj.com` 301 → www） |
 
 ---
@@ -94,7 +94,7 @@ Resolve-DnsName www.aieokj.com
 本机（PowerShell）：
 
 ```powershell
-$pem = "D:\py代码\新建文件夹\GEO.pem"
+$pem = "$env:USERPROFILE\.ssh\geo-aieokj.pem"
 # OpenSSH 要求私钥权限收紧
 icacls $pem /inheritance:r
 icacls $pem /grant:r "$env:USERNAME:(R)"
