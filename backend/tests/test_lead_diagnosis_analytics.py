@@ -1,5 +1,7 @@
 """Unit tests for lead diagnosis extended analytics."""
 
+from datetime import datetime
+
 from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, names_match
 
 
@@ -39,6 +41,20 @@ class _LeadStub:
     competitors_json = ["北森", "光华赋能"]
 
 
+def test_execution_key_falls_back_to_schedule_key_then_updated_at() -> None:
+    from app.services.lead_diagnosis_analytics import _execution_key_from_run
+
+    run_without_label = _RunStub("202607031430", "", "task-1")
+    run_without_schedule = _RunStub("", "", "task-2")
+
+    assert _execution_key_from_run(run_without_label) == "2026-07-03 14:30"
+    assert _execution_key_from_run(
+        run_without_schedule,
+        updated_at=datetime(2026, 7, 3, 19, 42),
+    ) == "2026-07-03 19:42"
+    assert _execution_key_from_run(None) == "时间数据缺失"
+
+
 def test_names_match_supports_partial_brand() -> None:
     assert names_match("儒思HR", "儒思")
     assert names_match("儒思", "儒思HR App")
@@ -76,7 +92,8 @@ def test_build_rank_trend_across_runs() -> None:
     lead = _LeadStub()
     runs = [
         _RunStub("202607030930", "2026-07-03 09:30", "task-1"),
-        _RunStub("202607031430", "2026-07-03 14:30", "task-2"),
+        _RunStub("202607031400", "2026-07-03 14:00", "task-2"),
+        _RunStub("202607031930", "2026-07-03 19:30", "task-3"),
     ]
     subtasks = [
         _SubtaskStub(
@@ -97,11 +114,24 @@ def test_build_rank_trend_across_runs() -> None:
                 {"brandName": "北森", "rank": 3},
             ],
         ),
+        _SubtaskStub(
+            prompt="HR课程性价比高的品牌推荐",
+            task_id="task-3",
+            mention_position=5,
+            all_rankings=[
+                {"brandName": "儒思HR", "rank": 5},
+                {"brandName": "北森", "rank": 2},
+            ],
+        ),
     ]
     result = build_lead_diagnosis_analytics(lead, subtasks, runs)
-    assert len(result["rank_trend"]) == 1
-    assert result["rank_trend"][0]["schedule_label"] == "2026-07-03"
-    assert result["rank_trend"][0]["avg_rank"] == 3.0
+    assert len(result["rank_trend"]) == 3
+    assert [row["schedule_label"] for row in result["rank_trend"]] == [
+        "2026-07-03 09:30",
+        "2026-07-03 14:00",
+        "2026-07-03 19:30",
+    ]
+    assert [row["avg_rank"] for row in result["rank_trend"]] == [4.0, 2.0, 5.0]
     assert "北森" in result["rank_trend"][0]["entities"]
     assert result["tracked_entities"][0] == "儒思HR"
 
@@ -128,7 +158,10 @@ def test_build_rank_trend_spans_multiple_days() -> None:
     ]
     result = build_lead_diagnosis_analytics(lead, subtasks, runs)
     assert len(result["rank_trend"]) == 2
-    assert [row["schedule_label"] for row in result["rank_trend"]] == ["2026-07-03", "2026-07-04"]
+    assert [row["schedule_label"] for row in result["rank_trend"]] == [
+        "2026-07-03 09:30",
+        "2026-07-04 09:30",
+    ]
     assert result["rank_trend"][0]["avg_rank"] == 4.0
     assert result["rank_trend"][1]["avg_rank"] == 2.0
 

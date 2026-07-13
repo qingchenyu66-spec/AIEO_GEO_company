@@ -209,33 +209,43 @@ def _format_collect_time(value: datetime | None) -> str:
     return value.strftime("%y-%m-%d %H:%M")
 
 
-def _day_key_from_run(run: LeadDiagnosisRun) -> str:
+def _execution_key_from_run(
+    run: LeadDiagnosisRun | None,
+    *,
+    updated_at: datetime | None = None,
+) -> str:
+    if run is None:
+        return updated_at.strftime("%Y-%m-%d %H:%M") if updated_at else "时间数据缺失"
     label = str(run.schedule_label or "").strip()
-    if len(label) >= 10 and label[4:5] == "-" and label[7:8] == "-":
-        return label[:10]
+    if label:
+        return label
     key = str(run.schedule_key or "").strip()
-    if len(key) >= 8 and key[:8].isdigit():
-        return f"{key[:4]}-{key[4:6]}-{key[6:8]}"
-    return label or key
+    if len(key) >= 12 and key[:12].isdigit():
+        return f"{key[:4]}-{key[4:6]}-{key[6:8]} {key[8:10]}:{key[10:12]}"
+    if updated_at:
+        return updated_at.strftime("%Y-%m-%d %H:%M")
+    return key or "时间数据缺失"
 
 
-def _format_day_label(day_key: str) -> str:
-    text = str(day_key or "").strip()
-    if len(text) >= 10 and text[4:5] == "-":
-        return f"{text[2:4]}{text[4:]}"
-    return text
+def _execution_sort_key(value: str) -> tuple[int, datetime | str]:
+    text = str(value or "").strip()
+    for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return (0, datetime.strptime(text[: len(datetime.now().strftime(pattern))], pattern))
+        except ValueError:
+            continue
+    return (1, text)
 
 
-def _group_rows_by_day(
+def _group_rows_by_execution(
     rows: list[GeoMonitorSubtask],
     task_run_map: dict[str, LeadDiagnosisRun],
 ) -> dict[str, list[GeoMonitorSubtask]]:
     grouped: dict[str, list[GeoMonitorSubtask]] = {}
     for item in rows:
         run = task_run_map.get(item.task_id or "")
-        if run is None:
-            continue
-        grouped.setdefault(_day_key_from_run(run), []).append(item)
+        execution_key = _execution_key_from_run(run, updated_at=item.updated_at)
+        grouped.setdefault(execution_key, []).append(item)
     return grouped
 
 
@@ -250,18 +260,18 @@ def _build_molizhishu_ranking_rows(
     if not rows or not task_run_map:
         return []
 
-    by_day = _group_rows_by_day(rows, task_run_map)
-    day_keys = sorted(by_day.keys())
-    if not day_keys:
+    by_execution = _group_rows_by_execution(rows, task_run_map)
+    execution_keys = sorted(by_execution.keys(), key=_execution_sort_key)
+    if not execution_keys:
         return []
 
     day_brand_rank: dict[str, float] = {}
-    for day in day_keys:
-        avg = _avg_rank_for_entity_in_batch(by_day[day], brand, is_brand=True)
+    for day in execution_keys:
+        avg = _avg_rank_for_entity_in_batch(by_execution[day], brand, is_brand=True)
         if avg is not None:
             day_brand_rank[day] = avg
 
-    latest_day = day_keys[-1]
+    latest_day = execution_keys[-1]
     best_day = min(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
     worst_day = max(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
 
@@ -274,7 +284,7 @@ def _build_molizhishu_ranking_rows(
     result: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
     for day, label, muted in export_plan:
-        batch = by_day.get(day) or []
+        batch = by_execution.get(day) or []
         aggregated: dict[tuple[str, str], list[float]] = {}
         for item in batch:
             for entry in normalize_structured_rankings(item.all_rankings_json or []):
@@ -287,7 +297,7 @@ def _build_molizhishu_ranking_rows(
                 category = str(entry.get("category") or "默认分类")
                 canonical = canonical_ranking_name(name, brand, competitors)
                 aggregated.setdefault((canonical, category), []).append(float(rank))
-        collected_at = _format_day_label(day)
+        collected_at = day
         for (name, category), ranks in sorted(aggregated.items(), key=lambda row: min(row[1])):
             rank_value = round(sum(ranks) / len(ranks), 1)
             dedupe = (label, name, category, rank_value, collected_at)
@@ -383,11 +393,11 @@ def _build_prompt_round_trend(
     task_run_map: dict[str, LeadDiagnosisRun],
     competitors: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    grouped = _group_rows_by_day(rows, task_run_map)
+    grouped = _group_rows_by_execution(rows, task_run_map)
 
     tracked = _tracked_entities(brand, competitors or [])
     trend: list[dict[str, Any]] = []
-    for day_key in sorted(grouped.keys()):
+    for day_key in sorted(grouped.keys(), key=_execution_sort_key):
         batch = grouped[day_key]
         if not batch:
             continue

@@ -118,7 +118,7 @@ def _demo_payload() -> dict:
     }
 
 
-def test_molizhishu_ranking_rows_aggregate_same_day() -> None:
+def test_molizhishu_ranking_rows_keep_same_day_executions_separate() -> None:
     from datetime import datetime
 
     from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
@@ -149,8 +149,8 @@ def test_molizhishu_ranking_rows_aggregate_same_day() -> None:
     )
     brand_rows = [row for row in rows if row["is_brand"] and row["type_label"] == "最近"]
     assert len(brand_rows) == 1
-    assert brand_rows[0]["rank_display"] == "3"
-    assert brand_rows[0]["collected_at"] == "26-07-02"
+    assert brand_rows[0]["rank_display"] == "2"
+    assert brand_rows[0]["collected_at"] == "2026-07-02 14:30"
 
 
 def test_molizhishu_ranking_rows_labels_recent_best_worst() -> None:
