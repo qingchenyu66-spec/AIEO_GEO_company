@@ -359,7 +359,7 @@ defineExpose({ resizeChart })
               <p>{{ cardHint }}{{ cardHintExtra }}</p>
             </div>
             <div class="matrix-chart-kpis">
-              <div class="matrix-chart-kpi"><span>进前三</span><b>{{ cardKpi.top3 }}</b></div>
+              <div class="matrix-chart-kpi"><span>进前三次数</span><b>{{ cardKpi.top3 }}</b></div>
               <div class="matrix-chart-kpi"><span>均位</span><b>{{ cardKpi.avg }}</b></div>
               <div class="matrix-chart-kpi"><span>未提及</span><b>{{ cardKpi.none }}</b></div>
             </div>
@@ -439,7 +439,7 @@ defineExpose({ resizeChart })
             </div>
             <div class="matrix-rail-kpis">
               <div class="matrix-rail-kpi">
-                <label>进前三</label>
+                <label>进前三次数</label>
                 <strong>{{ item.kpi.top3 }}</strong>
               </div>
               <div class="matrix-rail-kpi">

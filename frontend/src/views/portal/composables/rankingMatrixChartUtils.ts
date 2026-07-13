@@ -131,6 +131,37 @@ function ranksForColumnInScope(
   return ranks
 }
 
+function cellMonitoringSnapshots(cell: RankingMatrixCell | undefined): Array<Pick<RankingMatrixCell, 'mention_position' | 'brand_mentioned'>> {
+  if (!cell) return []
+  if (cell.snapshots?.length) {
+    return cell.snapshots.map(snapshot => ({
+      mention_position: snapshot.mention_position,
+      brand_mentioned: snapshot.brand_mentioned,
+    }))
+  }
+  return [{
+    mention_position: cell.mention_position,
+    brand_mentioned: cell.brand_mentioned,
+  }]
+}
+
+/** 单格内每次监测是否进 Top3（有 snapshots 按轮次，否则按当日聚合 1 次）。 */
+function countTop3SessionsInCell(cell: RankingMatrixCell | undefined) {
+  return cellMonitoringSnapshots(cell).filter(
+    snapshot => rankCountsAsTopThree(snapshot.mention_position),
+  ).length
+}
+
+function countTop3SessionsInSlice(slice: MatrixPlatformSlice, scope: MatrixRankScope) {
+  let total = 0
+  for (const row of rowsInRankScope(slice.rows, scope)) {
+    for (const column of slice.columns) {
+      total += countTop3SessionsInCell(resolveColumnCell(row, column))
+    }
+  }
+  return total
+}
+
 export type MatrixMentionStats = {
   mentioned: number
   total: number
@@ -338,6 +369,38 @@ export function selfCheckMatrixRankScope() {
   console.assert(resolveScopedColumnMentionStats(mentionRows, mentionColumn, mentionScope).rate === 50)
   console.assert(rankCountsAsTopThree(3.2) === true)
   console.assert(rankCountsAsTopThree(3.6) === false)
+  const snapCell = (ranks: Array<number | null>): RankingMatrixCell => ({
+    subtask_id: 's',
+    mention_position: ranks.length ? ranks.reduce((a, b) => a! + (b || 0), 0)! / ranks.filter(r => r != null).length : null,
+    brand_mentioned: ranks.some(r => r != null),
+    status: 'completed',
+    page_screenshot: null,
+    sentiment: null,
+    updated_at: null,
+    snapshots: ranks.map((rank, index) => ({
+      subtask_id: `s-${index}`,
+      mention_position: rank,
+      brand_mentioned: rank != null,
+      updated_at: null,
+      status: 'completed',
+      page_screenshot: null,
+      sentiment: null,
+    })),
+  })
+  const kpiSlice: MatrixPlatformSlice = {
+    platform: 'doubao',
+    columns: [{ prompt: 'p1', group_name: null, monitor_keyword: null }],
+    rows: [{
+      task_id: 't1',
+      platform: 'doubao',
+      day_key: '2026-06-01',
+      schedule_window_key: '2026-06-01',
+      schedule_label: '06-01',
+      snapshot_at: '2026-06-01',
+      cells: { p1: snapCell([1, 2, 8]) },
+    }],
+  }
+  console.assert(matrixPlatformKpi(kpiSlice, buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01')).top3 === 2)
 }
 
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {
@@ -364,7 +427,7 @@ export function matrixPlatformKpi(slice: MatrixPlatformSlice, scope: MatrixRankS
   const ranks = slice.columns.map(column => resolveScopedColumnRank(slice.rows, column, scope))
   const valid = ranks.filter((rank): rank is number => rank != null)
   return {
-    top3: valid.filter(rank => rankCountsAsTopThree(rank)).length,
+    top3: countTop3SessionsInSlice(slice, scope),
     none: ranks.filter(rank => rank == null).length,
     avg: valid.length
       ? (valid.reduce((sum, rank) => sum + rank, 0) / valid.length).toFixed(1)
