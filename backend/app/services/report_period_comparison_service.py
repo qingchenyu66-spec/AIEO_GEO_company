@@ -2660,6 +2660,12 @@ def wrap_period_html_for_word(html: str) -> bytes:
         enriched = html
     return enriched.encode("utf-8")
 
+
+def _parse_report_date(value: Any) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
     text = str(value or "").strip()
     if not text:
         return None

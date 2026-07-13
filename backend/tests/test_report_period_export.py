@@ -31,3 +31,16 @@ def test_playwright_chromium_health_returns_structured_status() -> None:
     result = playwright_chromium_health()
     assert result["status"] in {"ready", "error"}
     assert result.get("detail")
+
+
+def test_parse_report_date_handles_iso_and_date() -> None:
+    from datetime import date, datetime
+
+    from app.services.report_period_comparison_service import _parse_report_date
+
+    assert _parse_report_date("2026-07-01") == date(2026, 7, 1)
+    assert _parse_report_date("2026-07-01T12:00:00") == date(2026, 7, 1)
+    assert _parse_report_date(date(2026, 7, 2)) == date(2026, 7, 2)
+    assert _parse_report_date(datetime(2026, 7, 3, 10, 0)) == date(2026, 7, 3)
+    assert _parse_report_date("") is None
+    assert _parse_report_date("bad") is None

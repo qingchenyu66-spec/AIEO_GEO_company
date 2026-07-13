@@ -128,6 +128,8 @@ def build_period_report_pdf(
     if report_type not in PERIOD_EXPORT_TYPES:
         raise ValueError(f"unsupported report type: {report_type}")
 
+    from app.services.report_period_comparison_service import build_period_report_html_for_export
+
     html = build_period_report_html_for_export(db, report, tenant_id=tenant_id)
     try:
         from playwright.sync_api import sync_playwright
