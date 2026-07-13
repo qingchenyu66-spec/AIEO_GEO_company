@@ -1,6 +1,6 @@
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import {
@@ -8,9 +8,7 @@ import {
   getReportDetail,
   getReportList,
   isHtmlTemplateReportType,
-  publishReport,
   reportPreviewHtmlUrl,
-  updateReport,
   type ReportDetail,
   type ReportListItem,
   type ReportType,
@@ -43,29 +41,14 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const route = useRoute()
   const auth = useAuthStore()
   const loading = ref(false)
-  const saving = ref(false)
-  const publishing = ref(false)
   const exporting = ref(false)
   const detailLoading = ref(false)
-  const editMode = ref(false)
   const reports = ref<ReportListItem[]>([])
   const selectedReportId = ref<number | null>(null)
   const reportDetail = ref<ReportDetail | null>(null)
   const typeFilter = ref<ReportTypeFilter>('all')
   const keywordFilter = ref('')
   const tenantFilter = ref<number | ''>('')
-
-  const editForm = reactive({
-    report_title: '',
-    data_summary: '',
-    executive_summary: '',
-    highlightsText: '',
-    sentiment_summary: '',
-    strength_points: '',
-    weakness_points: '',
-    recommendation: '',
-    diagnosis_title: '',
-  })
 
   const filteredReports = computed(() => {
     let rows = reports.value
@@ -91,16 +74,10 @@ export function useReportCenter(options: UseReportCenterOptions) {
   ))
 
   const canGenerateReport = computed(() => Boolean(reportMenuGrant.value?.can_create))
-  const canEditReport = computed(() => Boolean(reportMenuGrant.value?.can_update))
   const canExportReport = computed(() => Boolean(reportMenuGrant.value?.can_export))
 
   const selectedReport = computed(() => (
     reports.value.find(item => item.id === selectedReportId.value) || null
-  ))
-
-  const canEditSelected = computed(() => (
-    canEditReport.value
-    && (selectedReport.value?.status === 'draft' || reportDetail.value?.status === 'draft')
   ))
 
   const heroMetrics = computed(() => {
@@ -153,19 +130,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
       || 'GEO 监测报告'
   })
 
-  function syncEditFormFromDetail(detail: ReportDetail | null) {
-    const content = detail?.report_content
-    editForm.report_title = detail?.report_title || ''
-    editForm.data_summary = detail?.data_summary || ''
-    editForm.executive_summary = content?.ai_insights?.executive_summary || ''
-    editForm.highlightsText = (content?.monitor_snapshot?.highlights || []).join('\n')
-    editForm.sentiment_summary = content?.diagnosis?.sentiment_summary || ''
-    editForm.strength_points = content?.diagnosis?.strength_points || ''
-    editForm.weakness_points = content?.diagnosis?.weakness_points || ''
-    editForm.recommendation = content?.diagnosis?.recommendation || ''
-    editForm.diagnosis_title = content?.diagnosis?.diagnosis_title || ''
-  }
-
   function applyInitialRouteQuery() {
     const tenantId = route.query.tenantId
     if (options.isPlatform() && typeof tenantId === 'string' && tenantId) {
@@ -174,9 +138,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
     const reportId = route.query.reportId
     if (typeof reportId === 'string' && reportId) {
       selectedReportId.value = Number(reportId)
-      if (canEditSelected.value || options.isPlatform()) {
-        editMode.value = true
-      }
     }
   }
 
@@ -188,7 +149,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
       if (!visibleRows.length) {
         selectedReportId.value = null
         reportDetail.value = null
-        editMode.value = false
       } else if (!selectedReportId.value || !visibleRows.some(item => item.id === selectedReportId.value)) {
         selectedReportId.value = visibleRows[0].id
       }
@@ -203,10 +163,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
     detailLoading.value = true
     try {
       reportDetail.value = await withRetry(() => getReportDetail(reportId))
-      syncEditFormFromDetail(reportDetail.value)
-      if (canEditSelected.value) {
-        editMode.value = true
-      }
     } catch (error: unknown) {
       reportDetail.value = null
       ElMessage.error(`报告详情加载失败：${errorMessage(error)}`)
@@ -217,75 +173,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   function selectReport(reportId: number) {
     selectedReportId.value = reportId
-    editMode.value = false
-  }
-
-  async function handleSaveDraft() {
-    if (!selectedReportId.value || !canEditSelected.value) return
-    saving.value = true
-    try {
-      const updated = await withRetry(() => updateReport(selectedReportId.value!, {
-        report_title: editForm.report_title.trim(),
-        data_summary: editForm.data_summary.trim(),
-        executive_summary: editForm.executive_summary.trim(),
-        highlights: editForm.highlightsText,
-        diagnosis: {
-          sentiment_summary: editForm.sentiment_summary.trim(),
-          strength_points: editForm.strength_points.trim(),
-          weakness_points: editForm.weakness_points.trim(),
-          recommendation: editForm.recommendation.trim(),
-          diagnosis_title: editForm.diagnosis_title.trim(),
-        },
-      }))
-      reportDetail.value = updated
-      syncEditFormFromDetail(updated)
-      ElMessage.success('草稿已保存')
-      await loadReports()
-    } catch (error: unknown) {
-      ElMessage.error(`保存失败：${errorMessage(error)}`)
-    } finally {
-      saving.value = false
-    }
-  }
-
-  async function handlePublish() {
-    if (!selectedReportId.value || !canEditReport.value) return
-    try {
-      await ElMessageBox.confirm('发布后客户可在报告中心查看，确认发布？', '发布报告', {
-        confirmButtonText: '发布',
-        cancelButtonText: '取消',
-        type: 'warning',
-      })
-    } catch {
-      return
-    }
-    publishing.value = true
-    try {
-      if (canEditSelected.value) {
-        await withRetry(() => updateReport(selectedReportId.value!, {
-          report_title: editForm.report_title.trim(),
-          data_summary: editForm.data_summary.trim(),
-          executive_summary: editForm.executive_summary.trim(),
-          highlights: editForm.highlightsText,
-          diagnosis: {
-            sentiment_summary: editForm.sentiment_summary.trim(),
-            strength_points: editForm.strength_points.trim(),
-            weakness_points: editForm.weakness_points.trim(),
-            recommendation: editForm.recommendation.trim(),
-            diagnosis_title: editForm.diagnosis_title.trim(),
-          },
-        }))
-      }
-      await withRetry(() => publishReport(selectedReportId.value!))
-      ElMessage.success('报告已发布')
-      editMode.value = false
-      await loadReports()
-      await loadReportDetail(selectedReportId.value!)
-    } catch (error: unknown) {
-      ElMessage.error(`发布失败：${errorMessage(error)}`)
-    } finally {
-      publishing.value = false
-    }
   }
 
   function printReport() {
@@ -328,7 +215,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
     if (!filteredReports.value.length) {
       selectedReportId.value = null
       reportDetail.value = null
-      editMode.value = false
     } else if (!filteredReports.value.some(item => item.id === selectedReportId.value)) {
       selectedReportId.value = filteredReports.value[0]?.id ?? null
     }
@@ -348,12 +234,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   return {
     loading,
-    saving,
-    publishing,
     exporting,
     detailLoading,
-    editMode,
-    editForm,
     reports,
     filteredReports,
     selectedReportId,
@@ -364,9 +246,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
     tenantFilter,
     reportTypeOptions,
     heroMetrics,
-    canEditSelected,
     canGenerateReport,
-    canEditReport,
     canExportReport,
     previewContent,
     previewKpis,
@@ -383,8 +263,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
     displayReportTitle,
     loadReports,
     selectReport,
-    handleSaveDraft,
-    handlePublish,
     printReport,
     exportReport,
   }

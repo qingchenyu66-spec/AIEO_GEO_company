@@ -6,10 +6,8 @@ import {
   FileBarChart,
   FileText,
   FileType,
-  Pencil,
   Printer,
   RefreshCw,
-  Send,
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useAuthStore } from '../../../stores/auth'
@@ -30,12 +28,8 @@ const pageMenuName = computed(() => (
 
 const {
   loading,
-  saving,
-  publishing,
   exporting,
   detailLoading,
-  editMode,
-  editForm,
   filteredReports,
   selectedReportId,
   selectedReport,
@@ -47,7 +41,6 @@ const {
   heroMetrics,
   heroTitle,
   displayReportTitle,
-  canEditSelected,
   canExportReport,
   previewContent,
   previewKpis,
@@ -60,8 +53,6 @@ const {
   previewHtmlUrl,
   loadReports,
   selectReport,
-  handleSaveDraft,
-  handlePublish,
   printReport,
   exportReport,
 } = useReportCenter({
@@ -142,7 +133,7 @@ function diagnosisTitleText(title: string | null | undefined) {
         <h2>{{ heroTitle }}</h2>
         <p>
           汇总 AI 平台监测结果、品牌诊断与信源引用，形成可交付的结构化报告。
-          {{ isPlatform ? '请在「企业管理」为企业生成报告，编辑确认后发布；客户仅可查看已发布报告。' : '此处展示运营已发布的报告，支持在线预览、导出 PDF/Word 与打印。' }}
+          {{ isPlatform ? '请在「企业管理」为企业生成报告；模板与样式变更通过代码发布。' : '此处展示运营已发布的报告，支持在线预览、导出 PDF/HTML/Word 与打印。' }}
         </p>
       </div>
       <article class="report-hero-metric">
@@ -176,7 +167,7 @@ function diagnosisTitleText(title: string | null | undefined) {
         <div v-else-if="!filteredReports.length" class="report-empty-panel">
           <FileText />
           <h3>暂无报告</h3>
-          <p v-if="isPlatform">请前往「企业管理」，在企业行点击「报告」选择类型并生成；生成后可在此编辑并发布。</p>
+          <p v-if="isPlatform">请前往「企业管理」，在企业行点击「报告」选择类型并生成。</p>
           <p v-else>暂无已发布报告，请联系运营为您生成并发布。</p>
         </div>
         <div v-else class="report-list-body">
@@ -210,19 +201,10 @@ function diagnosisTitleText(title: string | null | undefined) {
       <article class="report-preview-panel">
         <div class="report-preview-head">
           <div>
-            <h3>{{ canEditSelected && editMode ? '编辑报告' : '报告预览' }}</h3>
-            <p>{{ selectedReport ? (canEditSelected ? '修改后可保存草稿或直接发布' : '在线阅读 · 支持打印') : '从左侧选择一份报告' }}</p>
+            <h3>报告预览</h3>
+            <p>{{ selectedReport ? '在线阅读 · 支持导出与打印' : '从左侧选择一份报告' }}</p>
           </div>
           <div v-if="selectedReport" class="report-preview-actions">
-            <button
-              v-if="canEditSelected"
-              type="button"
-              class="filter-reset-btn tiny-btn"
-              @click="editMode = !editMode"
-            >
-              <Pencil />
-              {{ editMode ? '预览' : '编辑' }}
-            </button>
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
               PDF
@@ -249,28 +231,6 @@ function diagnosisTitleText(title: string | null | undefined) {
           <FileBarChart />
           <h3>选择报告开始预览</h3>
           <p>报告包含 KPI 摘要、诊断结论、各平台表现与高频引用信源，便于对外交付与复盘。</p>
-        </div>
-        <div v-else-if="canEditSelected && editMode" class="report-preview-body report-edit-body">
-          <div class="report-edit-form">
-            <label><span>报告标题</span><input v-model="editForm.report_title" /></label>
-            <label><span>数据摘要</span><input v-model="editForm.data_summary" /></label>
-            <label><span>执行摘要</span><textarea v-model="editForm.executive_summary" rows="4" /></label>
-            <label><span>核心结论（每行一条）</span><textarea v-model="editForm.highlightsText" rows="5" /></label>
-            <label><span>诊断标题</span><input v-model="editForm.diagnosis_title" /></label>
-            <label><span>情绪与口碑概述</span><textarea v-model="editForm.sentiment_summary" rows="3" /></label>
-            <label><span>优势亮点</span><textarea v-model="editForm.strength_points" rows="3" /></label>
-            <label><span>待改善项</span><textarea v-model="editForm.weakness_points" rows="3" /></label>
-            <label><span>优化建议</span><textarea v-model="editForm.recommendation" rows="4" /></label>
-          </div>
-          <div class="report-preview-actions">
-            <button type="button" class="filter-reset-btn tiny-btn" :disabled="saving" @click="handleSaveDraft">
-              {{ saving ? '保存中…' : '保存草稿' }}
-            </button>
-            <button type="button" class="primary-btn small-btn" :disabled="publishing" @click="handlePublish">
-              <Send />
-              {{ publishing ? '发布中…' : '保存并发布' }}
-            </button>
-          </div>
         </div>
         <div v-else-if="usesHtmlTemplatePreview && previewHtmlUrl" class="report-preview-body report-html-preview">
           <iframe
@@ -426,10 +386,6 @@ function diagnosisTitleText(title: string | null | undefined) {
           </section>
 
           <div class="report-preview-actions">
-            <button v-if="canEditSelected" type="button" class="filter-reset-btn tiny-btn" @click="editMode = true">
-              <Pencil />
-              编辑草稿
-            </button>
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
               导出 PDF
