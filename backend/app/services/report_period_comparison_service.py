@@ -2253,7 +2253,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         const ranks = data.rank.filter(v => v != null);
         const minR = Math.max(1, Math.min(...ranks) - 0.45);
         const maxR = Math.max(...ranks) + 0.45;
-        const rankInverse = true;
+        const rankInverse = !sparse;
         const rankAxisLabel = {{
           color: '#64748b',
           formatter: (v) => {{

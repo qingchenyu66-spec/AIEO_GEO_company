@@ -42,6 +42,13 @@ REPORT_STATUS_LABELS = {
     "archived": "已归档",
 }
 
+# 客户端报告中心仅展示周期监测报告；企业诊断仅供运营内部预览导出。
+CUSTOMER_PORTAL_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
+
+
+def _customer_can_view_report(report: GeoReport) -> bool:
+    return report.status == "published" and report.report_type in CUSTOMER_PORTAL_REPORT_TYPES
+
 
 def _notify_report_published(db: Session, report: GeoReport, *, auto_commit: bool = True) -> None:
     from app.services.system_notification_service import upsert_report_published_notification
@@ -562,6 +569,7 @@ def list_reports(db: Session, current: CurrentSession) -> list[dict[str, Any]]:
     if tenant_scope:
         stmt = stmt.where(GeoReport.tenant_id == tenant_scope)
         stmt = stmt.where(GeoReport.status == "published")
+        stmt = stmt.where(GeoReport.report_type.in_(CUSTOMER_PORTAL_REPORT_TYPES))
     else:
         owned = sales_owned_tenant_ids(db, current)
         if owned is not None:
@@ -585,7 +593,7 @@ def get_report_detail(db: Session, report_id: int, current: CurrentSession) -> d
     if current.identity.identity_type == "CUSTOMER":
         if report.tenant_id != current.identity.tenant_id:
             raise ValueError("无权查看")
-        if report.status != "published":
+        if not _customer_can_view_report(report):
             raise ValueError("报告不存在")
     else:
         guard_tenant_resource_access(db, current, report.tenant_id)

@@ -30,7 +30,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
       : '客户侧菜单默认面向展示，不开放企业资料和任务创建入口。'
   }
   if (key === 'audit') return '企业列表可单独控制新增/编辑、停止服务；资料、监测词、监控计划、竞品和上传文件可拆分授权。购买模型合并在企业资料中维护。'
-  if (key === 'analysis') return '报告中心支持查看/导出、生成与编辑发布；客户侧默认仅查看已发布报告。'
+  if (key === 'analysis') return '报告中心支持查看/导出；周期报告自动发布至客户端，企业诊断仅运营内部使用。'
   if (key === 'users') return '用户新增下分平台/客户两种创建能力；用户列表、职位管理、操作审批可单独授权。'
   if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
   if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'

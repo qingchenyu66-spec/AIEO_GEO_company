@@ -113,14 +113,6 @@ export interface GenerateReportPayload {
   report_type?: ReportType
 }
 
-export interface UpdateReportPayload {
-  report_title?: string
-  data_summary?: string
-  executive_summary?: string
-  highlights?: string[] | string
-  diagnosis?: Partial<ReportDiagnosisBlock>
-}
-
 /** 运营端手动生成：仅品牌诊断报告 */
 export const MANUAL_REPORT_TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
   { value: 'diagnosis', label: '品牌诊断报告' },
@@ -141,16 +133,6 @@ export async function getReportDetail(reportId: number): Promise<ReportDetail> {
 
 export async function createReport(data: GenerateReportPayload): Promise<ReportListItem> {
   const response = await http.post('/v1/reports/generate', data)
-  return response.data.data
-}
-
-export async function updateReport(reportId: number, data: UpdateReportPayload): Promise<ReportDetail> {
-  const response = await http.put(`/v1/reports/${reportId}`, data)
-  return response.data.data
-}
-
-export async function publishReport(reportId: number): Promise<ReportListItem> {
-  const response = await http.post(`/v1/reports/${reportId}/publish`)
   return response.data.data
 }
 

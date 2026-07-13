@@ -476,8 +476,8 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 
     <el-dialog v-model="reportDialog" width="520px" title="生成品牌诊断报告">
       <p v-if="reportDialogTenant" class="report-dialog-hint">
-        为「{{ reportDialogTenant.name }}」生成品牌诊断报告。生成后为草稿，确认后可发布；客户仅可查看已发布报告。
-        周报/月报/季报/年报由系统按周期自动生成并直接发布至客户端。
+        为「{{ reportDialogTenant.name }}」生成企业内部品牌诊断，仅供运营预览与导出，不会出现在客户端报告中心。
+        周报/月报/季报/年报由系统按周期自动生成并发布至客户端。
       </p>
       <div class="form-grid password-grid">
         <label class="form-field-full">

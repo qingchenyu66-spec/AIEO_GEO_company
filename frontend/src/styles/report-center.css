@@ -186,7 +186,6 @@
 }
 
 .report-preview-panel > .report-preview-body,
-.report-preview-panel > .report-edit-body,
 .report-preview-panel > .report-empty-panel {
   flex: 1 1 auto;
   min-height: 0;
@@ -568,7 +567,6 @@
 
   .report-list-body,
   .report-preview-panel > .report-preview-body,
-  .report-preview-panel > .report-edit-body,
   .report-preview-panel > .report-empty-panel {
     overflow: visible;
     max-height: none;
@@ -577,35 +575,6 @@
   .report-kpi-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
-
-.report-edit-form {
-  display: grid;
-  gap: 14px;
-}
-
-.report-edit-form label {
-  display: grid;
-  gap: 6px;
-}
-
-.report-edit-form label span {
-  font-size: 13px;
-  font-weight: 600;
-  color: #58708f;
-}
-
-.report-edit-form input,
-.report-edit-form textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d9e8f6;
-  border-radius: 8px;
-  background: #fff;
-  color: #17406a;
-  font-size: 14px;
-  line-height: 1.5;
-  resize: vertical;
 }
 
 @media print {

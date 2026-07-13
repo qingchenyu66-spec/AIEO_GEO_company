@@ -971,7 +971,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         report_type: reportType.value,
         report_title: reportTitle.value.trim() || undefined,
       }))
-      ElMessage.success('报告已生成，请编辑确认后发布')
+      ElMessage.success('企业内部诊断已生成，可在报告中心预览与导出（不同步至客户端）')
       reportDialog.value = false
       options.navigateToReportCenter?.(created.id, created.tenant_id)
     } catch (error: unknown) {

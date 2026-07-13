@@ -27,6 +27,18 @@ source .venv/bin/activate
 export PYTHONPATH="$ROOT/backend"
 alembic upgrade head
 
+echo "==> sync sys_config from .env (Redis/Celery 等运行时配置)"
+python scripts/sync_system_config_from_env.py
+
+echo "==> redis health"
+python - <<'PY' || echo "WARN: Redis 自检未通过，见运营看板 · Redis 缓存" >&2
+from app.core.redis_client import redis_health
+result = redis_health()
+print("redis:", result)
+if result.get("enabled") and result.get("status") != "ready":
+    raise SystemExit(1)
+PY
+
 echo "==> playwright chromium (周期/Premium 报告 PDF 依赖)"
 if ! python -m playwright install chromium; then
   echo "WARN: playwright install chromium 失败，PDF 导出可能不可用" >&2

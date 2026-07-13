@@ -133,7 +133,7 @@ function diagnosisTitleText(title: string | null | undefined) {
         <h2>{{ heroTitle }}</h2>
         <p>
           汇总 AI 平台监测结果、品牌诊断与信源引用，形成可交付的结构化报告。
-          {{ isPlatform ? '请在「企业管理」为企业生成报告；模板与样式变更通过代码发布。' : '此处展示运营已发布的报告，支持在线预览、导出 PDF/HTML/Word 与打印。' }}
+          {{ isPlatform ? '周期报告自动发布至客户端；企业诊断仅供运营内部预览导出。' : '此处展示已发布的周期监测报告，支持在线预览、导出 PDF/HTML/Word 与打印。' }}
         </p>
       </div>
       <article class="report-hero-metric">
@@ -167,8 +167,8 @@ function diagnosisTitleText(title: string | null | undefined) {
         <div v-else-if="!filteredReports.length" class="report-empty-panel">
           <FileText />
           <h3>暂无报告</h3>
-          <p v-if="isPlatform">请前往「企业管理」，在企业行点击「报告」选择类型并生成。</p>
-          <p v-else>暂无已发布报告，请联系运营为您生成并发布。</p>
+          <p v-if="isPlatform">请前往「企业管理」生成企业内部诊断；周期报告由系统自动生成。</p>
+          <p v-else>暂无已发布的周期监测报告，请联系运营。</p>
         </div>
         <div v-else class="report-list-body">
           <button

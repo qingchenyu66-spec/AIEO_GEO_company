@@ -375,7 +375,7 @@ function rankBarStyle(
   }
 }
 
-const BAR_AXIS_MIN = 1
+const BAR_AXIS_MIN = 0.55 // ponytail: min=1 时 inverse 轴上 #1 柱宽为 0
 const BAR_AXIS_FLOOR = 10
 
 /** 横轴上限：随数据最大排名扩展，避免 #8+ 全部顶格等长。 */
