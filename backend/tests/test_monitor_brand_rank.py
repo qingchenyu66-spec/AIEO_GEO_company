@@ -1,6 +1,28 @@
 from types import SimpleNamespace
 
-from app.services.monitor_service import _resolve_brand_rank
+from app.services.monitor_service import _filter_matrix_columns_for_scope, _resolve_brand_rank
+
+
+def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:
+    columns = [
+        {"prompt": "LED广告公司推荐", "monitor_keyword": "LED广告公司推荐"},
+        {"prompt": "地铁广告公司推荐", "monitor_keyword": "地铁广告公司推荐"},
+    ]
+    prompt_set = {"LED广告公司推荐": "词组A"}
+    filtered = _filter_matrix_columns_for_scope(
+        columns,
+        prompt_set,
+        keyword_group=None,
+        monitor_keyword="LED广告公司推荐",
+        exposure_term=None,
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["monitor_keyword"] == "LED广告公司推荐"
+
+
+def test_filter_matrix_columns_for_scope_no_filter_keeps_all() -> None:
+    columns = [{"prompt": "a"}, {"prompt": "b"}]
+    assert _filter_matrix_columns_for_scope(columns, {"a": None}, keyword_group=None, monitor_keyword=None, exposure_term=None) == columns
 
 
 def test_resolve_brand_rank_trusts_manual_snapshot_rank() -> None:

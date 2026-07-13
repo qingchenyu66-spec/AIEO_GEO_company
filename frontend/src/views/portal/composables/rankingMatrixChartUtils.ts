@@ -176,8 +176,6 @@ export function resolveColumnCell(
     const token = (key || '').trim()
     if (token && row.cells[token]) return row.cells[token]
   }
-  const keys = Object.keys(row.cells)
-  if (keys.length === 1) return row.cells[keys[0]]
   return undefined
 }
 

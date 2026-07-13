@@ -1506,7 +1506,22 @@ def _prompt_key_for_monitor_keyword(
             ranked_candidates.append((score, candidate))
     if ranked_candidates:
         return max(ranked_candidates, key=lambda item: (item[0], len(item[1])))[1]
-    return text
+    return ""
+
+
+def _filter_matrix_columns_for_scope(
+    columns: list[dict[str, Any]],
+    prompt_set: dict[str, str | None],
+    *,
+    keyword_group: str | None,
+    monitor_keyword: str | None,
+    exposure_term: str | None,
+) -> list[dict[str, Any]]:
+    """筛选后只保留本次 prompt_set 里真有数据的列，避免 6 列共用 1 个 cell。"""
+    if not any(str(value or "").strip() for value in (keyword_group, monitor_keyword, exposure_term)):
+        return columns
+    allowed = set(prompt_set.keys())
+    return [col for col in columns if col.get("prompt") in allowed]
 
 
 def _build_matrix_columns(
@@ -2293,6 +2308,13 @@ def ranking_matrix(
         })
 
     columns = _build_matrix_columns(keyword_group_rows, prompt_set, rows)
+    columns = _filter_matrix_columns_for_scope(
+        columns,
+        prompt_set,
+        keyword_group=scoped_group or None,
+        monitor_keyword=scoped_monitor or None,
+        exposure_term=scoped_exposure or None,
+    )
 
     group_map: dict[str, list[str]] = {}
     for column in columns:
