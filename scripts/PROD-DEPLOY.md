@@ -34,7 +34,16 @@ cd /opt/geo/AIEO_GEO
 bash scripts/deploy_prod.sh
 ```
 
-等价于：`git pull` → `alembic upgrade head` → `npm ci && npm run build` → 重启 `geo-api` + reload nginx。
+等价于：`git pull` → `alembic upgrade head` → `playwright install chromium` → `npm ci && npm run build` → 重启 `geo-api` + reload nginx。
+
+单独检查 Chromium：
+
+```bash
+cd /opt/geo/AIEO_GEO
+bash scripts/check_playwright.sh
+```
+
+运营健康检查 `GET /api/v1/health/ops` 含 `playwright_chromium`：`ready` 表示 PDF 导出可用。
 
 ## 首次接入（已完成 2026-07-10）
 

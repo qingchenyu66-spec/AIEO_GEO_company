@@ -270,11 +270,6 @@ def build_competitor_compare_summary(
 ) -> dict[str, Any]:
     resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
 
-    asset = get_brand_asset(db, resolved_tenant_id)
-    competitors = list_competitors(db, resolved_tenant_id)
-    entities = _tracked_entities(asset, competitors)
-    brand_display = (asset.brand_name if asset else None) or "本品牌"
-
     range_start, range_end = resolve_analytics_date_range(
         current,
         days=days,
@@ -283,6 +278,56 @@ def build_competitor_compare_summary(
     )
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
+
+    payload = _aggregate_competitor_stats(
+        db,
+        resolved_tenant_id,
+        range_start=range_start,
+        range_end=range_end,
+        platform_filters=platform_filters,
+        prompt_filter=prompt_filter,
+        subtask_limit=subtask_limit,
+    )
+    payload["prompt_options"] = _configured_prompt_options(db, resolved_tenant_id)
+    return payload
+
+
+def aggregate_competitor_period_stats(
+    db: Session,
+    tenant_id: int,
+    *,
+    start_date: date,
+    end_date: date,
+    subtask_limit: int = 5000,
+) -> dict[str, Any]:
+    """Period-bound competitor stats for report export (no auth session)."""
+    range_start = datetime.combine(start_date, time.min)
+    range_end = datetime.combine(end_date, time.max)
+    return _aggregate_competitor_stats(
+        db,
+        tenant_id,
+        range_start=range_start,
+        range_end=range_end,
+        platform_filters=[],
+        prompt_filter="",
+        subtask_limit=subtask_limit,
+    )
+
+
+def _aggregate_competitor_stats(
+    db: Session,
+    tenant_id: int,
+    *,
+    range_start: datetime,
+    range_end: datetime,
+    platform_filters: list[str],
+    prompt_filter: str,
+    subtask_limit: int,
+) -> dict[str, Any]:
+    asset = get_brand_asset(db, tenant_id)
+    competitors = list_competitors(db, tenant_id)
+    entities = _tracked_entities(asset, competitors)
+    brand_display = (asset.brand_name if asset else None) or "本品牌"
 
     stmt = (
         select(GeoMonitorSubtask)
@@ -300,7 +345,7 @@ def build_competitor_compare_summary(
         )
         .where(
             GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.tenant_id == resolved_tenant_id,
+            GeoMonitorTask.tenant_id == tenant_id,
             GeoMonitorSubtask.updated_at >= range_start,
             GeoMonitorSubtask.updated_at <= range_end,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
@@ -313,7 +358,6 @@ def build_competitor_compare_summary(
 
     subtasks = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))))
     sample_total = len(subtasks)
-    prompt_options = _configured_prompt_options(db, resolved_tenant_id)
 
     global_buckets: dict[str, dict[str, Any]] = {}
     platform_buckets: dict[str, dict[str, dict[str, Any]]] = {}
@@ -521,7 +565,6 @@ def build_competitor_compare_summary(
         "sample_total": sample_total,
         "start_at": range_start.isoformat(),
         "end_at": range_end.isoformat(),
-        "prompt_options": prompt_options,
         "trend_day_keys": sorted_days,
         "rows": rows,
         "platform_rows": platform_rows,

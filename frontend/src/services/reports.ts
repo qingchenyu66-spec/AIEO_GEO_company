@@ -2,6 +2,23 @@ import { http } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx'
 
+export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'diagnosis'] as const
+
+export function isHtmlTemplateReportType(reportType: string | null | undefined) {
+  return HTML_TEMPLATE_REPORT_TYPES.includes((reportType || '') as (typeof HTML_TEMPLATE_REPORT_TYPES)[number])
+}
+
+/** @deprecated 使用 isHtmlTemplateReportType */
+export const PERIOD_HTML_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual'] as const
+
+export function isPeriodHtmlReportType(reportType: string | null | undefined) {
+  return isHtmlTemplateReportType(reportType)
+}
+
+export function reportPreviewHtmlUrl(reportId: number) {
+  return `/api/v1/reports/${reportId}/preview/html`
+}
+
 export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'comparison' | 'periodic'
 export type ReportStatus = 'draft' | 'published' | 'archived'
 

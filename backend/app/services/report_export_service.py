@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import quote
 
+from sqlalchemy.orm import Session
+
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
@@ -22,6 +24,7 @@ from reportlab.platypus import Image as PdfImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES, PERIOD_COMPARISON_REPORT_TYPES
 from app.services.report_period_content_service import format_diagnosis_display_title
 from app.services.report_chart_service import (
     build_entity_rank_trend_chart,
@@ -963,26 +966,77 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
     return buffer.getvalue()
 
 
-def build_report_export(report: dict[str, Any], export_format: ExportFormat, *, theme: str = "b") -> tuple[bytes | str, str, str]:
+def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> str:
+    """报告中心 HTML 预览：周期环比模板 + 售前诊断改版模板。"""
+    payload = _normalize_export_payload(report)
+    platform_names = _platform_label_map()
+    report_type = str(payload.get("report_type") or "")
+    tenant_id = int(report.get("tenant_id") or 0)
+
+    if report_type in PERIOD_COMPARISON_REPORT_TYPES:
+        if tenant_id <= 0:
+            raise ValueError("报告缺少 tenant_id")
+        from app.services.report_period_comparison_service import build_period_report_html_for_export
+
+        return build_period_report_html_for_export(db, payload, tenant_id=tenant_id)
+
+    if report_type == "diagnosis":
+        from app.services.report_molizhishu_html_service import build_molizhishu_html
+
+        return build_molizhishu_html(payload, platform_names, theme=theme)
+
+    raise ValueError(f"unsupported html preview report type: {report_type}")
+
+
+def build_report_export(
+    report: dict[str, Any],
+    export_format: ExportFormat,
+    *,
+    db: Session | None = None,
+    theme: str = "b",
+) -> tuple[bytes | str, str, str]:
     """返回文件内容、文件名、MIME 类型。"""
     payload = _normalize_export_payload(report)
     platform_names = _platform_label_map()
-    if export_format == "pdf":
+    report_type = str(payload.get("report_type") or "")
+
+    if export_format == "pdf" and report_type in PERIOD_COMPARISON_REPORT_TYPES:
+        if db is None:
+            raise ValueError("周期报告 PDF 导出需要数据库会话")
+        from app.services.report_period_pdf_service import build_period_report_pdf
+
+        tenant_id = int(report.get("tenant_id") or 0)
+        if tenant_id <= 0:
+            raise ValueError("报告缺少 tenant_id")
+        content = build_period_report_pdf(db, payload, tenant_id=tenant_id)
+        mime = "application/pdf"
+        suffix = "pdf"
+    elif export_format == "pdf":
         content = _build_pdf_premium_or_fallback(payload, platform_names, theme=theme)
         mime = "application/pdf"
         suffix = "pdf"
     elif export_format == "html":
-        from app.services.report_molizhishu_html_service import build_molizhishu_html
-
-        if payload.get("report_type") != "diagnosis":
-            raise ValueError("HTML 导出暂仅支持售前诊断报告")
-        content = build_molizhishu_html(payload, platform_names, theme=theme).encode("utf-8")
+        if report_type not in HTML_TEMPLATE_REPORT_TYPES:
+            raise ValueError("HTML 导出暂仅支持售前诊断与周期监测报告")
+        if db is None:
+            raise ValueError("HTML 导出需要数据库会话")
+        content = build_report_html_preview(db, report, theme=theme).encode("utf-8")
         mime = "text/html; charset=utf-8"
         suffix = "html"
     else:
-        content = _build_docx(payload, platform_names)
-        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        suffix = "docx"
+        if db is None:
+            raise ValueError("Word 导出需要数据库会话")
+        if report_type in PERIOD_COMPARISON_REPORT_TYPES or report_type == "diagnosis":
+            from app.services.report_period_comparison_service import wrap_period_html_for_word
+
+            html = build_report_html_preview(db, report, theme=theme)
+            content = wrap_period_html_for_word(html)
+            mime = "application/msword"
+            suffix = "doc"
+        else:
+            content = _build_docx(payload, platform_names)
+            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            suffix = "docx"
     filename = _safe_filename(payload["title"], suffix)
     return content, filename, mime
 

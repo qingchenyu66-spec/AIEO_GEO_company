@@ -27,6 +27,21 @@ source .venv/bin/activate
 export PYTHONPATH="$ROOT/backend"
 alembic upgrade head
 
+echo "==> playwright chromium (周期/Premium 报告 PDF 依赖)"
+if ! python -m playwright install chromium; then
+  echo "WARN: playwright install chromium 失败，PDF 导出可能不可用" >&2
+fi
+if command -v playwright >/dev/null 2>&1; then
+  playwright install-deps chromium 2>/dev/null || true
+fi
+python - <<'PY' || echo "WARN: Chromium 启动自检未通过，见 /api/v1/health/ops · playwright_chromium" >&2
+from app.services.playwright_health import playwright_chromium_health
+result = playwright_chromium_health()
+print("playwright_chromium:", result)
+if result.get("status") != "ready":
+    raise SystemExit(1)
+PY
+
 echo "==> frontend build"
 cd "$ROOT/frontend"
 npm ci --legacy-peer-deps

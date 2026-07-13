@@ -7,7 +7,10 @@ import {
   downloadReportExport,
   getReportDetail,
   getReportList,
+  isPeriodHtmlReportType,
+  isHtmlTemplateReportType,
   publishReport,
+  reportPreviewHtmlUrl,
   updateReport,
   type ReportDetail,
   type ReportListItem,
@@ -129,6 +132,14 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const previewSources = computed(() => previewSnapshot.value.top_sources || [])
   const previewAiInsights = computed(() => previewContent.value?.ai_insights || null)
   const isDeepseekReport = computed(() => previewAiInsights.value?.source === 'deepseek')
+
+  const usesHtmlTemplatePreview = computed(() => isHtmlTemplateReportType(selectedReport.value?.report_type))
+
+  const previewHtmlUrl = computed(() => (
+    selectedReportId.value && usesHtmlTemplatePreview.value
+      ? reportPreviewHtmlUrl(selectedReportId.value)
+      : null
+  ))
 
   function displayReportTitle(item: Pick<ReportListItem, 'report_title' | 'report_type' | 'tenant_name'>) {
     return formatReportDisplayTitle(item)
@@ -279,6 +290,12 @@ export function useReportCenter(options: UseReportCenterOptions) {
   }
 
   function printReport() {
+    const frame = document.querySelector('.report-html-frame') as HTMLIFrameElement | null
+    if (frame?.contentWindow) {
+      frame.contentWindow.focus()
+      frame.contentWindow.print()
+      return
+    }
     window.print()
   }
 
@@ -360,6 +377,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
     previewSources,
     previewAiInsights,
     isDeepseekReport,
+    usesHtmlTemplatePreview,
+    previewHtmlUrl,
     heroTitle,
     displayReportTitle,
     loadReports,

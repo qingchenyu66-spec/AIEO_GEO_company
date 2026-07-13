@@ -56,6 +56,8 @@ const {
   previewPlatforms,
   previewSources,
   previewAiInsights,
+  usesHtmlTemplatePreview,
+  previewHtmlUrl,
   loadReports,
   selectReport,
   handleSaveDraft,
@@ -263,6 +265,28 @@ function diagnosisTitleText(title: string | null | undefined) {
             <button type="button" class="primary-btn small-btn" :disabled="publishing" @click="handlePublish">
               <Send />
               {{ publishing ? '发布中…' : '保存并发布' }}
+            </button>
+          </div>
+        </div>
+        <div v-else-if="usesHtmlTemplatePreview && previewHtmlUrl" class="report-preview-body report-html-preview">
+          <iframe
+            :key="previewHtmlUrl"
+            class="report-html-frame"
+            :src="previewHtmlUrl"
+            title="报告 HTML 预览"
+          />
+          <div class="report-preview-actions">
+            <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
+              <Download />
+              导出 PDF
+            </button>
+            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
+              <FileType />
+              导出 Word
+            </button>
+            <button type="button" class="filter-reset-btn tiny-btn" @click="printReport">
+              <Printer />
+              打印报告
             </button>
           </div>
         </div>

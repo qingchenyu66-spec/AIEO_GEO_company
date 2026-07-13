@@ -3,7 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.schemas.common import ApiResponse
 from app.services.approval_service import queue_or_run
 from app.services.operation_log_service import write_business_audit
-from app.services.report_export_service import build_report_export, content_disposition
+from app.services.report_export_service import build_report_html_preview, build_report_export, content_disposition
 from app.services.report_service import generate_report, get_report_detail, list_reports, publish_report, update_report
 
 router = APIRouter(prefix="/reports")
@@ -163,6 +163,35 @@ def publish_report_endpoint(
     return ApiResponse(data=result)
 
 
+@router.get("/{report_id}/preview/html")
+def preview_report_html(
+    report_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """周期/年报/诊断 HTML 模板预览（与导出 PDF 同源）。"""
+    try:
+        from app.services.menu_permission_service import require_report_permission
+
+        require_report_permission(db, current, "can_export")
+        detail = get_report_detail(db, report_id, current)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="reports.preview")
+
+    report_type = str(detail.get("report_type") or "")
+    from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES
+
+    if report_type not in HTML_TEMPLATE_REPORT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该报告类型暂不支持 HTML 模板预览")
+
+    try:
+        html = build_report_html_preview(db, detail)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="报告预览生成失败") from exc
+
+    return HTMLResponse(content=html)
+
+
 @router.get("/{report_id}/export/{export_format}")
 def export_report(
     report_id: int,
@@ -180,7 +209,7 @@ def export_report(
     except Exception as exc:
         raise_read_endpoint_error(exc, context="reports.export")
     try:
-        content, filename, mime = build_report_export(detail, export_format)
+        content, filename, mime = build_report_export(detail, export_format, db=db)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="报告导出失败，请稍后重试") from exc
     write_business_audit(

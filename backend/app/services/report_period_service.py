@@ -6,6 +6,8 @@ import calendar
 from datetime import date, timedelta
 
 AUTO_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
+PERIOD_COMPARISON_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
+HTML_TEMPLATE_REPORT_TYPES = PERIOD_COMPARISON_REPORT_TYPES | frozenset({"diagnosis"})
 MANUAL_REPORT_TYPES = frozenset({"diagnosis"})
 
 

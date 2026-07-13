@@ -15,6 +15,7 @@ from app.core.redis_client import redis_health
 from app.schemas.common import ApiResponse
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 from app.services.menu_permission_service import require_health_ops_access
+from app.services.playwright_health import playwright_chromium_health
 from app.services.system_service import check_database
 
 router = APIRouter()
@@ -59,6 +60,7 @@ def _detailed_health_payload(db: Session) -> dict:
         "redis": redis_status,
         "celery": celery_status,
         "molizhishu": _molizhishu_health(public=False),
+        "playwright_chromium": playwright_chromium_health(),
         "celery_queues": queue_snapshot,
         "timestamp": datetime.now(UTC).isoformat(),
     }

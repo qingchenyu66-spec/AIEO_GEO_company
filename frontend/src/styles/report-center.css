@@ -626,3 +626,24 @@
     box-shadow: none;
   }
 }
+
+.report-html-preview {
+  padding: 0;
+  gap: 0;
+  min-height: 0;
+}
+
+.report-html-preview .report-preview-actions {
+  padding: 12px 16px;
+  border-top: 1px solid #e2e8f0;
+  background: #fafcff;
+}
+
+.report-html-frame {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 520px;
+  border: 0;
+  background: #f5f7fb;
+}

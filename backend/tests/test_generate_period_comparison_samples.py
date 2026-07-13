@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.generate_period_comparison_samples import (
+from app.services.report_period_comparison_service import (
     enrich_competitor_analytics,
     render_competitor_html,
 )
