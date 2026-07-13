@@ -2131,6 +2131,8 @@ def _appearance_order_rank(
     text: str,
     brand_terms: list[str],
     scope: str | None = None,
+    *,
+    allow_global: bool = True,
 ) -> int | None:
     """When answer has no category/numbered list, rank by appearance order in scope section."""
     if scope:
@@ -2141,6 +2143,11 @@ def _appearance_order_rank(
         )
         if scoped is not None:
             return scoped
+        if not allow_global:
+            return None
+
+    if not allow_global:
+        return None
 
     order = 0
     for raw_line in text.splitlines():
@@ -2182,6 +2189,7 @@ def _resolve_brand_rank(
     is_industry_task = asset is not None and _is_industry_monitor_keyword(monitor_keyword, asset)
     scope = _ranking_scope_text(monitor_keyword, subtask.prompt)
     answer_text = _subtask_answer_plaintext(subtask)
+    has_parsed_entries = bool(_collect_ranking_entries(subtask))
 
     rank_from_list, in_ranking_list = _find_brand_in_rankings(
         subtask,
@@ -2194,15 +2202,26 @@ def _resolve_brand_rank(
     if in_ranking_list:
         return None, True
 
-    if _collect_ranking_entries(subtask):
+    appearance_kwargs = {"allow_global": not has_parsed_entries}
+    if has_parsed_entries:
         if has_brand_in_text:
-            appearance_rank = _appearance_order_rank(answer_text, brand_terms, scope)
+            appearance_rank = _appearance_order_rank(
+                answer_text,
+                brand_terms,
+                scope,
+                **appearance_kwargs,
+            )
             if appearance_rank is not None:
                 return appearance_rank, True
-        return None, False
+        return None, has_brand_in_text
 
     if has_brand_in_text:
-        appearance_rank = _appearance_order_rank(answer_text, brand_terms, scope)
+        appearance_rank = _appearance_order_rank(
+            answer_text,
+            brand_terms,
+            scope,
+            **appearance_kwargs,
+        )
         if appearance_rank is not None:
             return appearance_rank, True
 

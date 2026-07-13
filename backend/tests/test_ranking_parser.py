@@ -230,3 +230,27 @@ def test_scoped_appearance_order_uses_matching_section():
         "LED广告公司推荐",
     )
     assert rank == 2
+
+
+def test_scoped_rank_uses_brand_category_when_not_in_top_section():
+    text = """
+一、LED 显示屏生产 / 工程厂家
+**区域优质工程商**
+- 华东：杭州必见科技
+- 西南：艾迪亚控股
+
+二、全国 LED 大屏媒体运营商
+1. 郁金香传媒
+2. 联屏传媒
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert aidiya and aidiya[0]["name"] == "艾迪亚控股"
+    assert aidiya[0]["rank"] == 2
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "LED广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 2

@@ -52,6 +52,19 @@ def _clean_item_name(text: str) -> str:
     return value.strip()
 
 
+def _extract_list_item_name(text: str) -> str:
+    """「西南：艾迪亚控股」类 bullet 只取冒号后的公司名。"""
+    raw = re.sub(r"^[-•·▪*]\s*", "", (text or "").strip())
+    region_match = re.match(r"^[^：:\n]{1,10}[：:]\s*(.+)$", raw)
+    if region_match:
+        tail = region_match.group(1).strip()
+        company = re.split(r"[、，,/／]", tail)[0].strip()
+        cleaned = _clean_item_name(company)
+        if cleaned:
+            return cleaned
+    return _clean_item_name(raw)
+
+
 def _parse_rank_token(token: str | None) -> int | None:
     text = str(token or "").strip()
     if not text:
@@ -330,7 +343,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     in_company_block = False
 
     def append_item(name: str, rank: int | None, *, category: str | None = None) -> None:
-        cleaned = _clean_item_name(name)
+        cleaned = _extract_list_item_name(name)
         if not cleaned:
             return
         bucket = category if category is not None else (current_section or current_category)
@@ -528,11 +541,56 @@ def find_best_brand_rank_scoped(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Prefer ranks inside categories that match monitor keyword / prompt."""
-    scoped_entries, filtered = _entries_in_scope(entries, scope)
-    rank, matched = find_best_brand_rank(scoped_entries, match_name, skip_name=skip_name)
-    if filtered:
-        return rank, matched
+    """Prefer ranks in the scope-best category among categories where brand actually appears."""
+    matched_entries: list[dict[str, Any]] = []
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name or not match_name(name):
+            continue
+        if skip_name and skip_name(name):
+            continue
+        matched_entries.append(entry)
+    if not matched_entries:
+        return None, False
+
+    scope_text = str(scope or "").strip()
+    categorized = [
+        entry for entry in matched_entries
+        if str(entry.get("category") or "").strip()
+    ]
+    if scope_text and categorized:
+        categories = {
+            str(entry.get("category") or "").strip()
+            for entry in categorized
+        }
+        scores = {
+            category: ranking_category_scope_score(category, scope_text)
+            for category in categories
+        }
+        best_category = max(scores, key=lambda key: (scores[key], len(key)))
+        best_score = scores[best_category]
+        if best_score >= 100:
+            preferred = {
+                category for category, score in scores.items()
+                if score >= max(best_score * 0.45, 100)
+            }
+        else:
+            preferred = {best_category}
+        preferred_ranks: list[float] = []
+        for entry in categorized:
+            category = str(entry.get("category") or "").strip()
+            if category not in preferred:
+                continue
+            rank = entry.get("rank")
+            if rank is None:
+                continue
+            try:
+                preferred_ranks.append(float(rank))
+            except (TypeError, ValueError):
+                continue
+        if preferred_ranks:
+            return min(preferred_ranks), True
+
     return find_best_brand_rank(entries, match_name, skip_name=skip_name)
 
 

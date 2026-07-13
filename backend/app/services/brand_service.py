@@ -505,7 +505,13 @@ def _is_industry_monitor_keyword(text: str, asset: BrandAsset) -> bool:
     if any(keyword == anchor or keyword in anchor or anchor in keyword for anchor in anchors):
         return False
     industry_tokens = ("优化", "监测", "推广", "诊断", "SEO", "AEO", "DSO")
-    return any(token in keyword for token in industry_tokens) and not keyword.endswith("公司")
+    if any(token in keyword for token in industry_tokens) and not keyword.endswith("公司"):
+        return True
+    scene_tokens = (
+        "广告", "传媒", "媒体", "户外", "电梯", "机场", "地铁", "高铁", "公交",
+        "LED", "大屏", "站牌", "灯箱", "分众", "梯媒",
+    )
+    return any(token.casefold() in keyword.casefold() for token in scene_tokens)
 
 
 def brand_exposure_terms(asset: BrandAsset, groups: list[dict[str, Any]]) -> list[str]:
