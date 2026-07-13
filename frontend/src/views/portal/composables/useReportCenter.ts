@@ -7,7 +7,6 @@ import {
   downloadReportExport,
   getReportDetail,
   getReportList,
-  isPeriodHtmlReportType,
   isHtmlTemplateReportType,
   publishReport,
   reportPreviewHtmlUrl,
