@@ -111,6 +111,21 @@ def _strip_category_prefix(text: str) -> str:
     return re.sub(r"^[一二三四五六七八九十百]+[、.．]\s*", "", text.strip()).strip()
 
 
+def _split_combined_header_brands(text: str) -> list[str]:
+    """### 艾迪亚控股、澜翼传媒、麦迪威广告 → 多个品牌名（同段并列排名）。"""
+    cleaned = re.sub(r"^#+\s*", "", (text or "").strip())
+    cleaned = re.sub(r"^\d+[\.、．]\s*", "", cleaned)
+    if not cleaned or ("、" not in cleaned and "，" not in cleaned):
+        return []
+    parts = re.split(r"[、，,]", cleaned)
+    names = [_clean_item_name(part.strip()) for part in parts if part.strip()]
+    if len(names) < 2:
+        return []
+    if any(len(name) > 36 for name in names):
+        return []
+    return names
+
+
 def _extract_category_name(line: str) -> str:
     stripped = line.strip()
     for pattern in (
@@ -189,6 +204,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
     current_category: str | None = None
+    current_section: str | None = None
     appearance_counters: dict[str | None, int] = {}
 
     def append_item(name: str, rank: int | None) -> None:
@@ -210,7 +226,19 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         if _is_markdown_table_line(line):
             continue
         if _is_category_header(line):
-            current_category = _extract_category_name(line)
+            category_name = _extract_category_name(line)
+            combined = _split_combined_header_brands(category_name)
+            if combined:
+                group_category = current_section or current_category or category_name
+                saved_category = current_category
+                current_category = group_category
+                for index, name in enumerate(combined, 1):
+                    append_item(name, index)
+                current_category = saved_category
+                continue
+            if line.lstrip().startswith("##") and not line.lstrip().startswith("###"):
+                current_section = category_name
+            current_category = category_name
             appearance_counters.setdefault(current_category, 0)
             continue
 
@@ -239,8 +267,9 @@ def find_best_brand_rank(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Return best (smallest) rank among matched entries; True if any name matched."""
-    best_rank: int | float | None = None
+    """Return best rank among matched entries; prefer category-local over flat global rank."""
+    category_ranks: list[float] = []
+    flat_ranks: list[float] = []
     matched = False
     for entry in entries:
         name = str(entry.get("name") or "").strip()
@@ -256,8 +285,12 @@ def find_best_brand_rank(
             numeric = float(rank)
         except (TypeError, ValueError):
             continue
-        if best_rank is None or numeric < best_rank:
-            best_rank = numeric
-    if best_rank is not None:
-        return best_rank, True
+        if entry.get("category"):
+            category_ranks.append(numeric)
+        else:
+            flat_ranks.append(numeric)
+    if category_ranks:
+        return min(category_ranks), True
+    if flat_ranks:
+        return min(flat_ranks), True
     return None, matched

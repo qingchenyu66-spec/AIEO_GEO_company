@@ -109,6 +109,33 @@ def test_prompt_keyword_match_score_accepts_industry_variant_suffix() -> None:
     assert _prompt_keyword_match_score("地铁广告公司哪家好", "地铁广告公司推荐") >= 500
 
 
+def test_find_brand_rank_prefers_category_local_over_api_flat() -> None:
+    from types import SimpleNamespace
+
+    subtask = SimpleNamespace(
+        prompt="公交广告公司哪家好",
+        answer_content="""
+一、沧州本地推荐
+1. 沧州市都市传媒公交广告有限公司
+2. 沧州公共交通集团有限公司
+二、全国性头部企业
+1. 艾迪亚控股集团
+2. 德高广告
+""",
+        mention_context=None,
+        all_rankings_json=[
+            {"name": "沧州市都市传媒公交广告有限公司", "rank": 1},
+            {"name": "沧州公共交通集团有限公司", "rank": 2},
+            {"name": "艾迪亚控股集团", "rank": 3},
+        ],
+        raw_result_json={},
+        mention_position=3,
+    )
+    rank, mentioned = _resolve_brand_rank(subtask, "公交广告公司哪家好", ["艾迪亚"], asset=None)
+    assert mentioned is True
+    assert rank == 1
+
+
 def test_resolve_prompt_monitor_keyword_maps_variant_prompt_to_configured_keyword() -> None:
     groups = [
         {

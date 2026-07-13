@@ -74,3 +74,26 @@ def test_find_best_brand_rank_across_categories():
     rank, matched = find_best_brand_rank(entries, lambda name: "艾迪亚" in name)
     assert matched is True
     assert rank == 1
+
+
+def test_find_best_brand_rank_prefers_category_over_flat_global():
+    entries = [
+        {"name": "艾迪亚控股集团", "rank": 3, "category": None},
+        {"name": "艾迪亚控股集团", "rank": 1, "category": "全国性头部企业"},
+    ]
+    rank, matched = find_best_brand_rank(entries, lambda name: "艾迪亚" in name)
+    assert matched is True
+    assert rank == 1
+
+
+def test_parse_combined_header_brands():
+    text = """
+## 三、全案整合代理商（中小品牌）
+### 艾迪亚控股、澜翼传媒、麦迪威广告
+- 不独占核心一手资源
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert aidiya
+    assert aidiya[0]["rank"] == 1
+    assert "全案整合" in str(aidiya[0]["category"])

@@ -2099,17 +2099,14 @@ def _find_brand_in_rankings(
         return asset is not None and _is_industry_monitor_keyword(name, asset)
 
     text = _subtask_answer_plaintext(subtask)
+    merged: list[dict[str, Any]] = []
     for entries in (
         normalize_structured_rankings(subtask.all_rankings_json or []),
         parse_answer_rankings(text),
     ):
-        if not entries:
-            continue
-        rank, matched = find_best_brand_rank(entries, match_name, skip_name=skip_name)
-        if rank is not None:
-            return rank, True
-        if matched:
-            return None, True
+        merged.extend(entries)
+    if merged:
+        return find_best_brand_rank(merged, match_name, skip_name=skip_name)
     return None, False
 
 
