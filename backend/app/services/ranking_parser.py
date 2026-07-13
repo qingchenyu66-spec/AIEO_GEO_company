@@ -40,6 +40,10 @@ SUBSECTION_LABELS = frozenset({
     "特点", "适用", "适用人群", "优势", "短板", "特色", "定位", "覆盖", "适合",
     "核心场景", "覆盖规模", "核心优势", "投放建议", "快速选型",
 })
+_SUBCATEGORY_HINTS = (
+    "大厂", "工程商", "运营商", "代理商", "服务商", "制造商", "厂家", "媒体",
+    "头部", "区域", "性价比", "上市", "量产", "工程", "本地",
+)
 
 
 def _clean_item_name(text: str) -> str:
@@ -58,6 +62,7 @@ def _extract_list_item_name(text: str) -> str:
     region_match = re.match(r"^[^：:\n]{1,10}[：:]\s*(.+)$", raw)
     if region_match:
         tail = region_match.group(1).strip()
+        tail = re.split(r"[（(]", tail)[0].strip()
         company = re.split(r"[、，,/／]", tail)[0].strip()
         cleaned = _clean_item_name(company)
         if cleaned:
@@ -225,6 +230,17 @@ def _is_subsection_label(content: str) -> bool:
     cleaned = re.sub(r"^[一二三四五六七八九十\d]+[\.、．]\s*", "", content).strip()
     head = cleaned.split("：", 1)[0].split(":", 1)[0].strip()
     return head in SUBSECTION_LABELS or any(cleaned.startswith(label) for label in SUBSECTION_LABELS)
+
+
+def _looks_like_subcategory_header(content: str) -> bool:
+    """### 区域优质工程商 / 头部上市大厂 → 子分类标题，不是公司名。"""
+    cleaned = re.sub(r"^[#\s\d\.、]+", "", (content or "").strip())
+    cleaned = re.sub(r"[（(].*[)）]$", "", cleaned).strip()
+    if not cleaned or NUMBERED_TITLE_RE.match(cleaned):
+        return False
+    if SECTION_TITLE_RE.match(cleaned):
+        return True
+    return any(hint in cleaned for hint in _SUBCATEGORY_HINTS)
 
 
 def _next_section_rank(counters: dict[str | None, int], section: str | None) -> int:
@@ -402,6 +418,12 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             if _is_subsection_label(content):
                 current_category = _extract_category_name(line)
                 in_company_block = True
+                continue
+            if level == 3 and _looks_like_subcategory_header(content):
+                current_section = _extract_category_name(line)
+                current_category = current_section
+                appearance_counters.setdefault(current_section, 0)
+                in_company_block = False
                 continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True
@@ -605,16 +627,25 @@ def _is_major_section_line(line: str) -> bool:
     return bool(_MAJOR_SECTION_RE.match(stripped))
 
 
+def _is_rankable_content_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or len(stripped) > 120:
+        return False
+    if LIST_ITEM_RE.match(stripped) or BULLET_ITEM_RE.match(stripped):
+        return True
+    plain = re.sub(r"^\*+\s*|\*+$", "", stripped)
+    return bool(NUMBERED_TITLE_RE.match(plain))
+
+
 def appearance_order_rank_scoped(
     text: str,
     match_line: Callable[[str], bool],
     scope: str,
 ) -> int | None:
-    """Rank by appearance order inside the scope-best major section only."""
-    scope_text = str(scope or "").strip()
-    if not scope_text:
-        return None
+    """Rank within major sections that contain the brand; prefer scope-best section."""
     lines = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip() for raw in text.splitlines()]
+    scope_text = str(scope or "").strip()
+
     section_ranges: list[tuple[int, int, int]] = []
     current_start: int | None = None
     current_score = -1
@@ -624,19 +655,39 @@ def appearance_order_rank_scoped(
         if current_start is not None:
             section_ranges.append((current_start, index, current_score))
         current_start = index
-        current_score = ranking_category_scope_score(_extract_category_name(line), scope_text)
+        current_score = ranking_category_scope_score(_extract_category_name(line), scope_text) if scope_text else 0
     if current_start is not None:
         section_ranges.append((current_start, len(lines), current_score))
-    if not section_ranges:
+
+    def rank_in_range(start: int, end: int) -> int | None:
+        order = 0
+        for line in lines[start + 1:end]:
+            if not line or _is_major_section_line(line):
+                continue
+            if not _is_rankable_content_line(line):
+                continue
+            order += 1
+            if match_line(line):
+                return order
         return None
-    start, end, best_score = max(section_ranges, key=lambda item: item[2])
-    if best_score < 100:
-        return None
+
+    hits: list[tuple[int, int]] = []
+    for start, end, score in section_ranges:
+        rank = rank_in_range(start, end)
+        if rank is not None:
+            hits.append((score, rank))
+
+    if hits:
+        best_score = max(score for score, _ in hits)
+        threshold = max(best_score * 0.45, 100) if scope_text else -1
+        preferred = [rank for score, rank in hits if score >= threshold]
+        if preferred:
+            return min(preferred)
+        return min(rank for _, rank in hits)
+
     order = 0
-    for line in lines[start + 1:end]:
-        if not line or len(line) > 120:
-            continue
-        if _is_category_header(line) or _is_major_section_line(line):
+    for line in lines:
+        if not _is_rankable_content_line(line):
             continue
         order += 1
         if match_line(line):

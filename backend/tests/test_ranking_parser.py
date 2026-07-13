@@ -254,3 +254,25 @@ def test_scoped_rank_uses_brand_category_when_not_in_top_section():
     )
     assert matched is True
     assert rank == 2
+
+
+def test_parse_markdown_h3_subcategory_then_region_bullets():
+    text = """
+## 一、LED显示屏生产/工程厂家
+### 头部上市大厂（大型地标）
+1. 利亚德 LEYARD
+2. 洲明科技 Unilumin
+### 区域优质工程商（本地落地）
+- 华东：杭州华见科技
+- 西南：艾迪亚控股（利亚德/洲明双一级代理，重庆、贵州商圈大屏）
+
+## 二、全国LED大屏媒体运营商
+1. 郁金香传媒
+2. 联屏传媒
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["name"] == "艾迪亚控股"
+    assert aidiya[0]["rank"] == 2
+    assert "区域优质工程商" in str(aidiya[0]["category"])

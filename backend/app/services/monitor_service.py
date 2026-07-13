@@ -2202,29 +2202,18 @@ def _resolve_brand_rank(
     if in_ranking_list:
         return None, True
 
-    appearance_kwargs = {"allow_global": not has_parsed_entries}
-    if has_parsed_entries:
-        if has_brand_in_text:
-            appearance_rank = _appearance_order_rank(
-                answer_text,
-                brand_terms,
-                scope,
-                **appearance_kwargs,
-            )
-            if appearance_rank is not None:
-                return appearance_rank, True
-        return None, has_brand_in_text
-
+    # ② 正文有品牌但结构化未命中 → 在品牌所在章节内按列表/bullet 行计数
     if has_brand_in_text:
         appearance_rank = _appearance_order_rank(
             answer_text,
             brand_terms,
             scope,
-            **appearance_kwargs,
+            allow_global=not has_parsed_entries,
         )
         if appearance_rank is not None:
             return appearance_rank, True
 
+    # ③ 无列表结构且非场景词：才回退 API 原始 mention_position
     if is_industry_task:
         return None, has_brand_in_text
 
@@ -3267,3 +3256,5 @@ def recompute_subtask_rank_from_answer(
     rank, _mentioned = _resolve_brand_rank(subtask, task.monitor_keywords, brand_terms, asset)
     if rank is not None:
         subtask.mention_position = int(rank) if float(rank).is_integer() else rank
+    else:
+        subtask.mention_position = None
