@@ -1,5 +1,7 @@
 """Premium 报告 8 大模块测试。"""
 
+import pytest
+
 from app.services.report_period_content_service import (
     REPORT_MODULE_SCHEMA_VERSION,
     build_premium_content,
@@ -9,6 +11,7 @@ from app.services.report_period_content_service import (
     sanitize_report_modules_for_type,
 )
 from app.services.report_premium_context_service import build_premium_report_context
+from app.services.report_premium_pdf_service import render_premium_report_html
 
 
 def _demo_kpis() -> dict:
@@ -83,6 +86,61 @@ def test_weekly_action_plan_differs_from_annual() -> None:
     )
     assert weekly["action_plan"]["title"] != annual["action_plan"]["title"]
     assert "周" in weekly["preface"]["sample_description"] or "本周" in weekly["preface"]["sample_description"]
+
+
+@pytest.mark.parametrize("report_type", ["weekly", "monthly", "quarterly"])
+def test_periodic_modules_include_competitor_analysis(report_type: str) -> None:
+    modules = build_report_modules(
+        brand_name="艾迪亚控股集团有限公司",
+        company_name="艾迪亚控股集团有限公司",
+        report_type=report_type,
+        period_label="2026-Q2",
+        kpis=_demo_kpis(),
+        platform_stats=_demo_platforms(),
+        sentiment_counts={"正面": 30, "中性": 10, "负面": 2},
+        top_sources=[],
+        competitor_names=["分众传媒", "白马户外媒体"],
+        diagnosis={
+            "competitor_landscape": [
+                {"name": "艾迪亚控股集团有限公司", "avg_rank": 4.2, "mention_rate": 8.8, "is_brand": True},
+                {"name": "分众传媒", "avg_rank": 1.4, "mention_rate": 93.8},
+                {"name": "白马户外媒体", "avg_rank": 5.1, "mention_rate": 2.5},
+            ],
+        },
+    )
+
+    assert modules["competitor_analysis"]["head_competitor"]["name"] == "分众传媒"
+    assert modules["competitor_analysis"]["brand_position"]["risk"]["level"] == "watch"
+    assert modules["overview"]["interpretations"]
+    assert "sentiment" in modules
+    assert "source_influence" in modules
+
+
+def test_premium_html_renders_competitor_summary_actions_and_risk_text() -> None:
+    payload = {
+        "title": "GEO 监测周报",
+        "report_type": "weekly",
+        "brand_name": "艾迪亚控股集团有限公司",
+        "company_name": "艾迪亚控股集团有限公司",
+        "period_label": "2026-W27",
+        "completed_count": 120,
+        "platform_stats": _demo_platforms(),
+        "sentiment_counts": {"正面": 80, "中性": 30, "负面": 10},
+        "diagnosis": {
+            "competitor_landscape": [
+                {"name": "艾迪亚控股集团有限公司", "avg_rank": 4.2, "mention_rate": 8.8, "is_brand": True},
+                {"name": "分众传媒", "avg_rank": 1.4, "mention_rate": 93.8},
+            ],
+        },
+        "competitors": ["分众传媒"],
+    }
+
+    html = render_premium_report_html(payload)
+
+    assert "竞争格局摘要" in html
+    assert "运营建议动作" in html
+    assert "排名风险" in html
+    assert "#F28E2B" in html
 
 
 def test_diagnosis_report_modules() -> None:

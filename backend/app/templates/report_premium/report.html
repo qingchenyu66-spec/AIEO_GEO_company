@@ -33,6 +33,13 @@
     .list { list-style:none; display:flex; flex-direction:column; gap:2.5mm; }
     .list li { font-size:11px; line-height:1.7; color:#cbd5e1; padding-left:4mm; position:relative; }
     .list li::before { content:""; position:absolute; left:0; top:6px; width:5px; height:5px; border-radius:50%; background:var(--cyan); }
+    .entity-dot { display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:50%; vertical-align:1px; }
+    .risk-badge { display:inline-block; margin-left:4px; padding:1px 5px; border:1px solid currentColor; border-radius:999px; font-size:9px; white-space:nowrap; }
+    .risk-good { color:#34d399; } .risk-watch { color:#facc15; } .risk-warning { color:#fb923c; } .risk-danger { color:#f87171; } .risk-neutral { color:#94a3b8; }
+    .competitor-grid { display:grid; grid-template-columns:1.05fr .95fr; gap:4mm; margin-top:4mm; min-height:0; }
+    .competitor-actions { margin:2mm 0 0 4mm; }
+    .competitor-actions li { margin-bottom:1mm; font-size:10px; line-height:1.45; color:#cbd5e1; }
+    .risk-legend { margin-top:2mm; font-size:9px; line-height:1.8; color:var(--muted); }
     .chart { width:100%; border-radius:8px; background:#fff; padding:2mm; }
     .foot { margin-top:auto; padding-top:3mm; border-top:1px solid var(--line); display:flex; justify-content:space-between; font-size:10px; color:var(--muted); }
     .cover-title { font-size:38px; font-weight:700; line-height:1.15; }
@@ -169,6 +176,33 @@
       </table>
     </div>
     <p class="lead card" style="padding:3mm 4mm;"><strong>平台核心结论：</strong>{{ platform_benchmark.conclusion }}</p>
+    {% if competitor_analysis.rows %}
+    <div class="competitor-grid">
+      <div class="card">
+        <div class="tag">竞争格局摘要</div>
+        <p class="lead" style="margin:2mm 0;">{{ competitor_analysis.management_summary }}</p>
+        <table>
+          <thead><tr><th>品牌 / 竞品</th><th>提及率</th><th>均位与风险</th></tr></thead>
+          <tbody>
+            {% for row in competitor_analysis.rows[:6] %}
+            <tr>
+              <td><span class="entity-dot" style="background:{{ row.style.color }};"></span>{{ row.name }}{% if row.is_brand %}（本品牌）{% endif %}</td>
+              <td>{{ row.mention_rate }}%</td>
+              <td>#{{ row.avg_rank or '—' }} <span class="risk-badge risk-{{ row.risk.level }}">{{ row.risk.label }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="tag">运营建议动作</div>
+        <ol class="competitor-actions">
+          {% for action in competitor_analysis.actions[:4] %}<li>{{ action }}</li>{% endfor %}
+        </ol>
+        <p class="risk-legend"><strong>排名风险：</strong>前三名绿色达标；第4-5名黄色关注；第6-7名橙色警告；第8名以后红色高风险。颜色同时配合文字标签，便于打印识别。</p>
+      </div>
+    </div>
+    {% endif %}
     <div class="foot"><span>平台横评</span><span>Platform Benchmark</span></div>
   </div>
 </section>

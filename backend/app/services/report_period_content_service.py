@@ -7,10 +7,11 @@ from datetime import date
 from typing import Any
 
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.report_competitor_visuals import build_competitor_analysis
 
 PERIODIC_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
 ALL_RICH_REPORT_TYPES = PERIODIC_REPORT_TYPES | {"diagnosis"}
-REPORT_MODULE_SCHEMA_VERSION = 2
+REPORT_MODULE_SCHEMA_VERSION = 3
 
 _DIAGNOSIS_COVER_TITLE = "GEO企业诊断报告"
 _TITLE_PAREN_MARKERS = ("（", " (", "(")
@@ -525,6 +526,36 @@ def build_report_modules(
         "conclusion": platform_conclusion,
     }
 
+    competitor_rows = list(
+        diagnosis.get("competitor_landscape")
+        or kpis.get("competitor_landscape")
+        or []
+    )
+    if not any(row.get("is_brand") for row in competitor_rows):
+        competitor_rows.insert(
+            0,
+            {
+                "name": brand_name,
+                "avg_rank": avg_rank,
+                "mention_rate": mention_rate,
+                "is_brand": True,
+            },
+        )
+    known_names = {str(row.get("name") or "").strip() for row in competitor_rows}
+    for competitor_name in competitor_names:
+        cleaned_name = str(competitor_name or "").strip()
+        if cleaned_name and cleaned_name not in known_names:
+            competitor_rows.append(
+                {"name": cleaned_name, "avg_rank": None, "mention_rate": 0, "is_brand": False}
+            )
+            known_names.add(cleaned_name)
+    competitor_analysis = build_competitor_analysis(
+        brand_name=brand_name,
+        rows=competitor_rows,
+        platform_stats=platform_rows,
+        prompt_analytics=list(diagnosis.get("prompt_analytics") or []),
+    )
+
     source_rows = []
     for index, item in enumerate(top_sources[:8], start=1):
         title = str(item.get("title") or item.get("url") or "—")
@@ -649,6 +680,7 @@ def build_report_modules(
         "overview": overview,
         "sentiment": sentiment,
         "platform_benchmark": platform_benchmark,
+        "competitor_analysis": competitor_analysis,
         "source_influence": source_influence,
         "risk_and_strategy": risk_and_strategy,
         "action_plan": action_plan,
@@ -781,7 +813,7 @@ def merge_report_modules(
     if not ai_modules:
         return rule_modules
     merged = dict(rule_modules)
-    for key in ("preface", "overview", "sentiment", "platform_benchmark", "source_influence", "risk_and_strategy", "action_plan"):
+    for key in ("preface", "overview", "sentiment", "platform_benchmark", "competitor_analysis", "source_influence", "risk_and_strategy", "action_plan"):
         ai_block = ai_modules.get(key)
         if isinstance(ai_block, dict) and ai_block:
             base = dict(merged.get(key) or {})

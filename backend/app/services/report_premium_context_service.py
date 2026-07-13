@@ -130,7 +130,7 @@ def _ensure_report_modules(payload: dict[str, Any]) -> dict[str, Any]:
         platform_stats=list(payload.get("platform_stats") or []),
         sentiment_counts=_sentiment_dict(payload),
         top_sources=list(payload.get("top_sources") or []),
-        competitor_names=[],
+        competitor_names=list(payload.get("competitors") or []),
         diagnosis=diagnosis,
         highlights=list(payload.get("highlights") or []),
     )
@@ -186,6 +186,7 @@ def build_premium_report_context(payload: dict[str, Any]) -> dict[str, Any]:
         "overview": modules.get("overview") or {},
         "sentiment": modules.get("sentiment") or {},
         "platform_benchmark": modules.get("platform_benchmark") or {},
+        "competitor_analysis": modules.get("competitor_analysis") or {},
         "source_influence": modules.get("source_influence") or {},
         "risk_and_strategy": modules.get("risk_and_strategy") or {},
         "action_plan": modules.get("action_plan") or {},
