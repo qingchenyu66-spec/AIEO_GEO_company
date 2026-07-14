@@ -54,10 +54,12 @@ _REGION_LABEL_RE = re.compile(
     r")$"
 )
 _NON_RANK_CATEGORY_HINTS = (
-    "判断标准", "挑选", "如何选", "注意事项", "总结", "结语", "核心判断", "选型建议",
+    "判断标准", "挑选", "如何选", "怎么选", "注意事项", "总结", "结语",
+    "核心判断", "选型建议", "快速对照", "快速参考", "对照",
 )
 _SENTENCE_NAME_HINTS = (
     "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
+    "→", "->", "只投", "预算有限",
 )
 
 
@@ -474,6 +476,13 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 in_company_block = True
                 continue
             if level == 1:
+                # `# 怎么选公司？` 不能直接跳过：否则 1~7 对照表仍挂在上一 ## 节，rank 被吃成 7
+                cat = _extract_category_name(line)
+                if _is_non_rank_category(cat):
+                    current_section = cat
+                    current_category = cat
+                    appearance_counters.setdefault(current_section, 0)
+                    in_company_block = False
                 continue
             if level == 2 or SECTION_TITLE_RE.match(content):
                 current_section = _extract_category_name(line)

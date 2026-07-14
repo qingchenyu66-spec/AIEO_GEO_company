@@ -93,7 +93,38 @@ def test_resolve_brand_rank_blocks_api_when_prompt_is_scene_keyword() -> None:
     assert detail.rank == 2
 
 
-def test_should_trigger_llm_for_api_rank_on_scene_prompt() -> None:
+def test_resolve_brand_rank_does_not_skip_company_names_ending_with_media() -> None:
+    """「艾迪亚传媒」不得被当作行业词 skip，否则会落到「怎么选」第 7 条。"""
+    text = """
+## 三、全国整合投放代理公司（多城一站式，中小品牌省心）
+1. **传播易**：线上户外广告投放平台
+2. **艾迪亚传媒**：覆盖一二三线城市地铁/公交/高铁
+# 怎么选公司？快速对照
+7. **多城市同步批量投放、预算有限** → 传播易、艾迪亚整合代理
+"""
+    asset = SimpleNamespace(
+        brand_name="艾迪亚控股集团有限公司",
+        brand_short_name="艾迪亚",
+        company_full_name="艾迪亚控股集团有限公司",
+    )
+    subtask = SimpleNamespace(
+        prompt="地铁广告公司推荐",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=7,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "艾迪亚控股集团有限公司",
+        ["艾迪亚", "艾迪亚控股", "艾迪亚传媒"],
+        asset=asset,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.source == "structured"
+
     resolution = BrandRankResolution(rank=13, mentioned=True, source="api", confidence=0.6)
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
 

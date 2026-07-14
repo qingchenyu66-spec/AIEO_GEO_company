@@ -2122,7 +2122,18 @@ def _find_brand_in_rankings(
         return _name_matches_brand(name, brand_terms)
 
     def skip_name(name: str) -> bool:
-        return asset is not None and _is_industry_monitor_keyword(name, asset)
+        # 仅跳过纯行业/场景词（如「电梯广告」），勿把「艾迪亚传媒」「分众传媒」当行业词丢掉
+        text = str(name or "").strip()
+        if not text or asset is None:
+            return False
+        if any(token in text for token in ("公司", "集团", "控股", "股份", "有限")):
+            return False
+        if any(brand in text for brand in brand_terms if brand and len(brand) >= 2):
+            return False
+        # 「XX传媒」多为公司名：含 2+ 汉字专名时不跳过
+        if text.endswith(("传媒", "广告", "媒体")) and len(text) >= 4:
+            return False
+        return _is_industry_monitor_keyword(text, asset)
 
     text = _subtask_answer_plaintext(subtask)
     scope = _ranking_scope_text(monitor_keywords, subtask.prompt)

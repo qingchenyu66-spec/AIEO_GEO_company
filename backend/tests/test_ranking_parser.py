@@ -328,3 +328,37 @@ def test_first_appearance_wins_when_brand_listed_twice():
     )
     assert matched is True
     assert rank == 2
+
+
+def test_metro_howto_section_does_not_steal_rank():
+    text = """
+## 一、全国头部独家地铁媒体运营商（一手资源，大品牌首选）
+### 1. 德高中国 JCDecaux（全球户外龙头）
+- 覆盖城市：北京、上海
+### 2. 北京地铁通成（北京地铁官方合资运营商）
+- 资质：北京地铁控股
+## 二、区域本土专业地铁传媒（单城深耕，本地性价比高）
+1. **西安时代尚优**：西安、天津地铁独家运营
+2. **深圳市城市轨道广告**：深圳地铁全线路一手资源
+3. **胜智广告**：上海、杭州多城整合
+## 三、全国整合投放代理公司（多城一站式，中小品牌省心）
+1. **传播易**：线上户外广告投放平台
+2. **艾迪亚传媒**：覆盖一二三线城市地铁/公交/高铁
+# 怎么选公司？快速对照
+1. **只投北京** → 北京地铁通成（官方一手）
+7. **多城市同步批量投放、预算有限** → 传播易、艾迪亚整合代理
+"""
+    entries = parse_answer_rankings(text)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["name"] == "艾迪亚传媒"
+    assert aidiya[0]["rank"] == 2
+    assert "整合投放" in str(aidiya[0]["category"])
+    assert not any(item.get("rank") == 7 and "艾迪亚" in str(item.get("name") or "") for item in entries)
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "地铁广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 2
