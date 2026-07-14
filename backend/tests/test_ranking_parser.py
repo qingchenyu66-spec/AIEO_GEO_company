@@ -114,8 +114,8 @@ def test_find_best_brand_rank_across_categories():
     ]
     rank, matched = find_best_brand_rank(entries, lambda name: "艾迪亚" in name)
     assert matched is True
-    assert rank == 1
-
+    # 同品牌多次出现：取文档中第一次，不用后段更好名次
+    assert rank == 2
 
 def test_find_best_brand_rank_prefers_category_over_flat_global():
     entries = [
@@ -282,19 +282,49 @@ def test_parse_yuanbao_crushed_bus_bullets_section_local_rank():
     text = """
 ## 全国性/跨国头部集团（适合全国联投、高端品牌）
 - **德高中国 (JCDecaux)**：全球户外广告巨头。[citation:1]
-## 重点城市公交集团直属公司（适合单城深耕）
--**北京**：北京巴士传媒股份有限公司[citation:2]- **上海**：上海公共交通广告有限公司[citation:2]
-## 综合性/下沉市场运营商（适合性价比、下沉市场）
-- **华君传媒**：在二三线城市有优势。[citation:3]- **艾迪亚控股 / 上海澜翼传媒**：侧重公交车身全场景整合。[citation:3]
+- **白马户外媒体**：国内老牌。[citation:8]
+- **华视传媒 / 世通华纳**：早期专注公交。[citation:5]## 重点城市公交集团直属公司（适合单城深耕、本地化投放）
+-**北京**：北京巴士传媒股份有限公司[citation:2][citation:9]
+- **上海**：上海公共交通广告有限公司[citation:2][citation:9]
+- **其他强市**：西安振兴公交广告、济南公共交通集团文化传媒。[citation:2]## 综合性/下沉市场运营商（适合性价比、二三线城市渗透）
+- **华君传媒**：在二三线城市及县域市场的公交媒体资源整合有优势。[citation:3]
+- **艾迪亚控股 / 上海澜翼传媒**：侧重公交车身全场景整合。[citation:7]
+- **省广集团 / 引力传媒**：以整合营销见长。[citation:5]## 挑选时的核心判断标准
+- **看资源权属**：优先问是不是公交集团直营。
 """
     entries = parse_answer_rankings(text)
     aidiya = [item for item in entries if "艾迪亚" in item["name"]]
     assert len(aidiya) == 1
+    assert aidiya[0]["name"] == "艾迪亚控股"
     assert aidiya[0]["rank"] == 2
+    assert "下沉" in str(aidiya[0]["category"]) or "综合" in str(aidiya[0]["category"])
+    # 标准小节不应计入公司列表
+    assert not any("看资源" in str(e.get("name") or "") for e in entries)
     rank, matched = find_best_brand_rank_scoped(
         entries,
         lambda name: "艾迪亚" in name,
         "公交广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 2
+
+
+def test_first_appearance_wins_when_brand_listed_twice():
+    text = """
+## 全国推荐
+1. 分众传媒
+2. 艾迪亚控股
+3. 新潮传媒
+## 区域推荐
+1. 华君传媒
+2. 省广集团
+3. 艾迪亚控股
+"""
+    entries = parse_answer_rankings(text)
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "广告公司推荐",
     )
     assert matched is True
     assert rank == 2

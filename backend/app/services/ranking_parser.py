@@ -46,10 +46,27 @@ _SUBCATEGORY_HINTS = (
 )
 
 
+_REGION_LABEL_RE = re.compile(
+    r"^(?:"
+    r"华东|华南|华西|华北|华中|西南|西北|东北|其他|其他强市|"
+    r"北京|上海|广州|深圳|杭州|成都|重庆|武汉|西安|南京|天津|苏州|济南|合肥|"
+    r"[\u4e00-\u9fff]{1,3}(?:省|市|区)?"
+    r")$"
+)
+_NON_RANK_CATEGORY_HINTS = (
+    "判断标准", "挑选", "如何选", "注意事项", "总结", "结语", "核心判断", "选型建议",
+)
+_SENTENCE_NAME_HINTS = (
+    "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
+)
+
+
 def _normalize_answer_layout(text: str) -> str:
-    """Split inline bullets crushed onto one line (common in yuanbao/doubao HTML export)."""
+    """Split inline bullets / headers crushed onto one line (yuanbao/doubao HTML export)."""
     normalized = re.sub(r"<[^>]+>", "\n", text or "")
     normalized = re.sub(r"\r", "\n", normalized)
+    # [citation:5]## 下一节 — 勿拆行内正常的 ### 标题（### 会被拆成 #\n##）
+    normalized = re.sub(r"(?<=[^\s#])(#{2,4}\s+)", r"\n\1", normalized)
     normalized = re.sub(r"(\[[^\]]*\])\s*-\s*", r"\1\n- ", normalized)
     normalized = re.sub(r"(?<=[。；！？])-\s*", "\n- ", normalized)
     # ponytail: `-**Name**` / `...- **Name**` without newline
@@ -62,24 +79,53 @@ def _clean_item_name(text: str) -> str:
     value = re.sub(r"\*\*", "", text or "")
     value = re.sub(r"\[\[[^\]]+\]\]", "", value)
     value = re.sub(r"\[[^\]]+\]\([^)]+\)", "", value)
+    value = re.sub(r"\[citation:\d+\]", "", value, flags=re.I)
+    value = re.sub(r"^[*·•▪]+", "", value.strip())
     value = re.sub(r"^[「『\"'“]+|[」』\"'”]+$", "", value.strip())
     value = re.sub(r"[（(].*?[)）]$", "", value.strip())
     value = re.sub(r"[：:，,;；\.。]+$", "", value.strip())
     return value.strip()
 
 
+def _looks_like_company_list_name(name: str) -> bool:
+    cleaned = str(name or "").strip()
+    if not cleaned or len(cleaned) > 40:
+        return False
+    if any(hint in cleaned for hint in _SENTENCE_NAME_HINTS):
+        return False
+    if cleaned.startswith("看") and "：" not in cleaned:
+        return False
+    return True
+
+
+def _is_non_rank_category(category: str | None) -> bool:
+    text = str(category or "").strip()
+    return bool(text) and any(hint in text for hint in _NON_RANK_CATEGORY_HINTS)
+
+
 def _extract_list_item_name(text: str) -> str:
-    """「西南：艾迪亚控股」类 bullet 只取冒号后的公司名。"""
+    """Extract company name from bullet: **公司**：说明 / 西南：公司 / 公司：说明."""
     raw = re.sub(r"^[-•·▪*]\s*", "", (text or "").strip())
-    region_match = re.match(r"^[^：:\n]{1,10}[：:]\s*(.+)$", raw)
-    if region_match:
-        tail = region_match.group(1).strip()
-        tail = re.split(r"[（(]", tail)[0].strip()
-        company = re.split(r"[、，,/／]", tail)[0].strip()
+    # **公司名** / **公司名**：说明（优先，避免被「地区：公司」规则抢成描述句）
+    bold = re.match(r"^\*\*([^*]+)\*\*", raw)
+    if bold:
+        company = re.split(r"[（(]", bold.group(1).strip())[0].strip()
+        company = re.split(r"[、，,/／]", company)[0].strip()
         cleaned = _clean_item_name(company)
         if cleaned:
             return cleaned
-    raw = re.sub(r"^\*\*([^*]+)\*\*", r"\1", raw)
+    # 西南：艾迪亚控股 — 仅当冒号前是地区/城市短标签
+    region_match = re.match(r"^([^：:\n]{1,10})[：:]\s*(.+)$", raw)
+    if region_match:
+        head = _clean_item_name(region_match.group(1))
+        if head and _REGION_LABEL_RE.match(head):
+            tail = region_match.group(2).strip()
+            tail = re.split(r"[（(]", tail)[0].strip()
+            company = re.split(r"[、，,/／]", tail)[0].strip()
+            cleaned = _clean_item_name(company)
+            if cleaned:
+                return cleaned
+    # 公司名：长说明 → 取冒号前
     if "：" in raw or ":" in raw:
         head = re.split(r"[：:]", raw, maxsplit=1)[0].strip()
         head = re.split(r"[（(]", head)[0].strip()
@@ -384,9 +430,11 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
 
     def append_item(name: str, rank: int | None, *, category: str | None = None) -> None:
         cleaned = _extract_list_item_name(name)
-        if not cleaned:
+        if not cleaned or not _looks_like_company_list_name(cleaned):
             return
         bucket = category if category is not None else (current_section or current_category)
+        if _is_non_rank_category(bucket):
+            return
         if rank is None:
             appearance_counters[bucket] = appearance_counters.get(bucket, 0) + 1
             rank = appearance_counters[bucket]
@@ -587,13 +635,15 @@ def find_best_brand_rank_scoped(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Prefer ranks in the scope-best category among categories where brand actually appears."""
+    """Prefer first document occurrence in scope-best categories (not the best/min of later sections)."""
     matched_entries: list[dict[str, Any]] = []
     for entry in entries:
         name = str(entry.get("name") or "").strip()
         if not name or not match_name(name):
             continue
         if skip_name and skip_name(name):
+            continue
+        if _is_non_rank_category(entry.get("category")):
             continue
         matched_entries.append(entry)
     if not matched_entries:
@@ -621,8 +671,12 @@ def find_best_brand_rank_scoped(
                 if score >= max(best_score * 0.45, 100)
             }
         else:
-            preferred = {best_category}
-        preferred_ranks: list[float] = []
+            # scope 分不清时按正文第一次出现，不按 set 顺序抽一个类
+            preferred = {
+                str(entry.get("category") or "").strip()
+                for entry in categorized
+            }
+        # Document order: 同品牌多次出现时用第一次，不再取 min(rank) 变成后段更好名次
         for entry in categorized:
             category = str(entry.get("category") or "").strip()
             if category not in preferred:
@@ -631,11 +685,9 @@ def find_best_brand_rank_scoped(
             if rank is None:
                 continue
             try:
-                preferred_ranks.append(float(rank))
+                return float(rank), True
             except (TypeError, ValueError):
                 continue
-        if preferred_ranks:
-            return min(preferred_ranks), True
 
     return find_best_brand_rank(entries, match_name, skip_name=skip_name)
 
@@ -725,15 +777,17 @@ def find_best_brand_rank(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Return best rank among matched entries; prefer category-local over flat global rank."""
-    category_ranks: list[float] = []
-    flat_ranks: list[float] = []
+    """Return first document-order rank among matched entries; prefer categorized over flat."""
+    category_rank: float | None = None
+    flat_rank: float | None = None
     matched = False
     for entry in entries:
         name = str(entry.get("name") or "").strip()
         if not name or not match_name(name):
             continue
         if skip_name and skip_name(name):
+            continue
+        if _is_non_rank_category(entry.get("category")):
             continue
         matched = True
         rank = entry.get("rank")
@@ -744,11 +798,12 @@ def find_best_brand_rank(
         except (TypeError, ValueError):
             continue
         if entry.get("category"):
-            category_ranks.append(numeric)
-        else:
-            flat_ranks.append(numeric)
-    if category_ranks:
-        return min(category_ranks), True
-    if flat_ranks:
-        return min(flat_ranks), True
+            if category_rank is None:
+                category_rank = numeric
+        elif flat_rank is None:
+            flat_rank = numeric
+    if category_rank is not None:
+        return category_rank, True
+    if flat_rank is not None:
+        return flat_rank, True
     return None, matched
