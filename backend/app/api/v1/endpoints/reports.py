@@ -40,7 +40,7 @@ def generate_report_endpoint(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """生成品牌诊断报告——仅运营端手动触发，初始为草稿。周期报告由 Celery 自动生成并发布。"""
+    """生成品牌诊断报告——仅运营端手动触发，生成即为可用（无草稿）。周期报告由 Celery 自动生成并发布。"""
     tenant_id = payload.get("tenant_id")
 
     def _execute():
@@ -83,14 +83,14 @@ def update_report_endpoint(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """编辑并保存报告草稿——仅运营端。"""
+    """编辑报告内容——仅运营端。"""
     def _execute():
         data = update_report(db, report_id, payload, current)
         write_business_audit(
             db,
             current,
             "报告编辑",
-            f"保存报告草稿：{data.get('report_title') or data.get('title') or report_id}",
+            f"更新报告：{data.get('report_title') or data.get('title') or report_id}",
             request=request,
             target_module="报告中心",
             target_id=report_id,

@@ -186,7 +186,14 @@ function diagnosisTitleText(title: string | null | undefined) {
             </div>
             <div class="report-card-meta">
               <span class="report-badge type">{{ item.report_type_label || item.report_type }}</span>
-              <span class="report-badge status" :class="{ 'is-draft': item.status === 'draft' }">{{ item.status_label || item.status }}</span>
+              <span
+                v-if="item.status === 'published'"
+                class="report-badge status"
+              >已发布</span>
+              <span
+                v-else-if="item.status === 'archived'"
+                class="report-badge status"
+              >已归档</span>
               <span v-if="isPlatform && item.tenant_name" class="report-badge type">{{ item.tenant_name }}</span>
             </div>
             <p class="report-card-summary">{{ item.data_summary || '暂无摘要' }}</p>
@@ -274,7 +281,8 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div class="report-preview-title">
             <div class="report-card-meta">
               <span class="report-badge type">{{ reportDetail.report_type_label || reportDetail.report_type }}</span>
-              <span class="report-badge status">{{ reportDetail.status_label || reportDetail.status }}</span>
+              <span v-if="reportDetail.status === 'published'" class="report-badge status">已发布</span>
+              <span v-else-if="reportDetail.status === 'archived'" class="report-badge status">已归档</span>
               <span
                 v-if="previewContent?.period_label && reportDetail.report_type !== 'diagnosis'"
                 class="report-badge type"

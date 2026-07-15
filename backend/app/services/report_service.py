@@ -543,6 +543,8 @@ def refresh_diagnosis_report_for_tenant(
     report.report_title = bundle["report_title"]
     report.data_summary = bundle["data_summary"]
     report.report_content_json = bundle["content"]
+    if report.status == "draft":
+        report.status = "published"
     db.commit()
     db.refresh(report)
     _materialize_report_preview_html(db, report)
@@ -710,7 +712,8 @@ def generate_report(
         tenant_id=tenant_id,
         report_title=report_title,
         report_type=report_type,
-        status="draft",
+        # 已取消草稿流：生成即可用；客户端仍只看 CUSTOMER_PORTAL_REPORT_TYPES，诊断不会透出
+        status="published",
         data_summary=data_summary,
         report_content_json=content,
         created_by=current.user.id,
