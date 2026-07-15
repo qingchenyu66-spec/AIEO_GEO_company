@@ -5,6 +5,7 @@ export interface PlatformMeta {
   icon: string
 }
 
+/** Icons synced from https://doc.molizhishu.com/images/svg/*-color.svg */
 const PLATFORM_META: Record<string, PlatformMeta> = {
   deepseek: {
     code: 'deepseek',
@@ -22,13 +23,13 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'doubao',
     name: '豆包',
     accent: '#ff7a45',
-    icon: '/platform-icons/doubao.png',
+    icon: '/platform-icons/doubao.svg',
   },
   doubao_mobile: {
     code: 'doubao_mobile',
     name: '豆包移动端',
     accent: '#ff7a45',
-    icon: '/platform-icons/doubao.png',
+    icon: '/platform-icons/doubao.svg',
   },
   yuanbao: {
     code: 'yuanbao',
@@ -40,7 +41,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'kimi',
     name: 'Kimi',
     accent: '#111827',
-    icon: '/platform-icons/kimi.png',
+    icon: '/platform-icons/kimi.svg',
   },
   qianwen: {
     code: 'qianwen',
@@ -58,13 +59,13 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'antafu',
     name: '蚂蚁阿福',
     accent: '#1677ff',
-    icon: '',
+    icon: '/platform-icons/antafu.svg',
   },
   quark: {
     code: 'quark',
     name: '夸克',
     accent: '#0b57d0',
-    icon: '/platform-icons/quark.png',
+    icon: '/platform-icons/quark.svg',
   },
   baiduai: {
     code: 'baiduai',
@@ -82,7 +83,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     code: 'wenxinyiyan',
     name: '文心一言',
     accent: '#2b6de5',
-    icon: '/platform-icons/wenxinyiyan.svg',
+    icon: '/platform-icons/baiduai.svg',
   },
 }
 
