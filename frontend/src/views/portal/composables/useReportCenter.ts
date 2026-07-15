@@ -1,14 +1,14 @@
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import {
   downloadReportExport,
+  fetchReportPreviewHtml,
   getReportDetail,
   getReportList,
   isHtmlTemplateReportType,
-  reportPreviewHtmlUrl,
   type ReportDetail,
   type ReportListItem,
   type ReportType,
@@ -16,6 +16,7 @@ import {
 } from '../../../services/reports'
 import type { TenantInfo } from '../../../services/management'
 import { formatReportDisplayTitle } from '../portalUtils'
+import { prepareReportPreviewHtml } from '../../../utils/reportPreviewHtml'
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -43,12 +44,21 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const loading = ref(false)
   const exporting = ref(false)
   const detailLoading = ref(false)
+  const previewHtmlLoading = ref(false)
   const reports = ref<ReportListItem[]>([])
   const selectedReportId = ref<number | null>(null)
   const reportDetail = ref<ReportDetail | null>(null)
+  const previewHtmlBlobUrl = ref<string | null>(null)
   const typeFilter = ref<ReportTypeFilter>('all')
   const keywordFilter = ref('')
   const tenantFilter = ref<number | ''>('')
+
+  function revokePreviewHtmlBlob() {
+    if (previewHtmlBlobUrl.value) {
+      URL.revokeObjectURL(previewHtmlBlobUrl.value)
+      previewHtmlBlobUrl.value = null
+    }
+  }
 
   const filteredReports = computed(() => {
     let rows = reports.value
@@ -112,10 +122,26 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const usesHtmlTemplatePreview = computed(() => isHtmlTemplateReportType(selectedReport.value?.report_type))
 
   const previewHtmlUrl = computed(() => (
-    selectedReportId.value && usesHtmlTemplatePreview.value
-      ? reportPreviewHtmlUrl(selectedReportId.value)
-      : null
+    usesHtmlTemplatePreview.value ? previewHtmlBlobUrl.value : null
   ))
+
+  async function loadPreviewHtml(reportId: number) {
+    if (!isHtmlTemplateReportType(reports.value.find(item => item.id === reportId)?.report_type)) {
+      revokePreviewHtmlBlob()
+      return
+    }
+    previewHtmlLoading.value = true
+    try {
+      const html = await prepareReportPreviewHtml(await withRetry(() => fetchReportPreviewHtml(reportId)))
+      revokePreviewHtmlBlob()
+      previewHtmlBlobUrl.value = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+    } catch (error: unknown) {
+      revokePreviewHtmlBlob()
+      ElMessage.error(`报告预览加载失败：${errorMessage(error)}`)
+    } finally {
+      previewHtmlLoading.value = false
+    }
+  }
 
   function displayReportTitle(item: Pick<ReportListItem, 'report_title' | 'report_type' | 'tenant_name'>) {
     return formatReportDisplayTitle(item)
@@ -207,14 +233,20 @@ export function useReportCenter(options: UseReportCenterOptions) {
   }
 
   watch(selectedReportId, reportId => {
-    if (reportId) void loadReportDetail(reportId)
-    else reportDetail.value = null
+    if (reportId) {
+      void loadReportDetail(reportId)
+      void loadPreviewHtml(reportId)
+    } else {
+      reportDetail.value = null
+      revokePreviewHtmlBlob()
+    }
   })
 
   watch([typeFilter, tenantFilter], () => {
     if (!filteredReports.value.length) {
       selectedReportId.value = null
       reportDetail.value = null
+      revokePreviewHtmlBlob()
     } else if (!filteredReports.value.some(item => item.id === selectedReportId.value)) {
       selectedReportId.value = filteredReports.value[0]?.id ?? null
     }
@@ -228,14 +260,22 @@ export function useReportCenter(options: UseReportCenterOptions) {
     await loadReports()
     applyInitialRouteQuery()
     if (selectedReportId.value) {
-      await loadReportDetail(selectedReportId.value)
+      await Promise.all([
+        loadReportDetail(selectedReportId.value),
+        loadPreviewHtml(selectedReportId.value),
+      ])
     }
+  })
+
+  onUnmounted(() => {
+    revokePreviewHtmlBlob()
   })
 
   return {
     loading,
     exporting,
     detailLoading,
+    previewHtmlLoading,
     reports,
     filteredReports,
     selectedReportId,

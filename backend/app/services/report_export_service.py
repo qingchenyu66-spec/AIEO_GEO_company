@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -988,6 +990,86 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
     raise ValueError(f"unsupported html preview report type: {report_type}")
 
 
+REPORT_PREVIEW_ROOT = Path(__file__).resolve().parents[2] / "storage" / "report-preview"
+_PREVIEW_FP_RE = re.compile(r"<!--\s*geo-preview-fp:([^\s]+)\s*-->")
+
+
+def report_preview_html_path(report_id: int) -> Path:
+    return REPORT_PREVIEW_ROOT / f"{int(report_id)}.html"
+
+
+def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
+    """预览与导出共用：报告更新时间 / 状态 / 主题变化即失效旧缓存。"""
+    raw = "|".join(
+        [
+            str(report.get("id") or ""),
+            str(report.get("updated_at") or report.get("generated_at") or ""),
+            str(report.get("status") or ""),
+            str(report.get("content_hash") or ""),
+            str(theme or "b"),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _stamp_preview_html(html: str, fingerprint: str) -> str:
+    marker = f"<!-- geo-preview-fp:{fingerprint} -->"
+    if "geo-preview-fp:" in html:
+        return _PREVIEW_FP_RE.sub(marker, html, count=1)
+    head = re.search(r"(<head[^>]*>)", html, flags=re.I)
+    if head:
+        return f"{html[:head.end()]}\n{marker}{html[head.end():]}"
+    return f"{marker}\n{html}"
+
+
+def _cached_preview_matches(html: str, fingerprint: str) -> bool:
+    match = _PREVIEW_FP_RE.search(html)
+    return bool(match and match.group(1) == fingerprint)
+
+
+def materialize_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> Path | None:
+    """生成时落盘 HTML，预览优先读文件。返回路径；不支持的类型返回 None。"""
+    from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES
+
+    report_id = int(report.get("id") or 0)
+    report_type = str(report.get("report_type") or "")
+    if report_id <= 0 or report_type not in HTML_TEMPLATE_REPORT_TYPES:
+        return None
+    fp = _report_preview_fingerprint(report, theme=theme)
+    html = _stamp_preview_html(build_report_html_preview(db, report, theme=theme), fp)
+    REPORT_PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
+    path = report_preview_html_path(report_id)
+    path.write_text(html, encoding="utf-8")
+    return path
+
+
+def read_or_build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> str:
+    """预览：指纹匹配的落盘文件直读，否则现算并落盘。含 jsDelivr 的旧缓存强制重建。"""
+    report_id = int(report.get("id") or 0)
+    fingerprint = _report_preview_fingerprint(report, theme=theme)
+    if report_id > 0:
+        path = report_preview_html_path(report_id)
+        if path.is_file():
+            cached = path.read_text(encoding="utf-8")
+            if (
+                "jsdelivr.net" not in cached
+                and "cdn.jsdelivr" not in cached
+                and _cached_preview_matches(cached, fingerprint)
+            ):
+                return cached
+            path.unlink(missing_ok=True)
+    path = materialize_report_html_preview(db, report, theme=theme)
+    if path is not None and path.is_file():
+        return path.read_text(encoding="utf-8")
+    return _stamp_preview_html(build_report_html_preview(db, report, theme=theme), fingerprint)
+
+
+def invalidate_report_html_preview(report_id: int) -> None:
+    path = report_preview_html_path(report_id)
+    if path.is_file():
+        path.unlink()
+
+
 def build_report_export(
     report: dict[str, Any],
     export_format: ExportFormat,
@@ -1020,23 +1102,17 @@ def build_report_export(
             raise ValueError("HTML 导出暂仅支持售前诊断与周期监测报告")
         if db is None:
             raise ValueError("HTML 导出需要数据库会话")
-        content = build_report_html_preview(db, report, theme=theme).encode("utf-8")
+        # 与预览共用同一落盘快照（指纹失效后重建），避免预览/导出两套数据
+        content = read_or_build_report_html_preview(db, report, theme=theme).encode("utf-8")
         mime = "text/html; charset=utf-8"
         suffix = "html"
     else:
         if db is None:
             raise ValueError("Word 导出需要数据库会话")
-        if report_type in PERIOD_COMPARISON_REPORT_TYPES or report_type == "diagnosis":
-            from app.services.report_period_comparison_service import wrap_period_html_for_word
-
-            html = build_report_html_preview(db, report, theme=theme)
-            content = wrap_period_html_for_word(html)
-            mime = "application/msword"
-            suffix = "doc"
-        else:
-            content = _build_docx(payload, platform_names)
-            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            suffix = "docx"
+        # 真 DOCX：不再用 HTML 包装假 .doc
+        content = _build_docx(payload, platform_names)
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        suffix = "docx"
     filename = _safe_filename(payload["title"], suffix)
     return content, filename, mime
 

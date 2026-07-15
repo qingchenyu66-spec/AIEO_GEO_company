@@ -343,6 +343,10 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     save_keyword_groups(db, asset, payload)
     db.commit()
     db.refresh(asset)
+    # 露出词/平台变更后清摘要与信源缓存，避免脏读至多 6h
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    invalidate_monitor_summary_cache(tenant_id)
     return asset
 
 
@@ -384,6 +388,9 @@ def save_competitor(db: Session, payload: CompetitorSaveRequest, current: Curren
     competitor.deleted = False
     db.commit()
     db.refresh(competitor)
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    invalidate_monitor_summary_cache(tenant_id)
     return competitor
 
 
@@ -402,6 +409,9 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
         raise ValueError("竞品不存在")
     competitor.deleted = True
     db.commit()
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    invalidate_monitor_summary_cache(resolved_tenant_id)
 
 
 def asset_to_dict(
@@ -529,16 +539,24 @@ def ranking_task_is_industry_scoped(
 
 
 def brand_exposure_terms(asset: BrandAsset, groups: list[dict[str, Any]]) -> list[str]:
-    """收集品牌词组的露出词，排除行业词组里的行业词。"""
+    """收集露出词。行业场景词组的监测词不当地做露出词，但其 exposure_terms 仍要保留。"""
     terms: list[str] = []
     for group in groups:
         if not group.get("status", True):
             continue
-        keywords = keyword_group_monitor_keywords(group)
-        if keywords and all(_is_industry_monitor_keyword(keyword, asset) for keyword in keywords):
-            continue
         for term in group.get("exposure_terms") or []:
             text = str(term or "").strip()
+            if text and text not in terms:
+                terms.append(text)
+    # 纯行业词组客户若误配空露出词，回退品牌名/简称，避免信源统计被掏空。
+    if not terms and asset is not None:
+        for raw in (
+            asset.brand_short_name,
+            asset.brand_name,
+            asset.company_full_name,
+            *(asset.aliases_json or []),
+        ):
+            text = str(raw or "").strip()
             if text and text not in terms:
                 terms.append(text)
     return terms

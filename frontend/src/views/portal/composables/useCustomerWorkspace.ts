@@ -236,7 +236,7 @@ function resolveWorkspaceHeadline(data: WorkspaceBrief, tone: WorkspaceHeroTone)
   if (rc?.has_previous) {
     const parts: string[] = []
     if (rc.mention_rate_delta != null && Math.abs(rc.mention_rate_delta) >= 0.05) {
-      parts.push(`露出率${rc.mention_rate_delta > 0 ? '上升' : '下降'} ${Math.abs(rc.mention_rate_delta).toFixed(1)}%`)
+      parts.push(`提及率${rc.mention_rate_delta > 0 ? '上升' : '下降'} ${Math.abs(rc.mention_rate_delta).toFixed(1)}%`)
     }
     if (rc.avg_brand_rank_delta != null && Math.abs(rc.avg_brand_rank_delta) >= 0.05) {
       parts.push(`均排名${rc.avg_brand_rank_delta < 0 ? '前移' : '后移'} ${Math.abs(rc.avg_brand_rank_delta).toFixed(1)} 位`)
@@ -401,7 +401,7 @@ export function useCustomerWorkspace() {
     const hasCompetitor = (data.kpis.competitor_count || 0) > 0 && comp != null
     const lines = [
       '基于本轮已完成的推荐类监测样本，满分 100：',
-      `可见度分 ${vis} = 品牌露出率 ${mention}% × 60% + 前三露出率 ${top3}% × 40%`,
+      `可见度分 ${vis} = 品牌提及率 ${mention}% × 60% + 前三占比 ${top3}% × 40%`,
     ]
     if (rank != null) {
       lines.push(`排名分 ${rank} = 均排名 ${avgRank}（第 1 位 100 分，每后移 1 位减 20 分）`)
@@ -412,7 +412,7 @@ export function useCustomerWorkspace() {
       const delta = data.competitor_lead_delta
       const topComp = data.top_competitor_mention_rate
       lines.push(
-        `竞品分 ${comp} = 品牌露出率较最强竞品${delta != null && delta >= 0 ? '领先' : '落后'} ${delta != null ? Math.abs(delta) : 0}%（最强竞品 ${topComp ?? '-'}%）`,
+        `竞品分 ${comp} = 品牌提及率较最强竞品${delta != null && delta >= 0 ? '领先' : '落后'} ${delta != null ? Math.abs(delta) : 0}%（最强竞品 ${topComp ?? '-'}%）`,
       )
       lines.push(
         rank != null
@@ -444,7 +444,7 @@ export function useCustomerWorkspace() {
         key: 'visibility',
         label: '可见度',
         value: visibilityScore.value ?? 0,
-        hint: `露出 ${data.kpis.brand_mention_rate}%`,
+        hint: `提及 ${data.kpis.brand_mention_rate}%`,
       },
       {
         key: 'rank',
@@ -475,7 +475,7 @@ export function useCustomerWorkspace() {
     return [
       {
         key: 'mention',
-        label: '关键词露出率',
+        label: '品牌提及率',
         value: data.kpis.brand_mention_rate,
         unit: '%',
         decimals: 1,
@@ -597,7 +597,7 @@ export function useCustomerWorkspace() {
     const leader = platformMatrixSummary.value.leader
     if (leader) {
       const label = platformLabelMap[leader.platform] || leader.platform
-      parts.push(`${label}露出最高（${leader.mention_rate.toFixed(1)}%）`)
+      parts.push(`${label}提及最高（${leader.mention_rate.toFixed(1)}%）`)
     }
 
     const purchased = new Set(data.purchased_platforms || [])

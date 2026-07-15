@@ -1,6 +1,12 @@
 import type { ECharts } from 'echarts/core'
 
-export const ENTITY_LINE_COLORS = ['#ef4444', '#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6']
+/** 与后端 report_competitor_visuals 回落色板对齐（品牌蓝 + 按名哈希） */
+export const BRAND_LINE_COLOR = '#0057D9'
+export const ENTITY_LINE_COLORS = [
+  '#F28E2B', '#009E73', '#C43C92', '#7C3AED', '#008C95',
+  '#D55E00', '#0072B2', '#CC79A7', '#6B8E23', '#A65E2E',
+]
+export const MAX_TREND_ENTITIES = 8
 
 export function shortScheduleLabel(label: unknown) {
   const text = String(label || '')
@@ -10,11 +16,17 @@ export function shortScheduleLabel(label: unknown) {
 }
 
 export function rankToneClass(rank: unknown) {
+  if (rank === null || rank === undefined || rank === '' || rank === '—') return ''
   const value = Number(rank)
   if (Number.isNaN(value)) return ''
   if (value <= 3) return 'is-top'
   if (value <= 5) return 'is-mid'
   return 'is-low'
+}
+
+function entityColor(name: string, brandName: string, index: number) {
+  if (namesMatch(name, brandName)) return BRAND_LINE_COLOR
+  return ENTITY_LINE_COLORS[index % ENTITY_LINE_COLORS.length]
 }
 
 export function renderEntityRankTrendChart(
@@ -28,22 +40,25 @@ export function renderEntityRankTrendChart(
     ? trackedEntities
     : Object.keys((rows[0]?.entities as Record<string, unknown> | undefined) || {})
 
-  const series = entities.slice(0, 5).map((name, index) => ({
-    name,
-    type: 'line' as const,
-    smooth: true,
-    connectNulls: false,
-    symbolSize: 7,
-    lineStyle: { width: namesMatch(name, brandName) ? 3 : 2, color: ENTITY_LINE_COLORS[index % ENTITY_LINE_COLORS.length] },
-    itemStyle: { color: ENTITY_LINE_COLORS[index % ENTITY_LINE_COLORS.length] },
-    label: { show: true, formatter: (params: { value: [number, number] }) => (params.value[1] ?? '').toString() },
-    data: rows.map(row => {
-      const entitiesMap = (row.entities as Record<string, unknown> | undefined) || {}
-      const value = entitiesMap[name]
-      if (value == null && namesMatch(name, brandName)) return row.avg_rank == null ? null : Number(row.avg_rank)
-      return value == null || value === '' ? null : Number(value)
-    }),
-  }))
+  const series = entities.slice(0, MAX_TREND_ENTITIES).map((name, index) => {
+    const color = entityColor(name, brandName, index)
+    return {
+      name,
+      type: 'line' as const,
+      smooth: true,
+      connectNulls: false,
+      symbolSize: 7,
+      lineStyle: { width: namesMatch(name, brandName) ? 3 : 2, color },
+      itemStyle: { color },
+      label: { show: true, formatter: (params: { value: [number, number] }) => (params.value[1] ?? '').toString() },
+      data: rows.map(row => {
+        const entitiesMap = (row.entities as Record<string, unknown> | undefined) || {}
+        const value = entitiesMap[name]
+        if (value == null && namesMatch(name, brandName)) return row.avg_rank == null ? null : Number(row.avg_rank)
+        return value == null || value === '' ? null : Number(value)
+      }),
+    }
+  })
 
   chart.setOption({
     tooltip: { trigger: 'axis' },
@@ -69,6 +84,7 @@ export function renderEntityRankTrendChart(
 export function renderMentionRateBarChart(
   chart: ECharts,
   rows: Array<Record<string, unknown>>,
+  brandName = '',
 ) {
   const sorted = [...rows].sort((a, b) => Number(b.mention_rate || 0) - Number(a.mention_rate || 0)).slice(0, 12)
   chart.setOption({
@@ -88,13 +104,10 @@ export function renderMentionRateBarChart(
     },
     series: [{
       type: 'bar',
-      data: sorted.map(row => ({
+      data: sorted.map((row, index) => ({
         value: Number(row.mention_rate || 0),
         itemStyle: {
-          color: row.is_brand ? '#22c55e' : row.is_competitor ? '#3b82f6' : (
-            Number(row.mention_rate || 0) >= 60 ? '#86efac'
-              : Number(row.mention_rate || 0) >= 30 ? '#fde047' : '#fdba74'
-          ),
+          color: entityColor(String(row.name || ''), brandName || String(sorted.find(r => r.is_brand)?.name || ''), index),
         },
       })),
       label: { show: true, position: 'right', formatter: '{c}%' },
@@ -107,7 +120,9 @@ function namesMatch(left: string, right: string) {
   const a = left.trim().toLowerCase().replace(/\s+/g, '')
   const b = right.trim().toLowerCase().replace(/\s+/g, '')
   if (!a || !b) return false
-  return a === b || a.includes(b) || b.includes(a)
+  if (a === b) return true
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a]
+  return shorter.length >= 3 && longer.includes(shorter)
 }
 
 export function splitNarrativeParagraphs(text: unknown): string[] {
@@ -118,10 +133,8 @@ export function splitNarrativeParagraphs(text: unknown): string[] {
   if ((raw.match(/；/g) || []).length >= 2) {
     return raw.split('；').map(item => {
       const cleaned = item.trim()
-      if (!cleaned) return ''
-      return /[。！？；]$/.test(cleaned) ? cleaned : `${cleaned}。`
+      return cleaned.endsWith('。') ? cleaned : `${cleaned}。`
     }).filter(Boolean)
   }
-  const lines = raw.split(/\n+/).map(item => item.trim()).filter(Boolean)
-  return lines.length ? lines : [raw]
+  return [raw]
 }

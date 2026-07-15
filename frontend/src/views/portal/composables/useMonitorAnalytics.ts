@@ -14,8 +14,10 @@ import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
 export const monitorSummaryMenuCodes = new Set([
   'platform.diagnosis',
   'platform.reports',
+  'platform.sources',
   'customer.diagnosis',
   'customer.reports',
+  'customer.sources',
   'platform.models',
 ])
 
@@ -199,7 +201,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
 
   const statTooltipMap = computed<Record<string, string>>(() => ({
     总检测次数: '已入库的子任务总数（各平台 × 各问题的实际返回条数）。',
-    品牌曝光率: '已返回结果中，品牌在推荐列表里被提及的占比。与工作台「露出率」口径一致时数值应接近。',
+    品牌曝光率: '已返回结果中，品牌在推荐列表里被提及的占比。与工作台「提及率」口径一致时数值应接近。',
     平均推荐排名: '计算方式：所有已提及品牌结果的排名位置求平均。数值越小，说明推荐位置越靠前。',
     监控词: `当前监控词：${monitorKeywordTooltip.value}`,
   }))

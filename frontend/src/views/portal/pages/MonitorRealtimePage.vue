@@ -57,7 +57,6 @@ const {
   resetFilters,
   exportMatrixCsv,
   formatRank,
-  formatRankSourceLabel,
   formatExposureLabel,
   formatKeywordGroupDetailHint,
   keywordGroupSelectValue,
@@ -294,7 +293,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         <div class="realtime-hero-metric">
           <span>平均排名</span>
           <b>{{ heroMetrics.avgRank != null ? formatRank(heroMetrics.avgRank) : '—' }}</b>
-          <em v-if="heroMetrics.mentionRate != null">露出率 {{ heroMetrics.mentionRate }}%</em>
+          <em v-if="heroMetrics.mentionRate != null">提及率 {{ heroMetrics.mentionRate }}%</em>
         </div>
         <div class="realtime-hero-metric" :class="{ 'is-warn': heroMetrics.pendingPlatforms > 0 }">
           <span>待返回平台</span>
@@ -594,9 +593,6 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
                 <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}{{ scheduleSourceLabel(snapshot.schedule_source) }}</strong>
                 <small>
                   排名 {{ formatRank(snapshot.mention_position) }}
-                  <template v-if="formatRankSourceLabel(detailSubtask?.rank_source ?? snapshot.rank_source, detailSubtask?.rank_category ?? snapshot.rank_category)">
-                    · {{ formatRankSourceLabel(detailSubtask?.rank_source ?? snapshot.rank_source, detailSubtask?.rank_category ?? snapshot.rank_category) }}
-                  </template>
                   · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
                   <template v-if="snapshot.page_screenshot"> · 含快照</template>
                 </small>
@@ -611,9 +607,6 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
               <template v-else-if="detailSubtask?.subtask_id === snapshot.subtask_id">
                 <div class="realtime-drawer-metrics compact">
                   <span>排名 {{ formatRank(detailSubtask.mention_position) }}</span>
-                  <span v-if="formatRankSourceLabel(detailSubtask.rank_source, detailSubtask.rank_category)">
-                    来源 {{ formatRankSourceLabel(detailSubtask.rank_source, detailSubtask.rank_category) }}
-                  </span>
                   <span>情感 {{ sentimentLabelMap[detailSubtask.sentiment || ''] || '暂无' }}</span>
                   <span>状态 {{ monitorStatusLabelMap[detailSubtask.status || ''] || '—' }}</span>
                   <a

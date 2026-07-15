@@ -57,8 +57,9 @@ export function useBrandInsights(options?: {
   const brandCompetitors = analytics.brandCompetitors
 
   const datePreset = ref<CompetitorDatePreset>('30')
-  const trendPreset = ref<WorkspaceTrendPreset>('month')
-  const initialTrendRange = workspaceTrendDateRange('month')
+  // 客户首屏默认近7日，减轻冷启动聚合量；仍可切月/季/年
+  const trendPreset = ref<WorkspaceTrendPreset>('7d')
+  const initialTrendRange = workspaceTrendDateRange('7d')
   const trendStartDate = ref(initialTrendRange.startDate)
   const trendEndDate = ref(initialTrendRange.endDate)
   const trendMaxDate = customerDisplayCutoffDate()
@@ -412,8 +413,8 @@ export function useBrandInsights(options?: {
     selectedPlatforms.value = []
     promptFilter.value = ''
     if (isCustomerView.value) {
-      trendPreset.value = 'month'
-      syncTrendRange('month')
+      trendPreset.value = '7d'
+      syncTrendRange('7d')
     } else {
       datePreset.value = '30'
     }

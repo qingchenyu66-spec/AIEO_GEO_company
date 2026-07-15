@@ -1,10 +1,12 @@
 """Tests for competitor analytics helpers."""
 
+from datetime import datetime
 from types import SimpleNamespace
 
 from app.services.competitor_analytics_service import (
     _competitor_aliases,
     _dedupe_preserve_order,
+    _inclusive_day_keys,
     _include_in_sentiment_leaderboard,
     _tracked_entities,
 )
@@ -67,3 +69,14 @@ def test_sentiment_leaderboard_keeps_competitor_with_polar_sentiment():
         "negative_rate": 0.0,
     }
     assert _include_in_sentiment_leaderboard(row) is True
+
+
+def test_inclusive_day_keys_fills_month_span():
+    keys = _inclusive_day_keys(
+        datetime(2026, 7, 1, 0, 0, 0),
+        datetime(2026, 7, 13, 23, 59, 59),
+    )
+    assert keys[0] == "2026-07-01"
+    assert keys[-1] == "2026-07-13"
+    assert len(keys) == 13
+    assert "2026-07-04" in keys  # empty monitoring days still get a point

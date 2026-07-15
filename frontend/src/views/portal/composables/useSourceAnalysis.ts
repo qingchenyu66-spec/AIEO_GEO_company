@@ -6,7 +6,6 @@ import { useAuthStore } from '../../../stores/auth'
 import {
   customerDisplayPeriodLabel,
   customerTrendPeriodLabel,
-  isBeforeCustomerCutoff,
 } from '../../../utils/customerMonitorDate'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
@@ -59,7 +58,9 @@ export function useSourceAnalysis(options?: {
 
   const loading = ref(false)
   const monitorSummary = analytics.monitorSummary
-  const datePreset = ref<SourceDatePreset>('30')
+  // 客户页不展示近 7/30；运营端默认近 30 天
+  const datePreset = ref<SourceDatePreset>('all')
+  if (!isCustomerView.value) datePreset.value = '30'
   const platformFilter = ref('all')
   const categoryFilter = ref<'all' | SourceCategory>('all')
   const keywordFilter = ref('')
@@ -93,7 +94,6 @@ export function useSourceAnalysis(options?: {
     const dayMs = 86400000
     const rangeDays = datePreset.value === 'all' ? null : Number(datePreset.value)
     const rangeStart = rangeDays ? now - rangeDays * dayMs : null
-    const customerCutoff = isCustomerView.value
     return allSources.value.filter(source => {
       const platformMatched = platformFilter.value === 'all'
         || (source.platforms || []).includes(platformFilter.value)
@@ -101,8 +101,10 @@ export function useSourceAnalysis(options?: {
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
-      const dateMatched = customerCutoff
-        ? (!source.latest_time || isBeforeCustomerCutoff(source.latest_time))
+      // 客户样本后端已按监测日截到昨日；勿再用 latest_time 二次卡——补录刷 updated_at 后会被误杀成个位数。
+      // 客户：后端已按监测日截到昨日且已过露出词门槛；勿再按近 N 天截断
+      const dateMatched = isCustomerView.value
+        ? true
         : (!rangeStart || (sourceTime != null && sourceTime >= rangeStart))
       return platformMatched && categoryMatched && keywordMatched && dateMatched
         && (source.exposure_terms || []).length > 0
@@ -125,9 +127,8 @@ export function useSourceAnalysis(options?: {
 
   const platformTabs = computed(() => {
     const allowed = new Set(structurePlatformCodes.value)
-    const scopeSources = isCustomerView.value
-      ? allSources.value.filter(source => !source.latest_time || isBeforeCustomerCutoff(source.latest_time))
-      : allSources.value
+    // 与列表同口径：客户侧不再用 latest_time 二次截断
+    const scopeSources = allSources.value
     const counts = new Map<string, number>()
     scopeSources.forEach(source => {
       ;(source.platforms || []).forEach(platform => {
@@ -203,10 +204,14 @@ export function useSourceAnalysis(options?: {
   const sourceTrendRows = computed(() => {
     const backendPoints = monitorSummary.value?.source_citation_trend?.points || []
     if (backendPoints.length) {
-      const days = isCustomerView.value
-        ? 14
-        : (datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14)
-      return sliceTrendPoints(backendPoints, days).map(point => ({
+      // 客户：整段历史至昨日；运营：按预设截取
+      const points = isCustomerView.value
+        ? backendPoints
+        : sliceTrendPoints(
+          backendPoints,
+          datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14,
+        )
+      return points.map(point => ({
         label: point.label,
         value: point.value,
       }))
@@ -258,7 +263,7 @@ export function useSourceAnalysis(options?: {
     platformFilter.value = 'all'
     categoryFilter.value = 'all'
     keywordFilter.value = ''
-    datePreset.value = '30'
+    datePreset.value = isCustomerView.value ? 'all' : '30'
   }
 
   function exportCsv() {

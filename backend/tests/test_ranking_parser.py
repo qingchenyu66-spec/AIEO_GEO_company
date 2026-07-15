@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.services.ranking_parser import (
     appearance_order_rank_scoped,
     find_best_brand_rank,
@@ -25,6 +27,103 @@ def test_parse_categorized_numbered_lists():
     assert elevator[1]["rank"] == 2
 
 
+def test_segment_local_rank_ignores_cross_section_numbering():
+    """豆包式分段：中腰部接龙头继续标 3/4/5，段内应重排为 1/2/3。"""
+    text = """
+## 一、全国两大绝对龙头
+1. 分众传媒
+2. 新潮传媒
+
+## 二、全国性中腰部专业梯媒公司
+3. 城市纵横 CityMedia
+4. 梯影传媒 TikinMedia
+5. 艾迪亚传媒
+6. 淘屏新媒体 / 喜屏传媒
+"""
+    entries = parse_answer_rankings(text)
+    mid = [item for item in entries if item["category"] and "中腰部" in str(item["category"])]
+    assert len(mid) >= 3
+    aidiya = next(item for item in mid if "艾迪亚" in item["name"])
+    assert aidiya["rank"] == 3
+    assert mid[0]["rank"] == 1
+    assert mid[1]["rank"] == 2
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "电梯广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 3
+
+
+def test_structured_rankings_rerank_within_category():
+    raw = [
+        {"name": "城市纵横", "rank": 3, "category": "中腰部"},
+        {"name": "梯影传媒", "rank": 4, "category": "中腰部"},
+        {"name": "艾迪亚传媒", "rank": 5, "category": "中腰部"},
+    ]
+    entries = normalize_structured_rankings(raw)
+    assert [item["rank"] for item in entries] == [1, 2, 3]
+    assert entries[2]["name"] == "艾迪亚传媒"
+
+
+def test_airport_scoped_prefers_first_section_not_later_regional():
+    """机场广告：整合代理无「传媒」二字时，不能被区域段后文同品牌第 9 抢走。"""
+    text = Path(__file__).resolve().parents[1].joinpath("scripts/_airport_fixture.md").read_text(encoding="utf-8")
+    entries = parse_answer_rankings(text)
+    aidya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidya) >= 2
+    assert aidya[0]["rank"] == 1
+    assert "整合" in str(aidya[0]["category"])
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "机场广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 1
+
+
+def test_normalize_structured_drops_subsection_labels():
+    raw = [
+        {"name": "华铁传媒集团", "rank": 1, "category": "全国性头部综合服务商"},
+        {"name": "核心优势", "rank": 2, "category": "全国性头部综合服务商"},
+        {"name": "服务能力", "rank": 3, "category": "全国性头部综合服务商"},
+        {"name": "资质层面", "rank": 4, "category": "全国性头部综合服务商"},
+        {"name": "规模体量", "rank": 5, "category": "全国性头部综合服务商"},
+        {"name": "兆讯传媒", "rank": 2, "category": "全国性头部综合服务商"},
+        {"name": "核心优势", "rank": 4, "category": "全国性头部综合服务商"},
+        {"name": "服务能力", "rank": 5, "category": "全国性头部综合服务商"},
+        {"name": "艾迪亚控股集团", "rank": 3, "category": "全国性头部综合服务商"},
+    ]
+    entries = normalize_structured_rankings(raw)
+    assert [e["name"] for e in entries] == ["华铁传媒集团", "兆讯传媒", "艾迪亚控股集团"]
+    assert entries[2]["rank"] == 3
+    assert not any(e["name"] in {"资质层面", "规模体量", "核心亮点"} for e in entries)
+    entries2 = normalize_structured_rankings(
+        [{"name": "核心亮点", "rank": 2, "category": "头部"}, {"name": "艾迪亚", "rank": 1, "category": "头部"}]
+    )
+    assert [e["name"] for e in entries2] == ["艾迪亚"]
+    assert entries2[0]["rank"] == 1
+
+
+def test_hsr_parse_rejects_field_bullets_under_company():
+    """百度高铁文：公司下的「核心优势/服务能力」bullet 不得占位，艾迪亚应为头部段第 3。"""
+    text = Path(__file__).resolve().parents[1].joinpath("scripts/_hsr_5786.txt").read_text(encoding="utf-8")
+    entries = parse_answer_rankings(text)
+    assert not any(item["name"] in {"核心优势", "服务能力"} for item in entries)
+    head = [item for item in entries if item["category"] == "全国性头部综合服务商"]
+    assert [item["name"] for item in head] == ["华铁传媒集团", "兆讯传媒", "艾迪亚控股集团"]
+    assert head[2]["rank"] == 3
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "高铁广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 3
+
+
 def test_parse_bullet_list_uses_appearance_order():
     text = """
 推荐公司：
@@ -35,6 +134,46 @@ def test_parse_bullet_list_uses_appearance_order():
     entries = parse_answer_rankings(text)
     assert entries[1]["name"] == "艾迪亚"
     assert entries[1]["rank"] == 2
+
+
+def test_parse_rejects_nested_numbered_details_under_company():
+    """### 1. 公司 下「优势：1/2/3」嵌套编号不得占位（生产 5959）。"""
+    text = """
+## 全国全域投放首选
+### 1. 华铁传媒（行业绝对龙头）
+- 优势：
+  1. 一手铁路局授权，无多层转包，审批、上刊、运维统一落地；
+  2. 擅长长线品牌冠名、大型整合营销，汽车、白酒、家电头部品牌案例极多；
+  3. 全国同步监测，漏刊快速补刊，售后体系完善。
+- 适合：全国连锁、上市品牌。
+### 2. 艾迪亚控股集团（全场景全覆盖）
+- 优势：方案定制化极强
+"""
+    entries = parse_answer_rankings(text)
+    sec = [e for e in entries if e.get("category") == "全国全域投放首选"]
+    assert [e["name"] for e in sec] == ["华铁传媒", "艾迪亚控股集团"]
+    assert sec[1]["rank"] == 2
+    rank, matched = find_best_brand_rank_scoped(
+        entries, lambda name: "艾迪亚" in name, "高铁广告公司哪家好",
+    )
+    assert matched is True
+    assert rank == 2
+
+
+def test_parse_rejects_long_description_bullets_as_companies():
+    """公司下的长描述 bullet 不得占位。"""
+    text = """
+## 全国全域投放首选
+1. 华铁传媒
+- 一手铁路局授权，无多层转包，审批、上刊、运维统一落地
+- 擅长长线品牌冠名、大型整合营销，汽车、白酒、家电头部品牌案例极多
+- 全国同步监测，漏刊快速补刊，售后体系完善
+2. 艾迪亚控股集团
+"""
+    entries = parse_answer_rankings(text)
+    sec = [e for e in entries if e.get("category") == "全国全域投放首选"]
+    assert [e["name"] for e in sec] == ["华铁传媒", "艾迪亚控股集团"]
+    assert sec[1]["rank"] == 2
 
 
 def test_parse_markdown_company_table_under_section():

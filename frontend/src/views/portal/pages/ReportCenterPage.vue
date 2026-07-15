@@ -30,6 +30,7 @@ const {
   loading,
   exporting,
   detailLoading,
+  previewHtmlLoading,
   filteredReports,
   selectedReportId,
   selectedReport,
@@ -185,7 +186,6 @@ function diagnosisTitleText(title: string | null | undefined) {
             </div>
             <div class="report-card-meta">
               <span class="report-badge type">{{ item.report_type_label || item.report_type }}</span>
-              <span v-if="item.status === 'published'" class="report-badge status">已发布</span>
               <span class="report-badge status" :class="{ 'is-draft': item.status === 'draft' }">{{ item.status_label || item.status }}</span>
               <span v-if="isPlatform && item.tenant_name" class="report-badge type">{{ item.tenant_name }}</span>
             </div>
@@ -224,16 +224,15 @@ function diagnosisTitleText(title: string | null | undefined) {
           </div>
         </div>
 
-        <div v-if="detailLoading && !reportDetail" class="report-empty-panel">
-          <p>报告内容加载中…</p>
-        </div>
-        <div v-else-if="!reportDetail" class="report-empty-panel">
-          <FileBarChart />
-          <h3>选择报告开始预览</h3>
-          <p>报告包含 KPI 摘要、诊断结论、各平台表现与高频引用信源，便于对外交付与复盘。</p>
-        </div>
-        <div v-else-if="usesHtmlTemplatePreview && previewHtmlUrl" class="report-preview-body report-html-preview">
+        <div
+          v-if="usesHtmlTemplatePreview && (previewHtmlLoading || previewHtmlUrl)"
+          class="report-preview-body report-html-preview"
+        >
+          <div v-if="previewHtmlLoading && !previewHtmlUrl" class="report-empty-panel">
+            <p>报告预览加载中…</p>
+          </div>
           <iframe
+            v-else-if="previewHtmlUrl"
             :key="previewHtmlUrl"
             class="report-html-frame"
             :src="previewHtmlUrl"
@@ -257,6 +256,19 @@ function diagnosisTitleText(title: string | null | undefined) {
               打印报告
             </button>
           </div>
+        </div>
+        <div v-else-if="detailLoading && !reportDetail" class="report-empty-panel">
+          <p>报告内容加载中…</p>
+        </div>
+        <div v-else-if="!selectedReport" class="report-empty-panel">
+          <FileBarChart />
+          <h3>选择报告开始预览</h3>
+          <p>报告包含 KPI 摘要、诊断结论、各平台表现与高频引用信源，便于对外交付与复盘。</p>
+        </div>
+        <div v-else-if="!reportDetail" class="report-empty-panel">
+          <FileBarChart />
+          <h3>报告详情加载失败</h3>
+          <p>请点击刷新重试；HTML 模板类报告应走上方预览通道。</p>
         </div>
         <div v-else class="report-preview-body">
           <div class="report-preview-title">

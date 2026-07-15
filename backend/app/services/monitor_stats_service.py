@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.brand import BrandAsset
@@ -19,7 +19,7 @@ from app.services.schedule_context import (
     schedule_runs_for_tasks,
 )
 
-TERMINAL_STATUSES = {"completed", "partial_completed"}
+from app.services.monitor_sample_metrics import SUCCESS_STATUSES as TERMINAL_STATUSES
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +57,76 @@ def _detect_stat_date(
     if subtask.updated_at:
         return subtask.updated_at.date()
     return None
+
+
+def load_subtasks_for_business_date_range(
+    db: Session,
+    tenant_id: int,
+    *,
+    start_date: date,
+    end_date: date,
+    asset: BrandAsset | None = None,
+    statuses: set[str] | None = None,
+    limit: int | None = None,
+    only_with_refs: bool = False,
+) -> tuple[list[GeoMonitorSubtask], list[GeoMonitorTask], dict[int, date]]:
+    """按业务检测日（非裸 updated_at）拉取区间内子任务，供报告/分析复用。
+
+    返回 (subtasks, tasks, {subtask.id: business_date}).
+    only_with_refs：信源聚合用，跳过无 reference_list 的行，减冷路径 IO。
+    """
+    start_dt = datetime.combine(start_date, time.min)
+    end_dt = datetime.combine(end_date, time.max)
+
+    status_filter = statuses or TERMINAL_STATUSES
+    stmt = (
+        select(GeoMonitorSubtask)
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .options(joinedload(GeoMonitorSubtask.task))
+        .where(
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.tenant_id == tenant_id,
+            or_(
+                and_(GeoMonitorTask.created_at >= start_dt, GeoMonitorTask.created_at <= end_dt),
+                and_(GeoMonitorSubtask.updated_at >= start_dt, GeoMonitorSubtask.updated_at <= end_dt),
+            ),
+            GeoMonitorSubtask.status.in_(tuple(status_filter)),
+        )
+    )
+    if limit is not None:
+        stmt = stmt.limit(max(1, limit))
+
+    fetched = list(db.scalars(stmt).unique())
+    if only_with_refs:
+        fetched = [item for item in fetched if item.reference_list_json]
+    if not fetched:
+        return [], [], {}
+
+    resolved_asset = asset if asset is not None else get_brand_asset(db, tenant_id)
+    task_ids = list({item.task_id for item in fetched if item.task_id})
+    schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
+    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
+
+    matched: list[GeoMonitorSubtask] = []
+    task_by_id: dict[str, GeoMonitorTask] = {}
+    day_by_id: dict[int, date] = {}
+    for item in fetched:
+        task = item.task
+        if task is None:
+            continue
+        detect_day = _detect_stat_date(
+            item,
+            task,
+            schedule_run=schedule_runs_map.get(item.task_id),
+            lead_run=lead_runs_map.get(item.task_id),
+            asset=resolved_asset,
+        )
+        if detect_day is None or detect_day < start_date or detect_day > end_date:
+            continue
+        matched.append(item)
+        task_by_id[task.task_id] = task
+        day_by_id[item.id] = detect_day
+    return matched, list(task_by_id.values()), day_by_id
 
 
 def upsert_daily_stat_row(
@@ -107,6 +177,8 @@ def _rebuild_daily_stat_for_platform_day(
             GeoMonitorDailyStat.platform == platform,
         )
     )
+    # ponytail: 同会话多次重建同一 key 时，先 flush 掉 DELETE，否则未落库的旧 INSERT 会撞唯一键
+    db.flush()
     subtasks = list(
         db.scalars(
             select(GeoMonitorSubtask)

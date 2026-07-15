@@ -1,0 +1,37 @@
+"""信源口径：露出词是收录门槛；未命中的引用不得进入列表。"""
+
+
+def test_aggregate_source_stats_requires_exposure_hit():
+    from datetime import date
+    from types import SimpleNamespace
+
+    from app.services.monitor_service import _aggregate_source_stats
+
+    item = SimpleNamespace(
+        id=1,
+        platform="kimi",
+        prompt="电梯广告公司推荐",
+        reference_list_json=[
+            {
+                "title": "行业报告：户外广告趋势",
+                "url": "https://example.com/ads-report",
+                "site": "example",
+            },
+            {
+                "title": "艾迪亚传媒案例",
+                "url": "https://brand.example.com/case",
+                "site": "brand",
+            },
+        ],
+    )
+    stats, daily = _aggregate_source_stats(
+        [item],  # type: ignore[arg-type]
+        business_day_by_id={1: date(2026, 7, 12)},
+        subtask_tenant_map={1: 6},
+        purchased_platforms_by_tenant={6: {"kimi"}},
+        exposure_terms_by_tenant={6: ["艾迪亚"]},
+    )
+    assert len(stats) == 1
+    assert stats[0]["url"] == "https://brand.example.com/case"
+    assert "艾迪亚" in stats[0]["exposure_terms"]
+    assert daily["2026-07-12"] == 1

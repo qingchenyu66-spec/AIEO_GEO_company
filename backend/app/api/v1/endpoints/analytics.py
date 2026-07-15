@@ -13,7 +13,9 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.core.read_cache import (
+    COMPETITOR_COMPARE_CACHE_TTL,
     SENTIMENT_KEYWORDS_CACHE_TTL,
+    competitor_compare_cache_key,
     get_or_build_json_cache,
     sentiment_keywords_cache_key,
 )
@@ -168,16 +170,38 @@ def competitor_compare(
 ) -> ApiResponse[dict]:
     """品牌洞察——提及率/排名/情绪趋势及竞品对比。"""
     try:
-        data = build_competitor_compare_summary(
-            db,
-            current,
-            tenant_id=tenant_id,
+        resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        cache_tenant = resolved_tenant_id if resolved_tenant_id is not None else "platform"
+        cache_key = competitor_compare_cache_key(
+            current.identity.identity_type,
+            cache_tenant,
             platform=platform,
             platforms=platforms,
             days=days,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
             prompt=prompt,
+        )
+
+        def _build() -> dict:
+            return build_competitor_compare_summary(
+                db,
+                current,
+                tenant_id=tenant_id,
+                platform=platform,
+                platforms=platforms,
+                days=days,
+                start_date=start_date,
+                end_date=end_date,
+                prompt=prompt,
+            )
+
+        data = get_or_build_json_cache(
+            cache_key,
+            _build,
+            ttl_seconds=COMPETITOR_COMPARE_CACHE_TTL,
+            lock_ttl_seconds=90,
+            wait_seconds=30.0,
         )
         return ApiResponse(data=data)
     except Exception as exc:

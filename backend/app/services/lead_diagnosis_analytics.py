@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorSubtask
 from app.core.region_catalog import region_display_name, normalize_region_codes
-from app.services.monitor_service import TERMINAL_STATUSES
+from app.services.monitor_sample_metrics import SUCCESS_STATUSES
 from app.services.ranking_parser import (
     normalize_structured_rankings,
     ranking_entry_explicit_rank,
@@ -23,20 +23,19 @@ def _normalize_name_key(name: str | None) -> str:
     return re.sub(r"\s+", "", text)
 
 
+_ADMIN_OR_GENERIC_PREFIXES = frozenset({
+    "北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "天津", "苏州", "南京",
+    "武汉", "西安", "青岛", "大连", "厦门", "宁波", "合肥", "郑州", "长沙", "济南",
+    "中国", "全国", "集团", "股份", "有限", "公司", "传媒", "广告", "媒体",
+})
+
+
 def names_match(left: str | None, right: str | None) -> bool:
-    a = _normalize_name_key(left)
-    b = _normalize_name_key(right)
-    if not a or not b:
-        return False
-    if a == b or a in b or b in a:
-        return True
-    if len(a) >= 2 and len(b) >= 2 and (a[:2] in b or b[:2] in a):
-        return True
-    return False
+    """实体同一家：全名 / 短名子串（禁行政区两字）/ 共享 ≥3 字品牌词干。"""
+    return _strict_entity_match(left, right)
 
 
 def _strict_entity_match(left: str | None, right: str | None) -> bool:
-    """报告展示用：仅完整名或较长子串匹配，避免前两字误判。"""
     a = _normalize_name_key(left)
     b = _normalize_name_key(right)
     if not a or not b:
@@ -44,7 +43,22 @@ def _strict_entity_match(left: str | None, right: str | None) -> bool:
     if a == b:
         return True
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    return len(shorter) >= 3 and shorter in longer
+    if shorter in longer:
+        if len(shorter) >= 3:
+            return True
+        if len(shorter) == 2 and shorter not in _ADMIN_OR_GENERIC_PREFIXES:
+            return True
+    # 「艾迪亚传媒」↔「艾迪亚控股…」：共享 ≥3 字词干，且非行政区开头
+    if len(a) >= 3 and len(b) >= 3:
+        for n in (4, 3):
+            if len(a) < n or len(b) < n:
+                continue
+            for stem in (a[:n], b[:n]):
+                if stem[:2] in _ADMIN_OR_GENERIC_PREFIXES:
+                    continue
+                if stem in a and stem in b:
+                    return True
+    return False
 
 
 def _find_entity_rank(entries: list[dict[str, Any]], entity_name: str) -> float | None:
@@ -162,11 +176,25 @@ def _build_prompt_ranking_list(
     *,
     brand: str,
     competitors: list[str],
+    task_run_map: dict[str, LeadDiagnosisRun] | None = None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
-    latest_time = max((item.updated_at or datetime.min) for item in rows)
-    latest_rows = [item for item in rows if item.updated_at == latest_time] or rows[-1:]
+    # 按诊断批次聚合，避免 max(updated_at) 毫秒差只剩一条
+    if task_run_map:
+        by_exec = _group_rows_by_execution(rows, task_run_map)
+        if by_exec:
+            latest_key = sorted(by_exec.keys(), key=_execution_sort_key)[-1]
+            latest_rows = by_exec[latest_key]
+        else:
+            latest_rows = rows[-1:]
+    else:
+        latest_time = max((item.updated_at or datetime.min) for item in rows)
+        # 1 分钟容差：同批平台写库时间差不致被踢掉
+        latest_rows = [
+            item for item in rows
+            if item.updated_at and (latest_time - item.updated_at).total_seconds() <= 60
+        ] or rows[-1:]
     aggregated: dict[tuple[str, str | None], dict[str, Any]] = {}
     for item in latest_rows:
         for entry in normalize_structured_rankings(item.all_rankings_json or []):
@@ -214,15 +242,23 @@ def _execution_key_from_run(
     *,
     updated_at: datetime | None = None,
 ) -> str:
+    """批次键保留到分钟，避免同一天三次被压成一天。优先 schedule_key / 实际完成时间。"""
     if run is None:
         return updated_at.strftime("%Y-%m-%d %H:%M") if updated_at else "时间数据缺失"
-    label = str(run.schedule_label or "").strip()
-    if label:
-        return label
     key = str(run.schedule_key or "").strip()
     if len(key) >= 12 and key[:12].isdigit():
         return f"{key[:4]}-{key[4:6]}-{key[6:8]} {key[8:10]}:{key[10:12]}"
-    if updated_at:
+    finished = getattr(run, "finished_at", None) or getattr(run, "updated_at", None) or updated_at
+    label = str(run.schedule_label or "").strip()
+    if finished is not None:
+        return finished.strftime("%Y-%m-%d %H:%M")
+    if len(label) >= 16:
+        return label[:16]
+    if len(label) >= 10 and updated_at is not None:
+        return f"{label[:10]} {updated_at.strftime('%H:%M')}"
+    if label:
+        return label
+    if updated_at is not None:
         return updated_at.strftime("%Y-%m-%d %H:%M")
     return key or "时间数据缺失"
 
@@ -325,11 +361,15 @@ def _build_date_prompt_matrix(prompt_analytics: list[dict[str, Any]]) -> dict[st
     date_map: dict[str, dict[str, Any]] = {}
     for prompt, block in zip(prompts, prompt_analytics):
         for point in block.get("round_trend") or []:
-            date_key = str(point.get("schedule_label") or point.get("schedule_key") or "")[:10]
+            # 保留分钟级批次键，禁止截成 YYYY-MM-DD 导致一天三次合并
+            date_key = str(point.get("schedule_label") or point.get("schedule_key") or "").strip()
             if not date_key:
                 continue
             date_map.setdefault(date_key, {})[prompt] = point.get("avg_rank")
-    rows = [{"label": date_key, "cells": [date_map[date_key].get(prompt) for prompt in prompts]} for date_key in sorted(date_map)]
+    rows = [
+        {"label": date_key, "cells": [date_map[date_key].get(prompt) for prompt in prompts]}
+        for date_key in sorted(date_map, key=_execution_sort_key)
+    ]
     return {"prompts": prompts, "rows": rows}
 
 
@@ -341,7 +381,7 @@ def _build_city_prompt_matrix(
     brand: str,
     task_region_map: dict[str, list[str] | None] | None = None,
 ) -> dict[str, Any]:
-    completed = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
+    completed = [item for item in subtasks if item.status in SUCCESS_STATUSES and item.answer_content]
     grouped: dict[str, dict[str, list[GeoMonitorSubtask]]] = {}
     for item in completed:
         region = region_display_name(_subtask_region_code(item, task_region_map=task_region_map, lead=lead)) or "全部区域"
@@ -560,7 +600,7 @@ def _build_brand_city_rankings(
     """按监测地区汇总品牌与竞品平均排名、提及率（对齐外部报告「品牌城市排名」）。"""
     completed = [
         item for item in subtasks
-        if item.status in TERMINAL_STATUSES and item.answer_content
+        if item.status in SUCCESS_STATUSES and item.answer_content
     ]
     if not completed:
         return []
@@ -595,7 +635,7 @@ def build_lead_diagnosis_analytics(
     competitors: list[str] | None = None,
     task_region_map: dict[str, list[str] | None] | None = None,
 ) -> dict[str, Any]:
-    completed = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
+    completed = [item for item in subtasks if item.status in SUCCESS_STATUSES and item.answer_content]
     brand = lead.brand_name
     competitors = competitors or [
         str(item).strip() for item in (lead.competitors_json or []) if str(item).strip()
@@ -616,7 +656,9 @@ def build_lead_diagnosis_analytics(
                 "brand_mention_rate": brand_row["mention_rate"] if brand_row else 0.0,
                 "brand_avg_rank": brand_row["avg_rank"] if brand_row else None,
                 "mention_table": mention_table,
-                "ranking_list": _build_prompt_ranking_list(rows, brand=brand, competitors=competitors),
+                "ranking_list": _build_prompt_ranking_list(
+                    rows, brand=brand, competitors=competitors, task_run_map=task_run_map,
+                ),
                 "molizhishu_ranking_rows": _build_molizhishu_ranking_rows(
                     rows,
                     brand=brand,

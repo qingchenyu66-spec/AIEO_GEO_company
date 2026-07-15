@@ -191,7 +191,7 @@ watch(showEmptyGuide, (empty) => {
     </section>
 
     <template v-else-if="brief">
-      <!-- ① 简报 + ② 露出率趋势（一体） -->
+      <!-- ① 简报 + ② 提及率趋势（一体） -->
       <article class="ws-campus-hero">
         <section class="ws-campus-hero-summary ws-campus-greet" :class="heroTone">
           <div class="ws-campus-greet-top">
@@ -236,7 +236,7 @@ watch(showEmptyGuide, (empty) => {
 
         <section class="ws-campus-hero-trend">
           <div class="ws-campus-card-head ws-campus-card-head-trend">
-            <h3>露出率趋势</h3>
+            <h3>提及率趋势</h3>
             <div class="ws-campus-date-filter">
               <div class="ws-campus-date-presets">
                 <button

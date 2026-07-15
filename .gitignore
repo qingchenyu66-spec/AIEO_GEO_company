@@ -13,7 +13,24 @@ backend/storage/
 backend/celerybeat-schedule*
 frontend/node_modules/
 frontend/dist/
+frontend/public/report-assets/echarts.min.js
 *.log
 .scannerwork/
 sonar-project.properties.local
 .worktrees/
+
+# 本地调试 / 抓包 / 审计产物
+.playwright-cli/
+e2e/report/
+e2e/test-results/
+tmp/
+**/_tmp_*.py
+**/_out.txt
+**/_ref_body.txt
+**/*.premerge*.bak.py
+bandit-report.json
+backend/pip-audit-report.json
+geo-deploy.bundle
+geo-deploy.tgz
+geo-push.bundle
+.superpowers/

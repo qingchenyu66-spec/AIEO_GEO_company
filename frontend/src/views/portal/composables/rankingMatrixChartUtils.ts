@@ -177,7 +177,7 @@ function mentionStatsFromCell(cell: RankingMatrixCell | undefined): { mentioned:
   return { mentioned: Math.min(mentioned, total), total }
 }
 
-/** 与监测页「露出率」同口径：区间内被提及的监测次数 / 总监测次数。 */
+/** 与监测页「提及率」同口径：区间内被提及的监测次数 / 总监测次数。 */
 export function resolveScopedColumnMentionStats(
   rows: RankingMatrixRow[],
   column: RankingMatrixColumn,

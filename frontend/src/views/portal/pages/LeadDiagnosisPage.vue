@@ -198,7 +198,7 @@ async function renderPromptCharts() {
         chart = await initChart(mentionEl, 'diagnosis')
         promptMentionCharts.set(index, chart)
       }
-      renderMentionRateBarChart(chart, mentionTable)
+      renderMentionRateBarChart(chart, mentionTable, detail.value?.brand_name || '')
     }
   }
 }

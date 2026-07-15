@@ -218,38 +218,25 @@ def build_sentiment_keywords(
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()
 
-    stmt = (
-        select(GeoMonitorSubtask)
-        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            load_only(
-                GeoMonitorSubtask.subtask_id,
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.mention_position,
-                GeoMonitorSubtask.all_rankings_json,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.answer_content,
-                GeoMonitorSubtask.mention_context,
-                GeoMonitorSubtask.updated_at,
-            )
-        )
-        .where(
-            GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.tenant_id == resolved_tenant_id,
-            GeoMonitorSubtask.updated_at >= range_start,
-            GeoMonitorSubtask.updated_at <= range_end,
-            GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-            GeoMonitorSubtask.sentiment.isnot(None),
-        )
-    )
-    if platform_filters:
-        stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
-    if prompt_filter:
-        stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
+    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
 
-    subtasks = list(db.scalars(stmt.limit(5000)))
+    fetched, _tasks, _day_by_id = load_subtasks_for_business_date_range(
+        db,
+        resolved_tenant_id,
+        start_date=range_start.date(),
+        end_date=range_end.date(),
+        asset=asset,
+        limit=5000,
+    )
+    subtasks = []
+    for item in fetched:
+        if item.sentiment is None:
+            continue
+        if platform_filters and item.platform not in platform_filters:
+            continue
+        if prompt_filter and item.prompt != prompt_filter:
+            continue
+        subtasks.append(item)
     brand_display = (asset.brand_name if asset else None) or "本品牌"
     grouped: dict[str, list[GeoMonitorSubtask]] = {"positive": [], "negative": []}
     sample_counts = {"positive": 0, "negative": 0}

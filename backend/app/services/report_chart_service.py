@@ -170,7 +170,7 @@ def build_entity_rank_trend_chart(
     x = list(range(len(labels)))
     max_rank = 1.0
 
-    for name in entities[:5]:
+    for name in entities[:8]:
         points = []
         for point_index, row in enumerate(trend_rows):
             entities_map = row.get("entities") or {}

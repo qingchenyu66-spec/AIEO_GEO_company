@@ -7,6 +7,7 @@ from app.core.read_cache import (
     get_or_build_json_cache,
     invalidate_dashboard_caches,
     monitor_summary_cache_key,
+    source_stats_cache_key,
     workspace_brief_cache_key,
 )
 
@@ -46,11 +47,22 @@ def test_get_or_build_stores_on_miss() -> None:
 
 def test_invalidate_dashboard_caches_deletes_summary_and_overview() -> None:
     deleted: list[str] = []
+    patterns: list[str] = []
 
-    with patch("app.core.read_cache.delete_cache", side_effect=lambda key: deleted.append(key)):
+    with (
+        patch("app.core.read_cache.delete_cache", side_effect=lambda key: deleted.append(key)),
+        patch("app.core.read_cache.delete_cache_pattern", side_effect=lambda key: patterns.append(key)),
+    ):
         invalidate_dashboard_caches(tenant_id=6)
 
     assert MANAGEMENT_OVERVIEW_CACHE_KEY in deleted
     assert monitor_summary_cache_key("CUSTOMER", 6) in deleted
     assert workspace_brief_cache_key(6) in deleted
     assert monitor_summary_cache_key("PLATFORM", "platform") in deleted
+    assert "monitor:workspace-brief:v2:6:*" in patterns
+    assert "monitor:source-stats:v1:6:*" in patterns
+    assert "analytics:competitor-compare:v1:*:6:*" in patterns
+
+
+def test_source_stats_cache_key_includes_cutoff_day() -> None:
+    assert source_stats_cache_key(6, "2026-07-13", "abc123") == "monitor:source-stats:v1:6:2026-07-13:abc123"

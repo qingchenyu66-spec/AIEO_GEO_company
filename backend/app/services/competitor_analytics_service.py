@@ -6,8 +6,8 @@ import re
 from datetime import date, datetime, timedelta, time
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
@@ -19,6 +19,8 @@ from app.services.brand_service import (
     list_competitors,
 )
 from app.services.monitor_service import customer_display_cutoff, customer_display_date_range
+from app.services.monitor_stats_service import _detect_stat_date
+from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
 from app.services.ranking_parser import (
@@ -255,6 +257,20 @@ def _configured_prompt_options(db: Session, tenant_id: int) -> list[str]:
     return options
 
 
+def _inclusive_day_keys(range_start: datetime, range_end: datetime) -> list[str]:
+    """Return every ISO day in [range_start.date(), range_end.date()] for continuous trends."""
+    start = range_start.date()
+    end = range_end.date()
+    if end < start:
+        return []
+    days: list[str] = []
+    cursor = start
+    while cursor <= end:
+        days.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return days
+
+
 def build_competitor_compare_summary(
     db: Session,
     current: CurrentSession,
@@ -328,12 +344,18 @@ def _aggregate_competitor_stats(
     competitors = list_competitors(db, tenant_id)
     entities = _tracked_entities(asset, competitors)
     brand_display = (asset.brand_name if asset else None) or "本品牌"
+    range_start_day = range_start.date()
+    range_end_day = range_end.date()
 
+    # Broad SQL window on created_at OR updated_at, then pin to business day via
+    # _detect_stat_date (schedule window > task.created_at > updated_at). Pure
+    # updated_at filtering collapses trends after backfill rewrites timestamps.
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .options(
             load_only(
+                GeoMonitorSubtask.task_id,
                 GeoMonitorSubtask.platform,
                 GeoMonitorSubtask.prompt,
                 GeoMonitorSubtask.mention_position,
@@ -341,13 +363,22 @@ def _aggregate_competitor_stats(
                 GeoMonitorSubtask.all_rankings_json,
                 GeoMonitorSubtask.sentiment,
                 GeoMonitorSubtask.updated_at,
-            )
+            ),
+            joinedload(GeoMonitorSubtask.task),
         )
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
-            GeoMonitorSubtask.updated_at >= range_start,
-            GeoMonitorSubtask.updated_at <= range_end,
+            or_(
+                and_(
+                    GeoMonitorTask.created_at >= range_start,
+                    GeoMonitorTask.created_at <= range_end,
+                ),
+                and_(
+                    GeoMonitorSubtask.updated_at >= range_start,
+                    GeoMonitorSubtask.updated_at <= range_end,
+                ),
+            ),
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
         )
     )
@@ -356,7 +387,29 @@ def _aggregate_competitor_stats(
     if prompt_filter:
         stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
 
-    subtasks = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))))
+    fetched = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))).unique())
+    task_ids = list({item.task_id for item in fetched if item.task_id})
+    schedule_runs_map = schedule_runs_for_tasks(db, task_ids) if task_ids else {}
+    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids) if task_ids else {}
+
+    subtasks: list[GeoMonitorSubtask] = []
+    subtask_day_keys: dict[int, str] = {}
+    for item in fetched:
+        task = item.task
+        if task is None:
+            continue
+        detect_day = _detect_stat_date(
+            item,
+            task,
+            schedule_run=schedule_runs_map.get(item.task_id),
+            lead_run=lead_runs_map.get(item.task_id),
+            asset=asset,
+        )
+        if detect_day is None or detect_day < range_start_day or detect_day > range_end_day:
+            continue
+        subtasks.append(item)
+        subtask_day_keys[id(item)] = detect_day.isoformat()
+
     sample_total = len(subtasks)
 
     global_buckets: dict[str, dict[str, Any]] = {}
@@ -377,7 +430,7 @@ def _aggregate_competitor_stats(
 
     for item in subtasks:
         entries = normalize_structured_rankings(item.all_rankings_json or [])
-        day_key = item.updated_at.date().isoformat() if item.updated_at else None
+        day_key = subtask_day_keys.get(id(item))
         if day_key:
             daily_samples[day_key] = daily_samples.get(day_key, 0) + 1
             sentiment_label = _normalize_sentiment_label(item.sentiment)
@@ -496,7 +549,7 @@ def _aggregate_competitor_stats(
             ],
         })
 
-    sorted_days = sorted(daily_samples.keys())
+    sorted_days = _inclusive_day_keys(range_start, range_end)
     trend_labels = [
         datetime.fromisoformat(day).strftime("%m-%d")
         for day in sorted_days

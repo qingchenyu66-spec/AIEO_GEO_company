@@ -58,6 +58,7 @@ from app.services.schedule_context import (
 )
 
 TERMINAL_STATUSES = {"completed", "partial_completed", "failed", "stopped"}
+SUCCESS_STATUSES = {"completed", "partial_completed"}  # 率类指标分母；与 monitor_sample_metrics 对齐
 NON_TERMINAL_STATUSES = {"pending", "processing", "running", "queued"}
 _TRANSIENT_SYNC_ERRORS = (MolizhishuApiError, TimeoutError, OperationalError)
 logger = logging.getLogger(__name__)
@@ -470,6 +471,70 @@ def _matched_source_keywords(source: dict[str, Any], keywords: list[str]) -> lis
     return list(dict.fromkeys(matched))
 
 
+def _aggregate_source_stats(
+    completed_items: list[GeoMonitorSubtask],
+    *,
+    business_day_by_id: dict[int, date],
+    subtask_tenant_map: dict[int, int],
+    purchased_platforms_by_tenant: dict[int, set[str]],
+    exposure_terms_by_tenant: dict[int, list[str]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """汇总引用信源：标题/链接命中露出词才收录；时间范围由调用方保证（客户=监测日≤昨日全历史）。"""
+    source_map: dict[str, dict[str, Any]] = {}
+    source_daily_counts: dict[str, int] = {}
+    for item in completed_items:
+        tenant_id = subtask_tenant_map.get(item.id)
+        purchased_platforms = purchased_platforms_by_tenant.get(tenant_id) if tenant_id else None
+        if purchased_platforms and item.platform not in purchased_platforms:
+            continue
+        exposure_terms = exposure_terms_by_tenant.get(tenant_id, []) if tenant_id else []
+        for source in item.reference_list_json or []:
+            if not _is_valid_citation_source(source):
+                continue
+            url = source.get("url") or source.get("site") or source.get("title")
+            if not url:
+                continue
+            key = str(url).split("?")[0]
+            matched_exposure = _matched_source_keywords(source, exposure_terms)
+            if not matched_exposure:
+                continue
+            row = source_map.setdefault(
+                key,
+                {
+                    "title": source.get("title") or source.get("site") or key,
+                    "url": url,
+                    "count": 0,
+                    "platforms": [],
+                    "exposure_terms": [],
+                    "questions": [],
+                    "latest_time": None,
+                },
+            )
+            row["count"] += 1
+            biz_day = business_day_by_id.get(item.id)
+            if biz_day:
+                day_key = biz_day.isoformat()
+                source_daily_counts[day_key] = source_daily_counts.get(day_key, 0) + 1
+            if item.platform and item.platform not in row["platforms"]:
+                row["platforms"].append(item.platform)
+            for term in matched_exposure:
+                if term not in row["exposure_terms"]:
+                    row["exposure_terms"].append(term)
+            if item.prompt and item.prompt not in row["questions"]:
+                row["questions"].append(item.prompt)
+            # ponytail: latest_time=监测业务日；禁止 updated_at（补录会刷到今天）
+            if biz_day is not None:
+                candidate = datetime.combine(biz_day, time.max).isoformat(timespec="seconds")
+                if row["latest_time"] is None or candidate > row["latest_time"]:
+                    row["latest_time"] = candidate
+    source_stats = sorted(source_map.values(), key=lambda item: item["count"], reverse=True)
+    for row in source_stats:
+        row["platforms"] = sort_platform_codes(row["platforms"])[:6]
+        row["exposure_terms"] = row["exposure_terms"][:8]
+        row["questions"] = row["questions"][:8]
+    return source_stats, source_daily_counts
+
+
 def _effective_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int | None:
     """根据当前身份确定任务所属企业，客户端只能写入本企业。"""
     if current.identity.identity_type == "CUSTOMER":
@@ -696,23 +761,136 @@ def _build_source_citation_trend(
     *,
     range_start: datetime,
     range_end: datetime,
+    only_with_data: bool = False,
 ) -> dict[str, Any]:
-    points: list[dict[str, Any]] = []
-    cursor = range_start.date()
+    """按日构建引用趋势。only_with_data=True 时不补零日（避免四五六月一排 0）。"""
+    start = range_start.date()
     end = range_end.date()
-    while cursor <= end:
-        day_key = cursor.isoformat()
-        points.append({
-            "label": cursor.strftime("%m-%d"),
-            "day_key": day_key,
-            "value": daily_counts.get(day_key, 0),
-        })
-        cursor += timedelta(days=1)
+    points: list[dict[str, Any]] = []
+    if only_with_data:
+        for day_key in sorted(daily_counts):
+            try:
+                day = date.fromisoformat(day_key)
+            except ValueError:
+                continue
+            if day < start or day > end:
+                continue
+            value = int(daily_counts.get(day_key) or 0)
+            if value <= 0:
+                continue
+            points.append({
+                "label": day.strftime("%m-%d"),
+                "day_key": day_key,
+                "value": value,
+            })
+    else:
+        cursor = start
+        while cursor <= end:
+            day_key = cursor.isoformat()
+            points.append({
+                "label": cursor.strftime("%m-%d"),
+                "day_key": day_key,
+                "value": daily_counts.get(day_key, 0),
+            })
+            cursor += timedelta(days=1)
     return {
-        "start_at": datetime.combine(range_start.date(), time.min).isoformat(),
+        "start_at": datetime.combine(start, time.min).isoformat(),
         "end_at": datetime.combine(end, time.max).isoformat(),
         "points": points,
     }
+
+
+def _compute_customer_source_stats_bundle(
+    db: Session,
+    tenant_id: int,
+    *,
+    purchased_platforms: set[str],
+    exposure_terms: list[str],
+) -> dict[str, Any]:
+    """客户信源：监测日≤昨日全历史 + 露出词门槛；供 Redis 冷构建。"""
+    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+
+    cutoff_day = customer_display_cutoff().date()
+    hist_rows, hist_tasks, hist_days = load_subtasks_for_business_date_range(
+        db,
+        tenant_id,
+        start_date=date(2020, 1, 1),
+        end_date=datetime.now().date(),
+        only_with_refs=True,
+    )
+    source_items: list[GeoMonitorSubtask] = []
+    source_day_by_id: dict[int, date] = {}
+    source_tenant_map: dict[int, int] = {}
+    task_tenant = {t.task_id: t.tenant_id for t in hist_tasks if t.task_id}
+    for item in hist_rows:
+        biz = hist_days.get(item.id)
+        if biz is None or biz > cutoff_day:
+            continue
+        source_items.append(item)
+        source_day_by_id[item.id] = biz
+        tid = task_tenant.get(item.task_id) or tenant_id
+        if tid:
+            source_tenant_map[item.id] = int(tid)
+
+    source_stats, source_daily_counts = _aggregate_source_stats(
+        source_items,
+        business_day_by_id=source_day_by_id,
+        subtask_tenant_map=source_tenant_map,
+        purchased_platforms_by_tenant={tenant_id: purchased_platforms},
+        exposure_terms_by_tenant={tenant_id: exposure_terms},
+    )
+    citation_range_end = customer_display_cutoff()
+    positive_days = [
+        date.fromisoformat(k)
+        for k, v in source_daily_counts.items()
+        if int(v or 0) > 0
+    ]
+    citation_range_start = datetime.combine(
+        min(positive_days) if positive_days else citation_range_end.date(),
+        time.min,
+    )
+    source_citation_trend = _build_source_citation_trend(
+        source_daily_counts,
+        range_start=citation_range_start,
+        range_end=citation_range_end,
+        only_with_data=True,
+    )
+    return {
+        "source_stats": source_stats,
+        "source_citation_trend": source_citation_trend,
+    }
+
+
+def get_customer_source_stats_bundle(
+    db: Session,
+    tenant_id: int,
+    *,
+    purchased_platforms: set[str],
+    exposure_terms: list[str],
+) -> dict[str, Any]:
+    """客户信源聚合：命中长 TTL 缓存则直接返回，语义仍是全部历史。"""
+    from app.core.read_cache import (
+        SOURCE_STATS_CACHE_TTL,
+        get_or_build_json_cache,
+        source_stats_cache_key,
+        source_stats_config_fingerprint,
+    )
+
+    cutoff_day = customer_display_cutoff().date().isoformat()
+    config_fp = source_stats_config_fingerprint(exposure_terms, purchased_platforms)
+    cache_key = source_stats_cache_key(tenant_id, cutoff_day, config_fp)
+    return get_or_build_json_cache(
+        cache_key,
+        lambda: _compute_customer_source_stats_bundle(
+            db,
+            tenant_id,
+            purchased_platforms=purchased_platforms,
+            exposure_terms=exposure_terms,
+        ),
+        ttl_seconds=SOURCE_STATS_CACHE_TTL,
+        lock_ttl_seconds=120,
+        wait_seconds=45.0,
+    )
 
 
 def _empty_monitor_summary(current: CurrentSession) -> dict[str, Any]:
@@ -817,9 +995,42 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
     completed_ids = {item.id for item in completed}
     mentioned = [item for item in completed if item.mention_position is not None]
+    task_by_id = {task.task_id: task for task in tasks if task.task_id}
+    completed_task_ids = list({item.task_id for item in completed if item.task_id})
+    summary_schedule_runs = schedule_runs_for_tasks(db, completed_task_ids) if completed_task_ids else {}
+    summary_lead_runs = lead_diagnosis_runs_for_tasks(db, completed_task_ids) if completed_task_ids else {}
+    asset_by_tenant = {asset.tenant_id: asset for asset in asset_rows}
+
+    def _summary_business_day(item: GeoMonitorSubtask) -> date | None:
+        task = task_by_id.get(item.task_id or "")
+        if task is None:
+            return item.updated_at.date() if item.updated_at else None
+        tenant_id = subtask_tenant_map.get(item.id) or task.tenant_id
+        detect_dt = _subtask_detect_datetime(
+            item,
+            task,
+            resolve_task_schedule_context(
+                task,
+                summary_schedule_runs.get(item.task_id),
+                asset_by_tenant.get(tenant_id),
+                summary_lead_runs.get(item.task_id) if not getattr(task, "tenant_id", None) else None,
+            ),
+        )
+        return detect_dt.date() if detect_dt else None
+
+    business_day_by_id: dict[int, date] = {}
+    for item in completed:
+        day = _summary_business_day(item)
+        if day is not None:
+            business_day_by_id[item.id] = day
+
     total_cost = sum(float(item.amount or 0) for item in subtasks)
     mention_rate = round(len(mentioned) / len(completed) * 100, 1) if completed else 0.0
-    avg_rank = round(sum(item.mention_position for item in mentioned) / len(mentioned), 1) if mentioned else 0.0
+    avg_rank = (
+        round(sum(item.mention_position for item in mentioned) / len(mentioned), 1)
+        if mentioned
+        else None
+    )
 
     sentiment_labels = {
         "positive": "正面",
@@ -884,73 +1095,41 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
         if stat_platform_stats:
             platform_stats = sort_platform_items(stat_platform_stats)
 
-    source_map: dict[str, dict[str, Any]] = {}
-    source_daily_counts: dict[str, int] = {}
-    for item in completed:
-        purchased_platforms = purchased_platforms_by_tenant.get(subtask_tenant_map.get(item.id))
-        if purchased_platforms and item.platform not in purchased_platforms:
-            continue
-        for source in item.reference_list_json or []:
-            if not _is_valid_citation_source(source):
-                continue
-            url = source.get("url") or source.get("site") or source.get("title")
-            if not url:
-                continue
-            key = str(url).split("?")[0]
-            tenant_id = subtask_tenant_map.get(item.id)
-            exposure_terms = exposure_terms_by_tenant.get(tenant_id, [])
-            matched_exposure = _matched_source_keywords(source, exposure_terms)
-            if not matched_exposure:
-                continue
-            row = source_map.setdefault(
-                key,
-                {
-                    "title": source.get("title") or source.get("site") or key,
-                    "url": url,
-                    "count": 0,
-                    "platforms": [],
-                    "exposure_terms": [],
-                    "questions": [],
-                    "latest_time": None,
-                },
-            )
-            row["count"] += 1
-            if item.updated_at:
-                day_key = item.updated_at.date().isoformat()
-                source_daily_counts[day_key] = source_daily_counts.get(day_key, 0) + 1
-            if item.platform and item.platform not in row["platforms"]:
-                row["platforms"].append(item.platform)
-            for term in matched_exposure:
-                if term not in row["exposure_terms"]:
-                    row["exposure_terms"].append(term)
-            if item.prompt and item.prompt not in row["questions"]:
-                row["questions"].append(item.prompt)
-            if item.updated_at and (row["latest_time"] is None or item.updated_at.isoformat() > row["latest_time"]):
-                row["latest_time"] = item.updated_at.isoformat()
-    source_stats = sorted(source_map.values(), key=lambda item: item["count"], reverse=True)
-    for row in source_stats:
-        row["platforms"] = sort_platform_codes(row["platforms"])[:6]
-        row["exposure_terms"] = row["exposure_terms"][:8]
-        row["questions"] = row["questions"][:8]
-
-    citation_lookback = 30
-    if current.identity.identity_type == "CUSTOMER":
-        citation_range_end = customer_display_cutoff()
-        citation_range_start = datetime.combine(
-            citation_range_end.date() - timedelta(days=citation_lookback - 1),
-            time.min,
+    # 客户信源：全历史（≤昨日）+ 露出词门槛；独立长 TTL 缓存，首屏仍出全部历史
+    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
+        tenant_id = int(current.identity.tenant_id)
+        source_bundle = get_customer_source_stats_bundle(
+            db,
+            tenant_id,
+            purchased_platforms=purchased_platforms_by_tenant.get(tenant_id) or set(),
+            exposure_terms=exposure_terms_by_tenant.get(tenant_id) or [],
         )
+        source_stats = source_bundle.get("source_stats") or []
+        source_citation_trend = source_bundle.get("source_citation_trend") or {
+            "start_at": None,
+            "end_at": None,
+            "points": [],
+        }
     else:
+        source_stats, source_daily_counts = _aggregate_source_stats(
+            completed,
+            business_day_by_id=business_day_by_id,
+            subtask_tenant_map=subtask_tenant_map,
+            purchased_platforms_by_tenant=purchased_platforms_by_tenant,
+            exposure_terms_by_tenant=exposure_terms_by_tenant,
+        )
+        citation_lookback = 30
         citation_range_end = datetime.now()
         citation_range_start = datetime.combine(
             citation_range_end.date() - timedelta(days=citation_lookback - 1),
             time.min,
         )
-    source_citation_trend = _build_source_citation_trend(
-        source_daily_counts,
-        range_start=citation_range_start,
-        range_end=citation_range_end,
-    )
+        source_citation_trend = _build_source_citation_trend(
+            source_daily_counts,
+            range_start=citation_range_start,
+            range_end=citation_range_end,
+            only_with_data=False,
+        )
 
     today = datetime.now().date()
     trend_end_day = customer_display_cutoff().date() if current.identity.identity_type == "CUSTOMER" else today
@@ -969,7 +1148,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     else:
         for offset in trend_offsets:
             day = today - timedelta(days=offset)
-            value = sum(1 for item in mentioned if item.updated_at and item.updated_at.date() == day)
+            value = sum(1 for item in mentioned if business_day_by_id.get(item.id) == day)
             day_labels.append(day.strftime("%m-%d"))
             daily_trend.append({"label": day.strftime("%m-%d"), "value": value})
 
@@ -2090,15 +2269,12 @@ def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
 
 
 def _collect_ranking_entries(subtask: GeoMonitorSubtask) -> list[dict[str, Any]]:
+    """正文解析优先排在前；JSON 殿后作兜底（find_* 取首次命中＝优先正文名次）。"""
     text = _subtask_answer_plaintext(subtask)
-    entries: list[dict[str, Any]] = []
-    for source in (
-        normalize_structured_rankings(subtask.all_rankings_json or []),
-        parse_answer_rankings(text),
-    ):
-        if source:
-            entries.extend(source)
-    return entries
+    return [
+        *parse_answer_rankings(text),
+        *normalize_structured_rankings(subtask.all_rankings_json or []),
+    ]
 
 
 def _ranking_scope_text(monitor_keywords: str | None, prompt: str | None) -> str:
@@ -2137,12 +2313,11 @@ def _find_brand_in_rankings(
 
     text = _subtask_answer_plaintext(subtask)
     scope = _ranking_scope_text(monitor_keywords, subtask.prompt)
-    merged: list[dict[str, Any]] = []
-    for entries in (
-        normalize_structured_rankings(subtask.all_rankings_json or []),
-        parse_answer_rankings(text),
-    ):
-        merged.extend(entries)
+    # 正文在前：同品牌优先吃正文段内名次；正文未命中时仍可用 JSON
+    merged = [
+        *parse_answer_rankings(text),
+        *normalize_structured_rankings(subtask.all_rankings_json or []),
+    ]
     if merged:
         return find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
     return None, False
@@ -2688,14 +2863,15 @@ def customer_subtask_visible(
     task: GeoMonitorTask | None = None,
     schedule_ctx: dict[str, Any] | None = None,
 ) -> bool:
-    """客户侧是否可见：按检测日或 updated_at 截止昨日（补录不改检测日）。"""
+    """客户侧是否可见：只认监测业务日 ≤ 昨日。禁止用 updated_at（补录会把库时间刷到今天）。"""
     cutoff = customer_display_cutoff(now)
-    if subtask.updated_at and subtask.updated_at <= cutoff:
-        return True
     if task is None:
-        return False
+        return bool(subtask.updated_at and subtask.updated_at <= cutoff)
     detect_dt = _subtask_detect_datetime(subtask, task, schedule_ctx)
-    return bool(detect_dt and detect_dt <= cutoff)
+    if detect_dt is not None:
+        return detect_dt <= cutoff
+    # ponytail: 无业务日上下文时才回退 updated_at；有业务日绝不用改库时间当闸门。
+    return bool(subtask.updated_at and subtask.updated_at <= cutoff)
 
 
 def invalidate_monitor_summary_cache(tenant_id: int | None = None) -> None:
@@ -3032,6 +3208,7 @@ def workspace_brief(
     daily_exposure: dict[str, list[dict[str, Any]]] = {}
     source_map: dict[str, dict[str, Any]] = {}
     snapshot_candidates: list[dict[str, Any]] = []
+    daily_source_maps: dict[str, dict[str, dict[str, Any]]] = {}
 
     for item in subtasks:
         if item.task is None:
@@ -3056,6 +3233,7 @@ def workspace_brief(
         )
         keyword_group = _prompt_group_name(item.prompt or "", keyword_group_rows) or monitor_keywords
         sentiment_label = _normalize_sentiment_label(item.sentiment)
+        day_key = detect_dt.date().isoformat()
 
         row_payload = {
             "subtask_id": item.subtask_id,
@@ -3065,6 +3243,7 @@ def workspace_brief(
             "keyword_group": keyword_group,
             "schedule_label": schedule_ctx.get("schedule_label"),
             "schedule_window_key": schedule_ctx.get("schedule_window_key"),
+            "detect_day": day_key,
             "prompt_intent": intent,
             "brand_rank": brand_rank,
             "brand_mentioned": brand_mentioned,
@@ -3077,12 +3256,10 @@ def workspace_brief(
 
         if intent == "ranking":
             ranking_rows.append(row_payload)
-            day_key = detect_dt.date().isoformat()
             daily_ranking.setdefault(day_key, []).append(row_payload)
 
         else:
             exposure_rows.append(row_payload)
-            day_key = detect_dt.date().isoformat()
             daily_exposure.setdefault(day_key, []).append(row_payload)
 
         for source in item.reference_list_json or []:
@@ -3104,6 +3281,20 @@ def workspace_brief(
             src["count"] += 1
             if item.platform and item.platform not in src["platforms"]:
                 src["platforms"].append(item.platform)
+
+            day_src_map = daily_source_maps.setdefault(day_key, {})
+            day_src = day_src_map.setdefault(
+                key,
+                {
+                    "title": source.get("title") or source.get("site") or key,
+                    "url": key,
+                    "count": 0,
+                    "platforms": [],
+                },
+            )
+            day_src["count"] += 1
+            if item.platform and item.platform not in day_src["platforms"]:
+                day_src["platforms"].append(item.platform)
 
     latest_day: str | None = None
     previous_day: str | None = None
@@ -3222,30 +3413,7 @@ def workspace_brief(
         else _build_workspace_kpi_trends(daily_ranking, daily_exposure, trend_start, trend_end)
     )
 
-    latest_day_source_map: dict[str, dict[str, Any]] = {}
-    for item in subtasks:
-        if latest_day and (not item.updated_at or item.updated_at.date().isoformat() != latest_day):
-            continue
-        for source in item.reference_list_json or []:
-            if not _is_valid_citation_source(source):
-                continue
-            url = source.get("url") or source.get("site") or source.get("title")
-            if not url:
-                continue
-            key = str(url).split("?")[0]
-            src = latest_day_source_map.setdefault(
-                key,
-                {
-                    "title": source.get("title") or source.get("site") or key,
-                    "url": key,
-                    "count": 0,
-                    "platforms": [],
-                },
-            )
-            src["count"] += 1
-            if item.platform and item.platform not in src["platforms"]:
-                src["platforms"].append(item.platform)
-
+    latest_day_source_map = daily_source_maps.get(latest_day or "", {})
     top_sources = sorted(latest_day_source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
     if not top_sources:
         top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
@@ -3253,7 +3421,7 @@ def workspace_brief(
         row["platforms"] = sort_platform_codes(row["platforms"])[:4]
 
     recent_snapshots = (
-        [item for item in snapshot_candidates if (item.get("updated_at") or "")[:10] == latest_day][:6]
+        [item for item in snapshot_candidates if item.get("detect_day") == latest_day][:6]
         if latest_day
         else snapshot_candidates[:6]
     )

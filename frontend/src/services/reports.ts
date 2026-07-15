@@ -19,6 +19,21 @@ export function reportPreviewHtmlUrl(reportId: number) {
   return `/api/v1/reports/${reportId}/preview/html`
 }
 
+/** 带登录态拉取 HTML，供 iframe blob 预览（避免裸 src 未带 Cookie/鉴权时整页空白）。 */
+export async function fetchReportPreviewHtml(reportId: number): Promise<string> {
+  const response = await http.get(`/v1/reports/${reportId}/preview/html`, {
+    responseType: 'text',
+    timeout: 90000,
+    headers: { Accept: 'text/html', 'Content-Type': undefined as unknown as string },
+    transformResponse: [(data) => data],
+  })
+  const html = typeof response.data === 'string' ? response.data : String(response.data ?? '')
+  if (!html || html.trimStart().startsWith('{')) {
+    throw new Error('报告预览返回非 HTML，请重新登录后重试')
+  }
+  return html
+}
+
 export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'comparison' | 'periodic'
 export type ReportStatus = 'draft' | 'published' | 'archived'
 

@@ -483,8 +483,16 @@ def build_report_modules(
             {
                 "title": "平均推荐排名",
                 "body": (
-                    f"平均推荐排名 #{avg_rank or '—'}，整体接近行业 TOP3 曝光位置，"
-                    f"{meta['scope']} {top3_rate}% 场景可进入头部推荐位，流量获取基础较好。"
+                    (
+                        f"平均推荐排名 #{avg_rank}，整体接近行业 TOP3 曝光位置，"
+                        f"{meta['scope']} {top3_rate}% 场景可进入头部推荐位，流量获取基础较好。"
+                    )
+                    if avg_rank is not None and float(avg_rank) <= 3
+                    else (
+                        f"平均推荐排名 #{avg_rank or '—'}，"
+                        f"{meta['scope']} Top3 率为 {top3_rate}%；"
+                        f"{'排名仍有较大提升空间，建议加强高权重场景内容布局。' if avg_rank is not None else '当前样本不足以评价推荐位次。'}"
+                    )
                 ),
             },
             {
@@ -516,11 +524,17 @@ def build_report_modules(
     }
 
     platform_rows, platform_conclusion = _platform_rows_with_positioning(platform_stats, mention_rate)
+    sample_counts = [int(r.get("completed") or r.get("total") or 0) for r in (platform_stats or [])]
+    samples_uniform = bool(sample_counts) and len(set(sample_counts)) == 1 and sample_counts[0] > 0
     platform_benchmark = {
         "intro": (
-            f"{meta['scope']}各平台监测任务样本量统一（共 {completed} 条），数据具备对标参考性。"
-            if platform_rows
-            else "当前周期平台样本较少，建议扩大监测覆盖面。"
+            f"{meta['scope']}各平台监测任务样本量一致（每平台 {sample_counts[0]} 条），数据具备对标参考性。"
+            if samples_uniform
+            else (
+                f"{meta['scope']}共完成 {completed} 条成功样本，平台间样本量不完全一致，解读时请结合各平台 completed 数。"
+                if platform_rows
+                else "当前周期平台样本较少，建议扩大监测覆盖面。"
+            )
         ),
         "rows": platform_rows,
         "conclusion": platform_conclusion,
@@ -580,18 +594,24 @@ def build_report_modules(
         ),
     }
 
-    weak_platform = next((r["name"] for r in platform_rows if r.get("is_weak")), "部分平台")
-    problems = [
-        f"渠道不均衡：{weak_platform} 曝光、排名表现偏弱，未充分挖掘 AI 全域流量",
-        "舆情隐患：知乎等高权重渠道可能存在服务、价格相关负向表述，持续影响客户转化",
-        "内容短板：服务响应、价格透明化相关素材不足，难以对冲负面舆论",
-        "内容布局单一：过度依赖少数渠道，缺少常态化 AI 问答优质内容填充",
-    ]
+    weak_platform = next((r["name"] for r in platform_rows if r.get("is_weak")), None)
+    problems: list[str] = []
+    if weak_platform:
+        problems.append(
+            f"渠道不均衡：{weak_platform} 曝光、排名表现偏弱，未充分挖掘 AI 全域流量"
+        )
     if diagnosis.get("weakness_points"):
-        problems[1] = f"舆情与体验：{diagnosis['weakness_points']}"
+        problems.append(f"舆情与体验：{diagnosis['weakness_points']}")
+    elif positive_rate is not None and float(positive_rate) < 50:
+        problems.append("舆情压力：正面占比偏低，建议复核高权重渠道表述与客服体验素材")
+    if not problems:
+        problems.append("当前周期未发现显著结构性短板，建议维持内容投放并持续监测波动")
+    # 固定补全布局项仅当确实样本偏少时追加
+    if completed and int(completed) < 30:
+        problems.append("样本规模偏小：建议扩大监测覆盖面后再做强结论")
 
     risk_and_strategy = {
-        "problems": problems,
+        "problems": problems[:4],
         "dimensions": [
             {
                 "title": "AI 问答平台分层运营策略",

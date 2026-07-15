@@ -19,6 +19,7 @@ from app.models.tenant import Tenant
 from app.services.brand_service import active_keyword_groups, brand_exposure_terms, ensure_tenant, get_brand_asset, list_competitors, tenant_purchased_platforms
 from app.services.lead_diagnosis_service import aggregate_tenant_diagnosis
 from app.services.monitor_service import TERMINAL_STATUSES, _is_valid_citation_source, _matched_source_keywords
+from app.services.monitor_sample_metrics import SUCCESS_STATUSES, compute_brand_rank_rates, is_success_status
 from app.services.report_ai_service import enrich_report_narrative
 from app.services.report_period_content_service import build_premium_content, build_report_modules
 from app.services.report_period_service import MANUAL_REPORT_TYPES, period_label as build_period_label
@@ -127,30 +128,15 @@ def build_tenant_monitor_snapshot(
     subtasks: list[GeoMonitorSubtask] = []
     task_rows: list[GeoMonitorTask] = []
     if start_date is not None and end_date is not None:
-        start_dt = datetime.combine(start_date, time.min)
-        end_dt = datetime.combine(end_date, time.max)
-        subtasks = list(
-            db.scalars(
-                select(GeoMonitorSubtask)
-                .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-                .where(
-                    GeoMonitorTask.tenant_id == tenant_id,
-                    GeoMonitorTask.deleted.is_(False),
-                    GeoMonitorSubtask.updated_at >= start_dt,
-                    GeoMonitorSubtask.updated_at <= end_dt,
-                )
-            )
+        from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+
+        subtasks, task_rows, _day_by_id = load_subtasks_for_business_date_range(
+            db,
+            tenant_id,
+            start_date=start_date,
+            end_date=end_date,
+            asset=asset,
         )
-        task_ids = list({item.task_id for item in subtasks})
-        if task_ids:
-            task_rows = list(
-                db.scalars(
-                    select(GeoMonitorTask).where(
-                        GeoMonitorTask.task_id.in_(task_ids),
-                        GeoMonitorTask.deleted.is_(False),
-                    )
-                )
-            )
     else:
         task_rows = list(
             db.scalars(
@@ -166,14 +152,14 @@ def build_tenant_monitor_snapshot(
                 db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
             )
 
-    completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
+    completed = [item for item in subtasks if is_success_status(item.status)]
     completed_ids = {item.id for item in completed}
+    rates = compute_brand_rank_rates(subtasks)
     mentioned = [item for item in completed if item.mention_position is not None]
-    top3 = [item for item in mentioned if item.mention_position is not None and item.mention_position <= 3]
 
-    mention_rate = round(len(mentioned) / len(completed) * 100, 1) if completed else 0.0
-    avg_rank = round(sum(item.mention_position for item in mentioned) / len(mentioned), 1) if mentioned else None
-    top3_rate = round(len(top3) / len(completed) * 100, 1) if completed else 0.0
+    mention_rate = rates["mention_rate"]
+    avg_rank = rates["avg_rank"]
+    top3_rate = rates["top3_rate"]
 
     sentiment_labels = {
         "positive": "正面",
@@ -205,10 +191,10 @@ def build_tenant_monitor_snapshot(
         bucket["total"] += 1
         if item.id in completed_ids:
             bucket["completed"] += 1
-        if item.mention_position is not None:
-            bucket["mentioned"] += 1
-            bucket["rank_total"] += item.mention_position
-            bucket["rank_count"] += 1
+            if item.mention_position is not None:
+                bucket["mentioned"] += 1
+                bucket["rank_total"] += item.mention_position
+                bucket["rank_count"] += 1
         if item.id in completed_ids:
             for source in item.reference_list_json or []:
                 if not _is_valid_citation_source(source):
@@ -228,13 +214,14 @@ def build_tenant_monitor_snapshot(
 
     platform_stats = []
     for bucket in platform_bucket.values():
-        total = bucket["total"] or 1
+        # 与总体口径一致：提及率分母用成功样本，不用全部计划数
+        denom = bucket["completed"] or 1
         platform_stats.append(
             {
                 "platform": bucket["platform"],
                 "total": bucket["total"],
                 "completed": bucket["completed"],
-                "mention_rate": round(bucket["mentioned"] / total * 100, 1),
+                "mention_rate": round(bucket["mentioned"] / denom * 100, 1) if bucket["completed"] else 0.0,
                 "avg_rank": round(bucket["rank_total"] / bucket["rank_count"], 1) if bucket["rank_count"] else None,
             }
         )
@@ -312,6 +299,25 @@ def _serialize_report_row(report: GeoReport, tenant_name: str | None = None) -> 
         "created_at": report.created_at.isoformat(),
         "updated_at": report.updated_at.isoformat(),
     }
+
+
+def _materialize_report_preview_html(db: Session, report: GeoReport) -> None:
+    """生成/更新后落盘预览 HTML；先失效旧文件再以最新指纹写入。"""
+    try:
+        from app.services.report_export_service import (
+            invalidate_report_html_preview,
+            materialize_report_html_preview,
+        )
+        from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES
+
+        if report.report_type not in HTML_TEMPLATE_REPORT_TYPES:
+            return
+        invalidate_report_html_preview(int(report.id))
+        payload = _serialize_report_row(report)
+        payload["report_content"] = report.report_content_json or {}
+        materialize_report_html_preview(db, payload)
+    except Exception as exc:
+        logger.warning("report html materialize failed report_id=%s err=%s", report.id, exc)
 
 
 def _period_label_for_type(report_type: str, now: datetime) -> str:
@@ -539,6 +545,7 @@ def refresh_diagnosis_report_for_tenant(
     report.report_content_json = bundle["content"]
     db.commit()
     db.refresh(report)
+    _materialize_report_preview_html(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
@@ -714,6 +721,7 @@ def generate_report(
     else:
         db.flush()
     db.refresh(report)
+    _materialize_report_preview_html(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
@@ -825,6 +833,7 @@ def refresh_scheduled_report_for_tenant(
     report.status = "published"
     db.commit()
     db.refresh(report)
+    _materialize_report_preview_html(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
@@ -868,6 +877,7 @@ def generate_scheduled_report_for_tenant(
     db.commit()
     db.refresh(report)
     _notify_report_published(db, report)
+    _materialize_report_preview_html(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
@@ -926,6 +936,7 @@ def update_report(
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     result = _serialize_report_row(report, tenant.name if tenant else None)
     result["report_content"] = report.report_content_json
+    _materialize_report_preview_html(db, report)
     return result
 
 
@@ -948,5 +959,6 @@ def publish_report(
         db.flush()
     db.refresh(report)
     _notify_report_published(db, report, auto_commit=auto_commit)
+    _materialize_report_preview_html(db, report)
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)

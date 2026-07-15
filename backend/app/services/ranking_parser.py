@@ -37,8 +37,35 @@ NUMBERED_TITLE_RE = re.compile(r"^(\d+)\s*[\.、．]\s*(.+)$")
 SECTION_TITLE_RE = re.compile(r"^[一二三四五六七八九十百]+[、.．]\s*\S")
 
 SUBSECTION_LABELS = frozenset({
-    "特点", "适用", "适用人群", "优势", "短板", "特色", "定位", "覆盖", "适合",
-    "核心场景", "覆盖规模", "核心优势", "投放建议", "快速选型",
+    "特点", "适用", "适用人群", "优势", "短板", "劣势", "特色", "定位", "覆盖", "适合",
+    "核心场景", "覆盖规模", "核心优势", "服务能力", "服务", "资源", "资源能力",
+    "投放建议", "快速选型", "核心能力", "适配场景", "覆盖面", "适用场景", "适合场景",
+    "资质", "资质层面", "规模", "规模体量", "价格", "价格水平", "报价", "案例",
+    "客户", "客户群", "要点", "建议", "总结", "对比", "说明", "简介", "劣势短板",
+    "核心覆盖", "核心资源", "核心服务", "产品能力", "技术能力", "团队能力",
+    "渠道能力", "品牌能力", "服务体系", "资源体系", "核心亮点", "主要优势",
+    "资源覆盖", "服务特色", "特色服务", "适合客户", "适合对象", "适合需求",
+    "覆盖范围", "服务范围", "服务优势", "服务特点", "资源规模", "资源真实性",
+    "核心资质",
+})
+# 公司详情字段名：资质层面 / 规模体量 / XX能力 / XX优势… — 不是选手
+_FIELD_LABEL_RE = re.compile(
+    r"^("
+    r"(?:核心|主要)?"
+    r"(?:优势|亮点|短板|劣势|特点|特色|定位|资源|服务|能力|规模|价格|报价|"
+    r"案例|客户|资质|要点|建议|总结|对比|说明|简介|覆盖|适合|适用)"
+    r"(?:能力|层面|维度|方面|体量|水平|优势|体系|群|场景|规模|范围|覆盖|"
+    r"特色|真实性|对象|需求|客户|亮点)?"
+    r"|(?:适用|适合|适配)(?:场景|客户|对象|需求|人群)"
+    r"|(?:服务|资源|产品|渠道|品牌|技术|团队)"
+    r"(?:能力|特色|特点|优势|规模|范围|覆盖|体系|真实性)"
+    r"|投放建议|快速选型|覆盖面|覆盖规模|覆盖范围"
+    r")$"
+)
+# 学科/学习项误入榜（教育类正文），不当作公司
+_NON_COMPANY_TOKENS = frozenset({
+    "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治",
+    "单词", "作文", "阅读", "听力", "口语", "语法", "古诗", "文言文",
 })
 _SUBCATEGORY_HINTS = (
     "大厂", "工程商", "运营商", "代理商", "服务商", "制造商", "厂家", "媒体",
@@ -60,6 +87,12 @@ _NON_RANK_CATEGORY_HINTS = (
 _SENTENCE_NAME_HINTS = (
     "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
     "→", "->", "只投", "预算有限",
+    "擅长", "售后", "漏刊", "无多层", "案例极", "审批", "上刊", "运维", "补刊",
+    "授权", "转包", "监测", "落地",
+)
+_CORP_NAME_HINTS = (
+    "公司", "集团", "控股", "股份", "有限", "传媒", "广告", "媒体", "科技", "网络",
+    "商社", "银行", "证券", "保险", "医院", "大学", "学院",
 )
 
 
@@ -95,7 +128,12 @@ def _looks_like_company_list_name(name: str) -> bool:
         return False
     if any(hint in cleaned for hint in _SENTENCE_NAME_HINTS):
         return False
+    if any(ch in cleaned for ch in "，。；！？"):
+        return False
     if cleaned.startswith("看") and "：" not in cleaned:
+        return False
+    # 长句且无公司后缀 → 描述文案，不是选手
+    if len(cleaned) > 14 and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
         return False
     return True
 
@@ -301,8 +339,14 @@ def _parse_markdown_header(line: str) -> tuple[int, str] | None:
 
 def _is_subsection_label(content: str) -> bool:
     cleaned = re.sub(r"^[一二三四五六七八九十\d]+[\.、．]\s*", "", content).strip()
+    cleaned = re.sub(r"^\*\*|\*\*$", "", cleaned).strip()
     head = cleaned.split("：", 1)[0].split(":", 1)[0].strip()
-    return head in SUBSECTION_LABELS or any(cleaned.startswith(label) for label in SUBSECTION_LABELS)
+    head = re.sub(r"^\*\*|\*\*$", "", head).strip()
+    if head in SUBSECTION_LABELS or cleaned in SUBSECTION_LABELS:
+        return True
+    if _FIELD_LABEL_RE.match(head) or _FIELD_LABEL_RE.match(cleaned):
+        return True
+    return any(cleaned.startswith(label) for label in SUBSECTION_LABELS)
 
 
 def _looks_like_subcategory_header(content: str) -> bool:
@@ -395,7 +439,7 @@ def ranking_entry_explicit_rank(entry: dict[str, Any]) -> int | float | None:
 
 
 def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[str, Any]]:
-    """Normalize API ranking JSON; fill missing ranks by appearance order within each category."""
+    """Normalize API ranking JSON；有 category 时按段内出场序重排，忽略跨段连号。"""
     results: list[dict[str, Any]] = []
     appearance_counters: dict[str | None, int] = {}
     for raw in raw_entries or []:
@@ -404,15 +448,27 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
         name = ranking_entry_name(raw)
         if not name:
             continue
+        # API/旧缓存也会把「核心优势」当成选手；与正文解析同一门禁
+        if _is_subsection_label(name) or name in SUBSECTION_LABELS:
+            continue
+        if name in _NON_COMPANY_TOKENS:
+            continue
+        if not _looks_like_company_list_name(name):
+            continue
         category = ranking_entry_category(raw)
-        rank_value = ranking_entry_explicit_rank(raw)
-        if rank_value is None:
+        if category:
             appearance_counters[category] = appearance_counters.get(category, 0) + 1
-            rank_value = appearance_counters[category]
+            rank_value: int | float = appearance_counters[category]
         else:
-            numeric = _coerce_rank_number(rank_value)
-            if numeric is not None:
-                appearance_counters[category] = max(appearance_counters.get(category, 0), int(numeric))
+            rank_value_opt = ranking_entry_explicit_rank(raw)
+            if rank_value_opt is None:
+                appearance_counters[None] = appearance_counters.get(None, 0) + 1
+                rank_value = appearance_counters[None]
+            else:
+                rank_value = rank_value_opt
+                numeric = _coerce_rank_number(rank_value)
+                if numeric is not None:
+                    appearance_counters[None] = max(appearance_counters.get(None, 0), int(numeric))
         results.append({"name": name, "rank": rank_value, "category": category})
     return results
 
@@ -433,6 +489,11 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     def append_item(name: str, rank: int | None, *, category: str | None = None) -> None:
         cleaned = _extract_list_item_name(name)
         if not cleaned or not _looks_like_company_list_name(cleaned):
+            return
+        # 公司块下的「核心优势/服务能力」不是选手
+        if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
+            return
+        if cleaned in _NON_COMPANY_TOKENS:
             return
         bucket = category if category is not None else (current_section or current_category)
         if _is_non_rank_category(bucket):
@@ -525,12 +586,20 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             continue
 
         if in_company_block:
+            # 同段下一家编号公司：结束上家详情块
+            peer = LIST_ITEM_RE.match(line)
+            if peer:
+                append_item(peer.group(4), None)
+                in_company_block = True
             continue
 
         match = LIST_ITEM_RE.match(line)
         if match:
-            rank = _parse_rank_token(match.group(1) or match.group(2) or match.group(3))
-            append_item(match.group(4), rank)
+            # 分段重排：段内按出场序计位；编号公司后进入详情块，忽略核心优势等 bullet
+            before = len(results)
+            append_item(match.group(4), None)
+            if len(results) > before:
+                in_company_block = True
             continue
 
         bullet = BULLET_ITEM_RE.match(line)
@@ -559,6 +628,13 @@ def _scope_match_tokens(scope: str) -> list[str]:
         token = match.group(0).strip()
         if token and token not in tokens:
             tokens.append(token)
+        # 机场广告公司 → 再切 机场/广告/公司，避免整词拼不上分段标题
+        if len(token) >= 4 and re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            for size in (2, 3):
+                for index in range(0, len(token) - size + 1):
+                    piece = token[index:index + size]
+                    if piece not in tokens:
+                        tokens.append(piece)
     return tokens
 
 
@@ -592,9 +668,12 @@ def _scene_alignment_bonus(category: str, scope: str) -> int:
     category_text = str(category or "").casefold()
     scope_text = str(scope or "").casefold()
     bonus = 0
-    media_scope = any(token in scope_text for token in ("广告", "传媒", "媒体", "大屏", "户外"))
+    media_scope = any(token in scope_text for token in ("广告", "传媒", "媒体", "大屏", "户外", "机场", "电梯"))
     factory_scope = any(token in scope_text for token in ("显示屏", "生产", "工程", "厂家", "厂商"))
-    if media_scope and any(token in category_text for token in ("传媒", "媒体", "运营商", "广告", "户外", "大屏")):
+    if media_scope and any(
+        token in category_text
+        for token in ("传媒", "媒体", "运营商", "广告", "户外", "大屏", "代理", "平台", "整合", "机场", "梯媒")
+    ):
         bonus += 250
     if factory_scope and any(token in category_text for token in ("显示屏", "生产", "工程", "厂家", "厂商")):
         bonus += 250
@@ -644,7 +723,7 @@ def find_best_brand_rank_scoped(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Prefer first document occurrence in scope-best categories (not the best/min of later sections)."""
+    """同分段内：优先正文第一次出现；scope 只用来丢掉明显串段的后文命中。"""
     matched_entries: list[dict[str, Any]] = []
     for entry in entries:
         name = str(entry.get("name") or "").strip()
@@ -664,32 +743,35 @@ def find_best_brand_rank_scoped(
         if str(entry.get("category") or "").strip()
     ]
     if scope_text and categorized:
-        categories = {
-            str(entry.get("category") or "").strip()
+        scores = {
+            str(entry.get("category") or "").strip(): ranking_category_scope_score(
+                str(entry.get("category") or "").strip(),
+                scope_text,
+            )
             for entry in categorized
         }
-        scores = {
-            category: ranking_category_scope_score(category, scope_text)
-            for category in categories
-        }
-        best_category = max(scores, key=lambda key: (scores[key], len(key)))
-        best_score = scores[best_category]
+        best_score = max(scores.values(), default=-1)
         if best_score >= 100:
-            preferred = {
-                category for category, score in scores.items()
-                if score >= max(best_score * 0.45, 100)
-            }
+            threshold = max(best_score * 0.45, 100)
+            preferred = {category for category, score in scores.items() if score >= threshold}
         else:
-            # scope 分不清时按正文第一次出现，不按 set 顺序抽一个类
-            preferred = {
-                str(entry.get("category") or "").strip()
-                for entry in categorized
-            }
-        # Document order: 同品牌多次出现时用第一次，不再取 min(rank) 变成后段更好名次
+            preferred = set(scores)
+
+        # 正文首次命中若在 preferred 内直接用；否则才在 preferred 里找第一次
         for entry in categorized:
             category = str(entry.get("category") or "").strip()
-            if category not in preferred:
+            if preferred and category not in preferred:
                 continue
+            rank = entry.get("rank")
+            if rank is None:
+                continue
+            try:
+                return float(rank), True
+            except (TypeError, ValueError):
+                continue
+
+        # preferred 全无品牌：退回全文第一次（避免「整合代理」因缺「传媒」二字被踢掉后误吃区域第 9）
+        for entry in categorized:
             rank = entry.get("rank")
             if rank is None:
                 continue

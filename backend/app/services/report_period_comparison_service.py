@@ -43,6 +43,8 @@ TREND_META = {
 
 OUT_DIR = Path.home() / "Desktop" / "周期报告样例_环比预览"
 ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+# 门户预览/落盘 HTML：同源静态包，避免 blob iframe 打 jsDelivr 超时后「图表库未加载」
+ECHARTS_PORTAL_SRC = "/report-assets/echarts.min.js"
 ECHARTS_STATIC_DIR = Path(__file__).resolve().parents[1] / "static" / "report_period"
 REPORT_TYPES = ("weekly", "monthly", "quarterly", "annual")
 PERIOD_EXPORT_TYPES = PERIOD_COMPARISON_REPORT_TYPES
@@ -1662,22 +1664,22 @@ def _trend_bucket_slots(report_type: str, start: date, end: date) -> list[dict[s
     raise ValueError(report_type)
 
 
-def _load_completed_subtasks(db, tenant_id: int, start: date, end: date) -> list[GeoMonitorSubtask]:
-    start_dt = datetime.combine(start, time.min)
-    end_dt = datetime.combine(end, time.max)
-    return list(
-        db.scalars(
-            select(GeoMonitorSubtask)
-            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-            .where(
-                GeoMonitorTask.tenant_id == tenant_id,
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorSubtask.updated_at >= start_dt,
-                GeoMonitorSubtask.updated_at <= end_dt,
-                GeoMonitorSubtask.status.in_(TERMINAL_STATUSES),
-            )
-        )
+def _load_completed_subtasks(
+    db,
+    tenant_id: int,
+    start: date,
+    end: date,
+) -> tuple[list[GeoMonitorSubtask], dict[int, date]]:
+    """按业务检测日拉取区间子任务（禁止裸用 updated_at 当分日/周期键）。"""
+    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+
+    rows, _tasks, day_by_id = load_subtasks_for_business_date_range(
+        db,
+        tenant_id,
+        start_date=start,
+        end_date=end,
     )
+    return rows, day_by_id
 
 
 def _aggregate_bucket(rows: list[GeoMonitorSubtask]) -> dict[str, Any]:
@@ -1696,10 +1698,12 @@ def _aggregate_bucket(rows: list[GeoMonitorSubtask]) -> dict[str, Any]:
 def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: date) -> dict[str, Any]:
     meta = TREND_META[report_type]
     slots = _trend_bucket_slots(report_type, start, end)
-    rows = _load_completed_subtasks(db, tenant_id, start, end)
+    rows, day_by_id = _load_completed_subtasks(db, tenant_id, start, end)
     bucket_rows: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
     for row in rows:
-        day = row.updated_at.date()
+        day = day_by_id.get(row.id)
+        if day is None:
+            continue
         if report_type == "weekly":
             key = day.isoformat()
         elif report_type == "monthly":
@@ -1861,8 +1865,8 @@ def build_keyword_analytics(
     prev_end: date,
 ) -> dict[str, Any]:
     groups = _active_keyword_group_rows(db, tenant_id)
-    cur_rows = _load_completed_subtasks(db, tenant_id, start, end)
-    prev_rows = _load_completed_subtasks(db, tenant_id, prev_start, prev_end)
+    cur_rows, _cur_days = _load_completed_subtasks(db, tenant_id, start, end)
+    prev_rows, _prev_days = _load_completed_subtasks(db, tenant_id, prev_start, prev_end)
 
     cur_map: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
     prev_map: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
@@ -2134,9 +2138,16 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
 
     summary = trend.get("summary") or ""
     summary_html = f'<p class="trend-summary">{esc(summary)}</p>' if summary else ""
+    total_completed = sum(int(point.get("completed") or 0) for point in points)
+    empty_note = (
+        '<p class="note trend-empty-note">本周期各时间桶监测样本均为 0，暂无趋势可画。'
+        "请确认报告周期与实际监测日期是否重合（例如 2025 年报在仅有 2026 年监测数据时会整表为空）。</p>"
+        if total_completed <= 0
+        else ""
+    )
     sparse_note = (
         '<p class="note trend-sparse-note">本周期趋势时间点较少，图表采用柱状对比展示；明细见下方数据表。</p>'
-        if chart_data["sparse"]
+        if chart_data["sparse"] and total_completed > 0
         else ""
     )
     chart_kind_hint = "柱状对比" if chart_data["sparse"] else "折线趋势"
@@ -2145,6 +2156,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
       <section class="trend-section" id="trend">
         <h2>{esc(str(trend.get('title') or '趋势'))} · 品牌提及率与平均排名</h2>
         {summary_html}
+        {empty_note}
         {sparse_note}
         <div class="trend-charts">
           <div class="trend-chart-box">
@@ -2167,22 +2179,33 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
       <script>
       (function () {{
         const data = {chart_json};
-        if (!window.echarts) return;
-
         const mentionEl = document.getElementById('trendMentionChart');
         const rankEl = document.getElementById('trendRankChart');
         if (!mentionEl || !rankEl) return;
 
+        function failTip() {{
+          const tip = '<p class="note">图表库未加载，请检查网络或刷新后重试；下方数据表仍可查阅。</p>';
+          mentionEl.innerHTML = tip;
+          rankEl.innerHTML = tip;
+        }}
+
+        function paint() {{
+          if (!window.echarts) {{
+            failTip();
+            return;
+          }}
+
         const mentionChart = echarts.init(mentionEl);
         const sparse = !!data.sparse;
-        const mentionVals = data.mention.filter(v => v != null);
-        // ponytail: sparse 柱状用 zoom 轴（不从 0 起），视觉上更饱满；折线仍用原逻辑
-        const minM = sparse
-          ? Math.max(0, Math.min(...mentionVals) - 8)
-          : Math.max(0, Math.min(...mentionVals) - 8);
-        const maxM = sparse
-          ? Math.min(100, Math.max(...mentionVals) + 8)
-          : Math.min(100, Math.max(...mentionVals) + 6);
+        const mentionVals = data.mention.filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+        // ponytail: 全 null 时 Math.min(...[])=Infinity 会让坐标轴炸掉、柱子不画
+        let minM = 0;
+        let maxM = 100;
+        if (mentionVals.length) {{
+          minM = Math.max(0, Math.min(...mentionVals) - 8);
+          maxM = Math.min(100, Math.max(...mentionVals) + (sparse ? 8 : 6));
+          if (minM >= maxM) {{ maxM = Math.min(100, minM + 10); }}
+        }}
         const xRotate = data.label_rotate || 0;
         const gridBottom = data.grid_bottom || 56;
         const fullCats = data.fullCategories || data.categories || [];
@@ -2244,9 +2267,14 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         }});
 
         const rankChart = echarts.init(rankEl);
-        const ranks = data.rank.filter(v => v != null);
-        const minR = Math.max(1, Math.min(...ranks) - 0.45);
-        const maxR = Math.max(...ranks) + 0.45;
+        const ranks = data.rank.filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+        let minR = 1;
+        let maxR = 10;
+        if (ranks.length) {{
+          minR = Math.max(1, Math.min(...ranks) - 0.45);
+          maxR = Math.max(...ranks) + 0.45;
+          if (minR >= maxR) {{ maxR = minR + 1; }}
+        }}
         const rankInverse = !sparse;
         const rankAxisLabel = {{
           color: '#64748b',
@@ -2318,6 +2346,24 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
           mentionChart.resize();
           rankChart.resize();
         }});
+        }}
+
+        if (window.echarts) {{
+          paint();
+          return;
+        }}
+        // script src 失败/慢时：同源包或内联注入后仍可能晚到，短轮询再放弃
+        let tries = 0;
+        const timer = setInterval(() => {{
+          tries += 1;
+          if (window.echarts) {{
+            clearInterval(timer);
+            paint();
+          }} else if (tries >= 40) {{
+            clearInterval(timer);
+            failTip();
+          }}
+        }}, 50);
       }})();
       </script>"""
 
@@ -2414,7 +2460,15 @@ def render_html(
     sample_warn = comparison.get("sample_warn") or ""
     if v2 and sample_warn:
         sample_warn = sample_warn.replace("子任务", "样本")
-    completed = int((snapshot.get("kpis") or {}).get("completed_count") or 0)
+    snap_kpis = snapshot.get("kpis") or {}
+    completed = int(snap_kpis.get("completed_count") or snap_kpis.get("subtask_count") or 0)
+    if completed <= 0:
+        # comparison.kpis.*.current 是环比卡片；兜底避免 snapshot 缺 kpis 时正文写「0 条」
+        completed_metric = (comparison.get("kpis") or {}).get("completed_count") or {}
+        if isinstance(completed_metric, dict):
+            completed = int(completed_metric.get("current") or 0)
+        else:
+            completed = int(completed_metric or 0)
     sample_meta = (
         f'<p class="note sample-meta">本期有效监测样本 {completed} 条 · 对比周期 {esc(comparison["previous_period_label"])}</p>'
         if v2
@@ -2765,7 +2819,7 @@ def compose_period_report_html(
         competitor_analytics=competitor_analytics,
         generated=generated or date.today(),
         v2=True,
-        echarts_src=ECHARTS_CDN,
+        echarts_src=ECHARTS_PORTAL_SRC,
     )
 
 
