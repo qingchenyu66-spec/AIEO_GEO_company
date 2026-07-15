@@ -48,6 +48,18 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     accent: '#615ced',
     icon: '/platform-icons/qianwen.svg',
   },
+  qianwen_mobile: {
+    code: 'qianwen_mobile',
+    name: '通义千问移动端',
+    accent: '#615ced',
+    icon: '/platform-icons/qianwen.svg',
+  },
+  antafu: {
+    code: 'antafu',
+    name: '蚂蚁阿福',
+    accent: '#1677ff',
+    icon: '',
+  },
   quark: {
     code: 'quark',
     name: '夸克',
@@ -81,13 +93,21 @@ export const platformLabelMap: Record<string, string> = Object.fromEntries(
 export function getPlatformMeta(code: string): PlatformMeta {
   const text = String(code || '').trim()
   if (PLATFORM_META[text]) return PLATFORM_META[text]
+  const isMobile = text.endsWith('_mobile')
   const base = text.replace(/_mobile$/, '')
   if (PLATFORM_META[base]) {
-    return { ...PLATFORM_META[base], code: text, name: platformLabelMap[text] || PLATFORM_META[base].name }
+    const baseMeta = PLATFORM_META[base]
+    const mapped = platformLabelMap[text]
+    let name = mapped || baseMeta.name
+    // 未知 *_mobile 不得回落成与网页端同名，否则勾选列表截断后无法区分
+    if (isMobile && !/移动/.test(name)) {
+      name = `${baseMeta.name}移动端`
+    }
+    return { ...baseMeta, code: text, name }
   }
   return {
     code: text,
-    name: platformLabelMap[text] || text,
+    name: platformLabelMap[text] || (isMobile ? `${base || text}移动端` : text),
     accent: '#5b7aa8',
     icon: '',
   }
@@ -102,8 +122,10 @@ export const supportedPlatforms = [
   'weibo_zhisou',
   'yuanbao',
   'qianwen',
+  'qianwen_mobile',
   'quark',
   'kimi',
+  'antafu',
 ].map(code => getPlatformMeta(code))
 
 export function platformAccentColor(code: string) {

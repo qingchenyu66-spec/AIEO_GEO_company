@@ -181,6 +181,10 @@ export interface PlatformMatrixItem {
   channel: 'web' | 'mobile'
   channel_label: string
   supported: boolean
+  catalog_listed?: boolean
+  service_available?: boolean
+  labels?: string[]
+  service_checked_at?: string | null
   probe_total: number
   probe_success: number
   probe_failed: number
@@ -219,7 +223,9 @@ export async function getPlatformMatrix(force = false): Promise<PlatformMatrix> 
   if (!force && platformMatrixCache && Date.now() - platformMatrixCache.at < PLATFORM_CACHE_TTL) {
     return platformMatrixCache.data
   }
-  const response = await http.get('/v1/platforms/matrix')
+  const response = await http.get('/v1/platforms/matrix', {
+    params: force ? { refresh: true } : undefined,
+  })
   platformMatrixCache = { data: response.data.data, at: Date.now() }
   return platformMatrixCache.data
 }

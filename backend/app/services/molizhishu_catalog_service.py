@@ -20,21 +20,24 @@ CACHE_TTL = timedelta(hours=24)
 
 _FALLBACK_CATALOG: list[dict[str, Any]] = sort_catalog_items([
     {"code": "doubao", "name": "豆包", "description": "字节跳动旗下的智能 AI 助手。", "channel": "web", "sort_order": 10},
-    {"code": "doubao_mobile", "name": "豆包移动端", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 11},
+    {"code": "doubao_mobile", "name": "豆包移动版", "description": "字节跳动豆包移动端版本。", "channel": "mobile", "sort_order": 11},
     {"code": "baiduai", "name": "百度 AI+", "description": "百度推出的 AI 搜索。", "channel": "web", "sort_order": 20},
     {"code": "deepseek", "name": "DeepSeek", "description": "领先的国产自研大模型，性能强劲。", "channel": "web", "sort_order": 30},
     {"code": "deepseek_mobile", "name": "DeepSeek 移动端", "description": "DeepSeek 移动端版本。", "channel": "mobile", "sort_order": 31},
     {"code": "weibo_zhisou", "name": "微博智搜", "description": "微博推出的 AI 搜索。", "channel": "web", "sort_order": 40},
     {"code": "yuanbao", "name": "元宝", "description": "腾讯出品的 AI 助手，连接微信生态。", "channel": "web", "sort_order": 50},
     {"code": "qianwen", "name": "通义千问", "description": "阿里巴巴自研大模型，功能全面。", "channel": "web", "sort_order": 60},
+    {"code": "qianwen_mobile", "name": "通义千问移动端", "description": "通义千问移动端版本。", "channel": "mobile", "sort_order": 61},
     {"code": "quark", "name": "夸克", "description": "夸克浏览器内置 AI，主打搜索与学习。", "channel": "web", "sort_order": 70},
     {"code": "kimi", "name": "Kimi", "description": "月之暗面出品，支持长文本处理。", "channel": "web", "sort_order": 80},
+    {"code": "antafu", "name": "蚂蚁阿福", "description": "蚂蚁集团推出的 AI 助手。", "channel": "web", "sort_order": 90},
 ])
 
 _lock = threading.Lock()
 _cache: dict[str, Any] = {
     "catalog": [dict(item) for item in _FALLBACK_CATALOG],
-    "fetched_at": datetime.now(),
+    # ponytail: None so first get_supported_platform_catalog() actually hits 官方文档，不把启动 fallback 当成已同步
+    "fetched_at": None,
     "source": "fallback",
     "source_url": MOLIZHISHU_PLATFORM_DOC_URL,
 }
@@ -89,6 +92,7 @@ def refresh_platform_catalog(*, force: bool = False) -> dict[str, Any]:
             and isinstance(fetched_at, datetime)
             and datetime.now() - fetched_at < CACHE_TTL
             and _cache.get("catalog")
+            and _cache.get("source") != "fallback"
         ):
             return dict(_cache)
 
@@ -115,8 +119,10 @@ def refresh_platform_catalog(*, force: bool = False) -> dict[str, Any]:
         logger.error("[molizhishu] platform catalog refresh failed, using cache/fallback: %s", last_error)
     with _lock:
         _cache.setdefault("catalog", [dict(item) for item in _FALLBACK_CATALOG])
-        _cache["fetched_at"] = datetime.now()
-        _cache.setdefault("source", "fallback")
+        # 失败时保留上一次成功拉取时间；若从未成功则标记 fallback（下次仍应重试）
+        if _cache.get("source") != "molizhishu_doc":
+            _cache["fetched_at"] = None
+            _cache["source"] = "fallback"
         _cache.setdefault("source_url", MOLIZHISHU_PLATFORM_DOC_URL)
         return dict(_cache)
 

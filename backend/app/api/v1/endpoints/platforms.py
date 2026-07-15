@@ -110,12 +110,13 @@ def sync_platform_catalog(
 
 @router.get("/matrix", response_model=ApiResponse[dict])
 def platform_matrix(
+    refresh: bool = Query(False, description="强制拉取官方目录并同步货架状态"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """平台运营端：支持平台目录 + 当日服务可用性探测结果。"""
+    """平台运营端：支持平台目录 + 货架/可用性 + 当日探测结果。"""
     try:
-        data = build_platform_matrix(db, current)
+        data = build_platform_matrix(db, current, force_refresh=refresh)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ApiResponse(data=data)

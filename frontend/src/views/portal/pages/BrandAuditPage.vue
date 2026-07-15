@@ -12,6 +12,14 @@ function platformSelectionCount(group: { platforms?: unknown[] }) {
   return platformSelectionCodes((group.platforms || []) as never).length
 }
 
+function isMobilePlatform(platform: { code: string; channel?: string }) {
+  return platform.channel === 'mobile' || String(platform.code || '').endsWith('_mobile')
+}
+
+function platformChannelLabel(platform: { code: string; channel?: string }) {
+  return isMobilePlatform(platform) ? '移动' : '网页'
+}
+
 const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
 }>()
@@ -359,7 +367,14 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                       :disabled="!canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
                       @change="onToggleGroupPlatform(index, platform.code, ($event.target as HTMLInputElement).checked)"
                     />
-                    <PlatformBadge :code="platform.code" size="sm" />
+                    <PlatformBadge
+                      :code="platform.code"
+                      size="sm"
+                      :label="'name' in platform && platform.name ? platform.name : undefined"
+                    />
+                    <small class="platform-channel-tag" :class="{ 'is-mobile': isMobilePlatform(platform) }">
+                      {{ platformChannelLabel(platform) }}
+                    </small>
                     <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
                   </label>
                 </div>
@@ -519,15 +534,18 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
     </el-dialog>
 
     <el-dialog v-model="modeDialogVisible" width="440px" title="选择监测模式" @close="cancelModeDialog">
-      <p class="report-dialog-hint">与模力计费项一致：深度思考/截图会产生额外费用。截图默认开启，作为客户可见证据。</p>
+      <p class="report-dialog-hint">
+        与模力 mode 一致：standard 基础/极速、search 联网搜索、reasoning 深度思考、reasoning_search 深度+联网。
+        深度思考相关模式与截图会产生额外费用；截图默认开启，作为客户可见证据。
+      </p>
       <div class="form-grid password-grid">
         <label class="form-field-full">
           <span>模式</span>
           <select v-model="modeDialogForm.mode">
-            <option value="standard">standard（基础）</option>
-            <option value="search">search</option>
+            <option value="standard">standard（基础/极速）</option>
+            <option value="search">search（联网搜索）</option>
             <option value="reasoning">reasoning（深度思考 +0.09）</option>
-            <option value="reasoning_search">reasoning_search（深度思考 +0.09）</option>
+            <option value="reasoning_search">reasoning_search（深度+联网 +0.09）</option>
           </select>
         </label>
         <label class="form-field-full platform-shot-check">

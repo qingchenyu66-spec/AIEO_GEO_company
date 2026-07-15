@@ -190,6 +190,60 @@
   gap: 10px;
 }
 
+.platform-matrix-channel-tag {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid #c5d8ef;
+  background: #eef5ff;
+  color: #3b6ea5;
+}
+
+.platform-matrix-channel-tag.is-mobile {
+  border-color: #f0c28a;
+  background: #fff7eb;
+  color: #b45309;
+}
+
+.platform-matrix-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.platform-matrix-shelf-tag {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1px solid #e5e7eb;
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.platform-matrix-shelf-tag.is-unavailable {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.platform-matrix-shelf-tag.is-delisted {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.platform-matrix-card.is-unavailable,
+.platform-matrix-card.is-delisted {
+  opacity: 0.62;
+  filter: grayscale(0.35);
+}
+
 .platform-matrix-card-title {
   display: flex;
   align-items: center;

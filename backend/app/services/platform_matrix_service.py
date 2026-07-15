@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.platform import GeoPlatform
 from app.services.molizhishu_platforms import (
     filter_submittable_platforms,
     get_platform_catalog_meta,
@@ -82,24 +83,53 @@ def _first_schedule_today(db: Session) -> GeoMonitorScheduleRun | None:
     )
 
 
-def build_platform_matrix(db: Session, current: CurrentSession, *, tenant_id: int | None = None) -> dict[str, Any]:
-    """Platform ops view: Molizhishu doc catalog + today's cross-tenant probe counts."""
+def _shelf_labels(*, listed: bool, available: bool) -> list[str]:
+    labels: list[str] = []
+    if not listed:
+        labels.append("已下架")
+    elif not available:
+        labels.append("无服务")
+    return labels
+
+
+def build_platform_matrix(
+    db: Session,
+    current: CurrentSession,
+    *,
+    tenant_id: int | None = None,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Platform ops view: Molizhishu doc catalog + shelf/availability + today's probes."""
     del tenant_id
     if current.identity.identity_type != "PLATFORM":
         raise ValueError("模型平台服务状态仅平台运营端可查看")
+
+    if force_refresh:
+        from app.services.platform_catalog_lifecycle_service import sync_platform_catalog_lifecycle
+
+        sync_platform_catalog_lifecycle(db, force_refresh=True)
+    else:
+        get_supported_platform_catalog(force_refresh=False)
 
     catalog = get_supported_platform_catalog()
     catalog_meta = get_platform_catalog_meta()
     health_map = _today_global_platform_health(db)
     first_schedule = _first_schedule_today(db)
 
+    db_rows = {
+        row.platform_code: row
+        for row in db.scalars(select(GeoPlatform).where(GeoPlatform.deleted.is_(False))).all()
+    }
+
     platforms: list[dict[str, Any]] = []
     probe_total = 0
     probe_success = 0
     probe_failed = 0
+    seen: set[str] = set()
 
     for item in catalog:
         code = item["code"]
+        seen.add(code)
         stats = health_map.get(code)
         total = int(stats.get("total") or 0) if stats else 0
         success = int(stats.get("success") or 0) if stats else 0
@@ -107,13 +137,58 @@ def build_platform_matrix(db: Session, current: CurrentSession, *, tenant_id: in
         probe_total += total
         probe_success += success
         probe_failed += failed
+        row = db_rows.get(code)
+        listed = bool(row.catalog_listed) if row is not None else True
+        available = bool(row.service_available) if row is not None else True
+        channel = item.get("channel") or ("mobile" if row and row.access_type == "mobile" else "web")
         platforms.append({
             "code": code,
-            "name": item["name"],
+            "name": (row.platform_name if row and row.platform_name else None) or item["name"],
             "description": item.get("description"),
-            "channel": item["channel"],
-            "channel_label": "移动端" if item["channel"] == "mobile" else "网页端",
+            "channel": channel,
+            "channel_label": "移动端" if channel == "mobile" else "网页端",
             "supported": True,
+            "catalog_listed": listed,
+            "service_available": available,
+            "labels": _shelf_labels(listed=listed, available=available),
+            "service_checked_at": (
+                row.service_checked_at.isoformat(timespec="seconds")
+                if row is not None and row.service_checked_at
+                else None
+            ),
+            "probe_total": total,
+            "probe_success": success,
+            "probe_failed": failed,
+            "checked_at": stats["latest_at"].isoformat() if stats and stats.get("latest_at") else None,
+        })
+
+    # 已从官方目录消失但仍在库中的：保留展示以便看到「已下架」
+    for code, row in sorted(db_rows.items(), key=lambda pair: (pair[1].sort_order or 0, pair[0])):
+        if code in seen:
+            continue
+        if row.catalog_listed:
+            continue
+        stats = health_map.get(code)
+        total = int(stats.get("total") or 0) if stats else 0
+        success = int(stats.get("success") or 0) if stats else 0
+        failed = int(stats.get("failed") or 0) if stats else 0
+        probe_total += total
+        probe_success += success
+        probe_failed += failed
+        channel = "mobile" if row.access_type == "mobile" else "web"
+        platforms.append({
+            "code": code,
+            "name": row.platform_name,
+            "description": row.description,
+            "channel": channel,
+            "channel_label": "移动端" if channel == "mobile" else "网页端",
+            "supported": False,
+            "catalog_listed": False,
+            "service_available": bool(row.service_available),
+            "labels": _shelf_labels(listed=False, available=bool(row.service_available)),
+            "service_checked_at": (
+                row.service_checked_at.isoformat(timespec="seconds") if row.service_checked_at else None
+            ),
             "probe_total": total,
             "probe_success": success,
             "probe_failed": failed,
@@ -127,7 +202,7 @@ def build_platform_matrix(db: Session, current: CurrentSession, *, tenant_id: in
 
     return {
         "snapshot_date": date.today().isoformat(),
-        "supported_count": len(catalog),
+        "supported_count": len([p for p in platforms if p.get("catalog_listed")]),
         "probe_total": probe_total,
         "probe_success": probe_success,
         "probe_failed": probe_failed,

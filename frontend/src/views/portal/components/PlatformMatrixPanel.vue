@@ -34,6 +34,7 @@ const metaLine = computed(() => {
 })
 
 const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || []))
+const catalogSource = computed(() => props.matrix?.catalog_source || '')
 </script>
 
 <template>
@@ -43,8 +44,9 @@ const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || [])
         <div class="platform-matrix-summary">
           <strong>今日探测汇总</strong>
           <p>
-            共 {{ supportedCount }} 个平台 · 探测 {{ probeTotal }} 条
+            共 {{ supportedCount }} 个在架平台 · 探测 {{ probeTotal }} 条
             · 成功 {{ probeSuccess }} 条 · 失败 {{ probeFailed }} 条
+            <template v-if="catalogSource"> · 目录源 {{ catalogSource === 'molizhishu_doc' ? '官方文档' : catalogSource }}</template>
           </p>
         </div>
         <div class="platform-matrix-header-actions">
@@ -70,6 +72,10 @@ const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || [])
         v-for="item in platforms"
         :key="item.code"
         class="platform-matrix-card"
+        :class="{
+          'is-delisted': (item.labels || []).includes('已下架') || item.catalog_listed === false,
+          'is-unavailable': (item.labels || []).includes('无服务') || item.service_available === false,
+        }"
         :style="{ '--accent': platformAccentColor(item.code) }"
       >
         <div class="platform-matrix-card-head">
@@ -79,6 +85,19 @@ const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || [])
               <b>{{ item.name }}</b>
               <small>{{ item.channel_label }}</small>
             </div>
+          </div>
+          <div class="platform-matrix-card-tags">
+            <span class="platform-matrix-channel-tag" :class="{ 'is-mobile': item.channel === 'mobile' }">
+              {{ item.channel === 'mobile' ? '移动' : '网页' }}
+            </span>
+            <span
+              v-for="label in (item.labels || [])"
+              :key="label"
+              class="platform-matrix-shelf-tag"
+              :class="{ 'is-delisted': label === '已下架', 'is-unavailable': label === '无服务' }"
+            >
+              {{ label }}
+            </span>
           </div>
         </div>
 
