@@ -536,7 +536,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
     <el-dialog v-model="modeDialogVisible" width="440px" title="选择监测模式" @close="cancelModeDialog">
       <p class="report-dialog-hint">
         与模力 mode 一致：standard 基础/极速、search 联网搜索、reasoning 深度思考、reasoning_search 深度+联网。
-        深度思考相关模式与截图会产生额外费用；截图默认开启，作为客户可见证据。
+        截图强制开启（+0.09）作为客户可见证据；深度思考相关模式另计费用。
       </p>
       <div class="form-grid password-grid">
         <label class="form-field-full">
@@ -547,10 +547,6 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             <option value="reasoning">reasoning（深度思考 +0.09）</option>
             <option value="reasoning_search">reasoning_search（深度+联网 +0.09）</option>
           </select>
-        </label>
-        <label class="form-field-full platform-shot-check">
-          <input v-model="modeDialogForm.screenshot" type="checkbox" :true-value="1" :false-value="0" />
-          <span>开启截图（+0.09，默认开启）</span>
         </label>
       </div>
       <template #footer>

@@ -51,8 +51,8 @@ export function normalizePlatformSelection(raw: string | PlatformSelection | nul
   const code = String(raw.code || '').trim()
   if (!code) return null
   const mode = (['standard', 'reasoning', 'search', 'reasoning_search'].includes(raw.mode) ? raw.mode : 'standard') as PlatformSelection['mode']
-  const screenshot = ([0, 1, 2].includes(Number(raw.screenshot)) ? Number(raw.screenshot) : 1) as PlatformSelection['screenshot']
-  return { code, mode, screenshot }
+  // 截图强制开启（客户证据），不再接受关闭
+  return { code, mode, screenshot: 1 }
 }
 
 export function normalizePlatformSelections(raw: Array<string | PlatformSelection> | null | undefined): PlatformSelection[] {

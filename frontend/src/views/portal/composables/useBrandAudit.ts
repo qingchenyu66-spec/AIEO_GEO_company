@@ -1051,7 +1051,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     next.push({
       code: target.code,
       mode: modeDialogForm.mode,
-      screenshot: modeDialogForm.screenshot,
+      screenshot: 1,
     })
     group.platforms = next
     modeDialogVisible.value = false

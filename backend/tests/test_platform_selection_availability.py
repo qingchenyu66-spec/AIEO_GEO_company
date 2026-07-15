@@ -20,9 +20,10 @@ def test_normalize_object_platforms():
         {"code": "yuanbao", "mode": "reasoning", "screenshot": 0},
         {"platform": "qianwen"},
     ])
-    assert rows[0] == {"code": "yuanbao", "mode": "reasoning", "screenshot": 0}
+    assert rows[0] == {"code": "yuanbao", "mode": "reasoning", "screenshot": 1}
     assert rows[1]["code"] == "qianwen"
     assert rows[1]["mode"] == "standard"
+    assert rows[1]["screenshot"] == 1
 
 
 def test_formal_availability_thresholds():

@@ -24,13 +24,8 @@ def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
     mode = str(raw.get("mode") or FAST_MONITOR_MODE).strip().lower()
     if mode not in VALID_MODES:
         mode = FAST_MONITOR_MODE
-    try:
-        screenshot = int(raw.get("screenshot", 1))
-    except (TypeError, ValueError):
-        screenshot = 1
-    if screenshot not in (0, 1, 2):
-        screenshot = 1
-    return {"code": code, "mode": mode, "screenshot": screenshot}
+    # ponytail: 产品强制截图作客户证据；UI 不再提供关闭入口，入口归一化恒为 1
+    return {"code": code, "mode": mode, "screenshot": 1}
 
 
 def normalize_platform_selections(raw_list: list[Any] | None) -> list[dict[str, Any]]:
