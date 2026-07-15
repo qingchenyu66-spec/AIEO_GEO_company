@@ -2,6 +2,7 @@ import { ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { Router, RouteLocationNormalizedLoaded } from 'vue-router'
 import { normalizeMenuCode, hiddenCustomerMenus, hiddenPlatformMenus } from './constants'
+import { shouldKeepTenantQuery } from './tenantQueryScope'
 
 /** Sync active menu with ?menu= query — keeps deep links without breaking in-app navigation. */
 export function usePortalMenu(
@@ -28,9 +29,14 @@ export function usePortalMenu(
       return
     }
     activeMenuCode.value = code
-    const query = { ...route.query, menu: code, ...extraQuery }
+    const query: Record<string, unknown> = { ...route.query, menu: code, ...extraQuery }
+    // Sticky ?tenant_id= from 洞察/信源/实时监测 must not leak into 报告中心等页面，
+    // or PortalView brand prefetch will 403 sales users on unrelated enterprises.
+    if (!shouldKeepTenantQuery(code) && extraQuery?.tenant_id === undefined) {
+      delete query.tenant_id
+    }
     const nav = replace ? router.replace : router.push
-    nav({ path: route.path, query }).catch(() => undefined)
+    nav({ path: route.path, query: query as typeof route.query }).catch(() => undefined)
   }
 
   watch(

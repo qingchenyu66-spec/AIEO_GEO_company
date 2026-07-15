@@ -13,10 +13,8 @@ import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.diagnosis',
-  'platform.reports',
   'platform.sources',
   'customer.diagnosis',
-  'customer.reports',
   'customer.sources',
   'platform.models',
 ])

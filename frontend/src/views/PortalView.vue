@@ -35,6 +35,7 @@ import {
 import { platformLabelMap, monitorStatusLabelMap } from './portal/portalMaps'
 import { usePortalMenu } from './portal/usePortalMenu'
 import { useApprovalPendingCount } from './portal/composables/useApprovalPendingCount'
+import { resolveAccessibleTenantId, shouldPrefetchBrandForMenu } from './portal/tenantQueryScope'
 import '../styles/menu-config.css'
 
 const PositionPage = defineAsyncComponent(() => import('./portal/PositionPage.vue'))
@@ -215,9 +216,8 @@ function parseRouteTenantId(): number | null {
 }
 
 function shouldPrefetchBrandAsset() {
-  if (isBrandAssetPage.value || isRealtimeMonitorPage.value) return false
-  if (isUserListPage.value || isUserCreatePage.value || isPositionManagementPage.value || isApprovalPage.value) return false
-  return true
+  // Brand audit / realtime load their own asset. Reports & admin pages must not hit /brand/asset.
+  return shouldPrefetchBrandForMenu(activeMenuCode.value)
 }
 
 async function loadBrandAssetData() {
@@ -228,7 +228,11 @@ async function loadBrandAssetData() {
       if (!tenants.value.length) {
         tenants.value = await withRetry(() => getTenants())
       }
-      tenantId = parseRouteTenantId() ?? tenants.value[0]?.id ?? null
+      // Never send a sticky URL tenant the account cannot access (sales ownership).
+      tenantId = resolveAccessibleTenantId(
+        parseRouteTenantId(),
+        tenants.value.map(item => item.id),
+      )
       if (!tenantId) {
         brandAsset.value = null
         brandCompetitors.value = []
@@ -303,18 +307,14 @@ watch(activeMenuCode, (newCode, oldCode) => {
   if (oldCode === 'platform.audit' && newCode !== 'platform.audit') {
     brandAuditRef.value?.resetDetailMode?.()
   }
-  if (!isBrandAssetPage.value && !isRealtimeMonitorPage.value) {
-    loadBrandAssetData()
-  }
+  void loadBrandAssetData()
 })
 watch(() => route.query.tenant_id, () => {
-  if (isPlatform.value && !isBrandAssetPage.value) {
-    void loadBrandAssetData()
-  }
+  if (isPlatform.value) void loadBrandAssetData()
 })
 onMounted(refreshMenusFromServer)
 onMounted(() => {
-  if (!isBrandAssetPage.value && !isRealtimeMonitorPage.value) loadBrandAssetData()
+  void loadBrandAssetData()
 })
 </script>
 
