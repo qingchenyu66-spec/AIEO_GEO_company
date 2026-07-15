@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, onMounted } from 'vue'
+import { computed, inject, onMounted } from 'vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
@@ -23,6 +23,20 @@ function platformModeLabel(group: { platforms?: unknown[] }, code: string) {
   const hit = normalizePlatformSelections((group.platforms || []) as never).find(item => item.code === code)
   if (!hit) return ''
   return PLATFORM_MODE_LABELS[hit.mode] || PLATFORM_MODE_LABELS.standard
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>) {
+  const seen = new Set<string>()
+  const rows: string[] = []
+  for (const value of values) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    rows.push(text)
+  }
+  return rows
 }
 
 const emit = defineEmits<{
@@ -143,6 +157,28 @@ const {
 } = useBrandAudit({
   onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
   navigateToReportCenter,
+})
+
+/** 详情弹窗只展示词组里的监测词/露出词，不展示资产级强制并入的企业全称 */
+const enterpriseInfoMonitorKeywords = computed(() => {
+  const asset = enterpriseInfoAsset.value
+  if (!asset) return []
+  const fromGroups = (asset.keyword_groups || []).flatMap(group => keywordGroupMonitorKeywords(group))
+  if (fromGroups.length) return uniqueNonEmpty(fromGroups)
+  const company = String(asset.company_full_name || '').trim().toLowerCase()
+  const brand = String(asset.brand_name || '').trim().toLowerCase()
+  return uniqueNonEmpty(asset.monitor_keywords || []).filter(item => {
+    const key = item.toLowerCase()
+    return key !== company && key !== brand
+  })
+})
+
+const enterpriseInfoExposureTerms = computed(() => {
+  const asset = enterpriseInfoAsset.value
+  if (!asset) return []
+  const fromGroups = (asset.keyword_groups || []).flatMap(group => group.exposure_terms || [])
+  if (fromGroups.length) return uniqueNonEmpty(fromGroups)
+  return uniqueNonEmpty(asset.aliases || [])
 })
 
 onMounted(() => {
@@ -495,11 +531,11 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </section>
         <section>
           <h4>监测关键词</h4>
-          <div class="info-tags"><span v-for="item in enterpriseInfoAsset?.monitor_keywords || []" :key="item">{{ item }}</span><em v-if="!enterpriseInfoAsset?.monitor_keywords?.length">未配置</em></div>
+          <div class="info-tags"><span v-for="item in enterpriseInfoMonitorKeywords" :key="item">{{ item }}</span><em v-if="!enterpriseInfoMonitorKeywords.length">未配置</em></div>
         </section>
         <section>
           <h4>露出词</h4>
-          <div class="info-tags"><span v-for="item in enterpriseInfoAsset?.aliases || []" :key="item">{{ item }}</span><em v-if="!enterpriseInfoAsset?.aliases?.length">未配置</em></div>
+          <div class="info-tags"><span v-for="item in enterpriseInfoExposureTerms" :key="item">{{ item }}</span><em v-if="!enterpriseInfoExposureTerms.length">未配置</em></div>
         </section>
         <section>
           <h4>竞品监控</h4>

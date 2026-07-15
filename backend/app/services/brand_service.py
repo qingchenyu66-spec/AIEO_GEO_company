@@ -335,7 +335,7 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     asset.company_full_name = payload.company_full_name
     asset.brand_name = payload.brand_name
     asset.brand_short_name = payload.brand_short_name
-    asset.monitor_keywords_json = _dedupe([payload.brand_name, payload.brand_short_name, *payload.monitor_keywords, *payload.product_keywords])
+    asset.monitor_keywords_json = _dedupe([*payload.monitor_keywords, *payload.product_keywords])
     asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
     asset.product_keywords_json = []
     if not payload.keyword_groups:
