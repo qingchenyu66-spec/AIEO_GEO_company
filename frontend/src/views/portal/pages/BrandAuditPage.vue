@@ -5,8 +5,12 @@ import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
-import { keywordGroupMonitorKeywords } from '../../../services/brand'
+import { keywordGroupMonitorKeywords, platformSelectionCodes } from '../../../services/brand'
 import { PortalNavigateKey } from '../injectionKeys'
+
+function platformSelectionCount(group: { platforms?: unknown[] }) {
+  return platformSelectionCodes((group.platforms || []) as never).length
+}
 
 const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
@@ -27,6 +31,14 @@ const {
   platformLabelMap,
   formatPlatformLabels,
   supportedPlatforms,
+  catalogPlatforms,
+  loadCatalogPlatforms,
+  groupHasPlatform,
+  onToggleGroupPlatform,
+  modeDialogVisible,
+  modeDialogForm,
+  confirmModeDialog,
+  cancelModeDialog,
   enterpriseDetailMode,
   enterpriseDetailTab,
   enterpriseInfoDialog,
@@ -119,7 +131,10 @@ const {
   navigateToReportCenter,
 })
 
-onMounted(loadEnterpriseList)
+onMounted(() => {
+  void loadEnterpriseList()
+  void loadCatalogPlatforms()
+})
 
 defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 </script>
@@ -326,16 +341,26 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                 </div>
               </div>
               <div class="keyword-field keyword-group-platform-field">
-                <span class="keyword-field-label">监测平台（{{ (group.platforms || []).length }}）</span>
+                <span class="keyword-field-label">监测平台（{{ platformSelectionCount(group) }}）</span>
                 <div class="platform-check-grid compact">
-                  <label v-for="platform in supportedPlatforms" :key="`${index}-${platform.code}`" class="platform-check">
+                  <label
+                    v-for="platform in (catalogPlatforms.length ? catalogPlatforms : supportedPlatforms)"
+                    :key="`${index}-${platform.code}`"
+                    class="platform-check"
+                    :class="{
+                      'is-disabled': 'selectable' in platform && !platform.selectable,
+                      'is-unavailable': 'labels' in platform && (platform.labels || []).includes('无服务'),
+                      'is-delisted': 'labels' in platform && (platform.labels || []).includes('已下架'),
+                    }"
+                  >
                     <input
-                      v-model="group.platforms"
                       type="checkbox"
-                      :value="platform.code"
-                      :disabled="!canEditEnterpriseTab('keywords')"
+                      :checked="groupHasPlatform(group, platform.code)"
+                      :disabled="!canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
+                      @change="onToggleGroupPlatform(index, platform.code, ($event.target as HTMLInputElement).checked)"
                     />
                     <PlatformBadge :code="platform.code" size="sm" />
+                    <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
                   </label>
                 </div>
               </div>
@@ -490,6 +515,29 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <button class="primary-btn" :disabled="reportGenerating" @click="submitEnterpriseReport">
           {{ reportGenerating ? '生成中…' : '生成报告' }}
         </button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="modeDialogVisible" width="440px" title="选择监测模式" @close="cancelModeDialog">
+      <p class="report-dialog-hint">与模力计费项一致：深度思考/截图会产生额外费用。截图默认开启，作为客户可见证据。</p>
+      <div class="form-grid password-grid">
+        <label class="form-field-full">
+          <span>模式</span>
+          <select v-model="modeDialogForm.mode">
+            <option value="standard">standard（基础）</option>
+            <option value="search">search</option>
+            <option value="reasoning">reasoning（深度思考 +0.09）</option>
+            <option value="reasoning_search">reasoning_search（深度思考 +0.09）</option>
+          </select>
+        </label>
+        <label class="form-field-full platform-shot-check">
+          <input v-model="modeDialogForm.screenshot" type="checkbox" :true-value="1" :false-value="0" />
+          <span>开启截图（+0.09，默认开启）</span>
+        </label>
+      </div>
+      <template #footer>
+        <button class="plain-btn" @click="cancelModeDialog">取消</button>
+        <button class="primary-btn" @click="confirmModeDialog">确认</button>
       </template>
     </el-dialog>
 

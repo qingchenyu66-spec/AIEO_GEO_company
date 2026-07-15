@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     snapshot_backfill_notify_owner: bool = True
     snapshot_backfill_notify_operation: bool = True
     snapshot_backfill_notify_admin: bool = True
+    # 平台可用性/上下架通知：职位 ID JSON 列表，如 [1,2,3]
+    platform_service_notify_position_ids: str = "[]"
 
     model_config = SettingsConfigDict(
         env_file=".env",

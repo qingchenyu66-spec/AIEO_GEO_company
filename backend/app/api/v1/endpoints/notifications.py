@@ -43,6 +43,7 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         ("can_export", "can_update"),
     )
     from app.core.config import settings
+    from app.services.platform_notify_recipients import identity_can_view_platform_service
 
     is_sales = is_sales_identity(db, current.identity)
     is_admin = is_platform_admin_identity(db, current.identity)
@@ -62,6 +63,7 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "can_view_snapshot_backfill": can_view_snapshot_backfill,
         "snapshot_backfill_owner_only": bool(can_view_snapshot_backfill and is_sales),
         "can_view_customer_reports": can_view_customer_reports,
+        "can_view_platform_service": identity_can_view_platform_service(db, current.identity),
     }
 
 

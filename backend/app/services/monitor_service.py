@@ -581,10 +581,8 @@ def _build_submit_payload(
 
 
 def _fast_platform_payload(item: PlatformConfig) -> dict[str, Any]:
-    """统一提交为模力指数快速模式，避免前端或旧配置传入专家/深度模式。"""
-    data = item.model_dump()
-    data["mode"] = FAST_MONITOR_MODE
-    return data
+    """提交平台配置；保留企业配置的 mode/screenshot（与模力计费项一致）。"""
+    return item.model_dump()
 
 
 def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonitorSubtask:

@@ -10,11 +10,13 @@ import {
 } from '../../../services/management'
 import {
   createCompetitor, deleteCompetitor, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, updateCompetitor,
-  type BrandAsset, type BrandCompetitor, type BrandKeywordGroup,
+  normalizePlatformSelections, platformSelectionCodes,
+  type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type PlatformSelection,
 } from '../../../services/brand'
 import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
 import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
+import { getPlatformsForBrandConfig } from '../../../services/platforms'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
@@ -155,6 +157,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     saving?: boolean
   }>>([])
   const keywordGroupRows = ref<BrandKeywordGroup[]>([])
+  const catalogPlatforms = ref<Awaited<ReturnType<typeof getPlatformsForBrandConfig>>['platforms']>([])
+  const modeDialogVisible = ref(false)
+  const modeDialogTarget = ref<{ groupIndex: number; code: string } | null>(null)
+  const modeDialogForm = reactive({
+    mode: 'standard' as PlatformSelection['mode'],
+    screenshot: 1 as PlatformSelection['screenshot'],
+  })
   const editingGroupIndex = ref<number | null>(null)
   const competitorNameInput = ref('')
   const loadingBrand = ref(false)
@@ -284,15 +293,17 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function makeKeywordGroup(monitorKeyword = '', exposureTerms: string[] = []): BrandKeywordGroup {
     const keywords = monitorKeyword.trim() ? [monitorKeyword.trim()] : []
     const index = keywordGroupRows.value.length
-    const inheritedPlatforms = keywordGroupRows.value.find(item => (item.platforms || []).length)?.platforms
-      || (brandForm.monitored_platforms.length ? [...brandForm.monitored_platforms] : [])
+    const inheritedPlatforms = normalizePlatformSelections(
+      keywordGroupRows.value.find(item => (item.platforms || []).length)?.platforms
+      || (brandForm.monitored_platforms.length ? [...brandForm.monitored_platforms] : []),
+    )
     return {
       id: null,
       name: defaultKeywordGroupName(index),
       monitor_keyword: keywords[0] || '',
       monitor_keywords: keywords,
       exposure_terms: exposureTerms.length ? exposureTerms : keywords,
-      platforms: [...inheritedPlatforms],
+      platforms: inheritedPlatforms,
       sort_order: index,
       status: true,
     }
@@ -310,7 +321,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           monitor_keyword: monitorKeywords[0] || '',
           monitor_keywords: [...monitorKeywords],
           exposure_terms: [...(group.exposure_terms || [])],
-          platforms: [...(group.platforms?.length ? group.platforms : (asset?.monitored_platforms || []))],
+          platforms: normalizePlatformSelections(
+            group.platforms?.length ? group.platforms : (asset?.monitored_platforms || []),
+          ),
           sort_order: group.sort_order ?? index,
           status: group.status,
         }
@@ -325,7 +338,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       monitor_keyword: keyword,
       monitor_keywords: [keyword],
       exposure_terms: index === 0 && aliases.length ? aliases : [keyword],
-      platforms: [...(asset?.monitored_platforms || [])],
+      platforms: normalizePlatformSelections(asset?.monitored_platforms || []),
       sort_order: index,
       status: true,
     }))
@@ -663,7 +676,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const keywordGroups = keywordGroupRows.value
       .map((group, index) => {
         const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
-        const platforms = [...new Set((group.platforms || []).map(item => item.trim()).filter(Boolean))]
+        const platforms = normalizePlatformSelections(group.platforms)
         return {
           id: group.id || null,
           name: (group.name || '').trim() || defaultKeywordGroupName(index),
@@ -706,7 +719,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         monitor_keywords: keywordGroups.flatMap(group => group.monitor_keywords),
         aliases: [...new Set(keywordGroups.flatMap(group => group.exposure_terms))],
         product_keywords: [],
-        monitored_platforms: [...new Set(keywordGroups.flatMap(group => group.platforms))],
+        monitored_platforms: [...new Set(keywordGroups.flatMap(group => platformSelectionCodes(group.platforms)))],
         keyword_groups: keywordGroups,
         region_codes: [...brandForm.region_codes],
         official_url: brandForm.official_url.trim() || null,
@@ -981,10 +994,87 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
+  async function loadCatalogPlatforms() {
+    try {
+      const data = await getPlatformsForBrandConfig()
+      catalogPlatforms.value = data.platforms || []
+    } catch {
+      catalogPlatforms.value = supportedPlatforms.map(item => ({
+        code: item.code,
+        name: item.name,
+        channel: 'web',
+        catalog_listed: true,
+        service_available: true,
+        selectable: true,
+        labels: [],
+        modes: ['standard', 'search', 'reasoning', 'reasoning_search'],
+        default_mode: 'standard',
+        default_screenshot: 1,
+      }))
+    }
+  }
+
+  function groupHasPlatform(group: BrandKeywordGroup, code: string) {
+    return platformSelectionCodes(group.platforms).includes(code)
+  }
+
+  function onToggleGroupPlatform(groupIndex: number, code: string, checked: boolean) {
+    const group = keywordGroupRows.value[groupIndex]
+    if (!group) return
+    const meta = catalogPlatforms.value.find(item => item.code === code)
+    if (checked) {
+      if (meta && !meta.selectable) {
+        ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
+        return
+      }
+      modeDialogTarget.value = { groupIndex, code }
+      modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
+      modeDialogForm.screenshot = 1
+      modeDialogVisible.value = true
+      return
+    }
+    group.platforms = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
+  }
+
+  function confirmModeDialog() {
+    const target = modeDialogTarget.value
+    if (!target) {
+      modeDialogVisible.value = false
+      return
+    }
+    const group = keywordGroupRows.value[target.groupIndex]
+    if (!group) {
+      modeDialogVisible.value = false
+      return
+    }
+    const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== target.code)
+    next.push({
+      code: target.code,
+      mode: modeDialogForm.mode,
+      screenshot: modeDialogForm.screenshot,
+    })
+    group.platforms = next
+    modeDialogVisible.value = false
+    modeDialogTarget.value = null
+  }
+
+  function cancelModeDialog() {
+    modeDialogVisible.value = false
+    modeDialogTarget.value = null
+  }
+
   return {
     platformLabelMap,
     supportedPlatforms,
+    catalogPlatforms,
     formatPlatformLabels,
+    loadCatalogPlatforms,
+    groupHasPlatform,
+    onToggleGroupPlatform,
+    modeDialogVisible,
+    modeDialogForm,
+    confirmModeDialog,
+    cancelModeDialog,
     regionOptions,
     selectableRegionOptions,
     regionLabels,

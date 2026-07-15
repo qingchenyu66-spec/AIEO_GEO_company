@@ -400,10 +400,16 @@ def build_scheduled_payload(
     keyword_group: dict[str, Any] | None = None,
     region_code: str | None = None,
 ) -> MonitorTaskCreateRequest:
+    from app.services.brand_service import keyword_group_platform_configs
+    from app.services.platform_catalog_lifecycle_service import submittable_platform_codes
+
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
+    configs = keyword_group_platform_configs(keyword_group, asset)
+    allowed = set(submittable_platform_codes(db, [item["code"] for item in configs]))
     platforms = [
-        PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
-        for code in filter_submittable_platforms(keyword_group_platforms(keyword_group, asset))
+        PlatformConfig(platform=item["code"], mode=item["mode"], screenshot=item["screenshot"])
+        for item in configs
+        if item["code"] in allowed
     ]
     monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
     return MonitorTaskCreateRequest(
@@ -440,9 +446,15 @@ def preview_scheduled_tasks(
         group_previews: list[dict[str, Any]] = []
         for group in keyword_groups:
             prompts = build_scheduled_prompts(asset, competitors, max_prompts=per_group_max_prompts, keyword_group=group)
+            from app.services.brand_service import keyword_group_platform_configs
+            from app.services.platform_catalog_lifecycle_service import submittable_platform_codes
+
+            configs = keyword_group_platform_configs(group, asset)
+            allowed = set(submittable_platform_codes(db, [item["code"] for item in configs]))
             group_platforms = [
-                PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1)
-                for code in filter_submittable_platforms(keyword_group_platforms(group, asset))
+                PlatformConfig(platform=item["code"], mode=item["mode"], screenshot=item["screenshot"])
+                for item in configs
+                if item["code"] in allowed
             ]
             group_platform_count = len(group_platforms)
             group_previews.append({

@@ -224,6 +224,13 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         description="启用后「平台管理员」职位可看全部待补录通知",
         value_type="bool",
     ),
+    "platform_service_notify_position_ids": ConfigMeta(
+        field="platform_service_notify_position_ids",
+        category="notification",
+        label="平台服务通知职位",
+        description="JSON 职位 ID 列表；仅这些 PLATFORM 职位可见上下架/可用性铃铛。留空则默认销售+运营+管理员",
+        value_type="str",
+    ),
 }
 
 

@@ -1,6 +1,16 @@
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.region_catalog import normalize_region_codes
+from app.schemas.monitor import FAST_MONITOR_MODE, MonitorMode, ScreenshotMode
+from app.services.platform_selection import normalize_platform_selections
+
+
+class PlatformSelectionRequest(BaseModel):
+    """词组勾选平台时绑定模力 mode / screenshot。"""
+
+    code: str = Field(min_length=2, max_length=50)
+    mode: MonitorMode = FAST_MONITOR_MODE
+    screenshot: ScreenshotMode = 1
 
 
 class BrandKeywordGroupSaveRequest(BaseModel):
@@ -11,9 +21,17 @@ class BrandKeywordGroupSaveRequest(BaseModel):
     monitor_keyword: str | None = Field(default=None, max_length=150)
     monitor_keywords: list[str] = Field(default_factory=list)
     exposure_terms: list[str] = Field(default_factory=list)
-    platforms: list[str] = Field(default_factory=list)
+    # 兼容旧前端传 string[]；新前端传 PlatformSelectionRequest[]
+    platforms: list[str | PlatformSelectionRequest | dict] = Field(default_factory=list)
     sort_order: int = 0
     status: bool = True
+
+    @field_validator("platforms", mode="before")
+    @classmethod
+    def coerce_platforms(cls, value: object) -> list:
+        if not isinstance(value, list):
+            return []
+        return normalize_platform_selections(value)
 
 
 class BrandAssetSaveRequest(BaseModel):

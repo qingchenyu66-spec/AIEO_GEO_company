@@ -22,6 +22,12 @@ export interface BrandAsset {
   schedule_month_days: number[]
 }
 
+export interface PlatformSelection {
+  code: string
+  mode: 'standard' | 'reasoning' | 'search' | 'reasoning_search'
+  screenshot: 0 | 1 | 2
+}
+
 export interface BrandKeywordGroup {
   id: number | null
   tenant_id?: number
@@ -30,9 +36,39 @@ export interface BrandKeywordGroup {
   monitor_keyword: string
   monitor_keywords?: string[]
   exposure_terms: string[]
-  platforms?: string[]
+  platforms?: Array<string | PlatformSelection>
   sort_order: number
   status: boolean
+}
+
+export function normalizePlatformSelection(raw: string | PlatformSelection | null | undefined): PlatformSelection | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    const code = raw.trim()
+    if (!code) return null
+    return { code, mode: 'standard', screenshot: 1 }
+  }
+  const code = String(raw.code || '').trim()
+  if (!code) return null
+  const mode = (['standard', 'reasoning', 'search', 'reasoning_search'].includes(raw.mode) ? raw.mode : 'standard') as PlatformSelection['mode']
+  const screenshot = ([0, 1, 2].includes(Number(raw.screenshot)) ? Number(raw.screenshot) : 1) as PlatformSelection['screenshot']
+  return { code, mode, screenshot }
+}
+
+export function normalizePlatformSelections(raw: Array<string | PlatformSelection> | null | undefined): PlatformSelection[] {
+  const seen = new Set<string>()
+  const rows: PlatformSelection[] = []
+  for (const item of raw || []) {
+    const entry = normalizePlatformSelection(item)
+    if (!entry || seen.has(entry.code)) continue
+    seen.add(entry.code)
+    rows.push(entry)
+  }
+  return rows
+}
+
+export function platformSelectionCodes(raw: Array<string | PlatformSelection> | null | undefined): string[] {
+  return normalizePlatformSelections(raw).map(item => item.code)
 }
 
 export function defaultKeywordGroupName(index: number) {
@@ -113,7 +149,7 @@ export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.
 export function formatKeywordGroupDetailHint(group: BrandKeywordGroup): string {
   const keywords = keywordGroupMonitorKeywords(group)
   const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
-  const platforms = (group.platforms || []).map(code => code.trim()).filter(Boolean)
+  const platforms = platformSelectionCodes(group.platforms || [])
   const parts: string[] = []
   if (keywords.length) parts.push(`监测词：${keywords.join('、')}`)
   if (exposure.length) parts.push(`露出词：${exposure.join('、')}`)

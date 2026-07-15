@@ -19,6 +19,7 @@ import {
   keywordGroupDisplayName,
   keywordGroupMonitorKeywords,
   keywordGroupSelectValue,
+  platformSelectionCodes,
   type BrandKeywordGroup,
 } from '../../../services/brand'
 import { useAuthStore } from '../../../stores/auth'
@@ -81,7 +82,7 @@ const platformFilterOptions = computed(() => {
   if (tenantFilter.value === '') return supportedPlatforms
   const codes = new Set<string>()
   for (const group of keywordGroupOptions.value) {
-    for (const code of group.platforms || []) {
+    for (const code of platformSelectionCodes(group.platforms)) {
       if (code) codes.add(code)
     }
   }

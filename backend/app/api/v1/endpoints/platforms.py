@@ -60,11 +60,30 @@ def list_platforms(
             "access_type": r.access_type,
             "api_endpoint": r.api_endpoint,
             "status": r.status,
+            "catalog_listed": bool(getattr(r, "catalog_listed", True)),
+            "service_available": bool(getattr(r, "service_available", True)),
+            "service_checked_at": r.service_checked_at.isoformat(timespec="seconds") if getattr(r, "service_checked_at", None) else None,
             "sort_order": r.sort_order,
             "description": r.description,
         }
         for r in rows
     ])
+
+
+@router.get("/brand-config", response_model=ApiResponse[dict])
+def platforms_for_brand_config(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """企业管理勾选用：含下架/无服务态与可选 mode。"""
+    require_platform(current)
+    from app.services.platform_catalog_lifecycle_service import list_platforms_for_brand_config
+    from app.services.platform_notify_recipients import list_platform_positions_for_notify_config
+
+    return ApiResponse(data={
+        "platforms": list_platforms_for_brand_config(db),
+        "notify_positions": list_platform_positions_for_notify_config(db),
+    })
 
 
 @router.post("/sync-catalog", response_model=ApiResponse[dict])

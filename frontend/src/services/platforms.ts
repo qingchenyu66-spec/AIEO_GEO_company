@@ -203,7 +203,6 @@ export interface PlatformMatrix {
 }
 
 let platformMatrixCache: { data: PlatformMatrix; at: number } | null = null
-let platformListCache: { data: PlatformInfo[]; at: number } | null = null
 const PLATFORM_CACHE_TTL = 60 * 1000
 
 export async function getMolizhishuBalance(): Promise<MolizhishuBalance> {
@@ -225,18 +224,32 @@ export async function getPlatformMatrix(force = false): Promise<PlatformMatrix> 
   return platformMatrixCache.data
 }
 
-export async function getPlatforms(): Promise<PlatformInfo[]> {
-  if (platformListCache && Date.now() - platformListCache.at < PLATFORM_CACHE_TTL) {
-    return platformListCache.data
-  }
-  const response = await http.get('/v1/platforms')
-  platformListCache = { data: response.data.data, at: Date.now() }
-  return platformListCache.data
+export async function getPlatformsForBrandConfig(): Promise<{
+  platforms: Array<{
+    code: string
+    name: string
+    channel: string
+    catalog_listed: boolean
+    service_available: boolean
+    selectable: boolean
+    labels: string[]
+    modes: string[]
+    default_mode: string
+    default_screenshot: number
+  }>
+  notify_positions: Array<{
+    id: number
+    position_code: string
+    position_name: string
+    selected: boolean
+  }>
+}> {
+  const response = await http.get('/v1/platforms/brand-config')
+  return response.data.data
 }
 
 export async function updatePlatform(id: number, data: UpdatePlatformPayload): Promise<PlatformInfo> {
   const response = await http.put(`/v1/platforms/${id}`, data)
-  platformListCache = null
   platformMatrixCache = null
   return response.data.data
 }

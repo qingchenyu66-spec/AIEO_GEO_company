@@ -23,6 +23,7 @@ PLATFORM_RESTRICTED_CATEGORIES = (
     "operation_approval_result",
     "celery_queue",
     "snapshot_backfill",
+    "platform_service",
 )
 
 
@@ -34,6 +35,7 @@ def can_view_notification_category(
     can_view_snapshot_backfill: bool,
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> bool | None:
     """通知分类是否可见；None 表示需结合 payload 中的用户 ID 判断。"""
     if category == "operation_approval":
@@ -49,6 +51,8 @@ def can_view_notification_category(
         return None if snapshot_backfill_owner_only else True
     if category == "report_published":
         return can_view_customer_reports
+    if category == "platform_service":
+        return can_view_platform_service
     return False
 
 
@@ -99,8 +103,9 @@ def _apply_notification_visibility_filter(
     can_view_ops_alerts: bool,
     can_view_snapshot_backfill: bool,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> Select[tuple[SystemNotification]]:
-    """按角色过滤通知：审批、运维告警、补录待办分别鉴权。"""
+    """按角色过滤通知：审批、运维告警、补录待办、平台可用性分别鉴权。"""
     clauses = [SystemNotification.category.not_in(PLATFORM_RESTRICTED_CATEGORIES)]
     if can_review_approvals:
         clauses.append(SystemNotification.category == "operation_approval")
@@ -126,7 +131,54 @@ def _apply_notification_visibility_filter(
             )
         else:
             clauses.append(SystemNotification.category == "snapshot_backfill")
+    if can_view_platform_service:
+        clauses.append(SystemNotification.category == "platform_service")
     return stmt.where(or_(*clauses))
+
+
+def upsert_platform_service_notification(
+    db: Session,
+    *,
+    event: str,
+    title: str,
+    message: str,
+    payload: dict[str, Any],
+    source_key: str,
+    level: str = "info",
+) -> SystemNotification:
+    """平台上下架/可用性铃铛（P2 按职位过滤可见性）。"""
+    del event
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message[:500]
+        existing.level = level
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="platform_service",
+        level=level,
+        title=title,
+        message=message[:500],
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _apply_customer_notification_visibility_filter(
@@ -155,6 +207,7 @@ def _user_can_read_notification(
     can_view_snapshot_backfill: bool,
     can_view_customer_reports: bool,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> bool:
     if row.created_at < _notification_retention_cutoff():
         return False
@@ -187,6 +240,7 @@ def _user_can_read_notification(
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+            can_view_platform_service=can_view_platform_service,
         )
         if allowed is True:
             return True
@@ -205,6 +259,7 @@ def _user_can_read_notification(
         can_view_ops_alerts=can_view_ops_alerts,
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+        can_view_platform_service=can_view_platform_service,
     )
     return allowed is True
 
@@ -548,6 +603,7 @@ def list_notifications_for_user(
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> list[dict[str, Any]]:
     stmt = _notification_query_for_user(
         user_id=user_id,
@@ -562,6 +618,7 @@ def list_notifications_for_user(
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+            can_view_platform_service=can_view_platform_service,
         )
     else:
         stmt = _apply_customer_notification_visibility_filter(
@@ -604,6 +661,7 @@ def count_unread_notifications(
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> int:
     audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
     visible_ids = select(SystemNotification.id).where(
@@ -625,6 +683,7 @@ def count_unread_notifications(
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+            can_view_platform_service=can_view_platform_service,
         )
 
     read_subq = (
@@ -651,6 +710,7 @@ def mark_notification_read(
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> bool:
     exists = db.scalar(
         select(SystemNotificationRead.id).where(
@@ -673,6 +733,7 @@ def mark_notification_read(
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         can_view_customer_reports=can_view_customer_reports,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+        can_view_platform_service=can_view_platform_service,
     ):
         return False
     db.add(SystemNotificationRead(user_id=user_id, notification_id=notification_id))
@@ -691,6 +752,7 @@ def mark_all_notifications_read(
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
 ) -> int:
     unread = list_notifications_for_user(
         db,
@@ -704,6 +766,7 @@ def mark_all_notifications_read(
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         can_view_customer_reports=can_view_customer_reports,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+        can_view_platform_service=can_view_platform_service,
     )
     count = 0
     for item in unread:
@@ -718,6 +781,7 @@ def mark_all_notifications_read(
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             can_view_customer_reports=can_view_customer_reports,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+            can_view_platform_service=can_view_platform_service,
         ):
             count += 1
     return count

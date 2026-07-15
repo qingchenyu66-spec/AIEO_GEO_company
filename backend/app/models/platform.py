@@ -18,6 +18,15 @@ class GeoPlatform(Base):
     access_type: Mapped[str] = mapped_column(String(30), default="api", nullable=False, comment="访问方式: api/web/embedded")
     api_endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="API端点")
     status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")
+    catalog_listed: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, comment="是否仍在模力官方目录（日同步）"
+    )
+    service_available: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, comment="周探测：服务是否可用"
+    )
+    service_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, comment="最近可用性探测时间"
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序权重")
     description: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="平台描述")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="创建时间")

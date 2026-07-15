@@ -11,6 +11,7 @@ from app.core.region_catalog import normalize_region_codes
 from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
 from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
+from app.services.platform_selection import normalize_platform_selections, selection_codes
 from app.services.tenant_scope import ensure_sales_tenant_access
 
 
@@ -125,21 +126,31 @@ def keyword_group_display_label(group: BrandKeywordGroup | dict[str, Any] | None
     return f"{keywords[0]}等{len(keywords)}词"
 
 
-def keyword_group_platforms(
+def keyword_group_platform_configs(
     group: BrandKeywordGroup | dict[str, Any] | None,
     asset: BrandAsset | None = None,
-) -> list[str]:
-    """词组绑定的监测平台；无配置时回退企业级平台范围（兼容旧数据）。"""
+) -> list[dict[str, Any]]:
+    """词组平台配置（code/mode/screenshot）；无配置时回退企业级 code 列表。"""
     if group is None:
-        return sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+        codes = list(asset.monitored_platforms_json or []) if asset else []
+        return normalize_platform_selections(codes)
     if isinstance(group, BrandKeywordGroup):
         raw = list(group.platforms_json or [])
     else:
         raw = list(group.get("platforms") or [])
-    codes = sort_platform_codes(_dedupe([str(code or "").strip() for code in raw if str(code or "").strip()]))
-    if codes:
-        return codes
-    return sort_platform_codes(list(asset.monitored_platforms_json or [])) if asset else []
+    configs = normalize_platform_selections(raw)
+    if configs:
+        return configs
+    codes = list(asset.monitored_platforms_json or []) if asset else []
+    return normalize_platform_selections(codes)
+
+
+def keyword_group_platforms(
+    group: BrandKeywordGroup | dict[str, Any] | None,
+    asset: BrandAsset | None = None,
+) -> list[str]:
+    """词组绑定的监测平台编码；无配置时回退企业级平台范围（兼容旧数据）。"""
+    return selection_codes(keyword_group_platform_configs(group, asset))
 
 
 def tenant_purchased_platforms(db: Session, tenant_id: int, asset: BrandAsset | None = None) -> list[str]:
@@ -188,7 +199,7 @@ def keyword_group_to_dict(group: BrandKeywordGroup) -> dict[str, Any]:
         "monitor_keyword": primary,
         "monitor_keywords": monitor_keywords,
         "exposure_terms": group.exposure_terms_json or [],
-        "platforms": keyword_group_platforms(group),
+        "platforms": keyword_group_platform_configs(group),
         "sort_order": group.sort_order,
         "status": group.status,
     }
@@ -210,7 +221,7 @@ def ensure_keyword_group_payload(group: BrandKeywordGroup | dict[str, Any], inde
             "monitor_keyword": primary,
             "monitor_keywords": monitor_keywords,
             "exposure_terms": list(group.get("exposure_terms") or []),
-            "platforms": keyword_group_platforms(group, asset=None),
+            "platforms": keyword_group_platform_configs(group, asset=None),
             "sort_order": group.get("sort_order", index),
             "status": group.get("status", True),
         }
@@ -264,7 +275,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
                 monitor_keyword=primary,
                 monitor_keywords_json=list(keywords),
                 exposure_terms_json=_dedupe(item.exposure_terms or keywords),
-                platforms_json=sort_platform_codes(_dedupe(item.platforms or [])),
+                platforms_json=normalize_platform_selections(item.platforms or []),
             )
             db.add(group)
         group.brand_asset_id = asset.id
@@ -274,7 +285,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         flag_modified(group, "monitor_keywords_json")
         group.exposure_terms_json = _dedupe(item.exposure_terms or keywords)
         flag_modified(group, "exposure_terms_json")
-        platforms = sort_platform_codes(_dedupe(item.platforms or []))
+        platforms = normalize_platform_selections(item.platforms or [])
         group.platforms_json = platforms
         flag_modified(group, "platforms_json")
         group.sort_order = item.sort_order if item.sort_order is not None else index

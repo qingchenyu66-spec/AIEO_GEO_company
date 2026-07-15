@@ -478,3 +478,125 @@ def expire_overdue_tenant_services_task() -> dict[str, Any]:
     record_beat_scan("app.tasks.monitor.expire_overdue_tenant_services", {"handled": handled})
     logger.info("expire_overdue_tenant_services handled=%s", handled)
     return {"status": "ok", "handled": handled}
+
+
+@celery_app.task(name="app.tasks.monitor.sync_platform_catalog_daily", ignore_result=True)
+def sync_platform_catalog_daily_task() -> dict[str, Any]:
+    """每日同步模力支持平台目录：上下架 + 取消已下架勾选 + 铃铛。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    lock_key = _scan_lock_key("platform-catalog-daily", bucket_minutes=60)
+    with redis_lock(lock_key, ttl_seconds=3600) as acquired:
+        if not acquired:
+            return {"status": "locked"}
+        from app.services.platform_catalog_lifecycle_service import sync_platform_catalog_lifecycle
+
+        db = SessionLocal()
+        try:
+            result = sync_platform_catalog_lifecycle(db, force_refresh=True)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    record_beat_scan("app.tasks.monitor.sync_platform_catalog_daily", result)
+    return {"status": "ok", **result}
+
+
+@celery_app.task(name="app.tasks.monitor.check_platform_availability_weekly", ignore_result=True)
+def check_platform_availability_weekly_task() -> dict[str, Any]:
+    """每周混合探测平台可用性；冷门平台提交探针任务。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    lock_key = _scan_lock_key("platform-availability-weekly", bucket_minutes=60)
+    with redis_lock(lock_key, ttl_seconds=7200) as acquired:
+        if not acquired:
+            return {"status": "locked"}
+        from app.core.redis_client import set_json_cache
+        from app.services.monitor_service import submit_standalone_monitor_task
+        from app.services.platform_availability_service import (
+            build_cold_probe_request,
+            run_weekly_availability_check,
+        )
+
+        db = SessionLocal()
+        result: dict[str, Any] = {}
+        try:
+            result = run_weekly_availability_check(db)
+            cold = list(result.get("cold") or [])
+            if cold:
+                payload = build_cold_probe_request(cold)
+                if payload is not None:
+                    task = submit_standalone_monitor_task(db, payload=payload, tenant_id=None, auto_commit=True)
+                    set_json_cache(f"platform:probe:{task.task_id}", {"codes": cold}, ttl_seconds=7 * 24 * 3600)
+                    result["probe_task_id"] = task.task_id
+                    result["probe_codes"] = cold
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    record_beat_scan("app.tasks.monitor.check_platform_availability_weekly", result)
+    return {"status": "ok", **result}
+
+
+@celery_app.task(name="app.tasks.monitor.finalize_platform_probes", ignore_result=True)
+def finalize_platform_probes_task() -> dict[str, Any]:
+    """回收冷门探针子任务结果，写回 service_available。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    from app.core.redis_client import delete_cache, get_redis_client, prefixed_key
+    from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+    from app.services.platform_availability_service import (
+        SUCCESS_STATUSES,
+        TERMINAL_STATUSES,
+        apply_probe_results,
+        notify_availability_flips,
+    )
+
+    client = get_redis_client()
+    if client is None:
+        return {"status": "no_redis"}
+    try:
+        keys = list(client.scan_iter(match=prefixed_key("platform:probe:*"), count=50))
+    except Exception:
+        keys = []
+    finalized = 0
+    flipped_down: list[str] = []
+    flipped_up: list[str] = []
+    marker = "platform:probe:"
+    db = SessionLocal()
+    try:
+        for key in keys:
+            key_text = key.decode() if isinstance(key, bytes) else str(key)
+            idx = key_text.find(marker)
+            if idx < 0:
+                continue
+            task_id = key_text[idx + len(marker) :]
+            cache_key = f"platform:probe:{task_id}"
+            task = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
+            if task is None:
+                continue
+            if task.status not in ("completed", "partial_completed", "failed", "stopped"):
+                continue
+            subtasks = list(db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id == task_id)))
+            if not subtasks:
+                continue
+            if any(item.status not in TERMINAL_STATUSES for item in subtasks):
+                continue
+            results: dict[str, bool] = {}
+            for item in subtasks:
+                code = (item.platform or "").strip()
+                if not code:
+                    continue
+                results[code] = item.status in SUCCESS_STATUSES
+            flip = apply_probe_results(db, results)
+            flipped_down.extend(flip.get("flipped_down") or [])
+            flipped_up.extend(flip.get("flipped_up") or [])
+            delete_cache(cache_key)
+            finalized += 1
+        if flipped_down or flipped_up:
+            notify_availability_flips(db, flipped_down=list(set(flipped_down)), flipped_up=list(set(flipped_up)))
+    finally:
+        db.close()
+    return {"status": "ok", "finalized": finalized}

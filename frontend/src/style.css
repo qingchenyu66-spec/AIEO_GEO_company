@@ -3908,6 +3908,22 @@ button:disabled {
   transform: translateY(-1px);
 }
 .platform-check input { width: 16px; height: 16px; accent-color: #2d6cdf; }
+.platform-check.is-disabled,
+.platform-check.is-unavailable,
+.platform-check.is-delisted {
+  opacity: 0.55;
+  filter: grayscale(0.85);
+  cursor: not-allowed;
+  background: #f3f4f6;
+}
+.platform-check .platform-status-tag {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b45309;
+  white-space: nowrap;
+}
+.platform-check.is-delisted .platform-status-tag { color: #991b1b; }
 
 .sentiment-workbench,
 .diagnosis-workbench,
