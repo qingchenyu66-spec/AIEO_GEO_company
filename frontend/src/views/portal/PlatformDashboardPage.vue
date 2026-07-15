@@ -278,9 +278,15 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="ops-expire-list">
-          <b>即将到期客户</b>
-          <p v-for="tenant in overview?.expiring_tenants || []" :key="tenant.id">{{ tenant.name }} <span>{{ tenant.days_left }} 天后到期</span></p>
-          <p v-if="!overview?.expiring_tenants?.length">暂无 30 天内到期客户</p>
+          <b class="ops-expire-list__title">即将到期客户</b>
+          <div class="ops-expire-list__rows">
+            <div v-for="(tenant, index) in overview?.expiring_tenants || []" :key="tenant.id">
+              <i>{{ index + 1 }}</i>
+              <span>{{ tenant.name }}</span>
+              <em>{{ tenant.days_left }} 天后到期</em>
+            </div>
+            <div v-if="!overview?.expiring_tenants?.length" class="mini-empty">暂无 30 天内到期客户</div>
+          </div>
         </div>
       </article>
 

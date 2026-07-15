@@ -495,9 +495,51 @@ button:disabled {
 .ops-service-grid .red { border-color:#f2c4cd; background:#fff5f6; }
 .ops-service-grid .amber { border-color:#f1dfaa; background:#fffaf0; }
 .ops-expire-list { margin-top:16px; padding-top:14px; border-top:1px solid #edf2f8; }
-.ops-expire-list b,.ops-expire-list p { display:block; margin:0; }
-.ops-expire-list p { display:flex; justify-content:space-between; margin-top:8px; color:#526982; font-size:12px; }
-.ops-expire-list span { color:#d0741f; font-weight:800; }
+.ops-expire-list__title { display:block; margin:0 0 10px; color:#14304f; font-size:13px; font-weight:800; }
+.ops-expire-list__rows { display:grid; gap:10px; }
+.ops-expire-list__rows > div {
+  display:grid;
+  grid-template-columns:28px 1fr auto;
+  align-items:center;
+  gap:9px;
+  padding:10px;
+  border:1px solid #e0e9f4;
+  border-radius:8px;
+  background:#fbfdff;
+}
+.ops-expire-list__rows i {
+  display:grid;
+  place-items:center;
+  width:24px;
+  height:24px;
+  border-radius:7px;
+  color:#2871db;
+  background:#eaf3ff;
+  font-style:normal;
+  font-weight:800;
+  font-size:12px;
+}
+.ops-expire-list__rows span {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#243956;
+  font-size:13px;
+  font-weight:600;
+}
+.ops-expire-list__rows em {
+  color:#d0741f;
+  font-style:normal;
+  font-size:13px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.ops-expire-list__rows .mini-empty {
+  grid-template-columns:1fr;
+  border:none;
+  background:transparent;
+  padding:8px 0;
+}
 .ops-platform-list div { padding:10px 0; border-bottom:1px solid #edf2f8; }
 .ops-platform-list b,.ops-platform-list span,.ops-platform-list small { display:block; }
 .ops-platform-list b { font-size:13px; }
