@@ -14,9 +14,10 @@ function platformSelectionCount(group: { platforms?: unknown[] }) {
 
 const PLATFORM_MODE_LABELS: Record<string, string> = {
   standard: '快速',
-  search: '联网',
-  reasoning: '深度',
-  reasoning_search: '深度+联网',
+  reasoning: '深度思考',
+  // 历史数据兜底展示
+  search: '快速',
+  reasoning_search: '深度思考',
 }
 
 function platformModeLabel(group: { platforms?: unknown[] }, code: string) {
@@ -594,10 +595,8 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <label class="form-field-full">
           <span>模式</span>
           <select v-model="modeDialogForm.mode">
-            <option value="standard">standard（快速）</option>
-            <option value="search">search（联网搜索）</option>
-            <option value="reasoning">reasoning（深度思考）</option>
-            <option value="reasoning_search">reasoning_search（深度+联网）</option>
+            <option value="standard">快速</option>
+            <option value="reasoning">深度思考</option>
           </select>
         </label>
       </div>

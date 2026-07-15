@@ -173,7 +173,7 @@ def list_platforms_for_brand_config(db: Session) -> list[dict[str, Any]]:
             "selectable": selectable,
             "labels": labels,
             "service_checked_at": row.service_checked_at.isoformat(timespec="seconds") if row.service_checked_at else None,
-            "modes": ["standard", "search", "reasoning", "reasoning_search"],
+            "modes": ["standard", "reasoning"],
             "default_mode": "standard",
             "default_screenshot": 1,
         })

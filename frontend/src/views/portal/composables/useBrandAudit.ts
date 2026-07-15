@@ -1007,11 +1007,16 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         service_available: true,
         selectable: true,
         labels: [],
-        modes: ['standard', 'search', 'reasoning', 'reasoning_search'],
+        modes: ['standard', 'reasoning'],
         default_mode: 'standard',
         default_screenshot: 1,
       }))
     }
+  }
+
+  function coerceSelectableMode(mode: PlatformSelection['mode'] | string | undefined): PlatformSelection['mode'] {
+    if (mode === 'reasoning' || mode === 'reasoning_search') return 'reasoning'
+    return 'standard'
   }
 
   function groupHasPlatform(group: BrandKeywordGroup, code: string) {
@@ -1027,7 +1032,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       // 已勾选：再次点击改为改模式（取消勾选用右侧 ×）
       const current = normalizePlatformSelections(group.platforms).find(item => item.code === code)
       modeDialogTarget.value = { groupIndex, code }
-      modeDialogForm.mode = current?.mode || (meta?.default_mode as PlatformSelection['mode']) || 'standard'
+      modeDialogForm.mode = coerceSelectableMode(current?.mode || meta?.default_mode)
       modeDialogForm.screenshot = 1
       modeDialogVisible.value = true
       return
@@ -1037,7 +1042,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       return
     }
     modeDialogTarget.value = { groupIndex, code }
-    modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
+    modeDialogForm.mode = coerceSelectableMode(meta?.default_mode)
     modeDialogForm.screenshot = 1
     modeDialogVisible.value = true
   }
