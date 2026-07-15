@@ -42,7 +42,7 @@ const {
   catalogPlatforms,
   loadCatalogPlatforms,
   groupHasPlatform,
-  onToggleGroupPlatform,
+  onPlatformCheckClick,
   modeDialogVisible,
   modeDialogForm,
   confirmModeDialog,
@@ -365,7 +365,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                       type="checkbox"
                       :checked="groupHasPlatform(group, platform.code)"
                       :disabled="!canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
-                      @change="onToggleGroupPlatform(index, platform.code, ($event.target as HTMLInputElement).checked)"
+                      @click.prevent="onPlatformCheckClick(index, platform.code)"
                     />
                     <PlatformBadge
                       :code="platform.code"

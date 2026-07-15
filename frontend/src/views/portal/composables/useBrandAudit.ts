@@ -1018,22 +1018,24 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return platformSelectionCodes(group.platforms).includes(code)
   }
 
-  function onToggleGroupPlatform(groupIndex: number, code: string, checked: boolean) {
+  function onPlatformCheckClick(groupIndex: number, code: string) {
     const group = keywordGroupRows.value[groupIndex]
     if (!group) return
+    if (!canEditEnterpriseTab('keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
-    if (checked) {
-      if (meta && !meta.selectable) {
-        ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
-        return
-      }
-      modeDialogTarget.value = { groupIndex, code }
-      modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
-      modeDialogForm.screenshot = 1
-      modeDialogVisible.value = true
+    if (groupHasPlatform(group, code)) {
+      group.platforms = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
       return
     }
-    group.platforms = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
+    if (meta && !meta.selectable) {
+      ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
+      return
+    }
+    // 先弹窗；确认后再写入 platforms。click.prevent 避免原生 checkbox 先被勾上
+    modeDialogTarget.value = { groupIndex, code }
+    modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
+    modeDialogForm.screenshot = 1
+    modeDialogVisible.value = true
   }
 
   function confirmModeDialog() {
@@ -1045,6 +1047,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const group = keywordGroupRows.value[target.groupIndex]
     if (!group) {
       modeDialogVisible.value = false
+      modeDialogTarget.value = null
       return
     }
     const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== target.code)
@@ -1070,7 +1073,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     formatPlatformLabels,
     loadCatalogPlatforms,
     groupHasPlatform,
-    onToggleGroupPlatform,
+    onPlatformCheckClick,
     modeDialogVisible,
     modeDialogForm,
     confirmModeDialog,
