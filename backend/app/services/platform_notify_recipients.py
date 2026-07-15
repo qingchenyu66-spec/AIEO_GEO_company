@@ -8,13 +8,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.permission import Position
 from app.models.user_identity import UserIdentity
 
 
-def parse_notify_position_ids(raw: str | None = None) -> list[int]:
-    text = str(raw if raw is not None else getattr(settings, "platform_service_notify_position_ids", "") or "").strip()
+def parse_notify_position_ids(raw: str | None = None, db: Session | None = None) -> list[int]:
+    if raw is None:
+        from app.services.system_config_service import get_runtime_config
+
+        raw = str(get_runtime_config("platform_service_notify_position_ids", db=db) or "")
+    text = str(raw or "").strip()
     if not text:
         return []
     try:
@@ -43,7 +46,7 @@ def default_platform_notify_position_ids(db: Session) -> list[int]:
 def identity_can_view_platform_service(db: Session, identity: UserIdentity) -> bool:
     if identity.identity_type != "PLATFORM":
         return False
-    allowed = parse_notify_position_ids()
+    allowed = parse_notify_position_ids(db=db)
     if not allowed:
         allowed = default_platform_notify_position_ids(db)
     if identity.position_id is None:
@@ -58,7 +61,7 @@ def list_platform_positions_for_notify_config(db: Session) -> list[dict[str, Any
             Position.identity_type == "PLATFORM",
         ).order_by(Position.id.asc())
     )
-    selected = set(parse_notify_position_ids() or default_platform_notify_position_ids(db))
+    selected = set(parse_notify_position_ids(db=db) or default_platform_notify_position_ids(db))
     return [
         {
             "id": row.id,

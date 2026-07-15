@@ -34,8 +34,8 @@ _PATH_IN_DESC = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s+(/api/\S+)")
 _ROUTE_RULES: list[tuple[str, re.Pattern[str], str]] = [
     ("POST", re.compile(r"^/api/v1/auth/switch-identity$"), "切换登录身份：切换到其他已授权身份"),
     ("POST", re.compile(r"^/api/v1/auth/logout$"), "退出登录：结束当前会话"),
-    ("POST", re.compile(r"^/api/v1/monitor/tasks$"), "创建监测任务：向模力指数提交新一轮 GEO 检测"),
-    ("POST", re.compile(r"^/api/v1/monitor/tasks/\d+/sync$"), "同步监测任务：拉取模力指数最新进度与检测结果"),
+    ("POST", re.compile(r"^/api/v1/monitor/tasks$"), "创建监测任务：提交新一轮 GEO 检测抓取"),
+    ("POST", re.compile(r"^/api/v1/monitor/tasks/\d+/sync$"), "同步监测任务：拉取最新进度与检测结果"),
     (
         "POST",
         re.compile(r"^/api/v1/monitor/subtasks/[^/]+/snapshot-backfill$"),
@@ -51,7 +51,7 @@ _ROUTE_RULES: list[tuple[str, re.Pattern[str], str]] = [
     ("POST", re.compile(r"^/api/v1/lead-diagnosis/\d+/submit-run$"), "提交售前诊断：启动三时段全平台抓取"),
     ("POST", re.compile(r"^/api/v1/lead-diagnosis/\d+/refresh$"), "刷新售前诊断：重新汇总诊断结果"),
     ("POST", re.compile(r"^/api/v1/diagnosis/records$"), "创建诊断记录：保存品牌诊断结论"),
-    ("POST", re.compile(r"^/api/v1/platforms/sync-catalog$"), "同步模型平台目录：从模力指数拉取最新平台列表"),
+    ("POST", re.compile(r"^/api/v1/platforms/sync-catalog$"), "同步模型平台目录：更新系统支持平台列表"),
     ("PUT", re.compile(r"^/api/v1/platforms/\d+$"), "修改模型平台：更新平台启用状态或显示配置"),
     ("POST", re.compile(r"^/api/v1/notifications/\d+/read$"), "标记消息已读"),
     ("POST", re.compile(r"^/api/v1/notifications/read-all$"), "全部消息标记已读"),

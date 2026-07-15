@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def molizhishu_upstream_error_detail(exc: Exception) -> str:
     """对外隐藏模力指数原始错误，避免泄露 token/URL 等敏感信息。"""
     logger.warning("molizhishu upstream error: %s", exc)
-    return "模力指数服务暂时不可用，请稍后重试"
+    return "监测数据服务暂时不可用，请稍后重试"
 
 
 def raise_read_endpoint_error(exc: Exception, *, context: str) -> None:

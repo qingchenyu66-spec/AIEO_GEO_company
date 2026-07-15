@@ -135,7 +135,7 @@ def molizhishu_balance(
             current,
             "platform.settings",
             "can_export",
-            detail="当前账号无权查看模力指数余额",
+            detail="当前账号无权查看监测账户余额",
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

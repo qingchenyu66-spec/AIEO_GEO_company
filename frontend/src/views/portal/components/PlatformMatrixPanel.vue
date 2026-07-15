@@ -5,7 +5,7 @@ import { sortPlatformRows } from '../platformOrder'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { platformAccentColor } from '../platformMeta'
 import type { PlatformMatrix } from '../../../services/platforms'
-import { formatDateTime, externalLink } from '../portalUtils'
+import { formatDateTime } from '../portalUtils'
 
 const props = defineProps<{
   matrix: PlatformMatrix | null
@@ -22,7 +22,7 @@ const probeFailed = computed(() => props.matrix?.probe_failed ?? 0)
 const metaLine = computed(() => {
   const parts: string[] = []
   if (props.matrix?.catalog_fetched_at) {
-    parts.push(`目录同步 ${formatDateTime(props.matrix.catalog_fetched_at)}`)
+    parts.push(`平台更新 ${formatDateTime(props.matrix.catalog_fetched_at)}`)
   }
   if (props.matrix?.first_schedule_at) {
     parts.push(`首轮检测 ${formatDateTime(props.matrix.first_schedule_at)}`)
@@ -34,7 +34,6 @@ const metaLine = computed(() => {
 })
 
 const platforms = computed(() => sortPlatformRows(props.matrix?.platforms || []))
-const catalogSource = computed(() => props.matrix?.catalog_source || '')
 </script>
 
 <template>
@@ -46,18 +45,10 @@ const catalogSource = computed(() => props.matrix?.catalog_source || '')
           <p>
             共 {{ supportedCount }} 个在架平台 · 探测 {{ probeTotal }} 条
             · 成功 {{ probeSuccess }} 条 · 失败 {{ probeFailed }} 条
-            <template v-if="catalogSource"> · 目录源 {{ catalogSource === 'molizhishu_doc' ? '官方文档' : catalogSource }}</template>
           </p>
         </div>
         <div class="platform-matrix-header-actions">
           <p v-if="metaLine" class="platform-matrix-meta-line">{{ metaLine }}</p>
-          <a
-            v-if="externalLink(matrix?.catalog_source_url)"
-            class="platform-matrix-doc-link"
-            :href="externalLink(matrix?.catalog_source_url)!"
-            target="_blank"
-            rel="noopener noreferrer"
-          >平台目录文档</a>
           <button type="button" class="platform-matrix-refresh-btn" :disabled="loading" @click="emit('refresh')">
             <RefreshCw :class="{ 'is-spinning': loading }" />
             {{ loading ? '刷新中…' : '刷新数据' }}

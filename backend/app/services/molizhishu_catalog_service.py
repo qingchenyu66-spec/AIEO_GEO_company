@@ -78,7 +78,7 @@ def _fetch_doc_catalog(url: str) -> list[dict[str, Any]]:
         response.raise_for_status()
     catalog = _parse_platform_rows(response.text)
     if not catalog:
-        raise ValueError(f"未能从模力指数文档解析平台列表：{url}")
+        raise ValueError(f"未能解析监测平台列表：{url}")
     return catalog
 
 

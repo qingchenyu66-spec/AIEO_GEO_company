@@ -84,7 +84,7 @@ export function buildFunctionalPage(
     'platform.sources': { title: '信源分析', subtitle: '运营端查看企业各模型引用的信源结构、高频站点与可跳转原文。', mode: 'sources', actions: ['导出信源', '加入报告'], ...common },
     'platform.models': {
       title: '模型平台',
-      subtitle: '平台目录同步自模力指数官方文档，展示今日各平台探测成功/失败条数。',
+      subtitle: '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。',
       mode: 'platforms',
       actions: [],
       kpis: [],

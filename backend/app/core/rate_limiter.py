@@ -44,11 +44,16 @@ _local_limiter = _LocalMinuteRateLimiter()
 
 
 def _limit_for_category(category: RateCategory) -> int:
+    from app.services.system_config_service import get_runtime_config
+
     if category == "submit":
-        return settings.molizhishu_submit_rate_per_minute
+        return int(get_runtime_config("molizhishu_submit_rate_per_minute"))
     if category == "sync":
-        return settings.molizhishu_sync_rate_per_minute
-    return min(settings.molizhishu_submit_rate_per_minute, settings.molizhishu_sync_rate_per_minute)
+        return int(get_runtime_config("molizhishu_sync_rate_per_minute"))
+    return min(
+        int(get_runtime_config("molizhishu_submit_rate_per_minute")),
+        int(get_runtime_config("molizhishu_sync_rate_per_minute")),
+    )
 
 
 def _minute_bucket_key(prefix: str, category: str) -> str:
@@ -95,8 +100,10 @@ def acquire_rate_limit(scope: str, key: str, limit_per_minute: int) -> None:
 
 def acquire_molizhishu_rate_limit(category: RateCategory = "default") -> None:
     """Block until the current minute bucket has capacity, or raise TimeoutError."""
+    from app.services.system_config_service import get_runtime_config
+
     limit = max(1, _limit_for_category(category))
-    max_wait = max(0.0, settings.molizhishu_rate_limit_max_wait_seconds)
+    max_wait = max(0.0, float(get_runtime_config("molizhishu_rate_limit_max_wait_seconds")))
     deadline = time.monotonic() + max_wait
 
     while True:
@@ -120,6 +127,6 @@ def acquire_molizhishu_rate_limit(category: RateCategory = "default") -> None:
             return
 
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"模力指数 {category} 调用超过全局限流 {limit}/min，等待超时")
+            raise TimeoutError(f"监测接口 {category} 调用超过全局限流 {limit}/min，等待超时")
 
         time.sleep(0.25)

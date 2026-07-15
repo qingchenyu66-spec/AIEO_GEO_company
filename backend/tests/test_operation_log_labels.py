@@ -40,7 +40,7 @@ def test_module_from_api_path() -> None:
 
 def test_humanize_description_from_api_path() -> None:
     assert humanize_description("POST /api/v1/monitor/tasks") == (
-        "创建监测任务：向模力指数提交新一轮 GEO 检测"
+        "创建监测任务：提交新一轮 GEO 检测抓取"
     )
     assert humanize_description("修改企业「艾迪亚」：名称「旧名」→「新名」") == (
         "修改企业「艾迪亚」：名称「旧名」→「新名」"

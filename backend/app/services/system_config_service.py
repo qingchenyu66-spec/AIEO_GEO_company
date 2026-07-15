@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -13,6 +14,10 @@ from app.models.ops import SystemConfig
 
 ConfigCategory = Literal["secrets", "schedule", "cache_queue", "notification"]
 ValueType = Literal["str", "int", "float", "bool"]
+
+# ponytail: 2s 进程缓存；多 worker 最多延迟约 2s 对齐；upgrade=Redis pub/sub 立即失效。
+_RUNTIME_CACHE_TTL_SECONDS = 2.0
+_runtime_cache: dict[str, tuple[float, Any]] = {}
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,7 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
     "molizhishu_token": ConfigMeta(
         field="molizhishu_token",
         category="secrets",
-        label="模力指数 Token",
+        label="监测服务 Token",
         description="GEO 监测任务提交与结果同步",
         value_type="str",
         secret=True,
@@ -73,21 +78,21 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
     "molizhishu_submit_rate_per_minute": ConfigMeta(
         field="molizhishu_submit_rate_per_minute",
         category="schedule",
-        label="模力提交限速",
+        label="监测提交限速",
         description="每分钟最多提交次数",
         value_type="int",
     ),
     "molizhishu_sync_rate_per_minute": ConfigMeta(
         field="molizhishu_sync_rate_per_minute",
         category="schedule",
-        label="模力同步限速",
+        label="监测同步限速",
         description="每分钟最多同步次数",
         value_type="int",
     ),
     "molizhishu_rate_limit_max_wait_seconds": ConfigMeta(
         field="molizhishu_rate_limit_max_wait_seconds",
         category="schedule",
-        label="模力限速最大等待",
+        label="监测限速最大等待",
         description="触发限速时最长等待秒数",
         value_type="float",
     ),
@@ -228,7 +233,7 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         field="platform_service_notify_position_ids",
         category="notification",
         label="平台服务通知职位",
-        description="JSON 职位 ID 列表；仅这些 PLATFORM 职位可见上下架/可用性铃铛。留空则默认销售+运营+管理员",
+        description="仅这些平台职位可见上下架/可用性铃铛。不选则默认销售+运营+管理员",
         value_type="str",
     ),
 }
@@ -242,12 +247,59 @@ def coerce_config_value(raw: str, value_type: ValueType) -> Any:
             return True
         if lowered in {"0", "false", "no", "off", "停用", "否"}:
             return False
-        raise ValueError("布尔配置请填写 true/false 或 启用/停用")
+        raise ValueError("布尔配置请选择 是/否")
     if value_type == "int":
         return int(text)
     if value_type == "float":
         return float(text)
     return text
+
+
+def invalidate_runtime_config_cache(config_key: str | None = None) -> None:
+    if config_key is None:
+        _runtime_cache.clear()
+        return
+    _runtime_cache.pop(config_key, None)
+
+
+def get_runtime_config(config_key: str, db: Session | None = None) -> Any:
+    """Read registry config with short process cache; prefers DB so multi-worker stays consistent."""
+    meta = CONFIG_REGISTRY.get(config_key)
+    if meta is None:
+        raise KeyError(f"unknown config key: {config_key}")
+
+    now = time.monotonic()
+    hit = _runtime_cache.get(config_key)
+    if hit is not None and now - hit[0] < _RUNTIME_CACHE_TTL_SECONDS:
+        return hit[1]
+
+    close_db = False
+    session = db
+    if session is None:
+        from app.core.database import SessionLocal
+
+        session = SessionLocal()
+        close_db = True
+    try:
+        row = session.scalar(
+            select(SystemConfig).where(
+                SystemConfig.config_key == config_key,
+                SystemConfig.status.is_(True),
+            )
+        )
+        if row is not None and str(row.config_value or "").strip() != "":
+            try:
+                value = coerce_config_value(row.config_value, meta.value_type)
+            except ValueError:
+                value = getattr(settings, meta.field)
+        else:
+            value = getattr(settings, meta.field)
+        object.__setattr__(settings, meta.field, value)
+        _runtime_cache[config_key] = (now, value)
+        return value
+    finally:
+        if close_db and session is not None:
+            session.close()
 
 
 def apply_config_value_to_settings(config_key: str, raw_value: str) -> None:
@@ -256,6 +308,7 @@ def apply_config_value_to_settings(config_key: str, raw_value: str) -> None:
         return
     coerced = coerce_config_value(raw_value, meta.value_type)
     object.__setattr__(settings, meta.field, coerced)
+    invalidate_runtime_config_cache(config_key)
 
 
 def apply_all_configs_from_db(db: Session) -> int:
@@ -417,3 +470,4 @@ def update_system_config(db: Session, config_id: int, raw_value: str, *, updated
 def bootstrap_and_apply(db: Session) -> None:
     bootstrap_system_configs(db)
     apply_all_configs_from_db(db)
+    invalidate_runtime_config_cache()

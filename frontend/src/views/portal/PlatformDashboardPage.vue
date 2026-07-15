@@ -61,7 +61,7 @@ const kpiCards = computed(() => {
     { label: '今日任务', value: String(kpis?.today_tasks ?? 0), note: `已完成 ${kpis?.today_completed_tasks ?? 0}`, icon: Clock3, tone: 'blue' },
     { label: '异常任务', value: String(kpis?.today_failed_tasks ?? 0), note: '失败 / 停止 / 待复核', icon: AlertTriangle, tone: (kpis?.today_failed_tasks ?? 0) > 0 ? 'red' : 'green' },
     { label: '服务中企业', value: String(kpis?.active_tenants ?? 0), note: '当前正常服务客户', icon: Building2, tone: 'green' },
-    { label: '今日消耗', value: String(kpis?.today_cost ?? 0), note: '模力接口扣费', icon: WalletCards, tone: 'cyan' },
+    { label: '今日消耗', value: String(kpis?.today_cost ?? 0), note: '监测接口扣费', icon: WalletCards, tone: 'cyan' },
     { label: 'DeepSeek 余额', value: formatBalanceValue(deepseek), note: deepseek?.available ? '报告 / 知识库 / 情绪词' : (deepseek?.error || '未配置 API Key'), icon: Sparkles, tone: deepseek?.available ? 'purple' : 'amber' },
     { label: '即将到期', value: String(kpis?.expiring_tenants ?? 0), note: '30 天内到期', icon: FileBarChart, tone: (kpis?.expiring_tenants ?? 0) > 0 ? 'amber' : 'green' },
     { label: '接口成功率', value: `${kpis?.api_success_rate ?? 0}%`, note: '今日调度提交', icon: Gauge, tone: 'purple' },

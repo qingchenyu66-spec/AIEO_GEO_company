@@ -14,10 +14,10 @@ function platformSelectionCount(group: { platforms?: unknown[] }) {
 
 const PLATFORM_MODE_LABELS: Record<string, string> = {
   standard: '快速',
-  reasoning: '深度思考',
-  // 历史数据兜底展示
+  reasoning: '深度',
+  // 历史数据兜底展示（弹窗仍用「深度思考」全称）
   search: '快速',
-  reasoning_search: '深度思考',
+  reasoning_search: '深度',
 }
 
 function platformModeLabel(group: { platforms?: unknown[] }, code: string) {

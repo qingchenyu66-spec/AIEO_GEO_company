@@ -31,7 +31,7 @@ def _curl_exe_request(
 ) -> tuple[int, str]:
     curl_bin = shutil.which("curl") or shutil.which("curl.exe")
     if not curl_bin:
-        raise MolizhishuApiError("未找到 curl，可安装 curl 或 curl_cffi 以调用模力指数 API")
+        raise MolizhishuApiError("未找到 curl，可安装 curl 或 curl_cffi 以调用监测 API")
     cmd = [curl_bin, "-sS", "-m", str(max(1, int(timeout))), "-X", method.upper(), "-w", "\n__HTTP_CODE__:%{http_code}"]
     for key, value in headers.items():
         cmd.extend(["-H", f"{key}: {value}"])
@@ -41,7 +41,7 @@ def _curl_exe_request(
     completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "curl failed").strip()
-        raise MolizhishuApiError(f"模力指数网络错误：{detail[:500]}")
+        raise MolizhishuApiError(f"监测服务网络错误：{detail[:500]}")
     body = completed.stdout
     marker = "\n__HTTP_CODE__:"
     if marker in body:
@@ -102,10 +102,13 @@ class MolizhishuClient:
         return self.base_url.rsplit("/api", 1)[0].rstrip("/")
 
     def _headers(self) -> dict[str, str]:
-        if not self.token:
-            raise MolizhishuApiError("未配置 MOLIZHISHU_TOKEN，无法调用模力指数接口")
+        from app.services.system_config_service import get_runtime_config
+
+        token = str(get_runtime_config("molizhishu_token") or "").strip()
+        if not token:
+            raise MolizhishuApiError("未配置 MOLIZHISHU_TOKEN，无法调用监测接口")
         return {
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
@@ -139,14 +142,14 @@ class MolizhishuClient:
                 timeout=self.timeout,
             )
             if http_status >= 400:
-                raise MolizhishuApiError(f"模力指数 HTTP 错误：{http_status} {body_text[:1000]}")
+                raise MolizhishuApiError(f"监测服务 HTTP 错误：{http_status} {body_text[:1000]}")
             payload = json.loads(body_text)
         except MolizhishuApiError:
             raise
         except ValueError as exc:
-            raise MolizhishuApiError("模力指数响应不是合法 JSON") from exc
+            raise MolizhishuApiError("监测服务响应不是合法 JSON") from exc
         except Exception as exc:
-            raise MolizhishuApiError(f"模力指数网络错误：{exc}") from exc
+            raise MolizhishuApiError(f"监测服务网络错误：{exc}") from exc
         finally:
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.info(
@@ -159,7 +162,7 @@ class MolizhishuClient:
             )
         success = bool(payload.get("success"))
         code = payload.get("code")
-        message = payload.get("message") or "模力指数接口返回失败"
+        message = payload.get("message") or "监测接口返回失败"
         if not success:
             raise MolizhishuApiError(message, code=code, response=payload)
         return payload

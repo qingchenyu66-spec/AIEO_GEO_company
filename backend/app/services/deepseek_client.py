@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.services.system_config_service import get_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -24,32 +25,51 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.I)
 
 class DeepseekClient:
     def __init__(self) -> None:
-        self.api_key = settings.deepseek_api_key.strip()
-        self.base_url = settings.deepseek_base_url.rstrip("/")
-        self.model = settings.deepseek_model
         self.timeout = settings.deepseek_timeout_seconds
+
+    def _api_key(self) -> str:
+        return str(get_runtime_config("deepseek_api_key") or "").strip()
+
+    def _base_url(self) -> str:
+        return str(get_runtime_config("deepseek_base_url") or settings.deepseek_base_url).rstrip("/")
+
+    def _model(self) -> str:
+        return str(get_runtime_config("deepseek_model") or settings.deepseek_model)
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key()
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url()
+
+    @property
+    def model(self) -> str:
+        return self._model()
 
     @property
     def enabled(self) -> bool:
-        return bool(self.api_key) and settings.deepseek_sentiment_keyword_enabled
+        return bool(self._api_key()) and bool(get_runtime_config("deepseek_sentiment_keyword_enabled"))
 
     @property
     def report_enabled(self) -> bool:
-        return bool(self.api_key) and settings.deepseek_report_enabled
+        return bool(self._api_key()) and bool(get_runtime_config("deepseek_report_enabled"))
 
     @property
     def knowledge_enabled(self) -> bool:
-        return bool(self.api_key) and settings.deepseek_knowledge_parse_enabled
+        return bool(self._api_key()) and bool(get_runtime_config("deepseek_knowledge_parse_enabled"))
 
     @property
     def rank_fallback_enabled(self) -> bool:
-        return bool(self.api_key) and settings.deepseek_rank_fallback_enabled
+        return bool(self._api_key()) and bool(settings.deepseek_rank_fallback_enabled)
 
     def _headers(self) -> dict[str, str]:
-        if not self.api_key:
+        api_key = self._api_key()
+        if not api_key:
             raise DeepseekApiError("未配置 DEEPSEEK_API_KEY")
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 

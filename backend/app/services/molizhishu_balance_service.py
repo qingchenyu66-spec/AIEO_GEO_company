@@ -31,7 +31,7 @@ def fetch_molizhishu_balance() -> dict[str, Any]:
                 "current_balance": None,
                 "current_balance_text": None,
                 "fetched_at": fetched_at,
-                "error": "模力余额接口未返回 currentBalance",
+                "error": "账户余额接口未返回有效余额",
             }
         return {
             "available": True,
@@ -40,19 +40,19 @@ def fetch_molizhishu_balance() -> dict[str, Any]:
             "fetched_at": fetched_at,
             "error": None,
         }
-    except MolizhishuApiError as exc:
+    except MolizhishuApiError:
         return {
             "available": False,
             "current_balance": None,
             "current_balance_text": None,
             "fetched_at": fetched_at,
-            "error": str(exc),
+            "error": "监测账户余额暂不可用，请稍后重试",
         }
-    except Exception as exc:
+    except Exception:
         return {
             "available": False,
             "current_balance": None,
             "current_balance_text": None,
             "fetched_at": fetched_at,
-            "error": f"查询模力余额失败：{exc}",
+            "error": "查询监测账户余额失败",
         }

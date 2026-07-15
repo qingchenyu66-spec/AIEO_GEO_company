@@ -11,6 +11,8 @@ from app.services.system_config_service import (
     apply_config_value_to_settings,
     bootstrap_system_configs,
     coerce_config_value,
+    get_runtime_config,
+    invalidate_runtime_config_cache,
     list_system_configs,
     mask_secret_value,
     serialize_config_row,
@@ -49,6 +51,18 @@ def test_update_applies_runtime_settings(db_session, monkeypatch):
     db_session.commit()
     assert settings.molizhishu_submit_rate_per_minute == 42
     object.__setattr__(settings, "molizhishu_submit_rate_per_minute", original)
+
+
+def test_get_runtime_config_reads_db_over_stale_settings(db_session):
+    """Simulate another API worker: DB already updated, local settings still old."""
+    bootstrap_system_configs(db_session)
+    row = db_session.query(SystemConfig).filter_by(config_key="snapshot_backfill_notify_owner").one()
+    row.config_value = "false"
+    db_session.commit()
+    object.__setattr__(settings, "snapshot_backfill_notify_owner", True)
+    invalidate_runtime_config_cache()
+    assert get_runtime_config("snapshot_backfill_notify_owner", db=db_session) is False
+    assert settings.snapshot_backfill_notify_owner is False
 
 
 def test_list_system_configs_filters_category(db_session):

@@ -299,7 +299,7 @@ def _task_detail_text(name: str, kwargs: dict[str, Any]) -> str:
         task_id = kwargs.get("task_id")
         if task_id:
             text = str(task_id)
-            return f"模力任务 {text[:8]}…{text[-4:]}" if len(text) > 16 else f"模力任务 {text}"
+            return f"监测任务 {text[:8]}…{text[-4:]}" if len(text) > 16 else f"监测任务 {text}"
         return "同步监测主任务"
     if name == "app.tasks.monitor.scan_pending_syncs":
         live = get_sync_live()
@@ -833,9 +833,9 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
         "alert_count": len(snapshot.get("alerts") or []),
         "flower_url": snapshot.get("flower_url"),
         "tips": [
-            "提交队列：负责把到点监测任务提交到模力指数",
-            "同步队列：负责拉取模力指数任务结果",
-            "待同步监测任务：已提交到模力、尚未全部拉回结果的主任务数量",
+            "提交队列：负责把到点监测任务提交抓取",
+            "同步队列：负责拉取监测任务结果",
+            "待同步监测任务：已提交抓取、尚未全部拉回结果的主任务数量",
         ],
         "scheduler": {
             "submit_scan": "每 5 分钟扫描到点任务（09:00-21:00）",

@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElOption, ElSelect } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { withRetry } from '../../../composables/useRetry'
-import { getTenants, updateSystemConfig, type TenantInfo } from '../../../services/management'
+import {
+  getManagementPositions,
+  getTenants,
+  updateSystemConfig,
+  type PositionInfo,
+  type TenantInfo,
+} from '../../../services/management'
 import { getOperationLogs, type OperationLogRecord } from '../../../services/ops'
 import {
   previewScheduledMonitor,
@@ -81,8 +87,8 @@ const settingsCategory = ref<SettingsCategory>('secrets')
 
 const settingsTabs = computed(() => {
   const all: Array<{ key: SettingsCategory; title: string; desc: string }> = [
-    { key: 'secrets', title: '接口密钥', desc: '模力指数、DeepSeek 等敏感配置，保存后立即生效' },
-    { key: 'schedule', title: '调度策略', desc: '监测容差、模力限速、Celery 扫描与同步参数' },
+    { key: 'secrets', title: '接口密钥', desc: '监测服务、DeepSeek 等敏感配置，保存后立即生效' },
+    { key: 'schedule', title: '调度策略', desc: '监测容差、接口限速、Celery 扫描与同步参数' },
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
     { key: 'notification', title: '通知规则', desc: '快照补录待办谁收、弱排名阈值（默认 Top3 之外）' },
     { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
@@ -142,19 +148,66 @@ const schedulePreview = ref<ScheduledMonitorPreview[]>([])
 const schedulePreviewLoading = ref(false)
 const scheduleRunLoading = ref(false)
 const scheduleTenantId = ref<number | ''>('')
+const platformPositions = ref<PositionInfo[]>([])
+const editingPositionIds = ref<number[]>([])
 
 function isSecretConfigRow(row: { config_key: string; secret?: boolean }) {
   return row.secret || isSecretConfigKey(row.config_key)
 }
 
+function isPositionNotifyConfig(row: { config_key: string }) {
+  return row.config_key === 'platform_service_notify_position_ids'
+}
+
 function configValuePlaceholder(row: { value_type?: string }) {
-  if (row.value_type === 'bool') return 'true/false 或 启用/停用'
+  if (row.value_type === 'bool') return '请选择是或否'
   if (row.value_type === 'int' || row.value_type === 'float') return '请输入数字'
   return '请输入配置值'
 }
 
 function isSecretConfigKey(key: string) {
-  return /key|token|secret|password/i.test(key)
+  return /(?:^|_)(?:api_key|token|secret|password)(?:_|$)/i.test(key) || /(?:^|_)token$/i.test(key)
+}
+
+function isTruthyConfig(value: string) {
+  return ['1', 'true', 'yes', 'on', '启用', '是'].includes(String(value || '').trim().toLowerCase())
+}
+
+function formatBoolDisplay(value: string) {
+  const text = String(value || '').trim()
+  if (!text) return '-'
+  if (isTruthyConfig(text)) return '是'
+  if (['0', 'false', 'no', 'off', '停用', '否'].includes(text.toLowerCase())) return '否'
+  return text
+}
+
+function parsePositionIds(raw: string): number[] {
+  try {
+    const parsed = JSON.parse(raw || '[]') as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(Number).filter((id) => Number.isFinite(id) && id > 0)
+  } catch {
+    return []
+  }
+}
+
+function formatPositionIdsDisplay(raw: string) {
+  const ids = parsePositionIds(raw)
+  if (!ids.length) return '默认（销售+运营+管理员）'
+  return ids
+    .map((id) => platformPositions.value.find((item) => item.id === id)?.position_name || `#${id}`)
+    .join('、')
+}
+
+function formatConfigDisplay(row: {
+  config_key: string
+  config_value: string
+  value_type?: string
+  secret?: boolean
+}) {
+  if (row.value_type === 'bool') return formatBoolDisplay(row.config_value)
+  if (isPositionNotifyConfig(row)) return formatPositionIdsDisplay(row.config_value)
+  return maskedConfigValue(row.config_value, row.config_key, row.secret)
 }
 
 function maskedConfigValue(value: string, key: string, secret?: boolean) {
@@ -164,24 +217,67 @@ function maskedConfigValue(value: string, key: string, secret?: boolean) {
   return `${value.slice(0, 4)}****${value.slice(-4)}`
 }
 
-function startEditConfig(row: { id: number; config_key: string; config_value: string }) {
+function schedulePreviewTitle(item: ScheduledMonitorPreview) {
+  const tenant = String(item.tenant_name || '').trim()
+  const brand = String(item.brand_name || '').trim()
+  if (tenant && brand && tenant !== brand) return `${tenant} · ${brand}`
+  return tenant || brand || `企业 #${item.tenant_id}`
+}
+
+async function ensurePlatformPositions() {
+  if (platformPositions.value.length) return
+  try {
+    platformPositions.value = await withRetry(() => getManagementPositions('PLATFORM'))
+  } catch {
+    platformPositions.value = []
+  }
+}
+
+function startEditConfig(row: {
+  id: number
+  config_key: string
+  config_value: string
+  value_type?: string
+}) {
   editingConfigId.value = row.id
+  if (row.value_type === 'bool') {
+    editingConfigValue.value = isTruthyConfig(row.config_value) ? 'true' : 'false'
+    editingPositionIds.value = []
+    return
+  }
+  if (isPositionNotifyConfig(row)) {
+    editingPositionIds.value = parsePositionIds(row.config_value)
+    editingConfigValue.value = JSON.stringify(editingPositionIds.value)
+    void ensurePlatformPositions()
+    return
+  }
+  editingPositionIds.value = []
   editingConfigValue.value = row.config_value
 }
 
 function cancelEditConfig() {
   editingConfigId.value = null
   editingConfigValue.value = ''
+  editingPositionIds.value = []
 }
 
-async function saveConfigRow(row: { id: number; config_key: string; category?: string; scope?: string }) {
-  if (!editingConfigValue.value.trim()) {
+async function saveConfigRow(row: {
+  id: number
+  config_key: string
+  category?: string
+  scope?: string
+  value_type?: string
+}) {
+  const nextValue = isPositionNotifyConfig(row)
+    ? JSON.stringify(editingPositionIds.value)
+    : editingConfigValue.value.trim()
+  if (!isPositionNotifyConfig(row) && !nextValue) {
     ElMessage.warning('配置值不能为空')
     return
   }
   savingConfig.value = true
   try {
-    await updateSystemConfig(row.id, editingConfigValue.value.trim())
+    await updateSystemConfig(row.id, nextValue)
     ElMessage.success('配置已更新并立即生效')
     if ((row.category || row.scope) === 'cache_queue') {
       ElMessage.info('Redis / Celery 连接变更后，建议重启 Worker 与 API 以确保队列完全生效')
@@ -194,6 +290,10 @@ async function saveConfigRow(row: { id: number; config_key: string; category?: s
     savingConfig.value = false
   }
 }
+
+watch(settingsCategory, (category) => {
+  if (category === 'notification') void ensurePlatformPositions()
+})
 
 function navigateToMenu(menuCode: string) {
   portalNavigate(menuCode)
@@ -628,7 +728,7 @@ onUnmounted(() => {
           </div>
 
           <div v-else-if="settingsCategory === 'schedule'" class="schedule-ops-panel">
-            <p>预览各企业定时监测将提交的问题与平台；「立即执行到期调度」会调用模力指数接口，请谨慎操作。</p>
+            <p>预览各企业定时监测将提交的问题与平台；「立即执行到期调度」会发起真实抓取，请谨慎操作。</p>
             <div class="schedule-ops-toolbar">
               <select v-model="scheduleTenantId" title="企业">
                 <option value="">全部企业</option>
@@ -641,7 +741,7 @@ onUnmounted(() => {
             <div v-else-if="!schedulePreview.length" class="mini-empty">当前无到期或待提交的调度任务。</div>
             <div v-else class="schedule-preview-list">
               <div v-for="(item, index) in schedulePreview.slice(0, 12)" :key="`${item.tenant_id}-${index}`" class="schedule-preview-row">
-                <b>{{ item.tenant_name }} · {{ item.brand_name }}</b>
+                <b>{{ schedulePreviewTitle(item) }}</b>
                 <span>{{ item.prompt_count }} 个问题 · {{ item.platform_count || 0 }} 个平台</span>
                 <em>{{ item.schedule_times?.length ? `每日 ${item.schedule_times.join('、')}` : item.schedule_type }}</em>
               </div>
@@ -652,7 +752,33 @@ onUnmounted(() => {
             <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
             <div v-for="row in filteredConfigRows" :key="row.id" class="ops-row settings-config-row">
               <b>{{ row.config_name || row.config_key }}</b>
-              <span v-if="editingConfigId !== row.id">{{ maskedConfigValue(row.config_value, row.config_key, row.secret) }}</span>
+              <span v-if="editingConfigId !== row.id">{{ formatConfigDisplay(row) }}</span>
+              <select
+                v-else-if="row.value_type === 'bool'"
+                v-model="editingConfigValue"
+                class="settings-config-input"
+              >
+                <option value="true">是</option>
+                <option value="false">否</option>
+              </select>
+              <ElSelect
+                v-else-if="isPositionNotifyConfig(row)"
+                v-model="editingPositionIds"
+                class="settings-config-select"
+                multiple
+                filterable
+                clearable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="不选则默认销售+运营+管理员"
+              >
+                <ElOption
+                  v-for="position in platformPositions"
+                  :key="position.id"
+                  :label="position.position_name"
+                  :value="position.id"
+                />
+              </ElSelect>
               <input
                 v-else
                 v-model="editingConfigValue"

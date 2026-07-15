@@ -3171,16 +3171,19 @@ button:disabled {
   padding:16px;
 }
 .keyword-group-platform-field .platform-check-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
   gap: 8px;
 }
 .keyword-group-platform-field .platform-check {
   min-height: 38px;
-  padding: 6px 10px;
+  padding: 6px 8px 6px 10px;
+  gap: 8px;
+  overflow: hidden;
 }
 .platform-check .platform-mode-tag {
   flex: 0 0 auto;
   margin-left: auto;
+  max-width: 4.8em;
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid #c5d8ef;
@@ -3190,6 +3193,8 @@ button:disabled {
   font-weight: 800;
   line-height: 1.4;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .platform-check .platform-uncheck-btn {
   flex: 0 0 auto;
@@ -4158,6 +4163,14 @@ button:disabled {
   font-size: 13px;
 }
 
+.settings-config-select {
+  width: 100%;
+}
+
+.settings-config-select .el-select__wrapper {
+  min-height: 34px;
+}
+
 .settings-config-actions {
   display: inline-flex;
   gap: 6px;
@@ -4817,6 +4830,10 @@ button:disabled {
   gap: 6px;
 }
 .platform-check .platform-badge {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.platform-check .platform-badge__label {
   min-width: 0;
 }

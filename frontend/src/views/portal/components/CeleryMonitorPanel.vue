@@ -184,7 +184,7 @@ onUnmounted(() => {
         <div>
           <span>待同步监测任务</span>
           <strong>{{ data.ops_insights.pending_sync_tasks }}</strong>
-          <small>已提交模力、结果尚未全部拉回</small>
+          <small>已提交抓取、结果尚未全部拉回</small>
         </div>
       </section>
       <section class="celery-insight-card">
@@ -224,7 +224,7 @@ onUnmounted(() => {
         <ListTodo />
         <div>
           <h3>待同步监测明细</h3>
-          <p>已提交模力、尚未全部拉回的主任务（{{ pendingSyncDetails.length }} 条，含平台与问题进度）</p>
+          <p>已提交抓取、尚未全部拉回的主任务（{{ pendingSyncDetails.length }} 条，含平台与问题进度）</p>
         </div>
       </div>
       <div v-if="pendingSyncDetails.length" class="celery-sync-detail-list">

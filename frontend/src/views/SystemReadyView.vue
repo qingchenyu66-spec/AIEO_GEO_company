@@ -20,7 +20,7 @@ const navItems = [
 const nextModules = [
   [ShieldCheck, '登录与权限', '租户隔离、菜单权限、数据范围'],
   [Building2, '企业与品牌', '企业档案、品牌词与竞品配置'],
-  [Search, '检测任务', '接入模力指数 API 并保存结果'],
+  [Search, '检测任务', '提交监测抓取并保存结果'],
   [FileBarChart, '监测报告', '图表、明细、快照与导出'],
 ]
 

@@ -62,7 +62,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       return [
         ['企业客户', String(summary?.tenant_count ?? tenants.value.length), '来自企业库'],
         ['监测任务', String(summary?.task_count ?? 0), `${summary?.subtask_count ?? 0} 个子任务`],
-        ['接口消耗', `${summary?.total_cost ?? 0}`, '模力真实扣费'],
+        ['接口消耗', `${summary?.total_cost ?? 0}`, '实际接口扣费'],
         ['异常预警', String(summary?.failed_count ?? 0), '失败或待复核'],
       ]
     }

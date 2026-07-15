@@ -22,19 +22,21 @@ router = APIRouter()
 
 
 def _molizhishu_health(*, public: bool = False) -> dict:
-    if not settings.molizhishu_token.strip():
+    from app.services.system_config_service import get_runtime_config
+
+    if not str(get_runtime_config("molizhishu_token") or "").strip():
         return {"configured": False, "status": "skipped", "detail": "未配置 MOLIZHISHU_TOKEN"}
     try:
         payload = MolizhishuClient().ping()
         balance = (payload.get("data") or {}).get("currentBalance")
-        result = {"configured": True, "status": "ready", "detail": "模力指数 API 可连接"}
+        result = {"configured": True, "status": "ready", "detail": "监测 API 可连接"}
         if not public:
             result["balance"] = balance
         return result
     except MolizhishuApiError:
-        return {"configured": True, "status": "error", "detail": "模力指数 API 连接异常"}
+        return {"configured": True, "status": "error", "detail": "监测 API 连接异常"}
     except Exception:
-        return {"configured": True, "status": "error", "detail": "模力指数探测失败"}
+        return {"configured": True, "status": "error", "detail": "监测 API 探测失败"}
 
 
 def _public_health_payload(db: Session) -> dict:

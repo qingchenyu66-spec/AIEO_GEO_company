@@ -24,9 +24,9 @@ from app.services.knowledge_service import (
 )
 from app.services.menu_permission_service import require_knowledge_permission
 from app.services.operation_log_service import write_business_audit
+from app.services.system_config_service import get_runtime_config
 
 router = APIRouter(prefix="/knowledge")
-
 
 @router.get("/files", response_model=ApiResponse[list[dict]])
 def knowledge_files(
@@ -58,7 +58,9 @@ async def upload_knowledge_file(
     try:
         require_knowledge_permission(db, current, "can_create")
         record = await save_knowledge_file(db, current, file, tenant_id)
-        if settings.deepseek_knowledge_auto_parse_on_upload and settings.deepseek_knowledge_parse_enabled:
+        if settings.deepseek_knowledge_auto_parse_on_upload and bool(
+            get_runtime_config("deepseek_knowledge_parse_enabled", db=db)
+        ):
             try:
                 record = schedule_knowledge_parse(db, record.id)
             except ValueError:

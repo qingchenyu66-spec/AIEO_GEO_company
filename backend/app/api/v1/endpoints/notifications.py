@@ -42,18 +42,18 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "platform.snapshot_backfill",
         ("can_export", "can_update"),
     )
-    from app.core.config import settings
     from app.services.platform_notify_recipients import identity_can_view_platform_service
+    from app.services.system_config_service import get_runtime_config
 
     is_sales = is_sales_identity(db, current.identity)
     is_admin = is_platform_admin_identity(db, current.identity)
     is_operation = is_platform_operation_identity(db, current.identity)
     if can_view_snapshot_backfill:
-        if is_sales and not settings.snapshot_backfill_notify_owner:
+        if is_sales and not bool(get_runtime_config("snapshot_backfill_notify_owner", db=db)):
             can_view_snapshot_backfill = False
-        elif is_admin and not settings.snapshot_backfill_notify_admin:
+        elif is_admin and not bool(get_runtime_config("snapshot_backfill_notify_admin", db=db)):
             can_view_snapshot_backfill = False
-        elif is_operation and not settings.snapshot_backfill_notify_operation:
+        elif is_operation and not bool(get_runtime_config("snapshot_backfill_notify_operation", db=db)):
             can_view_snapshot_backfill = False
         elif not is_sales and not is_admin and not is_operation:
             can_view_snapshot_backfill = False

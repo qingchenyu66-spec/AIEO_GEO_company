@@ -6,7 +6,6 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.core.config import settings
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 
 
@@ -32,8 +31,10 @@ def _pick_balance_info(items: list[Any]) -> dict[str, Any] | None:
 
 def fetch_deepseek_balance() -> dict[str, Any]:
     """Return DeepSeek balance snapshot; never raise to callers."""
+    from app.services.system_config_service import get_runtime_config
+
     fetched_at = datetime.now().isoformat(timespec="seconds")
-    if not settings.deepseek_api_key.strip():
+    if not str(get_runtime_config("deepseek_api_key") or "").strip():
         return {
             "available": False,
             "current_balance": None,

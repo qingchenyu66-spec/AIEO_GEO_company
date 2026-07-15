@@ -15,6 +15,7 @@ from app.services.brand_service import get_brand_asset
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.knowledge_service import STORAGE_ROOT, knowledge_file_to_dict
 from app.services.knowledge_text_extractor import KnowledgeTextExtractError, extract_knowledge_text
+from app.services.system_config_service import get_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def parse_knowledge_file(db: Session, file_id: int) -> KnowledgeFile:
     if record is None:
         raise ValueError("文件不存在")
 
-    if not settings.deepseek_knowledge_parse_enabled:
+    if not bool(get_runtime_config("deepseek_knowledge_parse_enabled", db=db)):
         raise ValueError("未启用 DeepSeek 知识库解析")
 
     client = DeepseekClient()
@@ -151,7 +152,7 @@ def fail_stale_knowledge_parses(
 
 def schedule_knowledge_parse(db: Session, file_id: int) -> KnowledgeFile:
     """Queue or run DeepSeek parse for one knowledge file."""
-    if not settings.deepseek_knowledge_parse_enabled:
+    if not bool(get_runtime_config("deepseek_knowledge_parse_enabled", db=db)):
         raise ValueError("未启用 DeepSeek 知识库解析")
     record = request_knowledge_parse(db, file_id)
     if settings.celery_enabled:

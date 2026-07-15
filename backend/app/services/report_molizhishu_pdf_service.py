@@ -49,7 +49,7 @@ def build_molizhishu_pdf(
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
-        raise RuntimeError("Playwright 未安装，无法生成模力风格 PDF") from exc
+        raise RuntimeError("Playwright 未安装，无法生成诊断报告 PDF") from exc
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

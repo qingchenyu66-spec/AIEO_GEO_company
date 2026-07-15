@@ -553,7 +553,7 @@ def _build_submit_payload(
     """把本地请求转换为模力指数提交任务请求。"""
     submittable_codes = filter_submittable_platforms([item.platform for item in payload.platforms])
     if not submittable_codes:
-        raise ValueError("未配置模力指数支持的监测平台")
+        raise ValueError("未配置支持的监测平台")
     platform_items = [
         item for item in payload.platforms if item.platform in submittable_codes
     ]
@@ -590,7 +590,7 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
     """按 subTaskId 幂等保存子任务摘要或完整结果。"""
     subtask_id = str(item.get("subTaskId") or "")
     if not subtask_id:
-        raise ValueError("模力指数子任务缺少 subTaskId")
+        raise ValueError("监测子任务缺少 subTaskId")
     subtask = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id))
     if subtask is None:
         subtask = GeoMonitorSubtask(
@@ -653,7 +653,7 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     data = response.get("data") or {}
     task_id = data.get("taskId")
     if not task_id:
-        raise ValueError("模力指数提交成功但未返回 taskId")
+        raise ValueError("监测任务提交成功但未返回 taskId")
     existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
     if existing is not None:
         raise ValueError(f"任务已存在：{task_id}")
@@ -708,7 +708,7 @@ def submit_standalone_monitor_task(
     data = response.get("data") or {}
     task_id = data.get("taskId")
     if not task_id:
-        raise ValueError("模力指数提交成功但未返回 taskId")
+        raise ValueError("监测任务提交成功但未返回 taskId")
     existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
     if existing is not None:
         raise ValueError(f"任务已存在：{task_id}")
@@ -3530,16 +3530,16 @@ def workspace_brief(
     }
 
 
-# ponytail: 阈值默认 3；运行时以 settings.snapshot_backfill_weak_rank_after 为准（系统配置可改）。
+# ponytail: 阈值默认 3；运行时读库（短缓存），多 worker 也跟着开关变。
 BACKFILL_WEAK_RANK_AFTER = 3
 
 
-def backfill_weak_rank_threshold() -> int:
-    from app.core.config import settings
+def backfill_weak_rank_threshold(db=None) -> int:
+    from app.services.system_config_service import get_runtime_config
 
     try:
-        value = int(settings.snapshot_backfill_weak_rank_after)
-    except (TypeError, ValueError):
+        value = int(get_runtime_config("snapshot_backfill_weak_rank_after", db=db))
+    except (TypeError, ValueError, KeyError):
         return BACKFILL_WEAK_RANK_AFTER
     return max(0, value)
 
