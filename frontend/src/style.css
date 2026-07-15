@@ -3925,13 +3925,23 @@ button:disabled {
   box-shadow: 0 10px 26px rgba(38, 106, 190, .12);
   transform: translateY(-1px);
 }
-.platform-check input { width: 16px; height: 16px; accent-color: #2d6cdf; }
-.platform-check.is-disabled,
+.platform-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2d6cdf;
+  pointer-events: none;
+}
 .platform-check.is-unavailable,
 .platform-check.is-delisted {
+  opacity: 0.72;
+  filter: grayscale(0.55);
+  background: #f3f4f6;
+}
+.platform-check.is-disabled {
   opacity: 0.55;
   filter: grayscale(0.85);
   cursor: not-allowed;
+  pointer-events: none;
   background: #f3f4f6;
 }
 .platform-check .platform-status-tag {

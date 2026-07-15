@@ -1024,14 +1024,15 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     if (!canEditEnterpriseTab('keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
     if (groupHasPlatform(group, code)) {
-      group.platforms = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
+      const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
+      keywordGroupRows.value[groupIndex] = { ...group, platforms: next }
       return
     }
     if (meta && !meta.selectable) {
       ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
       return
     }
-    // 先弹窗；确认后再写入 platforms。click.prevent 避免原生 checkbox 先被勾上
+    // 先弹窗；确认后再写入 platforms（不要让原生 checkbox 自行切换状态）
     modeDialogTarget.value = { groupIndex, code }
     modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
     modeDialogForm.screenshot = 1
@@ -1056,7 +1057,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       mode: modeDialogForm.mode,
       screenshot: 1,
     })
-    group.platforms = next
+    keywordGroupRows.value[target.groupIndex] = { ...group, platforms: next }
     modeDialogVisible.value = false
     modeDialogTarget.value = null
   }

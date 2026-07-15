@@ -356,16 +356,17 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                     :key="`${index}-${platform.code}`"
                     class="platform-check"
                     :class="{
-                      'is-disabled': 'selectable' in platform && !platform.selectable,
+                      'is-disabled': 'selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code),
                       'is-unavailable': 'labels' in platform && (platform.labels || []).includes('无服务'),
                       'is-delisted': 'labels' in platform && (platform.labels || []).includes('已下架'),
                     }"
+                    @click.prevent="onPlatformCheckClick(index, platform.code)"
                   >
                     <input
                       type="checkbox"
+                      tabindex="-1"
                       :checked="groupHasPlatform(group, platform.code)"
                       :disabled="!canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
-                      @click.prevent="onPlatformCheckClick(index, platform.code)"
                     />
                     <PlatformBadge
                       :code="platform.code"
