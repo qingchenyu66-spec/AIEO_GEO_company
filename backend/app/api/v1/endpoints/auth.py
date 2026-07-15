@@ -127,7 +127,8 @@ def select_identity(payload: IdentitySelectRequest, request: Request, response: 
 
 
 @router.post("/logout", response_model=ApiResponse[dict])
-def logout(response: Response, current: CurrentSession = Depends(get_current_session)) -> ApiResponse[dict]:
+def logout(response: Response) -> ApiResponse[dict]:
+    """退出登录：幂等清理 Cookie；无有效会话也返回成功。"""
     _clear_session_cookies(response)
     return ApiResponse(data={"ok": True})
 

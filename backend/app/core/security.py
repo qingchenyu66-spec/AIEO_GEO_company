@@ -38,8 +38,13 @@ def create_token(subject: int, scope: str, expires_minutes: int, **claims: Any) 
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 
-def decode_token(token: str) -> dict[str, Any]:
+def decode_token(token: str, *, verify_exp: bool = True) -> dict[str, Any]:
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        return jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[ALGORITHM],
+            options={"verify_exp": verify_exp},
+        )
     except InvalidTokenError as exc:
         raise ValueError("登录状态无效或已过期") from exc

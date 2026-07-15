@@ -72,16 +72,16 @@ export const useAuthStore = defineStore('auth', {
       this.saveSession(latest)
     },
     async logout() {
-      // 先同步清理本地态，避免 router 跳转时守卫仍判定已登录
+      // 先调服务端（仍带当前 Bearer/Cookie），再清本地，便于审计记到真实操作人
+      try {
+        await logoutApi()
+      } catch {
+        // 网络异常时仍清本地态
+      }
       this.session = null
       this.pendingTicket = ''
       this.pendingIdentities = []
       localStorage.removeItem(STORAGE_KEY)
-      try {
-        await logoutApi()
-      } catch {
-        // 401 或网络异常时本地态已清理，忽略即可
-      }
     },
   },
 })

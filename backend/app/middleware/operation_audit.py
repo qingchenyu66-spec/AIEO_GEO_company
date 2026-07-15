@@ -66,16 +66,24 @@ def _access_token_from_request(request: Request) -> str | None:
 
 
 def resolve_audit_operator(request: Request) -> tuple[str, int | None, int | None]:
-    """从 Cookie 或 Bearer 解析当前操作人（与 get_current_session 一致）。"""
+    """从 Cookie 或 Bearer 解析当前操作人（与 get_current_session 一致）。
+
+    过期 token 仍尝试还原用户名，避免退出登录等场景写出「未登录用户」。
+    """
     token = _access_token_from_request(request)
     if not token:
-        return "未登录用户", None, None
+        return "匿名请求", None, None
+    payload: dict | None = None
     try:
         payload = decode_token(token)
     except ValueError:
-        return "登录凭证无效", None, None
+        try:
+            # ponytail: 仅审计归因；鉴权仍以 verify_exp=True 为准
+            payload = decode_token(token, verify_exp=False)
+        except ValueError:
+            return "会话已失效", None, None
     if payload.get("scope") != "access":
-        return "未登录用户", None, None
+        return "匿名请求", None, None
 
     user_id = int(payload["sub"])
     identity_id = int(payload.get("identity_id") or 0)
@@ -117,6 +125,11 @@ class OperationAuditMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         operator_name, operator_user_id, tenant_id_from_token = resolve_audit_operator(request)
+        # 退出接口在无会话时也会成功清 Cookie，匿名成功退出不记审计（避免「匿名请求退出登录」噪音）
+        path = request.url.path.rstrip("/")
+        if path.endswith("/auth/logout") and operator_user_id is None:
+            return response
+
         tenant_id = tenant_id_from_token
         tenant_query = request.query_params.get("tenant_id")
         if tenant_query and tenant_query.isdigit():

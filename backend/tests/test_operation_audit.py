@@ -11,7 +11,7 @@ def test_resolve_audit_operator_without_token() -> None:
         cookies={},
     )
     name, user_id, tenant_id = resolve_audit_operator(request)  # type: ignore[arg-type]
-    assert name == "未登录用户"
+    assert name == "匿名请求"
     assert user_id is None
     assert tenant_id is None
 
