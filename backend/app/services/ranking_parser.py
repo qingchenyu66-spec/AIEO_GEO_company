@@ -66,6 +66,10 @@ _FIELD_LABEL_RE = re.compile(
 _NON_COMPANY_TOKENS = frozenset({
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治",
     "单词", "作文", "阅读", "听力", "口语", "语法", "古诗", "文言文",
+    # 选型 checklist / 决策步骤 / 行业标签词，不是公司名
+    "需求定义", "实地考察", "试点验证", "行业经验", "语种能力", "合规资质",
+    "交付模式", "成本结构", "技术能力", "数据安全", "弹性", "资质",
+    "金融", "保险", "电商", "通讯", "出海", "新零售", "跨境电商",
 })
 _SUBCATEGORY_HINTS = (
     "大厂", "工程商", "运营商", "代理商", "服务商", "制造商", "厂家", "媒体",
@@ -83,6 +87,8 @@ _REGION_LABEL_RE = re.compile(
 _NON_RANK_CATEGORY_HINTS = (
     "判断标准", "挑选", "如何选", "怎么选", "注意事项", "总结", "结语",
     "核心判断", "选型建议", "快速对照", "快速参考", "对照",
+    "关键考量", "决策路径", "评估", "checklist", "Checklist",
+    "下一步", "建议的下一步", "维度", "关键问题",
 )
 _SENTENCE_NAME_HINTS = (
     "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
@@ -638,6 +644,12 @@ def _scope_match_tokens(scope: str) -> list[str]:
     return tokens
 
 
+_SCOPE_GENERIC_TOKENS = frozenset({
+    "公司", "企业", "厂商", "品牌", "外包", "服务商", "推荐", "哪家", "哪个",
+    "平台", "机构", "厂家",
+})
+
+
 def _text_overlap_score(left: str, right: str) -> int:
     left_text = str(left or "").strip()
     right_text = str(right or "").strip()
@@ -659,7 +671,12 @@ def _text_overlap_score(left: str, right: str) -> int:
     left_fold = left_text.casefold()
     score = 0
     for token in _scope_match_tokens(right_text):
-        if token.casefold() in left_fold:
+        if token.casefold() not in left_fold:
+            continue
+        # 泛词（公司/外包）易把「国际知名…」「关键考量」打到同分，降权
+        if token in _SCOPE_GENERIC_TOKENS:
+            score += 20 + min(len(token), 2)
+        else:
             score += 100 + len(token)
     return score
 
@@ -670,6 +687,7 @@ def _scene_alignment_bonus(category: str, scope: str) -> int:
     bonus = 0
     media_scope = any(token in scope_text for token in ("广告", "传媒", "媒体", "大屏", "户外", "机场", "电梯"))
     factory_scope = any(token in scope_text for token in ("显示屏", "生产", "工程", "厂家", "厂商"))
+    bpo_scope = any(token in scope_text for token in ("呼叫中心", "外包", "客服", "bpo"))
     if media_scope and any(
         token in category_text
         for token in ("传媒", "媒体", "运营商", "广告", "户外", "大屏", "代理", "平台", "整合", "机场", "梯媒")
@@ -681,6 +699,11 @@ def _scene_alignment_bonus(category: str, scope: str) -> int:
         bonus -= 120
     if factory_scope and any(token in category_text for token in ("传媒", "媒体", "运营商", "户外")):
         bonus -= 120
+    # 呼叫/外包类问题：本土/国内/性价比段优先于纯「云呼叫」产品段或选型 checklist
+    if bpo_scope and any(token in category_text for token in ("本土", "中国", "国内", "亚太", "性价比", "外包商")):
+        bonus += 280
+    if bpo_scope and any(token in category_text for token in ("云呼叫", "技术驱动", "saas")):
+        bonus -= 80
     return bonus
 
 
@@ -716,6 +739,30 @@ def _entries_in_scope(entries: list[dict[str, Any]], scope: str) -> tuple[list[d
     return scoped or entries, True
 
 
+def _numeric_rank(entry: dict[str, Any]) -> float | None:
+    rank = entry.get("rank")
+    if rank is None:
+        return None
+    try:
+        return float(rank)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_best_rank_entry(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """业务口径：多命中取名次最靠前（数字最小）的那条。"""
+    best: dict[str, Any] | None = None
+    best_rank: float | None = None
+    for entry in entries:
+        numeric = _numeric_rank(entry)
+        if numeric is None:
+            continue
+        if best_rank is None or numeric < best_rank:
+            best = entry
+            best_rank = numeric
+    return best
+
+
 def find_best_brand_rank_scoped(
     entries: list[dict[str, Any]],
     match_name: Callable[[str], bool],
@@ -723,7 +770,7 @@ def find_best_brand_rank_scoped(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """同分段内：优先正文第一次出现；scope 只用来丢掉明显串段的后文命中。"""
+    """分段名次：多命中取最靠前；scope 用于同分时偏爱相关段，不用来抬高差名次。"""
     matched_entries: list[dict[str, Any]] = []
     for entry in entries:
         name = str(entry.get("name") or "").strip()
@@ -737,50 +784,15 @@ def find_best_brand_rank_scoped(
     if not matched_entries:
         return None, False
 
-    scope_text = str(scope or "").strip()
     categorized = [
         entry for entry in matched_entries
         if str(entry.get("category") or "").strip()
     ]
-    if scope_text and categorized:
-        scores = {
-            str(entry.get("category") or "").strip(): ranking_category_scope_score(
-                str(entry.get("category") or "").strip(),
-                scope_text,
-            )
-            for entry in categorized
-        }
-        best_score = max(scores.values(), default=-1)
-        if best_score >= 100:
-            threshold = max(best_score * 0.45, 100)
-            preferred = {category for category, score in scores.items() if score >= threshold}
-        else:
-            preferred = set(scores)
-
-        # 正文首次命中若在 preferred 内直接用；否则才在 preferred 里找第一次
-        for entry in categorized:
-            category = str(entry.get("category") or "").strip()
-            if preferred and category not in preferred:
-                continue
-            rank = entry.get("rank")
-            if rank is None:
-                continue
-            try:
-                return float(rank), True
-            except (TypeError, ValueError):
-                continue
-
-        # preferred 全无品牌：退回全文第一次（避免「整合代理」因缺「传媒」二字被踢掉后误吃区域第 9）
-        for entry in categorized:
-            rank = entry.get("rank")
-            if rank is None:
-                continue
-            try:
-                return float(rank), True
-            except (TypeError, ValueError):
-                continue
-
-    return find_best_brand_rank(entries, match_name, skip_name=skip_name)
+    # 产品口径：有效命中取最靠前；scope 仅影响展示段名（见 find_best_brand_entry_scoped）
+    winner = _pick_best_rank_entry(categorized or matched_entries)
+    if winner is not None:
+        return float(winner["rank"]), True
+    return None, True
 
 
 def _is_major_section_line(line: str) -> bool:
@@ -868,9 +880,9 @@ def find_best_brand_rank(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """Return first document-order rank among matched entries; prefer categorized over flat."""
-    category_rank: float | None = None
-    flat_rank: float | None = None
+    """Return best (smallest) rank among matched entries; prefer categorized over flat."""
+    categorized: list[dict[str, Any]] = []
+    flat: list[dict[str, Any]] = []
     matched = False
     for entry in entries:
         name = str(entry.get("name") or "").strip()
@@ -881,20 +893,55 @@ def find_best_brand_rank(
         if _is_non_rank_category(entry.get("category")):
             continue
         matched = True
-        rank = entry.get("rank")
-        if rank is None:
-            continue
-        try:
-            numeric = float(rank)
-        except (TypeError, ValueError):
-            continue
         if entry.get("category"):
-            if category_rank is None:
-                category_rank = numeric
-        elif flat_rank is None:
-            flat_rank = numeric
-    if category_rank is not None:
-        return category_rank, True
-    if flat_rank is not None:
-        return flat_rank, True
+            categorized.append(entry)
+        else:
+            flat.append(entry)
+    winner = _pick_best_rank_entry(categorized) or _pick_best_rank_entry(flat)
+    if winner is not None:
+        return float(winner["rank"]), True
     return None, matched
+
+
+def find_best_brand_entry_scoped(
+    entries: list[dict[str, Any]],
+    match_name: Callable[[str], bool],
+    scope: str,
+    *,
+    skip_name: Callable[[str], bool] | None = None,
+) -> dict[str, Any] | None:
+    """同 find_best_brand_rank_scoped，返回取胜的那条（含 category）。"""
+    rank, matched = find_best_brand_rank_scoped(entries, match_name, scope, skip_name=skip_name)
+    if not matched or rank is None:
+        return None
+    target = float(rank)
+    hits = []
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name or not match_name(name):
+            continue
+        if skip_name and skip_name(name):
+            continue
+        if _is_non_rank_category(entry.get("category")):
+            continue
+        numeric = _numeric_rank(entry)
+        if numeric is None or numeric != target:
+            continue
+        hits.append(entry)
+    if not hits:
+        return None
+    scope_text = str(scope or "").strip()
+    if scope_text and len(hits) > 1:
+        hits_sorted = sorted(
+            hits,
+            key=lambda item: ranking_category_scope_score(
+                str(item.get("category") or "").strip(),
+                scope_text,
+            ),
+            reverse=True,
+        )
+        return hits_sorted[0]
+    return hits[0]
+
+
+

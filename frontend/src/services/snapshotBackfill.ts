@@ -22,6 +22,9 @@ export interface SnapshotBackfillPendingItem {
   brand_rank?: number | null
   brand_mentioned?: boolean | null
   prompt_intent?: string | null
+  rank_source?: string | null
+  rank_category?: string | null
+  rank_basis?: string | null
   keyword_group?: string | null
   sentiment?: string | null
   page_screenshot?: string | null

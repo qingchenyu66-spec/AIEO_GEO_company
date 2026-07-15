@@ -555,6 +555,9 @@ def build_snapshot_backfill_item(
     ctx["brand_rank"] = rank_display.get("brand_rank", rank_display.get("mention_position"))
     ctx["brand_mentioned"] = rank_display.get("brand_mentioned")
     ctx["prompt_intent"] = rank_display.get("prompt_intent")
+    ctx["rank_source"] = rank_display.get("rank_source")
+    ctx["rank_category"] = rank_display.get("rank_category")
+    ctx["rank_basis"] = rank_display.get("rank_basis")
     # 与卡片展示位次一致，避免库内 raw 差位却已重算进 Top3 仍标「待补录」
     display_rank = rank_display.get("mention_position")
     effective: int | None

@@ -33,6 +33,8 @@ export function mergeSnapshotBackfillItem(
     brand_rank: subtask.brand_rank ?? partial.brand_rank,
     brand_mentioned: subtask.brand_mentioned ?? partial.brand_mentioned,
     prompt_intent: subtask.prompt_intent ?? partial.prompt_intent,
+    rank_source: subtask.rank_source ?? (partial as { rank_source?: string | null }).rank_source,
+    rank_category: subtask.rank_category ?? (partial as { rank_category?: string | null }).rank_category,
     sentiment: subtask.sentiment ?? partial.sentiment,
     page_screenshot: subtask.page_screenshot ?? partial.page_screenshot,
     needs_backfill: subtask.needs_backfill ?? partial.needs_backfill,
@@ -45,10 +47,14 @@ export function snapshotBackfillRankDisplay(
   item: SnapshotBackfillPendingItem | null,
   subtask: MonitorSubtask | null,
 ): MonitorRankDisplay {
+  const fromSub = subtask as MonitorSubtask & MonitorRankDisplay | null
+  const fromItem = item as (SnapshotBackfillPendingItem & MonitorRankDisplay) | null
   return {
-    prompt_intent: subtask?.prompt_intent ?? item?.prompt_intent,
-    mention_position: subtask?.mention_position ?? item?.mention_position ?? null,
-    brand_mentioned: subtask?.brand_mentioned ?? item?.brand_mentioned ?? null,
+    prompt_intent: fromSub?.prompt_intent ?? fromItem?.prompt_intent,
+    mention_position: fromSub?.mention_position ?? fromItem?.mention_position ?? null,
+    brand_mentioned: fromSub?.brand_mentioned ?? fromItem?.brand_mentioned ?? null,
+    rank_source: fromSub?.rank_source ?? fromItem?.rank_source ?? null,
+    rank_category: fromSub?.rank_category ?? fromItem?.rank_category ?? null,
   }
 }
 

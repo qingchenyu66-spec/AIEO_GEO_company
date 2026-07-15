@@ -253,8 +253,8 @@ def test_find_best_brand_rank_across_categories():
     ]
     rank, matched = find_best_brand_rank(entries, lambda name: "艾迪亚" in name)
     assert matched is True
-    # 同品牌多次出现：取文档中第一次，不用后段更好名次
-    assert rank == 2
+    # 同品牌多次出现：优先更靠前名次（方案 2）
+    assert rank == 1
 
 def test_find_best_brand_rank_prefers_category_over_flat_global():
     entries = [

@@ -66,12 +66,14 @@ export function formatMonitorSubtaskRank(subtask: MonitorRankDisplay | null | un
   return formatExposureLabel(subtask.brand_mentioned)
 }
 
-/** 实时监测详情抽屉：第 N 位 / 已提及 / 未提及 */
+/** 实时监测详情抽屉：第 N 位 · 段名 / 已提及 / 未提及 */
 export function formatMonitorSubtaskRankDetail(subtask: MonitorRankDisplay | null | undefined) {
   if (!subtask) return '—'
   if (subtask.prompt_intent === 'ranking') {
     const rank = formatRank(subtask.mention_position)
-    return rank === '-' ? '—' : `第 ${rank} 位`
+    if (rank === '-') return '—'
+    const section = String(subtask.rank_category || '').trim()
+    return section ? `第 ${rank} 位 · ${section}` : `第 ${rank} 位`
   }
   return formatExposureLabel(subtask.brand_mentioned)
 }

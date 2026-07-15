@@ -43,6 +43,7 @@ from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 from app.services.ranking_parser import (
     appearance_order_rank_scoped,
     find_best_brand_rank,
+    find_best_brand_entry_scoped,
     find_best_brand_rank_scoped,
     normalize_structured_rankings,
     parse_answer_rankings,
@@ -2289,14 +2290,14 @@ def _find_brand_in_rankings(
     asset: BrandAsset | None,
     *,
     monitor_keywords: str | None = None,
-) -> tuple[int | float | None, bool]:
-    """Match exposure terms in structured or parsed answer rankings (category-local rank)."""
+) -> tuple[int | float | None, bool, str | None]:
+    """Match exposure terms in structured or parsed answer rankings (best / frontmost)."""
 
     def match_name(name: str) -> bool:
         return _name_matches_brand(name, brand_terms)
 
     def skip_name(name: str) -> bool:
-        # 仅跳过纯行业/场景词（如「电梯广告」），勿把「艾迪亚传媒」「分众传媒」当行业词丢掉
+        # 只跳过纯行业/场景词（如「电梯广告」），勿把「艾迪亚传媒」「分众传媒」当行业词丢掉
         text = str(name or "").strip()
         if not text or asset is None:
             return False
@@ -2309,16 +2310,24 @@ def _find_brand_in_rankings(
             return False
         return _is_industry_monitor_keyword(text, asset)
 
-    text = _subtask_answer_plaintext(subtask)
+    answer = _subtask_answer_plaintext(subtask)
     scope = _ranking_scope_text(monitor_keywords, subtask.prompt)
-    # 正文在前：同品牌优先吃正文段内名次；正文未命中时仍可用 JSON
     merged = [
-        *parse_answer_rankings(text),
+        *parse_answer_rankings(answer),
         *normalize_structured_rankings(subtask.all_rankings_json or []),
     ]
-    if merged:
-        return find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
-    return None, False
+    if not merged:
+        return None, False, None
+    entry = find_best_brand_entry_scoped(merged, match_name, scope, skip_name=skip_name)
+    if entry is None:
+        rank, matched = find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
+        return rank, matched, None
+    category = str(entry.get("category") or "").strip() or None
+    try:
+        return float(entry["rank"]), True, category
+    except (TypeError, ValueError):
+        return None, True, category
+
 
 
 def _appearance_order_rank(
@@ -2454,14 +2463,14 @@ def _resolve_brand_rank_detail(
     answer_text = _subtask_answer_plaintext(subtask)
     has_parsed_entries = bool(_collect_ranking_entries(subtask))
 
-    rank_from_list, in_ranking_list = _find_brand_in_rankings(
+    rank_from_list, in_ranking_list, list_category = _find_brand_in_rankings(
         subtask,
         brand_terms,
         asset,
         monitor_keywords=monitor_keyword,
     )
     if rank_from_list is not None:
-        category = _matched_brand_category(subtask, brand_terms, rank_from_list)
+        category = list_category or _matched_brand_category(subtask, brand_terms, rank_from_list)
         basis = "table" if "|" in answer_text and "企业" in answer_text else "section"
         return BrandRankResolution(
             rank=rank_from_list,
