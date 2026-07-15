@@ -2731,6 +2731,7 @@ def compose_period_report_html(
     period_start: date,
     period_end: date,
     generated: date | None = None,
+    echarts_src: str | None = None,
 ) -> str:
     """正式导出：V2 环比模板，仅使用真实监测数据（不注入演示增强）。"""
     from app.services.report_service import build_tenant_monitor_snapshot
@@ -2819,7 +2820,7 @@ def compose_period_report_html(
         competitor_analytics=competitor_analytics,
         generated=generated or date.today(),
         v2=True,
-        echarts_src=ECHARTS_PORTAL_SRC,
+        echarts_src=echarts_src or ECHARTS_PORTAL_SRC,
     )
 
 

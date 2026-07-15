@@ -85,20 +85,40 @@ _PRINT_CSS = """
 A4_CONTENT_PX = 794
 
 
-def _wait_charts_ready(page) -> None:
-    page.evaluate("() => document.fonts.ready")
-    page.wait_for_function(
-        """
-        () => {
-          const boxes = document.querySelectorAll('.echart-canvas');
-          if (!boxes.length) return true;
-          const canvases = document.querySelectorAll('canvas');
-          return canvases.length >= boxes.length;
-        }
-        """,
-        timeout=30_000,
+def prepare_period_html_for_playwright(html: str) -> str:
+    """把预览用同源/CDN 路径换成本地 file://，否则 set_content 下 echarts 永远加载失败。"""
+    from app.services.report_period_comparison_service import (
+        ECHARTS_CDN,
+        ECHARTS_PORTAL_SRC,
+        ensure_echarts_asset,
     )
-    page.wait_for_timeout(900)
+
+    local = ensure_echarts_asset()
+    return html.replace(ECHARTS_PORTAL_SRC, local).replace(ECHARTS_CDN, local)
+
+
+def _wait_charts_ready(page) -> None:
+    try:
+        page.evaluate("() => document.fonts.ready")
+    except Exception:
+        pass
+    try:
+        # ponytail: 图表挂不上就继续出 PDF，比卡死到 timeout 更可交付
+        page.wait_for_function(
+            """
+            () => {
+              const boxes = document.querySelectorAll('.echart-canvas');
+              if (!boxes.length) return true;
+              if (!window.echarts) return false;
+              const canvases = document.querySelectorAll('canvas');
+              return canvases.length >= boxes.length;
+            }
+            """,
+            timeout=15_000,
+        )
+        page.wait_for_timeout(500)
+    except Exception:
+        page.wait_for_timeout(200)
 
 
 def _inject_print_layout(page) -> None:
@@ -115,7 +135,7 @@ def _inject_print_layout(page) -> None:
         }
         """
     )
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(300)
 
 
 def build_period_report_pdf(
@@ -130,7 +150,9 @@ def build_period_report_pdf(
 
     from app.services.report_period_comparison_service import build_period_report_html_for_export
 
-    html = build_period_report_html_for_export(db, report, tenant_id=tenant_id)
+    html = prepare_period_html_for_playwright(
+        build_period_report_html_for_export(db, report, tenant_id=tenant_id)
+    )
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -140,7 +162,8 @@ def build_period_report_pdf(
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": A4_CONTENT_PX, "height": 1600})
-            page.set_content(html, wait_until="networkidle", timeout=90_000)
+            # networkidle 会等外链/挂死请求；本地 file:// echarts + load 即可
+            page.set_content(html, wait_until="load", timeout=60_000)
             _wait_charts_ready(page)
             _inject_print_layout(page)
             return page.pdf(

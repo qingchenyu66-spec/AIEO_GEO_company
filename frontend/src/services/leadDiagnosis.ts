@@ -125,6 +125,7 @@ export async function downloadLeadDiagnosisExport(leadId: number, format: 'pdf' 
   const response = await http.get(`/v1/lead-diagnosis/${leadId}/export`, {
     params: { format },
     responseType: 'blob',
+    timeout: 180000,
   })
   const fallback = `lead-diagnosis-${leadId}.${format}`
   const filename = parseExportFilename(response.headers['content-disposition'], fallback)

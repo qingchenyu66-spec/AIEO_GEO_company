@@ -222,7 +222,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
     }
     exporting.value = true
     try {
-      await withRetry(() => downloadReportExport(selectedReportId.value!, format))
+      await downloadReportExport(selectedReportId.value!, format)
       const label = format === 'pdf' ? 'PDF' : format === 'html' ? 'HTML' : 'Word'
       ElMessage.success(`${label} 已下载`)
     } catch (error: unknown) {

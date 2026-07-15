@@ -168,6 +168,7 @@ function parseExportFilename(contentDisposition: string | undefined, fallback: s
 export async function downloadReportExport(reportId: number, format: ReportExportFormat) {
   const response = await http.get(`/v1/reports/${reportId}/export/${format}`, {
     responseType: 'blob',
+    timeout: 180000,
   })
   const fallback = `report-${reportId}.${format}`
   const filename = parseExportFilename(response.headers['content-disposition'], fallback)
