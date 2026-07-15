@@ -102,20 +102,23 @@ def test_subtask_needs_snapshot_backfill_when_rank_after_top3() -> None:
     assert subtask_backfill_eligible(subtask, pending_only=True) is True
 
 
-def test_subtask_needs_snapshot_backfill_rank3_not_pending() -> None:
+def test_subtask_needs_snapshot_backfill_uses_effective_display_rank() -> None:
+    """库内 raw 差，但展示位次已是 Top3 时不应标待补录。"""
     subtask = GeoMonitorSubtask(
-        subtask_id="st-rank3",
+        subtask_id="st-raw7",
         task_id="task-1",
         platform="doubao_mobile",
         mode="standard",
         prompt="测试问题",
         status="completed",
-        answer_content="品牌第三",
-        mention_position=3,
+        answer_content="已有回答",
+        mention_position=7,
         raw_result_json={},
     )
-    assert subtask_needs_snapshot_backfill(subtask) is False
-    assert subtask_backfill_eligible(subtask, pending_only=False) is True
+    assert subtask_needs_snapshot_backfill(subtask) is True
+    assert subtask_needs_snapshot_backfill(subtask, effective_rank=2, use_effective_rank=True) is False
+    assert subtask_needs_snapshot_backfill(subtask, effective_rank=4, use_effective_rank=True) is True
+    assert subtask_needs_snapshot_backfill(subtask, effective_rank=None, use_effective_rank=True) is False
 
 
 def test_notify_failed_subtasks_for_task_creates_single_notification(db_session) -> None:
@@ -161,14 +164,17 @@ def test_notify_failed_subtasks_for_task_creates_single_notification(db_session)
     assert payload.get("owner_user_id") == 88
 
 
-def test_notify_weak_rank_uses_rank_title(db_session) -> None:
+def test_notify_weak_rank_uses_rank_title(db_session, monkeypatch) -> None:
+    """不依赖解析器：直接锁展示位次路径，验证标题与 owner。"""
+    from app.services import snapshot_backfill_service as svc
+
     tenant = Tenant(name="测试企业", code="t-weak", owner_user_id=9)
     db_session.add(tenant)
     db_session.flush()
     task = GeoMonitorTask(
         task_id="task-weak",
         tenant_id=tenant.id,
-        monitor_keywords="测试",
+        monitor_keywords="测试品牌",
         status="completed",
         total_items=1,
         completed_items=1,
@@ -185,7 +191,7 @@ def test_notify_weak_rank_uses_rank_title(db_session) -> None:
         mode="standard",
         prompt="弱排名",
         status="completed",
-        answer_content="……第5名……",
+        answer_content="测试品牌在列表第五",
         mention_position=5,
         raw_result_json={},
     )
@@ -193,6 +199,21 @@ def test_notify_weak_rank_uses_rank_title(db_session) -> None:
     db_session.add(task)
     db_session.commit()
 
+    def _fake_item(db, st, tk, **kwargs):
+        return {
+            "subtask_id": st.subtask_id,
+            "tenant_id": tk.tenant_id,
+            "tenant_name": "测试企业",
+            "brand_name": None,
+            "owner_user_id": 9,
+            "mention_position": 5,
+            "needs_backfill": True,
+            "has_answer": True,
+            "platform": st.platform,
+            "prompt": st.prompt,
+        }
+
+    monkeypatch.setattr(svc, "build_snapshot_backfill_item", _fake_item)
     assert notify_failed_subtasks_for_task(db_session, task) == 1
     row = db_session.query(SystemNotification).one()
     assert row.title == "排名落后待补录"

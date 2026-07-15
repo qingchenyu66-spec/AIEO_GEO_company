@@ -43,7 +43,7 @@ const {
   recentSubtasks,
 } = analytics
 
-type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'menu'
+type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
 
 const settingsCategory = ref<SettingsCategory>('secrets')
 
@@ -51,6 +51,7 @@ const settingsTabs: Array<{ key: SettingsCategory; title: string; desc: string }
   { key: 'secrets', title: '接口密钥', desc: '模力指数、DeepSeek 等敏感配置，保存后立即生效' },
   { key: 'schedule', title: '调度策略', desc: '监测容差、模力限速、Celery 扫描与同步参数' },
   { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
+  { key: 'notification', title: '通知规则', desc: '快照补录待办谁收、弱排名阈值（默认 Top3 之外）' },
   { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
 ]
 

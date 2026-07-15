@@ -56,6 +56,12 @@ def test_list_system_configs_filters_category(db_session):
     secrets = list_system_configs(db_session, category="secrets")
     assert secrets
     assert all(item["category"] == "secrets" for item in secrets)
+    notif = list_system_configs(db_session, category="notification")
+    assert {item["config_key"] for item in notif} >= {
+        "snapshot_backfill_weak_rank_after",
+        "snapshot_backfill_notify_owner",
+        "snapshot_backfill_notify_ops",
+    }
 
 
 def test_mask_secret_value():

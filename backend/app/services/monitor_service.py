@@ -3523,30 +3523,60 @@ def workspace_brief(
     }
 
 
-# ponytail: Top3 以外（rank>=4）也进待补录；未提及（null）不按「三位之后」处理。
+# ponytail: 阈值默认 3；运行时以 settings.snapshot_backfill_weak_rank_after 为准（系统配置可改）。
 BACKFILL_WEAK_RANK_AFTER = 3
 
 
-def subtask_weak_rank_needs_backfill(subtask: GeoMonitorSubtask) -> bool:
-    """品牌位次差于 Top3（第 4 名及更后）时需要补录优化。"""
-    pos = subtask.mention_position
+def backfill_weak_rank_threshold() -> int:
+    from app.core.config import settings
+
+    try:
+        value = int(settings.snapshot_backfill_weak_rank_after)
+    except (TypeError, ValueError):
+        return BACKFILL_WEAK_RANK_AFTER
+    return max(0, value)
+
+
+def subtask_weak_rank_needs_backfill(
+    subtask: GeoMonitorSubtask,
+    *,
+    effective_rank: int | None = None,
+    use_effective_rank: bool = False,
+) -> bool:
+    """品牌位次差于配置阈值（默认 Top3）时需要补录。
+
+    use_effective_rank=True 时只认展示位次：None=未纳入弱排名（不回退库内 raw）。
+    """
+    if use_effective_rank:
+        pos = effective_rank
+    else:
+        pos = subtask.mention_position
     if pos is None:
         return False
     try:
-        return int(pos) > BACKFILL_WEAK_RANK_AFTER
+        return int(pos) > backfill_weak_rank_threshold()
     except (TypeError, ValueError):
         return False
 
 
-def subtask_needs_snapshot_backfill(subtask: GeoMonitorSubtask) -> bool:
-    """失败/无回答，或已有回答但排名在 Top3 之外，需要快照补录。"""
+def subtask_needs_snapshot_backfill(
+    subtask: GeoMonitorSubtask,
+    *,
+    effective_rank: int | None = None,
+    use_effective_rank: bool = False,
+) -> bool:
+    """失败/无回答，或已有回答但展示排名在阈值之外，需要快照补录。"""
     if not (subtask.answer_content or "").strip():
         if subtask.status in {"failed", "stopped"}:
             return True
         if subtask.error_message and subtask.status in TERMINAL_STATUSES:
             return True
         return False
-    return subtask_weak_rank_needs_backfill(subtask)
+    return subtask_weak_rank_needs_backfill(
+        subtask,
+        effective_rank=effective_rank,
+        use_effective_rank=use_effective_rank,
+    )
 
 
 def recompute_subtask_rank_from_answer(

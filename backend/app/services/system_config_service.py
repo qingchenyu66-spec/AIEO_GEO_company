@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.ops import SystemConfig
 
-ConfigCategory = Literal["secrets", "schedule", "cache_queue"]
+ConfigCategory = Literal["secrets", "schedule", "cache_queue", "notification"]
 ValueType = Literal["str", "int", "float", "bool"]
 
 
@@ -194,6 +194,27 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         category="secrets",
         label="启用 DeepSeek 知识库解析",
         description="企业知识库结构化预览",
+        value_type="bool",
+    ),
+    "snapshot_backfill_weak_rank_after": ConfigMeta(
+        field="snapshot_backfill_weak_rank_after",
+        category="notification",
+        label="补录弱排名阈值",
+        description="展示排名大于该值（默认3，即第4名及更后）计入「待补录」并推通知；Top1–TopN 不算待补录",
+        value_type="int",
+    ),
+    "snapshot_backfill_notify_owner": ConfigMeta(
+        field="snapshot_backfill_notify_owner",
+        category="notification",
+        label="补录通知归属销售",
+        description="启用后站内铃铛通知企业归属销售（tenant.owner）或售前创建人；销售仅看名下",
+        value_type="bool",
+    ),
+    "snapshot_backfill_notify_ops": ConfigMeta(
+        field="snapshot_backfill_notify_ops",
+        category="notification",
+        label="补录通知运营/管理员",
+        description="启用后有快照补录菜单的非销售平台账号可看全部待补录通知",
         value_type="bool",
     ),
 }

@@ -42,14 +42,20 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "platform.snapshot_backfill",
         ("can_export", "can_update"),
     )
+    is_sales = is_sales_identity(db, current.identity)
+    from app.core.config import settings
+
+    if can_view_snapshot_backfill:
+        if is_sales and not settings.snapshot_backfill_notify_owner:
+            can_view_snapshot_backfill = False
+        elif not is_sales and not settings.snapshot_backfill_notify_ops:
+            can_view_snapshot_backfill = False
     return {
         "can_review_approvals": can_review_approvals(db, current),
         "can_view_ops_alerts": can_view_ops_alerts,
         "can_view_snapshot_backfill": can_view_snapshot_backfill,
-        # 方案 B：销售只看名下 owner_user_id；运营/管理员看全部。
-        "snapshot_backfill_owner_only": bool(
-            can_view_snapshot_backfill and is_sales_identity(db, current.identity)
-        ),
+        # 方案 B：销售只看名下；运营看全量。关闭对应配置则该类账号铃铛不收补录通知。
+        "snapshot_backfill_owner_only": bool(can_view_snapshot_backfill and is_sales),
         "can_view_customer_reports": can_view_customer_reports,
     }
 

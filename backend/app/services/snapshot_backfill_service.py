@@ -24,7 +24,7 @@ from app.services.brand_service import (
 )
 from app.services.operation_log_service import write_operation_log
 from app.services.monitor_service import (
-    BACKFILL_WEAK_RANK_AFTER,
+    backfill_weak_rank_threshold,
     TERMINAL_STATUSES,
     _platform_display_names,
     _prompt_belongs_to_group,
@@ -185,17 +185,25 @@ def notify_failed_subtasks_for_task(db: Session, task: GeoMonitorTask) -> int:
         return 0
     count = 0
     for subtask in task.subtasks or []:
-        if subtask_needs_snapshot_backfill(subtask):
-            _notify_subtask_backfill(db, subtask, task)
-            count += 1
+        ctx = build_snapshot_backfill_item(db, subtask, task)
+        if not ctx.get("needs_backfill"):
+            continue
+        _notify_subtask_backfill(db, subtask, task, ctx=ctx)
+        count += 1
     return count
 
 
-def _notify_subtask_backfill(db: Session, subtask: GeoMonitorSubtask, task: GeoMonitorTask) -> None:
-    ctx = build_snapshot_backfill_item(db, subtask, task)
-    scope = ctx.get("brand_name") or ctx.get("tenant_name") or task.monitor_keywords or "监测任务"
+def _notify_subtask_backfill(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    ctx: dict[str, Any] | None = None,
+) -> None:
+    payload = ctx or build_snapshot_backfill_item(db, subtask, task)
+    scope = payload.get("brand_name") or payload.get("tenant_name") or task.monitor_keywords or "监测任务"
     prompt_preview = (subtask.prompt or "")[:80]
-    rank = ctx.get("mention_position") if ctx.get("mention_position") is not None else subtask.mention_position
+    rank = payload.get("mention_position")
     if rank is not None and (subtask.answer_content or "").strip():
         title = "排名落后待补录"
         message = f"{scope} · {subtask.platform} · 第{int(rank)}名 · {prompt_preview}"
@@ -207,7 +215,7 @@ def _notify_subtask_backfill(db: Session, subtask: GeoMonitorSubtask, task: GeoM
         subtask_id=subtask.subtask_id,
         title=title,
         message=message,
-        payload=ctx,
+        payload=payload,
     )
 
 
@@ -525,7 +533,6 @@ def build_snapshot_backfill_item(
         ctx["keyword_group"] = str(task.monitor_keywords or "").strip() or None
     ctx["sentiment"] = subtask.sentiment
     ctx["page_screenshot"] = subtask.page_screenshot
-    ctx["needs_backfill"] = subtask_needs_snapshot_backfill(subtask)
     ctx["has_answer"] = bool((subtask.answer_content or "").strip())
     ctx["status"] = subtask.status
 
@@ -548,6 +555,18 @@ def build_snapshot_backfill_item(
     ctx["brand_rank"] = rank_display.get("brand_rank", rank_display.get("mention_position"))
     ctx["brand_mentioned"] = rank_display.get("brand_mentioned")
     ctx["prompt_intent"] = rank_display.get("prompt_intent")
+    # 与卡片展示位次一致，避免库内 raw 差位却已重算进 Top3 仍标「待补录」
+    display_rank = rank_display.get("mention_position")
+    effective: int | None
+    try:
+        effective = int(display_rank) if display_rank is not None else None
+    except (TypeError, ValueError):
+        effective = None
+    ctx["needs_backfill"] = subtask_needs_snapshot_backfill(
+        subtask,
+        effective_rank=effective,
+        use_effective_rank=True,
+    )
     return ctx
 
 
@@ -568,6 +587,7 @@ def _lead_context_from_maps(
     return {
         "lead_diagnosis_id": run.lead_diagnosis_id,
         "brand_name": lead.brand_name if lead else None,
+        "created_by_user_id": lead.created_by_user_id if lead else None,
     }
 
 
@@ -755,7 +775,7 @@ def list_snapshot_backfill_page(
         )
         weak_rank_pending = and_(
             GeoMonitorSubtask.mention_position.isnot(None),
-            GeoMonitorSubtask.mention_position > BACKFILL_WEAK_RANK_AFTER,
+            GeoMonitorSubtask.mention_position > backfill_weak_rank_threshold(),
         )
         stmt = stmt.where(or_(fail_pending, weak_rank_pending))
     if keyword_text:
@@ -800,12 +820,13 @@ def list_snapshot_backfill_page(
     brand_asset_cache: dict[int, BrandAsset | None] = {}
     lead_cache: dict[int, LeadDiagnosis] = {}
 
-    candidates: list[tuple[GeoMonitorSubtask, GeoMonitorTask, dict[str, Any], dict[str, Any]]] = []
+    candidates: list[tuple[GeoMonitorSubtask, GeoMonitorTask, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     pending_count = 0
     overwrite_count = 0
     for subtask in rows:
         task = tasks.get(subtask.task_id)
-        if task is None or not subtask_backfill_eligible(subtask, pending_only=pending_only):
+        # 列表预筛：pending_only 时 SQL 可能仍带上 raw>阈值项，最终以展示位次为准再滤。
+        if task is None or not subtask_backfill_eligible(subtask, pending_only=False):
             continue
 
         lead_ctx = _lead_context_from_maps(db, task.task_id, lead_runs_map, lead_cache)
@@ -846,24 +867,7 @@ def list_snapshot_backfill_page(
             lead_runs_map=lead_runs_map,
             brand_asset_cache=brand_asset_cache,
         )
-        candidates.append((subtask, task, schedule_ctx, lead_ctx))
-
-        needs = subtask_needs_snapshot_backfill(subtask)
-        has_answer = bool((subtask.answer_content or "").strip())
-        if needs:
-            pending_count += 1
-        elif has_answer:
-            overwrite_count += 1
-
-    candidates.sort(
-        key=lambda item: _snapshot_backfill_sort_key(item[2], item[0]),
-        reverse=True,
-    )
-    total = len(candidates)
-    page_offset = max(0, int(offset or 0))
-    page_candidates = candidates[page_offset:page_offset + limit]
-    page_items = [
-        build_snapshot_backfill_item(
+        item = build_snapshot_backfill_item(
             db,
             subtask,
             task,
@@ -875,8 +879,24 @@ def list_snapshot_backfill_page(
             tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
             lead_ctx=lead_ctx,
         )
-        for subtask, task, _schedule_ctx, lead_ctx in page_candidates
-    ]
+        needs = bool(item.get("needs_backfill"))
+        has_answer = bool(item.get("has_answer"))
+        if pending_only and not needs:
+            continue
+        candidates.append((subtask, task, schedule_ctx, lead_ctx, item))
+        if needs:
+            pending_count += 1
+        elif has_answer:
+            overwrite_count += 1
+
+    candidates.sort(
+        key=lambda row: _snapshot_backfill_sort_key(row[2], row[0]),
+        reverse=True,
+    )
+    total = len(candidates)
+    page_offset = max(0, int(offset or 0))
+    page_candidates = candidates[page_offset:page_offset + limit]
+    page_items = [item for _subtask, _task, _schedule_ctx, _lead_ctx, item in page_candidates]
     return {
         "items": page_items,
         "summary": {
