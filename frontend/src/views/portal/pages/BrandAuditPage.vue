@@ -5,19 +5,24 @@ import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
-import { keywordGroupMonitorKeywords, platformSelectionCodes } from '../../../services/brand'
+import { keywordGroupMonitorKeywords, normalizePlatformSelections, platformSelectionCodes } from '../../../services/brand'
 import { PortalNavigateKey } from '../injectionKeys'
 
 function platformSelectionCount(group: { platforms?: unknown[] }) {
   return platformSelectionCodes((group.platforms || []) as never).length
 }
 
-function isMobilePlatform(platform: { code: string; channel?: string }) {
-  return platform.channel === 'mobile' || String(platform.code || '').endsWith('_mobile')
+const PLATFORM_MODE_LABELS: Record<string, string> = {
+  standard: '极速',
+  search: '联网',
+  reasoning: '深度',
+  reasoning_search: '深度+联网',
 }
 
-function platformChannelLabel(platform: { code: string; channel?: string }) {
-  return isMobilePlatform(platform) ? '移动' : '网页'
+function platformModeLabel(group: { platforms?: unknown[] }, code: string) {
+  const hit = normalizePlatformSelections((group.platforms || []) as never).find(item => item.code === code)
+  if (!hit) return ''
+  return PLATFORM_MODE_LABELS[hit.mode] || PLATFORM_MODE_LABELS.standard
 }
 
 const emit = defineEmits<{
@@ -43,6 +48,7 @@ const {
   loadCatalogPlatforms,
   groupHasPlatform,
   onPlatformCheckClick,
+  removeGroupPlatform,
   modeDialogVisible,
   modeDialogForm,
   confirmModeDialog,
@@ -373,10 +379,23 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                       size="sm"
                       :label="'name' in platform && platform.name ? platform.name : undefined"
                     />
-                    <small class="platform-channel-tag" :class="{ 'is-mobile': isMobilePlatform(platform) }">
-                      {{ platformChannelLabel(platform) }}
+                    <small
+                      v-if="groupHasPlatform(group, platform.code)"
+                      class="platform-mode-tag"
+                      :title="'点击整块可修改模式'"
+                    >
+                      {{ platformModeLabel(group, platform.code) }}
                     </small>
                     <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
+                    <button
+                      v-if="canEditEnterpriseTab('keywords') && groupHasPlatform(group, platform.code)"
+                      type="button"
+                      class="platform-uncheck-btn"
+                      title="取消勾选"
+                      @click.stop.prevent="removeGroupPlatform(index, platform.code)"
+                    >
+                      ×
+                    </button>
                   </label>
                 </div>
               </div>
@@ -537,7 +556,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
     <el-dialog v-model="modeDialogVisible" width="440px" title="选择监测模式" @close="cancelModeDialog">
       <p class="report-dialog-hint">
         与模力 mode 一致：standard 基础/极速、search 联网搜索、reasoning 深度思考、reasoning_search 深度+联网。
-        截图强制开启（+0.09）作为客户可见证据；深度思考相关模式另计费用。
+        截图强制开启（+0.09）作为客户可见证据；深度思考相关模式另计费用。已勾选平台再次点击可改模式，点 × 取消勾选。
       </p>
       <div class="form-grid password-grid">
         <label class="form-field-full">

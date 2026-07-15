@@ -3171,14 +3171,14 @@ button:disabled {
   padding:16px;
 }
 .keyword-group-platform-field .platform-check-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
   gap: 8px;
 }
 .keyword-group-platform-field .platform-check {
   min-height: 38px;
   padding: 6px 10px;
 }
-.platform-check .platform-channel-tag {
+.platform-check .platform-mode-tag {
   flex: 0 0 auto;
   margin-left: auto;
   padding: 1px 6px;
@@ -3191,10 +3191,26 @@ button:disabled {
   line-height: 1.4;
   white-space: nowrap;
 }
-.platform-check .platform-channel-tag.is-mobile {
-  border-color: #f0c28a;
-  background: #fff7eb;
-  color: #b45309;
+.platform-check .platform-uncheck-btn {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8aa0ba;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.platform-check .platform-uncheck-btn:hover {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+.platform-check .platform-status-tag {
+  margin-left: 0;
 }
 .keyword-field {
   display:grid;

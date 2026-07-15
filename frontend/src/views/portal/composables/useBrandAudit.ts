@@ -1024,19 +1024,29 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     if (!canEditEnterpriseTab('keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
     if (groupHasPlatform(group, code)) {
-      const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
-      keywordGroupRows.value[groupIndex] = { ...group, platforms: next }
+      // 已勾选：再次点击改为改模式（取消勾选用右侧 ×）
+      const current = normalizePlatformSelections(group.platforms).find(item => item.code === code)
+      modeDialogTarget.value = { groupIndex, code }
+      modeDialogForm.mode = current?.mode || (meta?.default_mode as PlatformSelection['mode']) || 'standard'
+      modeDialogForm.screenshot = 1
+      modeDialogVisible.value = true
       return
     }
     if (meta && !meta.selectable) {
       ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
       return
     }
-    // 先弹窗；确认后再写入 platforms（不要让原生 checkbox 自行切换状态）
     modeDialogTarget.value = { groupIndex, code }
     modeDialogForm.mode = (meta?.default_mode as PlatformSelection['mode']) || 'standard'
     modeDialogForm.screenshot = 1
     modeDialogVisible.value = true
+  }
+
+  function removeGroupPlatform(groupIndex: number, code: string) {
+    const group = keywordGroupRows.value[groupIndex]
+    if (!group || !canEditEnterpriseTab('keywords')) return
+    const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
+    keywordGroupRows.value[groupIndex] = { ...group, platforms: next }
   }
 
   function confirmModeDialog() {
@@ -1075,6 +1085,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     loadCatalogPlatforms,
     groupHasPlatform,
     onPlatformCheckClick,
+    removeGroupPlatform,
     modeDialogVisible,
     modeDialogForm,
     confirmModeDialog,
