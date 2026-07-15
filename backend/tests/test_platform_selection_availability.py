@@ -26,6 +26,20 @@ def test_normalize_object_platforms():
     assert rows[1]["screenshot"] == 1
 
 
+def test_normalize_pydantic_like_platforms():
+    class FakeSelection:
+        def __init__(self):
+            self.code = "kimi"
+            self.mode = "search"
+            self.screenshot = 1
+
+        def model_dump(self):
+            return {"code": self.code, "mode": self.mode, "screenshot": self.screenshot}
+
+    rows = normalize_platform_selections([FakeSelection()])
+    assert rows == [{"code": "kimi", "mode": "search", "screenshot": 1}]
+
+
 def test_formal_availability_thresholds():
     assert _availability_from_formal(None) is None
     assert _availability_from_formal({"total": FORMAL_MIN_SAMPLES - 1, "success": 5, "failed": 0}) is None

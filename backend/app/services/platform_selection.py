@@ -10,14 +10,25 @@ VALID_MODES = frozenset({"standard", "reasoning", "search", "reasoning_search"})
 
 
 def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
-    """Accept legacy string or {code, mode, screenshot}; return normalized dict or None."""
+    """Accept legacy string, dict, or PlatformSelection-like object; return normalized dict or None."""
     if isinstance(raw, str):
         code = raw.strip().lower()
         if not code:
             return None
         return {"code": code, "mode": FAST_MONITOR_MODE, "screenshot": 1}
-    if not isinstance(raw, dict):
-        return None
+    if hasattr(raw, "model_dump") and callable(raw.model_dump):
+        raw = raw.model_dump()
+    elif hasattr(raw, "dict") and callable(raw.dict) and not isinstance(raw, dict):
+        raw = raw.dict()
+    elif not isinstance(raw, dict):
+        code = getattr(raw, "code", None) or getattr(raw, "platform", None)
+        if code is None:
+            return None
+        raw = {
+            "code": code,
+            "mode": getattr(raw, "mode", FAST_MONITOR_MODE),
+            "screenshot": getattr(raw, "screenshot", 1),
+        }
     code = str(raw.get("code") or raw.get("platform") or "").strip().lower()
     if not code:
         return None
