@@ -21,7 +21,7 @@ from app.services.system_config_service import (
     list_system_configs,
     update_system_config as persist_system_config,
 )
-from app.models.ops import OperationLog
+from app.models.ops import OperationLog, SystemConfig
 from app.models.permission import Menu, Position, PositionMenu, Role, UserIdentityMenu
 from app.models.tenant import Tenant
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
@@ -109,6 +109,9 @@ def guard_sales_tenant(db: Session, current: CurrentSession, tenant_id: int) -> 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+_SYSTEM_CONFIG_CATEGORIES = frozenset({"secrets", "schedule", "cache_queue", "notification", "menu"})
+
+
 def require_system_config_access(
     db: Session,
     current: CurrentSession,
@@ -116,13 +119,13 @@ def require_system_config_access(
     category: str | None = None,
     for_update: bool = False,
 ) -> None:
+    from app.services.menu_permission_service import has_settings_menu_permission
+
     action = "can_update" if for_update else "can_export"
-    if not has_identity_menu_permission(db, current.identity.id, "platform.settings", action):
+    if not has_settings_menu_permission(db, current.identity.id, action, category=category):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权访问系统配置")
     if is_sales_identity(db, current.identity):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="销售账号无权访问系统配置")
-    if category == "secrets" and is_sales_identity(db, current.identity):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问密钥配置")
 
 
 def _require_platform_menu(
@@ -596,21 +599,28 @@ def management_celery_monitor(
 ) -> ApiResponse[dict]:
     """中文版 Celery 队列与 Worker 监控数据。"""
     require_platform(current)
-    _require_platform_menu(db, current, "platform.settings", "can_export", "当前账号无权查看队列监控")
+    require_system_config_access(db, current, category="cache_queue")
     return ApiResponse(data=format_celery_monitor_zh(get_queue_monitor_snapshot()))
 
 
 @router.get("/system-configs", response_model=ApiResponse[list[dict]])
 def management_system_configs(
-    category: str | None = Query(default=None, description="secrets / schedule / cache_queue"),
+    category: str | None = Query(default=None, description="secrets / schedule / cache_queue / notification"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
+    from app.services.menu_permission_service import accessible_settings_categories
+
     require_platform(current)
-    require_system_config_access(db, current, category=category)
-    if category and category not in {"secrets", "schedule", "cache_queue"}:
+    if category and category not in _SYSTEM_CONFIG_CATEGORIES - {"menu"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的配置分类")
-    return ApiResponse(data=list_system_configs(db, category=category))
+    require_system_config_access(db, current, category=category)
+    data = list_system_configs(db, category=category)
+    if category is None:
+        allowed = accessible_settings_categories(db, current.identity.id, "can_export")
+        if allowed is not None:
+            data = [item for item in data if item.get("category") in allowed]
+    return ApiResponse(data=data)
 
 
 @router.put("/system-configs/{config_id}", response_model=ApiResponse[dict])
@@ -620,8 +630,19 @@ def management_update_system_config(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
+    from app.services.system_config_service import CONFIG_REGISTRY
+
     require_platform(current)
-    require_system_config_access(db, current, for_update=True)
+    existing = db.scalar(select(SystemConfig).where(SystemConfig.id == config_id))
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="配置项不存在")
+    meta = CONFIG_REGISTRY.get(existing.config_key)
+    require_system_config_access(
+        db,
+        current,
+        category=meta.category if meta else None,
+        for_update=True,
+    )
     new_value = payload.get("config_value")
     if new_value is None or not str(new_value).strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="配置值不能为空")
@@ -1377,7 +1398,7 @@ def get_menu_configs(
 ) -> ApiResponse[list[dict]]:
     """获取菜单配置列表"""
     require_platform(current)
-    require_system_config_access(db, current)
+    require_system_config_access(db, current, category="menu")
     stmt = select(MenuConfig).where(MenuConfig.deleted.is_(False))
     if identity_type:
         stmt = stmt.where(MenuConfig.identity_type == identity_type)
@@ -1405,7 +1426,7 @@ def update_menu_config(
 ):
     """更新菜单配置（名称、排序、可见性）"""
     require_platform(current)
-    require_system_config_access(db, current, for_update=True)
+    require_system_config_access(db, current, category="menu", for_update=True)
     config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
@@ -1438,7 +1459,7 @@ def delete_menu_config(
 ):
     """停用菜单配置（逻辑删除）"""
     require_platform(current)
-    require_system_config_access(db, current, for_update=True)
+    require_system_config_access(db, current, category="menu", for_update=True)
     config = db.scalar(select(MenuConfig).where(MenuConfig.id == config_id))
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="菜单配置不存在")
@@ -1458,7 +1479,7 @@ def batch_update_menu_configs(
 ):
     """批量更新菜单配置"""
     require_platform(current)
-    require_system_config_access(db, current, for_update=True)
+    require_system_config_access(db, current, category="menu", for_update=True)
     updated_count = 0
     for item in configs:
         config = db.scalar(select(MenuConfig).where(MenuConfig.id == item.id, MenuConfig.deleted.is_(False)))

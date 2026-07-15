@@ -101,7 +101,7 @@ export interface SystemConfigRecord {
   updated_at: string
 }
 
-export type SystemConfigCategory = 'secrets' | 'schedule' | 'cache_queue' | 'menu'
+export type SystemConfigCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
 
 export interface MenuConfigRecord {
   id: number

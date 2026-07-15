@@ -27,6 +27,11 @@ PLATFORM_MENUS = [
     ("platform.alerts", "预警阈值", "/platform/alerts", "BellRing", 70, True),
     ("platform.logs", "操作日志", "/platform/logs", "Activity", 80, True),
     ("platform.settings", "系统配置", "/platform/settings", "Settings", 90, True),
+    ("platform.settings.secrets", "接口密钥", "/platform/settings/secrets", "Key", 91, False),
+    ("platform.settings.schedule", "调度策略", "/platform/settings/schedule", "Timer", 92, False),
+    ("platform.settings.cache_queue", "缓存与队列", "/platform/settings/cache-queue", "Database", 93, False),
+    ("platform.settings.notification", "通知规则", "/platform/settings/notification", "Bell", 94, False),
+    ("platform.settings.menu", "菜单权限", "/platform/settings/menu", "LayoutList", 95, False),
 ]
 
 CUSTOMER_MENUS = [
@@ -211,6 +216,11 @@ def seed_menu_configs(db) -> None:
         ("platform.alerts", "预警阈值", "PLATFORM", 70, True, "BellRing", "/platform/alerts", "告警设置"),
         ("platform.logs", "操作日志", "PLATFORM", 80, True, "Activity", "/platform/logs", "系统审计日志"),
         ("platform.settings", "系统配置", "PLATFORM", 90, True, "Settings", "/platform/settings", "平台参数配置"),
+        ("platform.settings.secrets", "接口密钥", "PLATFORM", 91, False, "Key", "/platform/settings/secrets", "系统配置 · 接口密钥"),
+        ("platform.settings.schedule", "调度策略", "PLATFORM", 92, False, "Timer", "/platform/settings/schedule", "系统配置 · 调度策略"),
+        ("platform.settings.cache_queue", "缓存与队列", "PLATFORM", 93, False, "Database", "/platform/settings/cache-queue", "系统配置 · 缓存与队列"),
+        ("platform.settings.notification", "通知规则", "PLATFORM", 94, False, "Bell", "/platform/settings/notification", "系统配置 · 通知规则"),
+        ("platform.settings.menu", "菜单权限", "PLATFORM", 95, False, "LayoutList", "/platform/settings/menu", "系统配置 · 菜单权限"),
 
         # CUSTOMER 菜单
         ("customer.workspace", "运营工作台", "CUSTOMER", 10, True, "Gauge", "/customer/workspace", "企业监测数据看板"),

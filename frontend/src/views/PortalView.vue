@@ -23,9 +23,12 @@ import {
   USER_CREATE_CUSTOMER_MENU,
   USER_LIST_MENU,
   POSITION_MENU,
+  SETTINGS_MENU,
+  SETTINGS_CHILD_MENUS,
   hiddenCustomerMenus,
   hiddenEnterprisePermissionMenus,
   hiddenPlatformMenus,
+  hiddenSettingsPermissionMenus,
   hiddenUserPermissionMenus,
   normalizeMenuCode,
 } from './portal/constants'
@@ -71,6 +74,13 @@ function auditRouteAllowed(menus: MenuInfo[]) {
   ))
 }
 
+function settingsRouteAllowed(menus: MenuInfo[]) {
+  return menus.some(menu => (
+    (menu.menu_code === SETTINGS_MENU || SETTINGS_CHILD_MENUS.includes(menu.menu_code as typeof SETTINGS_CHILD_MENUS[number]))
+    && (menu.can_export || menu.can_update)
+  ))
+}
+
 const allowedMenuCodes = computed(() => {
   const codes = auth.allowedMenus.map(item => item.menu_code)
   const extra: string[] = []
@@ -79,6 +89,9 @@ const allowedMenuCodes = computed(() => {
   }
   if (auditRouteAllowed(auth.allowedMenus) && !codes.includes('platform.audit')) {
     extra.push('platform.audit')
+  }
+  if (settingsRouteAllowed(auth.allowedMenus) && !codes.includes(SETTINGS_MENU)) {
+    extra.push(SETTINGS_MENU)
   }
   return extra.length ? [...codes, ...extra] : codes
 })
@@ -89,11 +102,17 @@ const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => {
   const filtered = auth.allowedMenus
-    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus].includes(menu.menu_code))
+    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
   if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
     const auditChild = auth.allowedMenus.find(menu => menu.menu_code.startsWith('platform.audit.'))
     if (auditChild) {
       return [{ ...auditChild, menu_code: 'platform.audit', menu_name: '企业管理' }, ...filtered]
+    }
+  }
+  if (settingsRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === SETTINGS_MENU)) {
+    const settingsChild = auth.allowedMenus.find(menu => SETTINGS_CHILD_MENUS.includes(menu.menu_code as typeof SETTINGS_CHILD_MENUS[number]))
+    if (settingsChild) {
+      return [{ ...settingsChild, menu_code: SETTINGS_MENU, menu_name: '系统配置' }, ...filtered]
     }
   }
   return filtered

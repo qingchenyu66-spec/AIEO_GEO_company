@@ -31,6 +31,32 @@ def test_users_create_menu_is_route_only_not_assignable():
     assert "platform.users.create" in ROUTE_ONLY_MENU_CODES
 
 
+def test_settings_parent_is_route_only_children_assignable():
+    assert "platform.settings" in ROUTE_ONLY_MENU_CODES
+    for code in (
+        "platform.settings.secrets",
+        "platform.settings.schedule",
+        "platform.settings.cache_queue",
+        "platform.settings.notification",
+        "platform.settings.menu",
+    ):
+        assert code not in ROUTE_ONLY_MENU_CODES
+        flags = sanitize_menu_grant_flags(
+            code,
+            "PLATFORM",
+            can_create=True,
+            can_update=True,
+            can_delete=True,
+            can_export=True,
+        )
+        assert flags == {
+            "can_create": False,
+            "can_update": True,
+            "can_delete": False,
+            "can_export": True,
+        }
+
+
 def test_users_create_child_does_not_get_export_flag():
     flags = sanitize_menu_grant_flags(
         "platform.users.create.platform",

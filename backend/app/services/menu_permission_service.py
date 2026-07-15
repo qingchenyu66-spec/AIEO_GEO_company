@@ -24,10 +24,36 @@ ROUTE_PARENT_BY_CHILD: dict[str, str] = {
     "platform.users.create.customer": "platform.users.create",
     "platform.users.create": "platform.users",
     "platform.positions": "platform.users",
+    "platform.settings.secrets": "platform.settings",
+    "platform.settings.schedule": "platform.settings",
+    "platform.settings.cache_queue": "platform.settings",
+    "platform.settings.notification": "platform.settings",
+    "platform.settings.menu": "platform.settings",
 }
 
 # 职位权限配置里不单独勾选的路由父菜单（只配置子项动作，父菜单自动推导）
-ROUTE_ONLY_MENU_CODES = frozenset({"platform.audit", "platform.users", "platform.users.create"})
+ROUTE_ONLY_MENU_CODES = frozenset({
+    "platform.audit",
+    "platform.users",
+    "platform.users.create",
+    "platform.settings",
+})
+
+SETTINGS_CHILD_MENU_CODES = (
+    "platform.settings.secrets",
+    "platform.settings.schedule",
+    "platform.settings.cache_queue",
+    "platform.settings.notification",
+    "platform.settings.menu",
+)
+
+SETTINGS_CATEGORY_BY_MENU = {
+    "platform.settings.secrets": "secrets",
+    "platform.settings.schedule": "schedule",
+    "platform.settings.cache_queue": "cache_queue",
+    "platform.settings.notification": "notification",
+    "platform.settings.menu": "menu",
+}
 
 REPORT_MENU_BY_IDENTITY = {
     "PLATFORM": "platform.reports",
@@ -65,6 +91,11 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.alerts": frozenset({"can_export", "can_update"}),
     "platform.logs": frozenset({"can_export"}),
     "platform.settings": frozenset({"can_export", "can_update"}),
+    "platform.settings.secrets": frozenset({"can_export", "can_update"}),
+    "platform.settings.schedule": frozenset({"can_export", "can_update"}),
+    "platform.settings.cache_queue": frozenset({"can_export", "can_update"}),
+    "platform.settings.notification": frozenset({"can_export", "can_update"}),
+    "platform.settings.menu": frozenset({"can_export", "can_update"}),
     "platform.users.list": frozenset({"can_export", "can_update", "can_delete"}),
     "platform.users.create.platform": frozenset({"can_create"}),
     "platform.users.create.customer": frozenset({"can_create"}),
@@ -509,14 +540,53 @@ def require_platform_menu_permission(
         raise PermissionError(detail or "当前身份无权执行此操作")
 
 
-def require_health_ops_access(db: Session, current) -> None:
-    require_platform_menu_permission(
-        db,
-        current,
-        "platform.settings",
-        "can_export",
-        detail="当前账号无权查看运维健康详情",
+def has_settings_menu_permission(
+    db: Session,
+    identity_id: int,
+    action: str = "can_export",
+    *,
+    category: str | None = None,
+) -> bool:
+    """系统配置：父菜单或对应分类子菜单任一命中即可。"""
+    if has_identity_menu_permission(db, identity_id, "platform.settings", action):
+        return True
+    if category:
+        menu_code = next(
+            (code for code, cat in SETTINGS_CATEGORY_BY_MENU.items() if cat == category),
+            None,
+        )
+        if menu_code and has_identity_menu_permission(db, identity_id, menu_code, action):
+            return True
+        return False
+    return any(
+        has_identity_menu_permission(db, identity_id, code, action)
+        for code in SETTINGS_CHILD_MENU_CODES
     )
+
+
+def accessible_settings_categories(
+    db: Session,
+    identity_id: int,
+    action: str = "can_export",
+) -> set[str] | None:
+    """None = 拥有父菜单（全部分类）；空 set = 无权；其它 = 仅这些分类。"""
+    if has_identity_menu_permission(db, identity_id, "platform.settings", action):
+        return None
+    return {
+        cat
+        for code, cat in SETTINGS_CATEGORY_BY_MENU.items()
+        if has_identity_menu_permission(db, identity_id, code, action)
+    }
+
+
+def require_health_ops_access(db: Session, current) -> None:
+    from app.api.dependencies import CurrentSession
+
+    session: CurrentSession = current
+    if session.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可访问")
+    if not has_settings_menu_permission(db, session.identity.id, "can_export", category="cache_queue"):
+        raise PermissionError("当前账号无权查看运维健康详情")
 
 
 def require_knowledge_permission(db: Session, current, action: str) -> None:

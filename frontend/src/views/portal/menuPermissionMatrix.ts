@@ -1,6 +1,12 @@
 import type { IdentityType, MenuInfo } from '../../services/auth'
 import {
   POSITION_MENU,
+  SETTINGS_CACHE_QUEUE_MENU,
+  SETTINGS_MENU,
+  SETTINGS_MENU_PERM,
+  SETTINGS_NOTIFICATION_MENU,
+  SETTINGS_SCHEDULE_MENU,
+  SETTINGS_SECRETS_MENU,
   USER_CREATE_CUSTOMER_MENU,
   USER_CREATE_MENU,
   USER_CREATE_PLATFORM_MENU,
@@ -38,7 +44,11 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'platform.models': ['can_export'],
   'platform.alerts': ['can_export', 'can_update'],
   'platform.logs': ['can_export'],
-  'platform.settings': ['can_export', 'can_update'],
+  [SETTINGS_SECRETS_MENU]: ['can_export', 'can_update'],
+  [SETTINGS_SCHEDULE_MENU]: ['can_export', 'can_update'],
+  [SETTINGS_CACHE_QUEUE_MENU]: ['can_export', 'can_update'],
+  [SETTINGS_NOTIFICATION_MENU]: ['can_export', 'can_update'],
+  [SETTINGS_MENU_PERM]: ['can_export', 'can_update'],
 
   [USER_LIST_MENU]: ['can_export', 'can_update', 'can_delete'],
   [USER_CREATE_PLATFORM_MENU]: ['can_create'],
@@ -67,7 +77,11 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   'platform.snapshot_backfill': { can_export: '查看待补录', can_update: '提交补录' },
   'platform.reports': { can_export: '查看/导出', can_create: '生成诊断' },
   'platform.alerts': { can_export: '查看', can_update: '配置规则' },
-  'platform.settings': { can_export: '查看', can_update: '修改配置' },
+  [SETTINGS_SECRETS_MENU]: { can_export: '查看', can_update: '修改密钥' },
+  [SETTINGS_SCHEDULE_MENU]: { can_export: '查看', can_update: '修改调度' },
+  [SETTINGS_CACHE_QUEUE_MENU]: { can_export: '查看', can_update: '修改缓存队列' },
+  [SETTINGS_NOTIFICATION_MENU]: { can_export: '查看', can_update: '修改通知规则' },
+  [SETTINGS_MENU_PERM]: { can_export: '查看', can_update: '修改菜单配置' },
   [USER_LIST_MENU]: { can_export: '查看', can_update: '编辑', can_delete: '禁用/删除' },
   [USER_CREATE_PLATFORM_MENU]: { can_create: '创建平台账号' },
   [USER_CREATE_CUSTOMER_MENU]: { can_create: '创建客户账号' },
@@ -81,9 +95,17 @@ export type MenuGrantFlags = Record<PermissionAction, boolean>
 
 export type MenuGrantState = Record<number, MenuGrantFlags>
 
-export const ROUTE_ONLY_MENU_CODES = new Set(['platform.audit', 'platform.users', USER_CREATE_MENU])
+export const ROUTE_ONLY_MENU_CODES = new Set(['platform.audit', 'platform.users', USER_CREATE_MENU, SETTINGS_MENU])
 
 export const USER_CREATE_CHILD_MENUS = [USER_CREATE_PLATFORM_MENU, USER_CREATE_CUSTOMER_MENU] as const
+
+export const SETTINGS_CHILD_MENUS = [
+  SETTINGS_SECRETS_MENU,
+  SETTINGS_SCHEDULE_MENU,
+  SETTINGS_CACHE_QUEUE_MENU,
+  SETTINGS_NOTIFICATION_MENU,
+  SETTINGS_MENU_PERM,
+] as const
 
 export type PermissionMenuRow = {
   menu: MenuInfo
@@ -132,11 +154,29 @@ function syntheticUserCreateHeader(): MenuInfo {
   }
 }
 
+function syntheticSettingsHeader(): MenuInfo {
+  return {
+    id: 0,
+    menu_code: SETTINGS_MENU,
+    menu_name: '系统配置',
+    identity_type: 'PLATFORM',
+    route_path: '/platform/settings',
+    icon: 'Settings',
+    sort_order: 90,
+    can_create: false,
+    can_update: false,
+    can_delete: false,
+    can_export: false,
+  }
+}
+
 export function permissionMenuRows(menus: MenuInfo[]): PermissionMenuRow[] {
   const byCode = new Map(menus.map(menu => [menu.menu_code, menu]))
-  const childCodes = new Set<string>(USER_CREATE_CHILD_MENUS)
+  const userCreateChildCodes = new Set<string>(USER_CREATE_CHILD_MENUS)
+  const settingsChildCodes = new Set<string>(SETTINGS_CHILD_MENUS)
   const rows: PermissionMenuRow[] = []
   let userCreateBlockDone = false
+  let settingsBlockDone = false
 
   const appendUserCreateBlock = () => {
     const children = USER_CREATE_CHILD_MENUS
@@ -154,13 +194,37 @@ export function permissionMenuRows(menus: MenuInfo[]): PermissionMenuRow[] {
     userCreateBlockDone = true
   }
 
+  const appendSettingsBlock = () => {
+    const children = SETTINGS_CHILD_MENUS
+      .map(code => byCode.get(code))
+      .filter((menu): menu is MenuInfo => Boolean(menu))
+    if (!children.length) return
+    rows.push({
+      menu: byCode.get(SETTINGS_MENU) || syntheticSettingsHeader(),
+      indent: 0,
+      headerOnly: true,
+    })
+    for (const child of children) {
+      rows.push({ menu: child, indent: 1 })
+    }
+    settingsBlockDone = true
+  }
+
   for (const menu of menus) {
     if (menu.menu_code === USER_CREATE_MENU) {
       if (!userCreateBlockDone) appendUserCreateBlock()
       continue
     }
-    if (childCodes.has(menu.menu_code)) {
+    if (userCreateChildCodes.has(menu.menu_code)) {
       if (!userCreateBlockDone) appendUserCreateBlock()
+      continue
+    }
+    if (menu.menu_code === SETTINGS_MENU) {
+      if (!settingsBlockDone) appendSettingsBlock()
+      continue
+    }
+    if (settingsChildCodes.has(menu.menu_code)) {
+      if (!settingsBlockDone) appendSettingsBlock()
       continue
     }
     rows.push({ menu, indent: 0 })
@@ -180,6 +244,9 @@ export function actionsForMenu(menuCode: string, type: IdentityType): Permission
     return menuCode === 'platform.audit.list'
       ? ['can_export', 'can_update', 'can_delete']
       : ['can_export', 'can_update']
+  }
+  if (menuCode.startsWith('platform.settings.')) {
+    return ['can_export', 'can_update']
   }
   if (type === 'CUSTOMER') return ['can_export']
   return ['can_export']

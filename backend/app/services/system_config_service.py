@@ -210,11 +210,18 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         description="启用后站内铃铛通知企业归属销售（tenant.owner）或售前创建人；销售仅看名下",
         value_type="bool",
     ),
-    "snapshot_backfill_notify_ops": ConfigMeta(
-        field="snapshot_backfill_notify_ops",
+    "snapshot_backfill_notify_operation": ConfigMeta(
+        field="snapshot_backfill_notify_operation",
         category="notification",
-        label="补录通知运营/管理员",
-        description="启用后有快照补录菜单的非销售平台账号可看全部待补录通知",
+        label="补录通知运营",
+        description="启用后「运营」职位（非管理员、非销售）可看全部待补录通知",
+        value_type="bool",
+    ),
+    "snapshot_backfill_notify_admin": ConfigMeta(
+        field="snapshot_backfill_notify_admin",
+        category="notification",
+        label="补录通知管理员",
+        description="启用后「平台管理员」职位可看全部待补录通知",
         value_type="bool",
     ),
 }
@@ -287,6 +294,29 @@ def bootstrap_system_configs(db: Session) -> None:
         for row in db.scalars(select(SystemConfig).where(SystemConfig.config_key.in_(CONFIG_REGISTRY.keys()))).all()
     }
     changed = False
+    # 兼容旧 key：snapshot_backfill_notify_ops → operation / admin 双开关
+    legacy_ops = db.scalar(
+        select(SystemConfig).where(SystemConfig.config_key == "snapshot_backfill_notify_ops")
+    )
+    if legacy_ops is not None:
+        legacy_value = str(legacy_ops.config_value or "true").strip() or "true"
+        for key in ("snapshot_backfill_notify_operation", "snapshot_backfill_notify_admin"):
+            if key in existing:
+                continue
+            meta = CONFIG_REGISTRY[key]
+            row = SystemConfig(
+                config_key=key,
+                config_value=legacy_value,
+                scope=meta.category,
+                description=meta.description,
+                status=True,
+            )
+            db.add(row)
+            existing[key] = row
+            changed = True
+        if legacy_ops.status:
+            legacy_ops.status = False
+            changed = True
     for key, meta in CONFIG_REGISTRY.items():
         env_value = getattr(settings, meta.field, "")
         serialized = _serialize_env_value(env_value)

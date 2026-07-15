@@ -14,6 +14,15 @@ import {
 import { PortalAnalyticsKey, PortalNavigateKey } from '../injectionKeys'
 import { monitorStatusLabelMap, platformLabelMap } from '../portalMaps'
 import { externalLink } from '../portalUtils'
+import {
+  SETTINGS_CACHE_QUEUE_MENU,
+  SETTINGS_CHILD_MENUS,
+  SETTINGS_MENU,
+  SETTINGS_MENU_PERM,
+  SETTINGS_NOTIFICATION_MENU,
+  SETTINGS_SCHEDULE_MENU,
+  SETTINGS_SECRETS_MENU,
+} from '../constants'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import '../../../styles/platform-matrix.css'
 
@@ -45,15 +54,48 @@ const {
 
 type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
 
+const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
+  secrets: SETTINGS_SECRETS_MENU,
+  schedule: SETTINGS_SCHEDULE_MENU,
+  cache_queue: SETTINGS_CACHE_QUEUE_MENU,
+  notification: SETTINGS_NOTIFICATION_MENU,
+  menu: SETTINGS_MENU_PERM,
+}
+
+function menuHasAccess(menuCode: string) {
+  return auth.allowedMenus.some(menu => (
+    menu.menu_code === menuCode && Boolean(menu.can_export || menu.can_update)
+  ))
+}
+
+function canAccessSettingsCategory(key: SettingsCategory) {
+  const childCode = SETTINGS_MENU_BY_CATEGORY[key]
+  if (menuHasAccess(childCode)) return true
+  // 有任意配置子权限时，仅按子项授权；无子项时兼容旧的父菜单整页授权
+  const hasAnyChild = SETTINGS_CHILD_MENUS.some(code => menuHasAccess(code))
+  if (hasAnyChild) return false
+  return menuHasAccess(SETTINGS_MENU)
+}
+
 const settingsCategory = ref<SettingsCategory>('secrets')
 
-const settingsTabs: Array<{ key: SettingsCategory; title: string; desc: string }> = [
-  { key: 'secrets', title: '接口密钥', desc: '模力指数、DeepSeek 等敏感配置，保存后立即生效' },
-  { key: 'schedule', title: '调度策略', desc: '监测容差、模力限速、Celery 扫描与同步参数' },
-  { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
-  { key: 'notification', title: '通知规则', desc: '快照补录待办谁收、弱排名阈值（默认 Top3 之外）' },
-  { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
-]
+const settingsTabs = computed(() => {
+  const all: Array<{ key: SettingsCategory; title: string; desc: string }> = [
+    { key: 'secrets', title: '接口密钥', desc: '模力指数、DeepSeek 等敏感配置，保存后立即生效' },
+    { key: 'schedule', title: '调度策略', desc: '监测容差、模力限速、Celery 扫描与同步参数' },
+    { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
+    { key: 'notification', title: '通知规则', desc: '快照补录待办谁收、弱排名阈值（默认 Top3 之外）' },
+    { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
+  ]
+  return all.filter(tab => canAccessSettingsCategory(tab.key))
+})
+
+watch(settingsTabs, (tabs) => {
+  if (!tabs.length) return
+  if (!tabs.some(tab => tab.key === settingsCategory.value)) {
+    settingsCategory.value = tabs[0].key
+  }
+}, { immediate: true })
 
 const filteredConfigRows = computed(() => {
   if (settingsCategory.value === 'menu') return []
@@ -61,6 +103,7 @@ const filteredConfigRows = computed(() => {
 })
 
 function switchSettingsCategory(key: SettingsCategory) {
+  if (!canAccessSettingsCategory(key)) return
   settingsCategory.value = key
   cancelEditConfig()
 }

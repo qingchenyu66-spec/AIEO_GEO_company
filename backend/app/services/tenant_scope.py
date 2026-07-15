@@ -40,6 +40,43 @@ def is_sales_identity(db: Session, identity: UserIdentity) -> bool:
     return position.position_code == "PLATFORM_SALES"
 
 
+def is_platform_admin_identity(db: Session, identity: UserIdentity) -> bool:
+    """平台管理员职位（或 role_code 兜底）。"""
+    if identity.identity_type != "PLATFORM":
+        return False
+    if identity.position_id is not None:
+        position = db.scalar(
+            select(Position).where(
+                Position.id == identity.position_id,
+                Position.deleted.is_(False),
+            )
+        )
+        if position is not None and position.position_code == "PLATFORM_ADMIN":
+            return True
+    return str(identity.role_code or "").upper() == "PLATFORM_ADMIN"
+
+
+def is_platform_operation_identity(db: Session, identity: UserIdentity) -> bool:
+    """运营职位：显式 PLATFORM_OPERATION，或非销售且非管理员的平台账号。"""
+    if identity.identity_type != "PLATFORM":
+        return False
+    if is_sales_identity(db, identity) or is_platform_admin_identity(db, identity):
+        return False
+    if identity.position_id is not None:
+        position = db.scalar(
+            select(Position).where(
+                Position.id == identity.position_id,
+                Position.deleted.is_(False),
+            )
+        )
+        if position is not None and position.position_code == "PLATFORM_OPERATION":
+            return True
+        if position is not None:
+            # 交付等其他平台职位：按运营侧开关收通知
+            return True
+    return True
+
+
 def ensure_sales_tenant_access(db: Session, current: CurrentSession, tenant_id: int) -> None:
     """销售身份只能访问归属本账号的企业。"""
     if current.identity.identity_type != "PLATFORM":

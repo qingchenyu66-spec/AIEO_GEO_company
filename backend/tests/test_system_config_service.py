@@ -60,7 +60,8 @@ def test_list_system_configs_filters_category(db_session):
     assert {item["config_key"] for item in notif} >= {
         "snapshot_backfill_weak_rank_after",
         "snapshot_backfill_notify_owner",
-        "snapshot_backfill_notify_ops",
+        "snapshot_backfill_notify_operation",
+        "snapshot_backfill_notify_admin",
     }
 
 

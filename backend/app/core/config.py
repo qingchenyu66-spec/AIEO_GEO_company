@@ -94,7 +94,8 @@ class Settings(BaseSettings):
     # 快照补录通知规则（系统配置菜单 · 通知规则 可改）
     snapshot_backfill_weak_rank_after: int = 3
     snapshot_backfill_notify_owner: bool = True
-    snapshot_backfill_notify_ops: bool = True
+    snapshot_backfill_notify_operation: bool = True
+    snapshot_backfill_notify_admin: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

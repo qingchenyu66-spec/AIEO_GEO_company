@@ -13,7 +13,7 @@ from app.services.system_notification_service import (
     mark_all_notifications_read,
     mark_notification_read,
 )
-from app.services.tenant_scope import is_sales_identity
+from app.services.tenant_scope import is_platform_admin_identity, is_platform_operation_identity, is_sales_identity
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/notifications")
@@ -42,19 +42,24 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "platform.snapshot_backfill",
         ("can_export", "can_update"),
     )
-    is_sales = is_sales_identity(db, current.identity)
     from app.core.config import settings
 
+    is_sales = is_sales_identity(db, current.identity)
+    is_admin = is_platform_admin_identity(db, current.identity)
+    is_operation = is_platform_operation_identity(db, current.identity)
     if can_view_snapshot_backfill:
         if is_sales and not settings.snapshot_backfill_notify_owner:
             can_view_snapshot_backfill = False
-        elif not is_sales and not settings.snapshot_backfill_notify_ops:
+        elif is_admin and not settings.snapshot_backfill_notify_admin:
+            can_view_snapshot_backfill = False
+        elif is_operation and not settings.snapshot_backfill_notify_operation:
+            can_view_snapshot_backfill = False
+        elif not is_sales and not is_admin and not is_operation:
             can_view_snapshot_backfill = False
     return {
         "can_review_approvals": can_review_approvals(db, current),
         "can_view_ops_alerts": can_view_ops_alerts,
         "can_view_snapshot_backfill": can_view_snapshot_backfill,
-        # 方案 B：销售只看名下；运营看全量。关闭对应配置则该类账号铃铛不收补录通知。
         "snapshot_backfill_owner_only": bool(can_view_snapshot_backfill and is_sales),
         "can_view_customer_reports": can_view_customer_reports,
     }

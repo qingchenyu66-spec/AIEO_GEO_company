@@ -34,7 +34,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
   if (key === 'users') return '用户新增下分平台/客户两种创建能力；用户列表、职位管理、操作审批可单独授权。'
   if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
   if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'
-  if (key === 'system') return '系统配置、操作日志、模型平台等后台维护能力。'
+  if (key === 'system') return '系统配置可按「接口密钥 / 调度策略 / 缓存与队列 / 通知规则 / 菜单权限」拆分授权；操作日志与模型平台单独控制。'
   return '平台运营端用于内部管理，可按职位控制新增、编辑、禁用和导出。'
 }
 
@@ -52,7 +52,7 @@ export function permissionGroupKey(menu: MenuInfo) {
   if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
   if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
-  if (['platform.models', 'platform.alerts', 'platform.logs', 'platform.settings'].includes(menu.menu_code)) return 'system'
+  if (['platform.models', 'platform.alerts', 'platform.logs'].includes(menu.menu_code) || menu.menu_code.startsWith('platform.settings')) return 'system'
   return 'other'
 }
 
