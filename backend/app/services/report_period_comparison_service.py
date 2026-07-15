@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -43,9 +44,13 @@ TREND_META = {
 
 OUT_DIR = Path.home() / "Desktop" / "周期报告样例_环比预览"
 ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
-# 门户预览/落盘 HTML：同源静态包，避免 blob iframe 打 jsDelivr 超时后「图表库未加载」
+# 门户预览中间态：同源静态包；最终预览/导出/PDF 会再内联 bundle，避免 blob/Playwright 外链失败
 ECHARTS_PORTAL_SRC = "/report-assets/echarts.min.js"
 ECHARTS_STATIC_DIR = Path(__file__).resolve().parents[1] / "static" / "report_period"
+_ECHARTS_SCRIPT_SRC_RE = re.compile(
+    r'<script\b[^>]*\bsrc=["\'][^"\']*echarts[^"\']*["\'][^>]*>\s*</script>',
+    re.IGNORECASE,
+)
 REPORT_TYPES = ("weekly", "monthly", "quarterly", "annual")
 PERIOD_EXPORT_TYPES = PERIOD_COMPARISON_REPORT_TYPES
 TYPE_LABELS = {
@@ -859,6 +864,33 @@ def ensure_echarts_asset(out_dir: Path | None = None) -> str:
     if out_dir is not None:
         return "assets/echarts.min.js"
     return target.resolve().as_uri()
+
+
+def load_echarts_bundle_text() -> str:
+    """读取本地 echarts 全文；缺失则尝试下载，再退化拉 CDN。"""
+    local = ECHARTS_STATIC_DIR / "assets" / "echarts.min.js"
+    ensure_echarts_asset()
+    if local.exists() and local.stat().st_size > 1000:
+        return local.read_text(encoding="utf-8")
+    import urllib.request
+
+    with urllib.request.urlopen(ECHARTS_CDN, timeout=60) as resp:
+        text = resp.read().decode("utf-8")
+    if len(text) < 1000 or "echarts" not in text.lower():
+        raise RuntimeError("无法加载 echarts 资源")
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(text, encoding="utf-8")
+    return text
+
+
+def inline_echarts_scripts(html_text: str) -> str:
+    """把 echarts 外链 script 换成内联，供 blob 预览与 Playwright set_content。"""
+    if not _ECHARTS_SCRIPT_SRC_RE.search(html_text):
+        return html_text
+    code = load_echarts_bundle_text()
+    safe = code.replace("</script", "<\\/script")
+    # 必须用 callable 替换：echarts 源码含 \d 等，string repl 会被 re 当模板转义炸掉
+    return _ECHARTS_SCRIPT_SRC_RE.sub(lambda _m: f"<script>{safe}</script>", html_text, count=1)
 
 
 def build_v2_conclusions(
@@ -2836,7 +2868,7 @@ def build_period_report_html_for_export(
     if period_start is None or period_end is None:
         raise ValueError("period report missing period_start/period_end")
     generated = _parse_report_date(report.get("generated_at")) or date.today()
-    return compose_period_report_html(
+    html_text = compose_period_report_html(
         db,
         tenant_id=tenant_id,
         report_type=report_type,
@@ -2844,6 +2876,8 @@ def build_period_report_html_for_export(
         period_end=period_end,
         generated=generated,
     )
+    # 预览(blob)/下载 HTML/PDF 共用：内联 echarts，不再依赖外链
+    return inline_echarts_scripts(html_text)
 
 
 def generate_one(db, tenant_id: int, brand_name: str, report_type: str, today: date, *, v2: bool = False) -> Path:

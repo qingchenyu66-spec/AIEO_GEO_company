@@ -1054,6 +1054,9 @@ def read_or_build_report_html_preview(db: Session, report: dict[str, Any], *, th
             if (
                 "jsdelivr.net" not in cached
                 and "cdn.jsdelivr" not in cached
+                and "/report-assets/echarts" not in cached
+                and "file:///" not in cached
+                and "file://" not in cached
                 and _cached_preview_matches(cached, fingerprint)
             ):
                 return cached

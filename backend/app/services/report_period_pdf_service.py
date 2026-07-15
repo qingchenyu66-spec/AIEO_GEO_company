@@ -86,15 +86,10 @@ A4_CONTENT_PX = 794
 
 
 def prepare_period_html_for_playwright(html: str) -> str:
-    """把预览用同源/CDN 路径换成本地 file://，否则 set_content 下 echarts 永远加载失败。"""
-    from app.services.report_period_comparison_service import (
-        ECHARTS_CDN,
-        ECHARTS_PORTAL_SRC,
-        ensure_echarts_asset,
-    )
+    """确保 PDF 渲染前 echarts 已内联（外链/file:// 在 set_content 下会失败）。"""
+    from app.services.report_period_comparison_service import inline_echarts_scripts
 
-    local = ensure_echarts_asset()
-    return html.replace(ECHARTS_PORTAL_SRC, local).replace(ECHARTS_CDN, local)
+    return inline_echarts_scripts(html)
 
 
 def _wait_charts_ready(page) -> None:
