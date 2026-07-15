@@ -5,7 +5,7 @@ from app.services.approval_preview_service import _brand_changes, _platform_labe
 
 def test_platform_labels_mixed_shapes():
     assert _platform_labels(["doubao", {"code": "kimi", "mode": "search"}]) == [
-        "doubao(极速)",
+        "doubao(快速)",
         "kimi(联网)",
     ]
 

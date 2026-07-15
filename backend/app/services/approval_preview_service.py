@@ -16,7 +16,7 @@ from app.services.platform_selection import normalize_platform_selections, selec
 
 
 _MODE_SHORT = {
-    "standard": "极速",
+    "standard": "快速",
     "search": "联网",
     "reasoning": "深度",
     "reasoning_search": "深度+联网",
@@ -27,7 +27,7 @@ def _platform_labels(raw: Any) -> list[str]:
     """平台列表展示：兼容 string[] 与 {code,mode}[]。"""
     labels: list[str] = []
     for item in normalize_platform_selections(raw if isinstance(raw, list) else []):
-        mode = _MODE_SHORT.get(str(item.get("mode") or "standard"), "极速")
+        mode = _MODE_SHORT.get(str(item.get("mode") or "standard"), "快速")
         labels.append(f"{item['code']}({mode})")
     return labels
 
