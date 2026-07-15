@@ -12,6 +12,24 @@ from app.models.approval import OperationApproval
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.brand_service import asset_to_dict, get_brand_asset, list_keyword_groups
+from app.services.platform_selection import normalize_platform_selections, selection_codes
+
+
+_MODE_SHORT = {
+    "standard": "极速",
+    "search": "联网",
+    "reasoning": "深度",
+    "reasoning_search": "深度+联网",
+}
+
+
+def _platform_labels(raw: Any) -> list[str]:
+    """平台列表展示：兼容 string[] 与 {code,mode}[]。"""
+    labels: list[str] = []
+    for item in normalize_platform_selections(raw if isinstance(raw, list) else []):
+        mode = _MODE_SHORT.get(str(item.get("mode") or "standard"), "极速")
+        labels.append(f"{item['code']}({mode})")
+    return labels
 
 
 def _body(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -133,7 +151,7 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         rows.append(
             _change(
                 f"新增词组「{name}」",
-                after=f"监测词 {_join_list(_group_keywords(group), limit=6)}；平台 {_join_list(group.get('platforms'), limit=6)}",
+                after=f"监测词 {_join_list(_group_keywords(group), limit=6)}；平台 {_join_list(_platform_labels(group.get('platforms')), limit=6)}",
                 kind="add",
             )
         )
@@ -159,8 +177,8 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         new_kw = _join_list(_group_keywords(new_group), limit=8)
         if old_kw != new_kw:
             rows.append(_change(f"词组「{name}」监测词", before=old_kw, after=new_kw))
-        old_plat = _join_list(old_group.get("platforms"), limit=6)
-        new_plat = _join_list(new_group.get("platforms"), limit=6)
+        old_plat = _join_list(_platform_labels(old_group.get("platforms")), limit=6)
+        new_plat = _join_list(_platform_labels(new_group.get("platforms")), limit=6)
         if old_plat != new_plat:
             rows.append(_change(f"词组「{name}」平台", before=old_plat, after=new_plat))
         old_name = str(old_group.get("name") or "").strip()
@@ -168,8 +186,16 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         if old_name and new_name and old_name != new_name:
             rows.append(_change("词组名称", before=old_name, after=new_name))
 
-    old_platforms = _join_list(sorted({code for group in old_groups for code in (group.get("platforms") or [])}))
-    new_platforms = _join_list(sorted({code for group in new_groups for code in (group.get("platforms") or [])}))
+    old_codes: set[str] = set()
+    new_codes: set[str] = set()
+    for group in old_groups:
+        if isinstance(group, dict):
+            old_codes.update(selection_codes(group.get("platforms")))
+    for group in new_groups:
+        if isinstance(group, dict):
+            new_codes.update(selection_codes(group.get("platforms")))
+    old_platforms = _join_list(sorted(old_codes))
+    new_platforms = _join_list(sorted(new_codes))
     if old_platforms != new_platforms and not any(row.get("field", "").endswith("」平台") for row in rows):
         rows.append(_change("监测平台（汇总）", before=old_platforms, after=new_platforms))
 
