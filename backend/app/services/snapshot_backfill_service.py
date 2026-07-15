@@ -24,6 +24,7 @@ from app.services.brand_service import (
 )
 from app.services.operation_log_service import write_operation_log
 from app.services.monitor_service import (
+    BACKFILL_WEAK_RANK_AFTER,
     TERMINAL_STATUSES,
     _platform_display_names,
     _prompt_belongs_to_group,
@@ -117,7 +118,26 @@ def _lead_context_for_task(db: Session, task_id: str) -> dict[str, Any]:
     return {
         "lead_diagnosis_id": run.lead_diagnosis_id,
         "brand_name": lead.brand_name if lead else None,
+        "created_by_user_id": lead.created_by_user_id if lead else None,
     }
+
+
+def resolve_backfill_owner_user_id(
+    db: Session,
+    task: GeoMonitorTask,
+    *,
+    lead_ctx: dict[str, Any] | None = None,
+) -> int | None:
+    """补录待办归属销售：签约企业 → tenant.owner_user_id；售前 → 诊断创建人。"""
+    if task.tenant_id:
+        tenant = db.get(Tenant, task.tenant_id)
+        if tenant and tenant.owner_user_id:
+            return int(tenant.owner_user_id)
+    ctx = lead_ctx if lead_ctx is not None else _lead_context_for_task(db, task.task_id)
+    creator = ctx.get("created_by_user_id")
+    if creator:
+        return int(creator)
+    return None
 
 
 def _schedule_context_for_task(
@@ -175,8 +195,13 @@ def _notify_subtask_backfill(db: Session, subtask: GeoMonitorSubtask, task: GeoM
     ctx = build_snapshot_backfill_item(db, subtask, task)
     scope = ctx.get("brand_name") or ctx.get("tenant_name") or task.monitor_keywords or "监测任务"
     prompt_preview = (subtask.prompt or "")[:80]
-    title = "快照待补录"
-    message = f"{scope} · {subtask.platform} · {prompt_preview}"
+    rank = ctx.get("mention_position") if ctx.get("mention_position") is not None else subtask.mention_position
+    if rank is not None and (subtask.answer_content or "").strip():
+        title = "排名落后待补录"
+        message = f"{scope} · {subtask.platform} · 第{int(rank)}名 · {prompt_preview}"
+    else:
+        title = "快照待补录"
+        message = f"{scope} · {subtask.platform} · {prompt_preview}"
     persist_backfill_notification(
         db,
         subtask_id=subtask.subtask_id,
@@ -361,11 +386,13 @@ def build_backfill_notification_context(
     )
     if schedule_ctx is None:
         schedule_ctx = _schedule_context_for_task(db, task)
+    owner_user_id = resolve_backfill_owner_user_id(db, task, lead_ctx=lead_ctx)
     return {
         "subtask_id": subtask.subtask_id,
         "task_id": task.task_id,
         "tenant_id": task.tenant_id,
         "tenant_name": tenant_name,
+        "owner_user_id": owner_user_id,
         "platform": subtask.platform,
         "prompt": subtask.prompt,
         "error_message": subtask.error_message,
@@ -715,7 +742,7 @@ def list_snapshot_backfill_page(
 
     no_answer = or_(GeoMonitorSubtask.answer_content.is_(None), GeoMonitorSubtask.answer_content == "")
     if pending_only:
-        stmt = stmt.where(
+        fail_pending = and_(
             no_answer,
             or_(
                 GeoMonitorSubtask.status.in_(("failed", "stopped")),
@@ -726,6 +753,11 @@ def list_snapshot_backfill_page(
                 ),
             ),
         )
+        weak_rank_pending = and_(
+            GeoMonitorSubtask.mention_position.isnot(None),
+            GeoMonitorSubtask.mention_position > BACKFILL_WEAK_RANK_AFTER,
+        )
+        stmt = stmt.where(or_(fail_pending, weak_rank_pending))
     if keyword_text:
         stmt = stmt.where(GeoMonitorSubtask.prompt.like(f"%{keyword_text}%"))
 

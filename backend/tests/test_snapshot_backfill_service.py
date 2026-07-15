@@ -80,14 +80,51 @@ def test_subtask_needs_snapshot_backfill_when_answer_present() -> None:
         prompt="测试问题",
         status="completed",
         answer_content="已有回答",
+        mention_position=2,
         raw_result_json={},
     )
     assert subtask_needs_snapshot_backfill(subtask) is False
 
 
+def test_subtask_needs_snapshot_backfill_when_rank_after_top3() -> None:
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank4",
+        task_id="task-1",
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="测试问题",
+        status="completed",
+        answer_content="品牌出现在第四",
+        mention_position=4,
+        raw_result_json={},
+    )
+    assert subtask_needs_snapshot_backfill(subtask) is True
+    assert subtask_backfill_eligible(subtask, pending_only=True) is True
+
+
+def test_subtask_needs_snapshot_backfill_rank3_not_pending() -> None:
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank3",
+        task_id="task-1",
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="测试问题",
+        status="completed",
+        answer_content="品牌第三",
+        mention_position=3,
+        raw_result_json={},
+    )
+    assert subtask_needs_snapshot_backfill(subtask) is False
+    assert subtask_backfill_eligible(subtask, pending_only=False) is True
+
+
 def test_notify_failed_subtasks_for_task_creates_single_notification(db_session) -> None:
+    tenant = Tenant(name="艾迪亚", code="aidya", owner_user_id=88)
+    db_session.add(tenant)
+    db_session.flush()
     task = GeoMonitorTask(
         task_id="task-1",
+        tenant_id=tenant.id,
         monitor_keywords="艾迪亚",
         status="partial_completed",
         total_items=1,
@@ -118,6 +155,51 @@ def test_notify_failed_subtasks_for_task_creates_single_notification(db_session)
     assert row.category == "snapshot_backfill"
     assert row.source_key == "subtask:backfill:st-fail-1"
     assert "doubao_mobile" in row.message
+    import json
+
+    payload = json.loads(row.payload_json or "{}")
+    assert payload.get("owner_user_id") == 88
+
+
+def test_notify_weak_rank_uses_rank_title(db_session) -> None:
+    tenant = Tenant(name="测试企业", code="t-weak", owner_user_id=9)
+    db_session.add(tenant)
+    db_session.flush()
+    task = GeoMonitorTask(
+        task_id="task-weak",
+        tenant_id=tenant.id,
+        monitor_keywords="测试",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["弱排名"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-weak",
+        task_id="task-weak",
+        platform="doubao",
+        mode="standard",
+        prompt="弱排名",
+        status="completed",
+        answer_content="……第5名……",
+        mention_position=5,
+        raw_result_json={},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    assert notify_failed_subtasks_for_task(db_session, task) == 1
+    row = db_session.query(SystemNotification).one()
+    assert row.title == "排名落后待补录"
+    assert "第5名" in row.message
+    import json
+
+    assert json.loads(row.payload_json or "{}").get("owner_user_id") == 9
 
 
 def test_subtask_backfill_eligible_includes_completed_with_answer() -> None:

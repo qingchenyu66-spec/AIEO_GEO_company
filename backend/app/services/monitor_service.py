@@ -3523,15 +3523,30 @@ def workspace_brief(
     }
 
 
-def subtask_needs_snapshot_backfill(subtask: GeoMonitorSubtask) -> bool:
-    """失败或无回答的子任务需要运营快照补录。"""
-    if subtask.answer_content:
+# ponytail: Top3 以外（rank>=4）也进待补录；未提及（null）不按「三位之后」处理。
+BACKFILL_WEAK_RANK_AFTER = 3
+
+
+def subtask_weak_rank_needs_backfill(subtask: GeoMonitorSubtask) -> bool:
+    """品牌位次差于 Top3（第 4 名及更后）时需要补录优化。"""
+    pos = subtask.mention_position
+    if pos is None:
         return False
-    if subtask.status in {"failed", "stopped"}:
-        return True
-    if subtask.error_message and subtask.status in TERMINAL_STATUSES:
-        return True
-    return False
+    try:
+        return int(pos) > BACKFILL_WEAK_RANK_AFTER
+    except (TypeError, ValueError):
+        return False
+
+
+def subtask_needs_snapshot_backfill(subtask: GeoMonitorSubtask) -> bool:
+    """失败/无回答，或已有回答但排名在 Top3 之外，需要快照补录。"""
+    if not (subtask.answer_content or "").strip():
+        if subtask.status in {"failed", "stopped"}:
+            return True
+        if subtask.error_message and subtask.status in TERMINAL_STATUSES:
+            return True
+        return False
+    return subtask_weak_rank_needs_backfill(subtask)
 
 
 def recompute_subtask_rank_from_answer(

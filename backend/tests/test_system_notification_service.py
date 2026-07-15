@@ -59,9 +59,90 @@ def test_celery_notification_category_gated():
     assert can_view_notification_category("celery_queue", **{**flags, "can_view_ops_alerts": True}) is True
     assert can_view_notification_category("snapshot_backfill", **flags) is False
     assert can_view_notification_category("snapshot_backfill", **{**flags, "can_view_snapshot_backfill": True}) is True
+    assert (
+        can_view_notification_category(
+            "snapshot_backfill",
+            **{**flags, "can_view_snapshot_backfill": True, "snapshot_backfill_owner_only": True},
+        )
+        is None
+    )
     assert can_view_notification_category("report_published", **flags) is False
     assert can_view_notification_category("report_published", **{**flags, "can_view_customer_reports": True}) is True
     assert can_view_notification_category("unknown_category", **flags) is False
+
+
+def test_snapshot_backfill_owner_only_read_check(db_session):
+    from app.services.system_notification_service import _user_can_read_notification
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="snapshot_backfill",
+        level="warning",
+        title="快照待补录",
+        message="a · b · c",
+        payload_json='{"owner_user_id": 42, "subtask_id": "st-1"}',
+        source_key="subtask:backfill:st-1",
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    assert (
+        _user_can_read_notification(
+            row,
+            user_id=42,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=False,
+            snapshot_backfill_owner_only=True,
+        )
+        is True
+    )
+    assert (
+        _user_can_read_notification(
+            row,
+            user_id=99,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=False,
+            snapshot_backfill_owner_only=True,
+        )
+        is False
+    )
+    assert (
+        _user_can_read_notification(
+            row,
+            user_id=99,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=False,
+            snapshot_backfill_owner_only=False,
+        )
+        is True
+    )
+    assert (
+        _user_can_read_notification(
+            row,
+            user_id=42,
+            identity_type="CUSTOMER",
+            tenant_id=10,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=True,
+            snapshot_backfill_owner_only=False,
+        )
+        is False
+    )
 
 
 def test_report_published_notification_for_customer_tenant(db_session):

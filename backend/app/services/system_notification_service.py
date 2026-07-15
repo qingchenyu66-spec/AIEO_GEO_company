@@ -33,8 +33,9 @@ def can_view_notification_category(
     can_view_ops_alerts: bool,
     can_view_snapshot_backfill: bool,
     can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
 ) -> bool | None:
-    """通知分类是否可见；None 表示需结合 payload 中的 requester_user_id 判断。"""
+    """通知分类是否可见；None 表示需结合 payload 中的用户 ID 判断。"""
     if category == "operation_approval":
         return can_review_approvals
     if category == "operation_approval_result":
@@ -42,7 +43,10 @@ def can_view_notification_category(
     if category == "celery_queue":
         return can_view_ops_alerts
     if category == "snapshot_backfill":
-        return can_view_snapshot_backfill
+        if not can_view_snapshot_backfill:
+            return False
+        # 销售仅看归属自己的补录待办；运营/管理员看全部。
+        return None if snapshot_backfill_owner_only else True
     if category == "report_published":
         return can_view_customer_reports
     return False
@@ -80,6 +84,13 @@ def _notification_query_for_user(
     return stmt
 
 
+def _owner_user_id_expr():
+    return func.cast(
+        func.json_unquote(func.json_extract(SystemNotification.payload_json, "$.owner_user_id")),
+        Integer,
+    )
+
+
 def _apply_notification_visibility_filter(
     stmt: Select[tuple[SystemNotification]],
     *,
@@ -87,6 +98,7 @@ def _apply_notification_visibility_filter(
     can_review_approvals: bool,
     can_view_ops_alerts: bool,
     can_view_snapshot_backfill: bool,
+    snapshot_backfill_owner_only: bool = False,
 ) -> Select[tuple[SystemNotification]]:
     """按角色过滤通知：审批、运维告警、补录待办分别鉴权。"""
     clauses = [SystemNotification.category.not_in(PLATFORM_RESTRICTED_CATEGORIES)]
@@ -105,7 +117,15 @@ def _apply_notification_visibility_filter(
     if can_view_ops_alerts:
         clauses.append(SystemNotification.category == "celery_queue")
     if can_view_snapshot_backfill:
-        clauses.append(SystemNotification.category == "snapshot_backfill")
+        if snapshot_backfill_owner_only:
+            clauses.append(
+                and_(
+                    SystemNotification.category == "snapshot_backfill",
+                    _owner_user_id_expr() == user_id,
+                )
+            )
+        else:
+            clauses.append(SystemNotification.category == "snapshot_backfill")
     return stmt.where(or_(*clauses))
 
 
@@ -134,6 +154,7 @@ def _user_can_read_notification(
     can_view_ops_alerts: bool,
     can_view_snapshot_backfill: bool,
     can_view_customer_reports: bool,
+    snapshot_backfill_owner_only: bool = False,
 ) -> bool:
     if row.created_at < _notification_retention_cutoff():
         return False
@@ -159,11 +180,31 @@ def _user_can_read_notification(
         except json.JSONDecodeError:
             return False
         return int(payload.get("requester_user_id") or 0) == user_id
+    if row.category == "snapshot_backfill":
+        allowed = can_view_notification_category(
+            row.category,
+            can_review_approvals=can_review_approvals,
+            can_view_ops_alerts=can_view_ops_alerts,
+            can_view_snapshot_backfill=can_view_snapshot_backfill,
+            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+        )
+        if allowed is True:
+            return True
+        if allowed is False:
+            return False
+        if not row.payload_json:
+            return False
+        try:
+            payload = json.loads(row.payload_json)
+        except json.JSONDecodeError:
+            return False
+        return int(payload.get("owner_user_id") or 0) == user_id
     allowed = can_view_notification_category(
         row.category,
         can_review_approvals=can_review_approvals,
         can_view_ops_alerts=can_view_ops_alerts,
         can_view_snapshot_backfill=can_view_snapshot_backfill,
+        snapshot_backfill_owner_only=snapshot_backfill_owner_only,
     )
     return allowed is True
 
@@ -506,6 +547,7 @@ def list_notifications_for_user(
     can_view_ops_alerts: bool = False,
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
 ) -> list[dict[str, Any]]:
     stmt = _notification_query_for_user(
         user_id=user_id,
@@ -519,6 +561,7 @@ def list_notifications_for_user(
             can_review_approvals=can_review_approvals,
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
+            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         )
     else:
         stmt = _apply_customer_notification_visibility_filter(
@@ -560,6 +603,7 @@ def count_unread_notifications(
     can_view_ops_alerts: bool = False,
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
 ) -> int:
     audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
     visible_ids = select(SystemNotification.id).where(
@@ -580,6 +624,7 @@ def count_unread_notifications(
             can_review_approvals=can_review_approvals,
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
+            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         )
 
     read_subq = (
@@ -605,6 +650,7 @@ def mark_notification_read(
     can_view_ops_alerts: bool = False,
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
 ) -> bool:
     exists = db.scalar(
         select(SystemNotificationRead.id).where(
@@ -626,6 +672,7 @@ def mark_notification_read(
         can_view_ops_alerts=can_view_ops_alerts,
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         can_view_customer_reports=can_view_customer_reports,
+        snapshot_backfill_owner_only=snapshot_backfill_owner_only,
     ):
         return False
     db.add(SystemNotificationRead(user_id=user_id, notification_id=notification_id))
@@ -643,6 +690,7 @@ def mark_all_notifications_read(
     can_view_ops_alerts: bool = False,
     can_view_snapshot_backfill: bool = False,
     can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
 ) -> int:
     unread = list_notifications_for_user(
         db,
@@ -655,6 +703,7 @@ def mark_all_notifications_read(
         can_view_ops_alerts=can_view_ops_alerts,
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         can_view_customer_reports=can_view_customer_reports,
+        snapshot_backfill_owner_only=snapshot_backfill_owner_only,
     )
     count = 0
     for item in unread:
@@ -668,6 +717,7 @@ def mark_all_notifications_read(
             can_view_ops_alerts=can_view_ops_alerts,
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             can_view_customer_reports=can_view_customer_reports,
+            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         ):
             count += 1
     return count
