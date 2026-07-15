@@ -17,9 +17,9 @@ from app.services.platform_selection import normalize_platform_selections, selec
 
 _MODE_SHORT = {
     "standard": "快速",
-    "search": "联网",
-    "reasoning": "深度",
-    "reasoning_search": "深度+联网",
+    "search": "快速",
+    "reasoning": "深度思考",
+    "reasoning_search": "深度思考",
 }
 
 
