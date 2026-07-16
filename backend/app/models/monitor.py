@@ -87,6 +87,7 @@ class GeoMonitorDailyStat(Base):
     platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     mentioned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    top3_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rank_sum: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rank_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     citation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

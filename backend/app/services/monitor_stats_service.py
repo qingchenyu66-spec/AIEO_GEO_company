@@ -137,6 +137,7 @@ def upsert_daily_stat_row(
     platform: str,
     completed_delta: int = 0,
     mentioned_delta: int = 0,
+    top3_delta: int = 0,
     rank_sum_delta: int = 0,
     rank_count_delta: int = 0,
     citation_delta: int = 0,
@@ -157,6 +158,7 @@ def upsert_daily_stat_row(
         db.add(row)
     row.completed_count = max(0, (row.completed_count or 0) + completed_delta)
     row.mentioned_count = max(0, (row.mentioned_count or 0) + mentioned_delta)
+    row.top3_count = max(0, (row.top3_count or 0) + top3_delta)
     row.rank_sum = max(0, (row.rank_sum or 0) + rank_sum_delta)
     row.rank_count = max(0, (row.rank_count or 0) + rank_count_delta)
     row.citation_count = max(0, (row.citation_count or 0) + citation_delta)
@@ -199,7 +201,7 @@ def _rebuild_daily_stat_for_platform_day(
     lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
     asset = get_brand_asset(db, tenant_id)
 
-    metrics = {"completed": 0, "mentioned": 0, "rank_sum": 0, "rank_count": 0, "citation": 0}
+    metrics = {"completed": 0, "mentioned": 0, "top3": 0, "rank_sum": 0, "rank_count": 0, "citation": 0}
     for item in subtasks:
         task = item.task
         if task is None:
@@ -218,6 +220,8 @@ def _rebuild_daily_stat_for_platform_day(
             metrics["mentioned"] += 1
             metrics["rank_sum"] += int(item.mention_position)
             metrics["rank_count"] += 1
+            if float(item.mention_position) <= 3:
+                metrics["top3"] += 1
         refs = item.reference_list_json or []
         metrics["citation"] += len(refs) if isinstance(refs, list) else 0
     if metrics["completed"] == 0:
@@ -229,6 +233,7 @@ def _rebuild_daily_stat_for_platform_day(
             platform=platform,
             completed_count=metrics["completed"],
             mentioned_count=metrics["mentioned"],
+            top3_count=metrics["top3"],
             rank_sum=metrics["rank_sum"],
             rank_count=metrics["rank_count"],
             citation_count=metrics["citation"],
@@ -427,21 +432,47 @@ def platform_bucket_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[str,
 
 
 def workspace_metrics_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[str, int | float | None]:
-    """从日统计行聚合工作台 KPI（不含 top3/负面，需子任务补充）。"""
+    """从日统计行聚合工作台 KPI。
+
+    Top3 口径与 monitor_sample_metrics.compute_brand_rank_rates 一致：
+    top3_count / completed_count（成功样本分母）。负面仍需子任务补充。
+    """
     completed = sum(int(row.completed_count or 0) for row in rows)
     mentioned = sum(int(row.mentioned_count or 0) for row in rows)
+    top3 = sum(int(getattr(row, "top3_count", 0) or 0) for row in rows)
     rank_sum = sum(int(row.rank_sum or 0) for row in rows)
     rank_count = sum(int(row.rank_count or 0) for row in rows)
     mention_rate = round(mentioned / max(1, completed) * 100, 1) if completed else 0.0
+    top3_rate = round(top3 / max(1, completed) * 100, 1) if completed else 0.0
     avg_rank = round(rank_sum / rank_count, 1) if rank_count else None
     return {
         "ranking_sample_count": completed,
         "brand_mention_rate": mention_rate,
         "avg_brand_rank": avg_rank,
-        "top3_rate": 0.0,
+        "top3_rate": top3_rate,
+        "top3_count": top3,
         "exposure_sample_count": 0,
         "negative_count": 0,
         "negative_rate": 0.0,
+    }
+
+
+def period_bucket_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[str, int | float | None]:
+    """周期报告趋势桶：与 _aggregate_bucket 字段对齐；无样本时率类为 None。"""
+    metrics = workspace_metrics_from_stat_rows(rows)
+    completed = int(metrics["ranking_sample_count"] or 0)
+    if completed <= 0:
+        return {
+            "completed": 0,
+            "mention_rate": None,
+            "avg_rank": None,
+            "top3_rate": None,
+        }
+    return {
+        "completed": completed,
+        "mention_rate": metrics["brand_mention_rate"],
+        "avg_rank": metrics["avg_brand_rank"],
+        "top3_rate": metrics["top3_rate"],
     }
 
 

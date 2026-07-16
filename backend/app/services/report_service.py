@@ -160,6 +160,22 @@ def build_tenant_monitor_snapshot(
     mention_rate = rates["mention_rate"]
     avg_rank = rates["avg_rank"]
     top3_rate = rates["top3_rate"]
+    # 有日期范围且日表可用时，品牌级 KPI（含 Top3）与工作台/周期趋势统一走日统计
+    if start_date is not None and end_date is not None:
+        from app.services.monitor_stats_service import (
+            has_daily_stats,
+            list_daily_stats_for_tenant,
+            workspace_metrics_from_stat_rows,
+        )
+
+        if has_daily_stats(db, [tenant_id]):
+            stat_metrics = workspace_metrics_from_stat_rows(
+                list_daily_stats_for_tenant(db, tenant_id, since=start_date, until=end_date)
+            )
+            if int(stat_metrics.get("ranking_sample_count") or 0) > 0:
+                mention_rate = float(stat_metrics["brand_mention_rate"] or 0.0)
+                avg_rank = stat_metrics["avg_brand_rank"]
+                top3_rate = float(stat_metrics["top3_rate"] or 0.0)
 
     sentiment_labels = {
         "positive": "正面",

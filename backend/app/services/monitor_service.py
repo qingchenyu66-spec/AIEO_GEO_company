@@ -3384,7 +3384,7 @@ def workspace_brief(
         display_metrics = _round_metrics_from_rows(latest_ranking_rows, latest_exposure_rows)
         if use_daily_stats and daily_stat_by_day.get(latest_day):
             stat_metrics = workspace_metrics_from_stat_rows(daily_stat_by_day[latest_day])
-            stat_metrics["top3_rate"] = display_metrics["top3_rate"]
+            # Top3 以日表为准，避免 limit 子任务采样把上轮/本轮算成 0
             stat_metrics["negative_count"] = display_metrics["negative_count"]
             stat_metrics["negative_rate"] = display_metrics["negative_rate"]
             stat_metrics["exposure_sample_count"] = display_metrics["exposure_sample_count"]
@@ -3404,7 +3404,6 @@ def workspace_brief(
             previous_metrics = _round_metrics_from_rows(previous_ranking_rows, previous_exposure_rows)
             if use_daily_stats and previous_day and daily_stat_by_day.get(previous_day):
                 stat_prev = workspace_metrics_from_stat_rows(daily_stat_by_day[previous_day])
-                stat_prev["top3_rate"] = previous_metrics["top3_rate"]
                 stat_prev["negative_count"] = previous_metrics["negative_count"]
                 stat_prev["negative_rate"] = previous_metrics["negative_rate"]
                 stat_prev["exposure_sample_count"] = previous_metrics["exposure_sample_count"]

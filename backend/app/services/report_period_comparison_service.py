@@ -1727,32 +1727,53 @@ def _aggregate_bucket(rows: list[GeoMonitorSubtask]) -> dict[str, Any]:
     }
 
 
+def _trend_slot_key(report_type: str, day: date, slots: list[dict[str, Any]]) -> str | None:
+    if report_type == "weekly":
+        return day.isoformat()
+    if report_type == "monthly":
+        return next((s["key"] for s in slots if s["start"] <= day <= s["end"]), None)
+    if report_type == "annual":
+        quarter = (day.month - 1) // 3 + 1
+        return f"{day.year}-Q{quarter}"
+    return f"{day.year}-{day.month:02d}"
+
+
 def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: date) -> dict[str, Any]:
     meta = TREND_META[report_type]
     slots = _trend_bucket_slots(report_type, start, end)
-    rows, day_by_id = _load_completed_subtasks(db, tenant_id, start, end)
-    bucket_rows: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
-    for row in rows:
-        day = day_by_id.get(row.id)
-        if day is None:
-            continue
-        if report_type == "weekly":
-            key = day.isoformat()
-        elif report_type == "monthly":
-            key = next((s["key"] for s in slots if s["start"] <= day <= s["end"]), None)
+    points: list[dict[str, Any]] = []
+
+    from app.services.monitor_stats_service import (
+        has_daily_stats,
+        list_daily_stats_for_tenant,
+        period_bucket_from_stat_rows,
+    )
+
+    if has_daily_stats(db, [tenant_id]):
+        # 与工作台一致：Top3/提及率/均排走日表，避免明细扫描与采样口径漂移
+        bucket_stats: dict[str, list] = defaultdict(list)
+        for row in list_daily_stats_for_tenant(db, tenant_id, since=start, until=end):
+            key = _trend_slot_key(report_type, row.stat_date, slots)
             if key is None:
                 continue
-        elif report_type == "annual":
-            quarter = (day.month - 1) // 3 + 1
-            key = f"{day.year}-Q{quarter}"
-        else:
-            key = f"{day.year}-{day.month:02d}"
-        bucket_rows[key].append(row)
-
-    points: list[dict[str, Any]] = []
-    for slot in slots:
-        agg = _aggregate_bucket(bucket_rows.get(slot["key"], []))
-        points.append({**slot, **agg})
+            bucket_stats[key].append(row)
+        for slot in slots:
+            agg = period_bucket_from_stat_rows(bucket_stats.get(slot["key"], []))
+            points.append({**slot, **agg})
+    else:
+        rows, day_by_id = _load_completed_subtasks(db, tenant_id, start, end)
+        bucket_rows: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
+        for row in rows:
+            day = day_by_id.get(row.id)
+            if day is None:
+                continue
+            key = _trend_slot_key(report_type, day, slots)
+            if key is None:
+                continue
+            bucket_rows[key].append(row)
+        for slot in slots:
+            agg = _aggregate_bucket(bucket_rows.get(slot["key"], []))
+            points.append({**slot, **agg})
 
     valid_mr = [p["mention_rate"] for p in points if p["mention_rate"] is not None]
     valid_rank = [p["avg_rank"] for p in points if p["avg_rank"] is not None]

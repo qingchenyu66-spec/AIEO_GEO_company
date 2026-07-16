@@ -110,3 +110,10 @@ def test_refresh_stats_merges_multiple_tasks_for_same_day_platform(db_session) -
     assert row is not None
     assert row.completed_count == 5
     assert row.mentioned_count == 3
+    assert row.top3_count == 3  # positions 1,2,3
+
+    from app.services.monitor_stats_service import workspace_metrics_from_stat_rows
+
+    metrics = workspace_metrics_from_stat_rows([row])
+    assert metrics["top3_rate"] == 60.0  # 3/5
+    assert metrics["brand_mention_rate"] == 60.0
