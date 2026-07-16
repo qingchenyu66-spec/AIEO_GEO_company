@@ -10,7 +10,6 @@ import {
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
-import { formatDateTime } from '../portalUtils'
 import {
   createEmptyCategoryBucket,
   collectBrandKnownHosts,
@@ -34,6 +33,18 @@ export type SourceRow = MonitorSummary['source_stats'][number] & {
   has_exposure: boolean
 }
 
+export type WebsiteRankRow = {
+  domain: string
+  count: number
+  articleCount: number
+  category: SourceCategory
+  platforms: string[]
+  exposure_terms: string[]
+  has_exposure: boolean
+  sampleUrl: string
+  questions: string[]
+}
+
 const RANK_PAGE_SIZE = 20
 
 function errorMessage(error: unknown) {
@@ -44,7 +55,7 @@ function domainFromUrl(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, '')
   } catch {
-    return url
+    return url.replace(/^https?:\/\//, '').split('/')[0]?.replace(/^www\./, '') || url
   }
 }
 
@@ -66,6 +77,62 @@ function mapSourceRows(
       brandKnownHosts,
     }),
   }))
+}
+
+function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
+  type Acc = WebsiteRankRow & { categoryCounts: Record<string, number>; topArticleCount: number }
+  const map = new Map<string, Acc>()
+  for (const row of rows) {
+    const domain = domainFromUrl(row.url || '')
+    if (!domain) continue
+    let entry = map.get(domain)
+    if (!entry) {
+      entry = {
+        domain,
+        count: 0,
+        articleCount: 0,
+        category: row.category,
+        platforms: [],
+        exposure_terms: [],
+        has_exposure: false,
+        sampleUrl: row.url,
+        questions: [],
+        categoryCounts: {},
+        topArticleCount: row.count,
+      }
+      map.set(domain, entry)
+    }
+    entry.count += row.count
+    entry.articleCount += 1
+    entry.has_exposure = entry.has_exposure || row.has_exposure
+    entry.categoryCounts[row.category] = (entry.categoryCounts[row.category] || 0) + row.count
+    if (row.count > entry.topArticleCount) {
+      entry.topArticleCount = row.count
+      entry.sampleUrl = row.url
+    }
+    for (const platform of row.platforms || []) {
+      if (!entry.platforms.includes(platform)) entry.platforms.push(platform)
+    }
+    for (const term of row.exposure_terms || []) {
+      if (!entry.exposure_terms.includes(term)) entry.exposure_terms.push(term)
+    }
+    for (const question of row.questions || []) {
+      if (entry.questions.length < 8 && !entry.questions.includes(question)) {
+        entry.questions.push(question)
+      }
+    }
+  }
+  return Array.from(map.values())
+    .map(({ categoryCounts, topArticleCount: _top, ...row }) => {
+      const bestCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0]?.[0]
+      return {
+        ...row,
+        category: (bestCategory as SourceCategory) || row.category,
+        exposure_terms: row.exposure_terms.slice(0, 8),
+        platforms: row.platforms.slice(0, 6),
+      }
+    })
+    .sort((a, b) => b.count - a.count || b.articleCount - a.articleCount)
 }
 
 export function useSourceAnalysis(options?: {
@@ -161,21 +228,26 @@ export function useSourceAnalysis(options?: {
   const filteredSources = computed(() => applySourceFilters(brandedSources.value))
   const filteredAllSources = computed(() => applySourceFilters(allCitationSources.value))
 
-  const activeRankSources = computed(() => (
-    rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
+  const brandedWebsites = computed(() => aggregateByWebsite(filteredSources.value))
+  const allWebsites = computed(() => aggregateByWebsite(filteredAllSources.value))
+
+  const activeRankWebsites = computed(() => (
+    rankTab.value === 'all' ? allWebsites.value : brandedWebsites.value
   ))
 
-  const rankTotalPages = computed(() => Math.max(1, Math.ceil(activeRankSources.value.length / RANK_PAGE_SIZE)))
-  const pagedRankSources = computed(() => {
+  const rankTotalPages = computed(() => Math.max(1, Math.ceil(activeRankWebsites.value.length / RANK_PAGE_SIZE)))
+  const pagedRankWebsites = computed(() => {
     const page = Math.min(Math.max(rankPage.value, 1), rankTotalPages.value)
     const start = (page - 1) * RANK_PAGE_SIZE
-    return activeRankSources.value.slice(start, start + RANK_PAGE_SIZE)
+    return activeRankWebsites.value.slice(start, start + RANK_PAGE_SIZE)
   })
 
   const sourceTotalCount = computed(() => filteredSources.value.reduce((sum, item) => sum + item.count, 0))
   const uniqueSourceCount = computed(() => filteredSources.value.length)
+  const brandedWebsiteCount = computed(() => brandedWebsites.value.length)
   const allCitationTotalCount = computed(() => filteredAllSources.value.reduce((sum, item) => sum + item.count, 0))
   const allCitationUniqueCount = computed(() => filteredAllSources.value.length)
+  const allWebsiteCount = computed(() => allWebsites.value.length)
   const brandedCitationShare = computed(() => {
     if (!allCitationTotalCount.value) return 0
     return Math.round((sourceTotalCount.value / allCitationTotalCount.value) * 100)
@@ -332,7 +404,7 @@ export function useSourceAnalysis(options?: {
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '图表与「品牌相关」榜仅统计标题/链接含露出词的引用；「全部引用」榜不过滤露出词，行内 chip 标记是否含露出词。',
+      body: '图表按含露出词的引用文章统计；下方「引用网站排行」按域名聚合。「品牌相关」只含命中露出词的网站，「全部网站」含所有被引用域名。',
     }
   })
 
@@ -376,22 +448,22 @@ export function useSourceAnalysis(options?: {
   }
 
   function exportCsv() {
-    const rows = activeRankSources.value
+    const rows = activeRankWebsites.value
     if (!rows.length) {
       ElMessage.warning('暂无可导出数据')
       return
     }
-    const tabLabel = rankTab.value === 'all' ? '全部引用' : '品牌相关'
+    const tabLabel = rankTab.value === 'all' ? '全部网站' : '品牌相关网站'
     const lines = [
-      ['标题', '链接', '引用次数', '监测问题', '露出词', '含露出词', '最近检测'].join(','),
-      ...rows.map(source => [
-        `"${(source.title || '').replace(/"/g, '""')}"`,
-        `"${source.url || ''}"`,
-        source.count,
-        `"${(source.questions || []).join('；')}"`,
-        `"${(source.exposure_terms || []).join('、')}"`,
-        source.has_exposure ? '是' : '否',
-        source.latest_time ? formatDateTime(source.latest_time) : '',
+      ['网站', '引用次数', '文章数', '类型', '露出词', '含露出词', '平台'].join(','),
+      ...rows.map(site => [
+        `"${site.domain.replace(/"/g, '""')}"`,
+        site.count,
+        site.articleCount,
+        `"${sourceCategoryLabels[site.category] || site.category}"`,
+        `"${site.exposure_terms.join('、')}"`,
+        site.has_exposure ? '是' : '否',
+        `"${site.platforms.map(code => platformLabelMap[code] || code).join('、')}"`,
       ].join(',')),
     ]
     const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
@@ -438,12 +510,14 @@ export function useSourceAnalysis(options?: {
     platformTabs,
     filteredSources,
     filteredAllSources,
-    activeRankSources,
-    pagedRankSources,
+    activeRankWebsites,
+    pagedRankWebsites,
     sourceTotalCount,
     uniqueSourceCount,
+    brandedWebsiteCount,
     allCitationTotalCount,
     allCitationUniqueCount,
+    allWebsiteCount,
     brandedCitationShare,
     platformWithSourcesCount,
     categoryStats,

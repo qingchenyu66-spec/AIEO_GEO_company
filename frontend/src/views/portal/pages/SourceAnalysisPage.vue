@@ -39,12 +39,13 @@ const {
   rankTotalPages,
   platformTabs,
   filteredSources,
-  activeRankSources,
-  pagedRankSources,
+  activeRankWebsites,
+  pagedRankWebsites,
   sourceTotalCount,
   uniqueSourceCount,
+  brandedWebsiteCount,
   allCitationTotalCount,
-  allCitationUniqueCount,
+  allWebsiteCount,
   brandedCitationShare,
   platformWithSourcesCount,
   categoryStats,
@@ -62,15 +63,14 @@ const {
   exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
-  domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
 
 const rankPageLabel = computed(() => {
-  const total = activeRankSources.value.length
+  const total = activeRankWebsites.value.length
   if (!total) return '暂无数据'
   const start = (rankPage.value - 1) * rankPageSize + 1
   const end = Math.min(rankPage.value * rankPageSize, total)
-  return `第 ${start}-${end} 条 / 共 ${total} 条`
+  return `第 ${start}-${end} 个网站 / 共 ${total} 个`
 })
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
@@ -121,7 +121,7 @@ const categoryOptions = [
               <RefreshCw />
               刷新
             </button>
-            <button type="button" class="primary-btn small-btn" :disabled="!activeRankSources.length" @click="exportCsv">
+            <button type="button" class="primary-btn small-btn" :disabled="!activeRankWebsites.length" @click="exportCsv">
               <Download />
               导出 CSV
             </button>
@@ -150,7 +150,7 @@ const categoryOptions = [
         <span class="source-hero-eyebrow">{{ pageMenuName }} · AI 引用溯源</span>
         <h2>{{ brandAsset?.brand_name || '本品牌' }} · 信源分析</h2>
         <p class="source-hero-note">
-          图表默认按<strong>含露出词</strong>统计；排行支持切换「品牌相关」与「全部引用」。
+          图表默认按<strong>含露出词</strong>统计；下方排行按<strong>引用网站（域名）</strong>聚合。
         </p>
       </div>
       <div v-if="loading && !hasPageContent" class="mini-empty">信源数据加载中…</div>
@@ -158,12 +158,12 @@ const categoryOptions = [
         <div class="source-hero-metric primary-metric">
           <span>品牌相关引用</span>
           <b>{{ sourceTotalCount }}</b>
-          <em>{{ uniqueSourceCount }} 个独立信源</em>
+          <em>{{ brandedWebsiteCount }} 个相关网站 · {{ uniqueSourceCount }} 篇文章</em>
         </div>
         <div class="source-hero-metric">
           <span>全部引用次数</span>
           <b>{{ allCitationTotalCount }}</b>
-          <em>{{ allCitationUniqueCount }} 个独立信源</em>
+          <em>{{ allWebsiteCount }} 个引用网站</em>
         </div>
         <div class="source-hero-metric">
           <span>品牌相关占比</span>
@@ -250,7 +250,7 @@ const categoryOptions = [
       <article class="source-panel source-table-panel">
         <div class="source-panel-head source-rank-head">
           <div>
-            <h3>信源排行</h3>
+            <h3>引用网站排行</h3>
             <p>{{ rankPageLabel }}</p>
           </div>
           <div class="source-rank-tabs">
@@ -266,48 +266,50 @@ const categoryOptions = [
               :class="{ active: rankTab === 'all' }"
               @click="setRankTab('all')"
             >
-              全部引用
+              全部网站
             </button>
           </div>
         </div>
-        <div class="source-table-head" :class="{ 'is-all-tab': rankTab === 'all' }">
+        <div class="source-table-head source-website-head">
           <span>#</span>
-          <span>信源</span>
-          <span>问题</span>
+          <span>网站</span>
+          <span>类型</span>
           <span>{{ rankTab === 'all' ? '标记' : '露出词' }}</span>
+          <span>文章</span>
           <span>次数</span>
         </div>
-        <div v-if="!pagedRankSources.length" class="mini-empty chart-empty">当前 Tab / 筛选下暂无信源。</div>
+        <div v-if="!pagedRankWebsites.length" class="mini-empty chart-empty">当前 Tab / 筛选下暂无网站。</div>
         <div
-          v-for="(source, index) in pagedRankSources"
-          :key="`${rankTab}-${source.url}`"
-          class="source-table-row"
-          :class="{ 'is-all-tab': rankTab === 'all' }"
+          v-for="(site, index) in pagedRankWebsites"
+          :key="`${rankTab}-${site.domain}`"
+          class="source-table-row source-website-row"
         >
           <span>{{ (rankPage - 1) * rankPageSize + index + 1 }}</span>
           <div class="source-table-main">
-            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
-              {{ source.title || domainFromUrl(source.url) }}
+            <a
+              :href="externalLink(site.sampleUrl || `https://${site.domain}`) || undefined"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="source-table-title-link"
+            >
+              {{ site.domain }}
             </a>
-            <small>
-              {{ domainFromUrl(source.url) }}
-              · {{ sourceCategoryLabel(source.category) }}
-            </small>
+            <small>{{ site.platforms.length }} 个平台引用</small>
           </div>
           <div class="source-table-tags">
-            <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
-            <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
+            <i>{{ sourceCategoryLabel(site.category) }}</i>
           </div>
           <div class="source-table-tags">
             <template v-if="rankTab === 'all'">
-              <i v-if="source.has_exposure" class="is-exposure">含露出词</i>
+              <i v-if="site.has_exposure" class="is-exposure">含露出词</i>
               <i v-else class="source-table-muted">未命中</i>
             </template>
             <template v-else>
-              <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
+              <i v-for="term in site.exposure_terms.slice(0, 3)" :key="`${site.domain}-${term}`" class="is-exposure">{{ term }}</i>
             </template>
           </div>
-          <strong>{{ source.count }}</strong>
+          <strong>{{ site.articleCount }}</strong>
+          <strong>{{ site.count }}</strong>
         </div>
         <div v-if="rankTotalPages > 1" class="source-rank-pager">
           <button type="button" class="tiny-btn" :disabled="rankPage <= 1" @click="rankPage -= 1">上一页</button>
