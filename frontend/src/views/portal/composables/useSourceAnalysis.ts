@@ -264,10 +264,12 @@ export function useSourceAnalysis(options?: {
 
   const structureChartHeight = computed(() => {
     const count = Math.max(structureChartRows.value.length, 1)
-    return count * 50 + 36
+    const legendReserve = categoryStats.value.length > 4 ? 48 : 36
+    return count * 44 + legendReserve + 24
   })
 
-  const structureChartScrollable = computed(() => structureChartRows.value.length > 6)
+  // ponytail: 超过 10 平台才滚；常见已购数（≤8）直接撑开，避免丑滚动条
+  const structureChartScrollable = computed(() => structureChartRows.value.length > 10)
 
   const hasStructurePanel = computed(() => (
     platformFilter.value === 'all'
@@ -280,7 +282,7 @@ export function useSourceAnalysis(options?: {
     const categoryMin = Math.max(220, categoryRows * 48 + 96)
     if (!hasStructurePanel.value) return categoryMin
     const structureH = structureChartHeight.value
-    if (structureChartScrollable.value) return Math.max(460, categoryMin)
+    if (structureChartScrollable.value) return Math.max(520, categoryMin)
     return Math.max(structureH, categoryMin)
   })
 

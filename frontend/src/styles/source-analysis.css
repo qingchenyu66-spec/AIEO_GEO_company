@@ -314,31 +314,6 @@
   font-size: 12px;
 }
 
-.source-structure-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin: 0 0 10px;
-  padding: 0;
-  list-style: none;
-}
-
-.source-structure-legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #526b89;
-}
-
-.source-structure-legend i {
-  display: block;
-  width: 22px;
-  height: 5px;
-  border-radius: 999px;
-  flex: 0 0 auto;
-}
-
 .source-structure-scroll.is-scrollable {
   overflow-y: auto;
   padding-right: 2px;

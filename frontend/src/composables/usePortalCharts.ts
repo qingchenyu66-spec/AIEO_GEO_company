@@ -420,11 +420,13 @@ export function usePortalCharts(refs: PortalChartRefs) {
           .map(item => `${'marker' in item && item.marker ? item.marker : '● '}${item.seriesName}：${item.value}%`)
           .join('<br/>')}`
       }
+      const legendLabels = categoryKeys.map(type => data.sourceCategoryLabels[type])
+      const legendTop = categoryKeys.length > 4 ? 40 : 28
       sourceStructureChart.setOption({
         grid: {
           left: 88,
           right: 46,
-          top: 12,
+          top: legendTop + 8,
           bottom: rows.length === 1 ? 12 : rows.length <= 2 ? 16 : 20,
         },
         tooltip: {
@@ -432,7 +434,16 @@ export function usePortalCharts(refs: PortalChartRefs) {
           ...(compactStructure ? {} : { axisPointer: { type: 'shadow' } }),
           formatter: formatStructureTooltip,
         },
-        legend: { show: false },
+        legend: {
+          show: legendLabels.length > 0,
+          data: legendLabels,
+          left: 0,
+          top: 0,
+          itemWidth: 14,
+          itemHeight: 8,
+          itemGap: 14,
+          textStyle: { color: '#526b89', fontSize: 12 },
+        },
         xAxis: { type: 'value', max: 100, show: false },
         yAxis: {
           type: 'category',
@@ -447,7 +458,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
             name: '暂无引用',
             type: 'bar',
             stack: 'source',
-            barWidth: 16,
+            barWidth: 18,
             data: rows.map(row => (row.total ?? 0) > 0 ? 0 : 100),
             itemStyle: { color: '#e8edf3', borderRadius: [0, 8, 8, 0] },
           },
@@ -455,7 +466,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
             name: data.sourceCategoryLabels[type],
             type: 'bar',
             stack: 'source',
-            barWidth: 16,
+            barWidth: 18,
             data: rows.map(row => {
               if ((row.total ?? 0) === 0) return 0
               return row.categories.find(item => item.type === type)?.value || 0
