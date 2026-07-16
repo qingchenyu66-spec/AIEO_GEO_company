@@ -273,12 +273,17 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const tenantId = computed(() => {
     if (auth.session?.identity?.identity_type === 'CUSTOMER') return null
     if (externalTenantId != null) return externalTenantId
+    const previewId = Number(Array.isArray(route.query.preview_tenant_id) ? route.query.preview_tenant_id[0] : route.query.preview_tenant_id)
+    if (Number.isFinite(previewId) && previewId > 0) return previewId
     const raw = route.query.tenant_id
     const text = Array.isArray(raw) ? raw[0] : raw
     const parsed = Number(text)
     return Number.isFinite(parsed) ? parsed : null
   })
-  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const isCustomerView = computed(() => (
+    auth.session?.identity?.identity_type === 'CUSTOMER'
+    || (auth.session?.identity?.identity_type === 'PLATFORM' && tenantId.value != null && Boolean(route.query.preview_tenant_id))
+  ))
   const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const customerTrendPeriodLabel = computed(() => (
     workspaceTrendPeriodLabel(
@@ -948,8 +953,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     try {
       const [, tasks, summary] = await Promise.all([
         loadBrandAssetData(),
-        withRetry(() => getMonitorTasks()),
-        withRetry(() => getMonitorSummary()).catch(() => null),
+        withRetry(() => getMonitorTasks(tenantId.value)),
+        withRetry(() => getMonitorSummary(false, tenantId.value)).catch(() => null),
       ])
       monitorTasks.value = isCustomerView.value
         ? tasks.filter(task => monitorTaskBeforeToday(task))
@@ -992,6 +997,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         keyword_group: filters.keywordGroup.trim() || undefined,
         monitor_keyword: filters.monitorKeyword.trim() || undefined,
         exposure_term: filters.exposureTerm.trim() || undefined,
+        tenant_id: tenantId.value ?? undefined,
       }))
       ensureActiveMatrixPlatform()
     } catch (error: unknown) {

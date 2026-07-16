@@ -28,8 +28,14 @@ router = APIRouter(prefix="/auth")
 
 def identity_info(identity: UserIdentity, db: Session) -> dict:
     position_name = None
+    position_code = None
     if identity.position_id:
-        position_name = db.scalar(select(Position.position_name).where(Position.id == identity.position_id, Position.deleted.is_(False)))
+        position = db.scalar(
+            select(Position).where(Position.id == identity.position_id, Position.deleted.is_(False))
+        )
+        if position is not None:
+            position_name = position.position_name
+            position_code = position.position_code
     return IdentityInfo(
         id=identity.id,
         identity_type=identity.identity_type,
@@ -37,6 +43,7 @@ def identity_info(identity: UserIdentity, db: Session) -> dict:
         role_code=identity.role_code,
         position_id=identity.position_id,
         position_name=position_name,
+        position_code=position_code,
         tenant_id=identity.tenant_id,
         tenant_name=identity.tenant.name if identity.tenant else None,
         is_default=identity.is_default,

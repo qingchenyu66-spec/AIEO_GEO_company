@@ -1,10 +1,13 @@
 /** Menus that intentionally keep ?tenant_id= as enterprise context across navigations. */
 export const TENANT_QUERY_SCOPED_MENUS = new Set([
+  'customer.workspace',
   'customer.realtime',
   'customer.competitor',
   'platform.competitor',
   'customer.sources',
   'platform.sources',
+  'customer.reports',
+  'customer.knowledge',
 ])
 
 /** PortalView global brand prefetch is only for pages that inject PortalAnalytics brandAsset. */

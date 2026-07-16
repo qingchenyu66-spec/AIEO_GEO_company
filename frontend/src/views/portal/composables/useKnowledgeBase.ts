@@ -1,4 +1,5 @@
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import {
@@ -8,6 +9,7 @@ import {
 } from '../../../services/knowledge'
 import { useAuthStore } from '../../../stores/auth'
 import { formatDateTime, formatFileSize } from '../portalUtils'
+import { isCustomerPreviewActive, parsePreviewTenantId, parsePreviewTenantName } from '../customerPreview'
 
 export type KnowledgeTypeFilter = 'all' | 'pdf' | 'doc' | 'md' | 'txt'
 
@@ -26,6 +28,7 @@ function matchesTypeFilter(file: KnowledgeFileRecord, filter: KnowledgeTypeFilte
 
 export function useKnowledgeBase() {
   const auth = useAuthStore()
+  const route = useRoute()
   const files = ref<KnowledgeFileRecord[]>([])
   const loading = ref(false)
   const uploading = ref(false)
@@ -34,13 +37,22 @@ export function useKnowledgeBase() {
   const typeFilter = ref<KnowledgeTypeFilter>('all')
   const selectedId = ref<number | null>(null)
 
+  const isPreviewMode = computed(() => (
+    isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
+  ))
+  const previewTenantId = computed(() => parsePreviewTenantId(route))
+
   const pageMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.knowledge')?.menu_name || '企业知识库'
   ))
 
   const menuGrant = computed(() => auth.allowedMenus.find(menu => menu.menu_code === 'customer.knowledge'))
-  const canUpload = computed(() => Boolean(menuGrant.value?.can_create))
-  const tenantName = computed(() => auth.session?.identity?.tenant_name || '当前企业')
+  const canUpload = computed(() => !isPreviewMode.value && Boolean(menuGrant.value?.can_create))
+  const tenantName = computed(() => (
+    isPreviewMode.value
+      ? (parsePreviewTenantName(route) || '预览企业')
+      : (auth.session?.identity?.tenant_name || '当前企业')
+  ))
 
   const filteredFiles = computed(() => {
     const keyword = keywordFilter.value.trim().toLowerCase()
@@ -96,7 +108,7 @@ export function useKnowledgeBase() {
     loading.value = true
     loadError.value = ''
     try {
-      files.value = await withRetry(() => getKnowledgeFiles(null))
+      files.value = await withRetry(() => getKnowledgeFiles(previewTenantId.value))
       if (files.value.length && selectedId.value === null) {
         selectedId.value = files.value[0].id
       }
@@ -120,6 +132,10 @@ export function useKnowledgeBase() {
   }
 
   async function uploadFile(file: File) {
+    if (isPreviewMode.value) {
+      ElMessage.info('预览模式为只读，不可上传')
+      return
+    }
     validateFile(file)
     uploading.value = true
     try {

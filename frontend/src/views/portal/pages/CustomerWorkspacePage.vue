@@ -52,9 +52,6 @@ const {
   showTodoStrip,
   activeRound,
   roundSummaryLine,
-  isPreviewMode,
-  previewTenantName,
-  exitCustomerPreview,
 } = useCustomerWorkspace()
 
 const { enterActive, enterGeneration } = useWorkspaceEnter(() => brief.value)
@@ -136,13 +133,6 @@ watch(showEmptyGuide, (empty) => {
 
 <template>
   <section class="customer-workspace-page ws-campus">
-    <div v-if="isPreviewMode" class="ws-preview-banner">
-      <div>
-        <strong>只读预览</strong>
-        <span>正在预览「{{ previewTenantName || displayName }}」的客户工作台，不可代客户操作</span>
-      </div>
-      <button type="button" class="ws-campus-primary" @click="exitCustomerPreview">返回企业管理</button>
-    </div>
     <header class="ws-campus-head">
       <div>
         <h1>工作台</h1>

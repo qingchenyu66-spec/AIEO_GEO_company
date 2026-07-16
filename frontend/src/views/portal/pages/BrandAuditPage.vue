@@ -7,6 +7,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
 import { keywordGroupMonitorKeywords, normalizePlatformSelections, platformSelectionCodes } from '../../../services/brand'
 import { PortalNavigateKey } from '../injectionKeys'
+import { previewQueryFields } from '../customerPreview'
 
 function platformSelectionCount(group: { platforms?: unknown[] }) {
   return platformSelectionCodes((group.platforms || []) as never).length
@@ -56,10 +57,7 @@ function navigateToReportCenter(reportId: number, tenantId: number) {
 }
 
 function openCustomerPreview(tenant: { id: number; name: string }) {
-  portalNavigate('platform.customer_preview', false, {
-    preview_tenant_id: String(tenant.id),
-    preview_tenant_name: tenant.name,
-  })
+  portalNavigate('customer.workspace', false, previewQueryFields(tenant.id, tenant.name))
 }
 
 const {
@@ -93,6 +91,7 @@ const {
   transferringTenantOwner,
   canTransferTenantOwner,
   canFilterBySales,
+  showOwnerOnEnterpriseList,
   tenantSalesFilterOptions,
   knowledgeFiles,
   loadingKnowledgeFiles,
@@ -260,6 +259,10 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             <span>
               <small>服务状态</small>
               <b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b>
+            </span>
+            <span v-if="showOwnerOnEnterpriseList">
+              <small>归属销售</small>
+              <b>{{ tenantOwnerLabel(tenant) }}</b>
             </span>
             <span>
               <small>自动监测</small>

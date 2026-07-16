@@ -17,6 +17,7 @@ import {
 import type { TenantInfo } from '../../../services/management'
 import { formatReportDisplayTitle } from '../portalUtils'
 import { prepareReportPreviewHtml } from '../../../utils/reportPreviewHtml'
+import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -33,6 +34,8 @@ const reportTypeOptions: Array<{ value: ReportTypeFilter; label: string }> = [
   { value: 'annual', label: '监测年报' },
 ]
 
+const CUSTOMER_PORTAL_REPORT_TYPES = new Set(['weekly', 'monthly', 'quarterly', 'annual'])
+
 type UseReportCenterOptions = {
   isPlatform: () => boolean
   tenants: () => TenantInfo[]
@@ -41,6 +44,10 @@ type UseReportCenterOptions = {
 export function useReportCenter(options: UseReportCenterOptions) {
   const route = useRoute()
   const auth = useAuthStore()
+  const isPreviewMode = computed(() => (
+    isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
+  ))
+  const previewTenantId = computed(() => parsePreviewTenantId(route))
   const loading = ref(false)
   const exporting = ref(false)
   const detailLoading = ref(false)
@@ -62,10 +69,17 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   const filteredReports = computed(() => {
     let rows = reports.value
+    if (isPreviewMode.value && previewTenantId.value != null) {
+      rows = rows.filter(item => (
+        item.tenant_id === previewTenantId.value
+        && item.status === 'published'
+        && CUSTOMER_PORTAL_REPORT_TYPES.has(item.report_type)
+      ))
+    }
     if (typeFilter.value !== 'all') {
       rows = rows.filter(item => item.report_type === typeFilter.value)
     }
-    if (options.isPlatform() && tenantFilter.value !== '') {
+    if (options.isPlatform() && !isPreviewMode.value && tenantFilter.value !== '') {
       rows = rows.filter(item => item.tenant_id === tenantFilter.value)
     }
     const keyword = keywordFilter.value.trim().toLowerCase()
@@ -80,11 +94,16 @@ export function useReportCenter(options: UseReportCenterOptions) {
   })
 
   const reportMenuGrant = computed(() => (
-    auth.allowedMenus.find(menu => menu.menu_code === (options.isPlatform() ? 'platform.reports' : 'customer.reports')) || null
+    auth.allowedMenus.find(menu => menu.menu_code === (options.isPlatform() || isPreviewMode.value ? 'platform.reports' : 'customer.reports')) || null
   ))
 
-  const canGenerateReport = computed(() => Boolean(reportMenuGrant.value?.can_create))
+  const canGenerateReport = computed(() => !isPreviewMode.value && Boolean(reportMenuGrant.value?.can_create))
   const canExportReport = computed(() => Boolean(reportMenuGrant.value?.can_export))
+
+  const visibleReportTypeOptions = computed(() => {
+    if (options.isPlatform() && !isPreviewMode.value) return reportTypeOptions
+    return reportTypeOptions.filter(item => item.value === 'all' || CUSTOMER_PORTAL_REPORT_TYPES.has(item.value))
+  })
 
   const selectedReport = computed(() => (
     reports.value.find(item => item.id === selectedReportId.value) || null
@@ -148,7 +167,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
   }
 
   const heroTitle = computed(() => {
-    if (options.isPlatform()) {
+    if (options.isPlatform() && !isPreviewMode.value) {
       return previewContent.value?.brand_name || selectedReport.value?.tenant_name || 'GEO 监测报告'
     }
     return selectedReport.value?.report_type_label
@@ -158,8 +177,11 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   function applyInitialRouteQuery() {
     const tenantId = route.query.tenantId
-    if (options.isPlatform() && typeof tenantId === 'string' && tenantId) {
+    if (options.isPlatform() && !isPreviewMode.value && typeof tenantId === 'string' && tenantId) {
       tenantFilter.value = Number(tenantId)
+    }
+    if (isPreviewMode.value && previewTenantId.value != null) {
+      tenantFilter.value = previewTenantId.value
     }
     const reportId = route.query.reportId
     if (typeof reportId === 'string' && reportId) {
@@ -254,7 +276,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   onMounted(async () => {
     applyInitialRouteQuery()
-    if (options.isPlatform() && options.tenants().length && tenantFilter.value === '') {
+    if (options.isPlatform() && !isPreviewMode.value && options.tenants().length && tenantFilter.value === '') {
       tenantFilter.value = options.tenants()[0].id
     }
     await loadReports()
@@ -284,7 +306,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
     typeFilter,
     keywordFilter,
     tenantFilter,
-    reportTypeOptions,
+    reportTypeOptions: visibleReportTypeOptions,
     heroMetrics,
     canGenerateReport,
     canExportReport,

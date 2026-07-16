@@ -112,9 +112,11 @@ def resolve_monitor_date_range(
     current: CurrentSession,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
+    *,
+    customer_like: bool = False,
 ) -> tuple[datetime, datetime]:
     """客户身份截止昨日且不含今日；平台运营可按参数或默认近 7 日。"""
-    if current.identity.identity_type == "CUSTOMER":
+    if current.identity.identity_type == "CUSTOMER" or customer_like:
         return customer_display_date_range(start_at=start_at, end_at=end_at, default_lookback_days=7)
     now = datetime.now()
     range_start = start_at or (now - timedelta(days=7))
@@ -741,11 +743,18 @@ def submit_standalone_monitor_task(
     return task
 
 
-def list_monitor_tasks(db: Session, current: CurrentSession) -> list[GeoMonitorTask]:
-    """读取本地任务列表，不隐式调用模力指数远端。"""
+def list_monitor_tasks(
+    db: Session,
+    current: CurrentSession,
+    *,
+    tenant_id: int | None = None,
+) -> list[GeoMonitorTask]:
+    """读取本地任务列表，不隐式调用模力指数远端。平台预览可传 tenant_id 限定企业。"""
     stmt = select(GeoMonitorTask).where(GeoMonitorTask.deleted.is_(False)).order_by(GeoMonitorTask.id.desc())
     if current.identity.identity_type == "CUSTOMER":
         stmt = stmt.where(GeoMonitorTask.tenant_id == current.identity.tenant_id)
+    elif tenant_id is not None:
+        stmt = stmt.where(GeoMonitorTask.tenant_id == tenant_id)
     else:
         owned_ids = sales_owned_tenant_ids(db, current)
         if owned_ids is not None:
@@ -915,8 +924,18 @@ def _empty_monitor_summary(current: CurrentSession) -> dict[str, Any]:
     }
 
 
-def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
+def monitor_summary(
+    db: Session,
+    current: CurrentSession,
+    *,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
     """Build a read-only dashboard summary from stored Molizhishu task results."""
+    # 平台端带 tenant_id 时按客户口径汇总（客户门户预览）
+    customer_like = (
+        current.identity.identity_type == "CUSTOMER"
+        or (current.identity.identity_type == "PLATFORM" and tenant_id is not None)
+    )
     summary_task_limit = 200
     stmt = (
         select(GeoMonitorTask)
@@ -962,6 +981,8 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     )
     if current.identity.identity_type == "CUSTOMER":
         stmt = stmt.where(GeoMonitorTask.tenant_id == current.identity.tenant_id)
+    elif tenant_id is not None:
+        stmt = stmt.where(GeoMonitorTask.tenant_id == tenant_id)
     else:
         owned_ids = sales_owned_tenant_ids(db, current)
         if owned_ids is not None:
@@ -971,7 +992,9 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     tasks = list(db.scalars(stmt).unique())
     owned_ids = sales_owned_tenant_ids(db, current)
     tenant_stmt = select(Tenant).where(Tenant.deleted.is_(False))
-    if owned_ids is not None:
+    if tenant_id is not None:
+        tenant_stmt = tenant_stmt.where(Tenant.id == tenant_id)
+    elif owned_ids is not None:
         tenant_stmt = tenant_stmt.where(Tenant.id.in_(owned_ids))
     tenant_rows = list(db.scalars(tenant_stmt))
     tenant_map = {item.id: item.name for item in tenant_rows}
@@ -987,7 +1010,7 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     }
     subtask_tenant_map = {subtask.id: task.tenant_id for task in tasks for subtask in task.subtasks}
     subtasks = [subtask for task in tasks for subtask in task.subtasks]
-    if current.identity.identity_type == "CUSTOMER":
+    if customer_like:
         subtasks = filter_customer_visible_subtasks(db, subtasks)
         visible_task_ids = {item.task_id for item in subtasks if item.task_id}
         tasks = [task for task in tasks if task.task_id in visible_task_ids]
@@ -1074,7 +1097,9 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
         })
     platform_stats = sort_platform_items(platform_stats)
     summary_tenant_ids = [task.tenant_id for task in tasks if task.tenant_id]
-    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
+    if customer_like and tenant_id is not None:
+        summary_tenant_ids = [tenant_id]
+    elif current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
         summary_tenant_ids = [current.identity.tenant_id]
     elif owned_ids is not None:
         summary_tenant_ids = owned_ids
@@ -1095,13 +1120,17 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
             platform_stats = sort_platform_items(stat_platform_stats)
 
     # 客户信源：全历史（≤昨日）+ 露出词门槛；独立长 TTL 缓存，首屏仍出全部历史
-    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
-        tenant_id = int(current.identity.tenant_id)
+    scoped_customer_tenant = (
+        int(tenant_id) if customer_like and tenant_id is not None
+        else int(current.identity.tenant_id) if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id
+        else None
+    )
+    if scoped_customer_tenant is not None:
         source_bundle = get_customer_source_stats_bundle(
             db,
-            tenant_id,
-            purchased_platforms=purchased_platforms_by_tenant.get(tenant_id) or set(),
-            exposure_terms=exposure_terms_by_tenant.get(tenant_id) or [],
+            scoped_customer_tenant,
+            purchased_platforms=purchased_platforms_by_tenant.get(scoped_customer_tenant) or set(),
+            exposure_terms=exposure_terms_by_tenant.get(scoped_customer_tenant) or [],
         )
         source_stats = source_bundle.get("source_stats") or []
         source_citation_trend = source_bundle.get("source_citation_trend") or {
@@ -1131,10 +1160,10 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
         )
 
     today = datetime.now().date()
-    trend_end_day = customer_display_cutoff().date() if current.identity.identity_type == "CUSTOMER" else today
+    trend_end_day = customer_display_cutoff().date() if customer_like else today
     day_labels = []
     daily_trend = []
-    trend_offsets = range(7, 0, -1) if current.identity.identity_type == "CUSTOMER" else range(6, -1, -1)
+    trend_offsets = range(7, 0, -1) if customer_like else range(6, -1, -1)
     stat_trend = aggregate_daily_mention_trend(
         db,
         tenant_ids=summary_tenant_ids or None,
@@ -1163,9 +1192,9 @@ def monitor_summary(db: Session, current: CurrentSession) -> dict[str, Any]:
     ]
 
     return {
-        "scope": current.identity.identity_type,
-        "tenant_id": current.identity.tenant_id,
-        "tenant_count": len(tenant_rows) if current.identity.identity_type == "PLATFORM" else 1,
+        "scope": "CUSTOMER" if customer_like else current.identity.identity_type,
+        "tenant_id": scoped_customer_tenant if customer_like else current.identity.tenant_id,
+        "tenant_count": 1 if customer_like else (len(tenant_rows) if current.identity.identity_type == "PLATFORM" else 1),
         "task_count": len(tasks),
         "subtask_count": len(subtasks),
         "completed_count": len(completed),
@@ -1399,10 +1428,13 @@ def serialize_summary_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     }
 
 
-def _resolve_matrix_tenant_id(current: CurrentSession) -> int | None:
+def _resolve_matrix_tenant_id(
+    current: CurrentSession,
+    requested_tenant_id: int | None = None,
+) -> int | None:
     if current.identity.identity_type == "CUSTOMER":
         return current.identity.tenant_id
-    return None
+    return requested_tenant_id
 
 
 def _prompt_belongs_to_group(
@@ -2595,22 +2627,29 @@ def ranking_matrix(
     monitor_keyword: str | None = None,
     exposure_term: str | None = None,
     limit_rows: int = 120,
+    tenant_id: int | None = None,
 ) -> dict[str, Any]:
     """Build prompt × daily-average ranking matrix for realtime monitor view."""
-    tenant_id = _resolve_matrix_tenant_id(current)
-    if tenant_id is None:
+    resolved_tenant_id = _resolve_matrix_tenant_id(current, tenant_id)
+    if resolved_tenant_id is None:
         raise ValueError("排名矩阵仅支持客户侧查看，请使用企业账号登录")
 
-    range_start, range_end = resolve_monitor_date_range(current, start_at, end_at)
+    customer_like = (
+        current.identity.identity_type == "CUSTOMER"
+        or (current.identity.identity_type == "PLATFORM" and tenant_id is not None)
+    )
+    range_start, range_end = resolve_monitor_date_range(
+        current, start_at, end_at, customer_like=customer_like,
+    )
 
-    asset = get_brand_asset(db, tenant_id)
-    keyword_group_rows = list_keyword_groups(db, tenant_id)
+    asset = get_brand_asset(db, resolved_tenant_id)
+    keyword_group_rows = list_keyword_groups(db, resolved_tenant_id)
     keyword_groups = [
         keyword_group_to_dict(item)
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
-    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
+    ] if keyword_group_rows else active_keyword_groups(db, resolved_tenant_id)
+    purchased_platforms = tenant_purchased_platforms(db, resolved_tenant_id, asset) if asset else []
     daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
@@ -2640,7 +2679,7 @@ def ranking_matrix(
         )
         .where(
             GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.tenant_id == tenant_id,
+            GeoMonitorTask.tenant_id == resolved_tenant_id,
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
             or_(
                 GeoMonitorSubtask.updated_at >= range_start - timedelta(days=45),
@@ -2802,7 +2841,7 @@ def ranking_matrix(
         "brand_name": asset.brand_name if asset else None,
         "start_at": range_start.isoformat(),
         "end_at": range_end.isoformat(),
-        "display_period": "through_yesterday" if current.identity.identity_type == "CUSTOMER" else "custom",
+        "display_period": "through_yesterday" if customer_like else "custom",
         "columns": columns,
         "rows": rows,
         "schedule_round_count": schedule_round_count,

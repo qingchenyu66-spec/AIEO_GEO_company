@@ -17,6 +17,7 @@ import {
 import { platformLabelMap, platformAccentColor, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { sortPlatformRows } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
+import { previewQueryFields } from '../customerPreview'
 
 export type WorkspaceHeroTone = 'empty' | 'calm' | 'warn'
 
@@ -306,7 +307,7 @@ export function useCustomerWorkspace() {
   const isPreviewMode = computed(() => previewTenantId.value != null)
   const previewAccessRecorded = ref(false)
 
-  const canOpenRealtime = computed(() => !isPreviewMode.value && hasMenu('customer.realtime'))
+  const canOpenRealtime = computed(() => hasMenu('customer.realtime') || isPreviewMode.value)
 
   const heroTone = computed(() => resolveHeroTone(brief.value))
   const statusBadge = computed(() => {
@@ -321,9 +322,12 @@ export function useCustomerWorkspace() {
     brief.value ? resolveStatusSummary(brief.value, heroTone.value) : ''
   ))
   const primaryAction = computed(() => {
-    if (isPreviewMode.value) return null
     const action = brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
-    if (!action || !hasMenu(action.menu)) return null
+    if (!action) return null
+    if (isPreviewMode.value) {
+      return action
+    }
+    if (!hasMenu(action.menu)) return null
     const menuName = auth.allowedMenus.find(menu => menu.menu_code === action.menu)?.menu_name
     const useMenuName = action.label === '查看实时检测' && menuName
     return {
@@ -576,7 +580,6 @@ export function useCustomerWorkspace() {
   })
 
   const todoItems = computed(() => {
-    if (isPreviewMode.value) return []
     const data = brief.value
     if (!data) return []
     return [
@@ -700,7 +703,18 @@ export function useCustomerWorkspace() {
 
   function navigateToMenu(menuCode: string) {
     if (isPreviewMode.value) {
-      ElMessage.info('预览模式为只读，请返回企业管理后再操作')
+      if (portalNavigate) {
+        portalNavigate(menuCode)
+        return
+      }
+      router.push({
+        path: route.path,
+        query: {
+          ...route.query,
+          menu: menuCode,
+          ...previewQueryFields(previewTenantId.value!, previewTenantName.value),
+        },
+      }).catch(() => undefined)
       return
     }
     if (portalNavigate) {
@@ -739,17 +753,19 @@ export function useCustomerWorkspace() {
 
   function openAlertTarget(alert: WorkspaceAlert) {
     const menu = alertTargetMenu(alert)
-    if (!hasMenu(menu)) return
+    if (!isPreviewMode.value && !hasMenu(menu)) return
     navigateToMenu(menu)
   }
 
   function openSnapshot(snapshot: WorkspaceSnapshot) {
-    if (isPreviewMode.value) {
-      ElMessage.info('预览模式为只读，请返回企业管理后再操作')
-      return
+    if (!isPreviewMode.value && !hasMenu('customer.realtime')) return
+    const nextQuery: Record<string, string | string[]> = {
+      ...route.query,
+      menu: 'customer.realtime',
     }
-    if (!hasMenu('customer.realtime')) return
-    const nextQuery: Record<string, string | string[]> = { ...route.query, menu: 'customer.realtime' }
+    if (isPreviewMode.value && previewTenantId.value) {
+      Object.assign(nextQuery, previewQueryFields(previewTenantId.value, previewTenantName.value))
+    }
     if (snapshot.task_id) nextQuery.task_id = snapshot.task_id
     nextQuery.subtask_id = snapshot.subtask_id
     router.push({ path: route.path, query: nextQuery }).catch(() => undefined)

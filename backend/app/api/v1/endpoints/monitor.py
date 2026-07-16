@@ -118,26 +118,49 @@ def create_monitor_task(
 
 @router.get("/tasks", response_model=ApiResponse[list[dict]])
 def monitor_tasks(
+    tenant_id: int | None = Query(default=None, description="平台端客户预览时指定企业"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     """查询本地任务列表；这里不请求模力指数远端接口。"""
-    tasks = list_monitor_tasks(db, current)
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    scoped_tenant_id: int | None = None
+    if current.identity.identity_type == "PLATFORM" and tenant_id is not None:
+        try:
+            scoped_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    tasks = list_monitor_tasks(db, current, tenant_id=scoped_tenant_id)
     return ApiResponse(data=serialize_tasks_for_display(db, tasks))
 
 
 @router.get("/summary", response_model=ApiResponse[dict])
 def monitor_dashboard_summary(
+    tenant_id: int | None = Query(default=None, description="平台端客户预览时指定企业"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Read aggregated real monitoring data for customer and platform dashboards."""
-    tenant_key = current.identity.tenant_id or "platform"
-    cache_key = monitor_summary_cache_key(current.identity.identity_type, tenant_key)
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    scoped_tenant_id: int | None = None
+    if current.identity.identity_type == "PLATFORM" and tenant_id is not None:
+        try:
+            scoped_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    tenant_key = scoped_tenant_id or current.identity.tenant_id or "platform"
+    identity_key = "CUSTOMER" if scoped_tenant_id is not None else current.identity.identity_type
+    cache_key = monitor_summary_cache_key(identity_key, tenant_key)
     try:
         data = get_or_build_json_cache(
             cache_key,
-            lambda: monitor_summary(db, current),
+            lambda: monitor_summary(db, current, tenant_id=scoped_tenant_id),
             ttl_seconds=MONITOR_SUMMARY_CACHE_TTL,
         )
         return ApiResponse(data=data)
@@ -156,10 +179,21 @@ def monitor_ranking_matrix(
     monitor_keyword: str | None = None,
     exposure_term: str | None = None,
     limit_rows: int = 120,
+    tenant_id: int | None = Query(default=None, description="平台端客户预览时指定企业"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Return prompt × snapshot ranking matrix for customer realtime monitor."""
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    scoped_tenant_id: int | None = None
+    if current.identity.identity_type == "PLATFORM" and tenant_id is not None:
+        try:
+            scoped_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None
     try:
@@ -175,6 +209,7 @@ def monitor_ranking_matrix(
             monitor_keyword=monitor_keyword,
             exposure_term=exposure_term,
             limit_rows=limit_rows,
+            tenant_id=scoped_tenant_id,
         )
     except Exception as exc:
         raise_read_endpoint_error(exc, context="monitor.ranking_matrix")
@@ -191,9 +226,8 @@ def monitor_workspace_brief(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """客户工作台简报；平台端可带 tenant_id 只读预览（销售仅名下企业）。"""
-    from app.services.menu_permission_service import has_identity_menu_permission
     from app.services.operation_log_service import write_operation_log
-    from app.services.tenant_scope import resolve_and_guard_tenant_id
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="起始日期不能晚于结束日期")
@@ -204,12 +238,8 @@ def monitor_workspace_brief(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="运营工作台简报仅支持客户企业账号")
         resolved_tenant_id = current.identity.tenant_id
     elif current.identity.identity_type == "PLATFORM":
-        if tenant_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="平台端预览需指定企业")
-        if not has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export"):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权预览客户工作台")
         try:
-            resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
+            resolved_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         except ValueError as exc:

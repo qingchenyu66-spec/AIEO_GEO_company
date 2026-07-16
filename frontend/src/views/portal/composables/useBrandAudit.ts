@@ -123,6 +123,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const transferringTenantOwner = ref(false)
   const canTransferTenantOwner = computed(() => Boolean(menuGrant('platform.approvals')?.can_update))
   const canFilterBySales = computed(() => canTransferTenantOwner.value)
+  /** 销售只看名下企业，列表无需再标归属销售 */
+  const showOwnerOnEnterpriseList = computed(() => {
+    const identity = auth.session?.identity
+    if (!identity || identity.identity_type !== 'PLATFORM') return false
+    if (identity.position_code === 'PLATFORM_SALES') return false
+    if (!identity.position_code && identity.position_name === '销售') return false
+    return true
+  })
   const tenantSalesFilterOptions = computed(() => {
     const map = new Map<number, string>()
     for (const owner of tenantSalesOwners.value) {
@@ -1117,6 +1125,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     transferringTenantOwner,
     canTransferTenantOwner,
     canFilterBySales,
+    showOwnerOnEnterpriseList,
     tenantSalesFilterOptions,
     knowledgeFiles,
     loadingKnowledgeFiles,

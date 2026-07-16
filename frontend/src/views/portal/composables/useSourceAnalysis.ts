@@ -12,6 +12,8 @@ import { platformLabelMap } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
 import { sourceCategory, sourceCategoryLabels, type SourceCategory } from '../sourceCategory'
+import { isCustomerPreviewActive } from '../customerPreview'
+import { useRoute } from 'vue-router'
 
 export type { SourceCategory }
 export { sourceCategoryLabels, sourceCategory }
@@ -45,7 +47,11 @@ export function useSourceAnalysis(options?: {
 }) {
   const analytics = inject(PortalAnalyticsKey)!
   const auth = useAuthStore()
-  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const route = useRoute()
+  const isCustomerView = computed(() => (
+    auth.session?.identity?.identity_type === 'CUSTOMER'
+    || isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
+  ))
   const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
   const trendPeriodLabel = computed(() => {
     if (!isCustomerView.value) {

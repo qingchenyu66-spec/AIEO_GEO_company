@@ -16,6 +16,7 @@ import { PortalAnalyticsKey } from '../injectionKeys'
 import { resolveRealtimeMenu } from '../portalNavigation'
 import { platformLabelMap } from '../portalMaps'
 import { sortPlatformTabs } from '../platformOrder'
+import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
 
 export type CompetitorDatePreset = '7' | '30' | '90'
 
@@ -51,7 +52,10 @@ export function useBrandInsights(options?: {
   const route = useRoute()
   const router = useRouter()
   const auth = useAuthStore()
-  const isCustomerView = computed(() => auth.session?.identity?.identity_type === 'CUSTOMER')
+  const isCustomerView = computed(() => (
+    auth.session?.identity?.identity_type === 'CUSTOMER'
+    || isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
+  ))
   const analytics = inject(PortalAnalyticsKey)!
   const brandAsset = analytics.brandAsset
   const brandCompetitors = analytics.brandCompetitors
@@ -280,7 +284,9 @@ export function useBrandInsights(options?: {
   }
 
   const platformTenantId = computed(() => {
-    if (isCustomerView.value) return undefined
+    const previewId = parsePreviewTenantId(route)
+    if (previewId != null) return previewId
+    if (isCustomerView.value && auth.session?.identity?.identity_type === 'CUSTOMER') return undefined
     const raw = route.query.tenant_id
     const text = Array.isArray(raw) ? raw[0] : raw
     const parsed = Number(text)

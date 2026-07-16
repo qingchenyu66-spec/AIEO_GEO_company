@@ -270,6 +270,7 @@ export interface RankingMatrixQuery {
   monitor_keyword?: string
   exposure_term?: string
   limit_rows?: number
+  tenant_id?: number
 }
 
 export interface WorkspaceBriefSchedule {
@@ -384,33 +385,41 @@ export async function createMonitorTask(payload: MonitorTaskCreatePayload): Prom
   return response.data.data
 }
 
-export async function getMonitorTasks(): Promise<MonitorTask[]> {
-  const response = await http.get('/v1/monitor/tasks')
+export async function getMonitorTasks(tenantId?: number | null): Promise<MonitorTask[]> {
+  const response = await http.get('/v1/monitor/tasks', {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  })
   return response.data.data
 }
 
-let monitorSummaryCache: { data: MonitorSummary; expiresAt: number } | null = null
+let monitorSummaryCache: { data: MonitorSummary; expiresAt: number; key: string } | null = null
 let monitorSummaryInflight: Promise<MonitorSummary> | null = null
+let monitorSummaryInflightKey: string | null = null
 const MONITOR_SUMMARY_TTL_MS = 15_000
 
 export function invalidateMonitorSummaryCache() {
   monitorSummaryCache = null
 }
 
-export async function getMonitorSummary(force = false): Promise<MonitorSummary> {
+export async function getMonitorSummary(force = false, tenantId?: number | null): Promise<MonitorSummary> {
   const now = Date.now()
-  if (!force && monitorSummaryCache && monitorSummaryCache.expiresAt > now) {
+  const cacheKey = tenantId ? `t:${tenantId}` : 'default'
+  if (!force && monitorSummaryCache && monitorSummaryCache.key === cacheKey && monitorSummaryCache.expiresAt > now) {
     return monitorSummaryCache.data
   }
-  if (!force && monitorSummaryInflight) {
+  if (!force && monitorSummaryInflight && monitorSummaryInflightKey === cacheKey) {
     return monitorSummaryInflight
   }
-  monitorSummaryInflight = http.get('/v1/monitor/summary').then(response => {
+  monitorSummaryInflightKey = cacheKey
+  monitorSummaryInflight = http.get('/v1/monitor/summary', {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  }).then(response => {
     const data = response.data.data as MonitorSummary
-    monitorSummaryCache = { data, expiresAt: Date.now() + MONITOR_SUMMARY_TTL_MS }
+    monitorSummaryCache = { data, expiresAt: Date.now() + MONITOR_SUMMARY_TTL_MS, key: cacheKey }
     return data
   }).finally(() => {
     monitorSummaryInflight = null
+    monitorSummaryInflightKey = null
   })
   return monitorSummaryInflight
 }

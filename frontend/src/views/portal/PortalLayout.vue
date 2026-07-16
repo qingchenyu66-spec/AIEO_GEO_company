@@ -33,6 +33,8 @@ defineProps<{
   immersive?: boolean
   fullscreen?: boolean
   pendingApprovalCount?: number
+  previewMode?: boolean
+  previewTenantName?: string
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +44,7 @@ const emit = defineEmits<{
   switchIdentity: [identityId: number]
   logout: []
   openAlerts: []
+  exitPreview: []
 }>()
 </script>
 
@@ -56,10 +59,10 @@ const emit = defineEmits<{
     <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
         <div class="brand-mark"><AppBrandLogo variant="icon" /></div>
-        <div><strong>GEO Monitor</strong><span>{{ isPlatform ? '平台运营端' : '客户企业端' }}</span></div>
+        <div><strong>GEO Monitor</strong><span>{{ previewMode ? '客户门户预览' : (isPlatform ? '平台运营端' : '客户企业端') }}</span></div>
       </div>
       <div class="portal-tag">
-        <ShieldCheck v-if="isPlatform" />
+        <ShieldCheck v-if="isPlatform && !previewMode" />
         <Building2 v-else />
         <span>
           <b>{{ portalIdentityName }}</b>
@@ -162,6 +165,13 @@ const emit = defineEmits<{
         </div>
       </header>
       <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
+        <div v-if="previewMode" class="ws-preview-banner portal-preview-banner">
+          <div>
+            <strong>只读预览</strong>
+            <span>正在预览「{{ previewTenantName || '客户' }}」门户全部菜单，不可代客户操作</span>
+          </div>
+          <button type="button" class="ws-campus-primary" @click="emit('exitPreview')">返回企业管理</button>
+        </div>
         <div v-if="!immersive" class="page-head">
           <div class="page-head-main">
             <h1>{{ pageTitle }}</h1>

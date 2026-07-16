@@ -9,6 +9,7 @@ export interface IdentityInfo {
   role_code: string
   position_id: number | null
   position_name: string | null
+  position_code?: string | null
   tenant_id: number | null
   tenant_name: string | null
   is_default: boolean

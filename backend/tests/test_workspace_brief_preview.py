@@ -17,7 +17,7 @@ def test_platform_workspace_brief_requires_tenant_id(monkeypatch: pytest.MonkeyP
         user=SimpleNamespace(id=1, display_name="ops", username="ops"),
     )
     monkeypatch.setattr(
-        "app.services.menu_permission_service.has_identity_menu_permission",
+        "app.services.tenant_scope.has_identity_menu_permission",
         lambda *_a, **_k: True,
     )
 
@@ -39,7 +39,7 @@ def test_platform_workspace_brief_rejects_without_audit_menu(monkeypatch: pytest
         user=SimpleNamespace(id=1, display_name="ops", username="ops"),
     )
     monkeypatch.setattr(
-        "app.services.menu_permission_service.has_identity_menu_permission",
+        "app.services.tenant_scope.has_identity_menu_permission",
         lambda *_a, **_k: False,
     )
 
@@ -63,7 +63,7 @@ def test_platform_workspace_brief_uses_guarded_tenant(monkeypatch: pytest.Monkey
     seen: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "app.services.menu_permission_service.has_identity_menu_permission",
+        "app.services.tenant_scope.has_identity_menu_permission",
         lambda *_a, **_k: True,
     )
     monkeypatch.setattr(

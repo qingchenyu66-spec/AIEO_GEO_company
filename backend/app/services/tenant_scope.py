@@ -120,7 +120,9 @@ def ensure_platform_tenant_read_access(
     ensure_tenant(db, tenant_id)
     ensure_sales_tenant_access(db, current, tenant_id)
     if not has_identity_menu_permission(db, current.identity.id, menu_code, action):
-        raise PermissionError("当前账号没有该数据范围的查看权限")
+        # 有企业管理查看权即可按企业只读分析（客户门户预览 / 运营核对）
+        if not has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export"):
+            raise PermissionError("当前账号没有该数据范围的查看权限")
     logger.info(
         "platform tenant read identity_id=%s user_id=%s tenant_id=%s menu=%s",
         current.identity.id,
@@ -213,6 +215,21 @@ def resolve_and_guard_tenant_id(
     ensure_tenant(db, tenant_id)
     ensure_sales_tenant_access(db, current, tenant_id)
     return tenant_id
+
+
+def resolve_customer_preview_tenant_id(
+    db: Session,
+    current: CurrentSession,
+    requested_tenant_id: int | None,
+) -> int:
+    """平台端客户门户只读预览：需企业管理查看权 + 销售归属。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台端可预览客户门户")
+    if requested_tenant_id is None:
+        raise ValueError("平台端预览需指定企业")
+    if not has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export"):
+        raise PermissionError("当前账号无权预览客户门户")
+    return resolve_and_guard_tenant_id(db, current, requested_tenant_id)
 
 
 def guard_tenant_resource_access(db: Session, current: CurrentSession, tenant_id: int) -> None:

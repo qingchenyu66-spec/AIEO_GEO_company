@@ -48,6 +48,21 @@
   border: 1px solid #c9dcff;
   color: #1a3a66;
 }
+
+.portal-preview-banner {
+  margin: 0 0 14px;
+}
+
+.portal-preview-banner .ws-campus-primary,
+.ws-preview-banner .ws-campus-primary {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 14px;
+  background: #2d6cdf;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
 .ws-preview-banner strong {
   margin-right: 8px;
   font-weight: 700;

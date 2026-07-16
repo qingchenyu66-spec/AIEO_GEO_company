@@ -1,4 +1,5 @@
 import { computed, onMounted, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import { getSystemConfigs, type SystemConfigRecord, type TenantInfo } from '../../../services/management'
@@ -10,6 +11,8 @@ import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
+import { parsePreviewTenantId } from '../customerPreview'
+import { parsePreviewTenantId } from '../customerPreview'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.diagnosis',
@@ -35,6 +38,8 @@ type MonitorAnalyticsOptions = {
 export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const { activeMenuCode, isPlatform, isDashboardPage, brandAsset, brandCompetitors, tenants, notifyError, errorMessage } = options
   const auth = useAuthStore()
+  const route = useRoute()
+  const previewTenantId = computed(() => parsePreviewTenantId(route))
 
   const monitorSummary = ref<MonitorSummary | null>(null)
   const loadingSummary = ref(false)
@@ -322,12 +327,13 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     if (!shouldLoadMonitorSummary.value && !syncRemote && monitorSummary.value) return
     loadingSummary.value = true
     try {
-      const summary = await withRetry(() => getMonitorSummary())
+      const summaryTenantId = previewTenantId.value
+      const summary = await withRetry(() => getMonitorSummary(false, summaryTenantId))
       monitorSummary.value = summary
       if (syncRemote) {
         const synced = await syncPendingTasksFromSummary(summary)
         if (synced) {
-          monitorSummary.value = await withRetry(() => getMonitorSummary(true))
+          monitorSummary.value = await withRetry(() => getMonitorSummary(true, summaryTenantId))
         }
       }
     } catch (error: unknown) {

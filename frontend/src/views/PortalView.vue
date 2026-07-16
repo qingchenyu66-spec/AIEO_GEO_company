@@ -33,6 +33,14 @@ import {
   hiddenUserPermissionMenus,
   normalizeMenuCode,
 } from './portal/constants'
+import {
+  CUSTOMER_PREVIEW_MENUS,
+  CUSTOMER_PREVIEW_MENU_CODES,
+  isCustomerPreviewActive,
+  parsePreviewTenantId,
+  parsePreviewTenantName,
+  previewQueryFields,
+} from './portal/customerPreview'
 import { platformLabelMap, monitorStatusLabelMap } from './portal/portalMaps'
 import { usePortalMenu } from './portal/usePortalMenu'
 import { useApprovalPendingCount } from './portal/composables/useApprovalPendingCount'
@@ -60,6 +68,8 @@ const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
+const isPreviewActive = computed(() => isCustomerPreviewActive(route, isPlatform.value))
+const previewTenantName = computed(() => parsePreviewTenantName(route))
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
 
 function userCreateRouteAllowed(menus: MenuInfo[]) {
@@ -84,6 +94,9 @@ function settingsRouteAllowed(menus: MenuInfo[]) {
 }
 
 const allowedMenuCodes = computed(() => {
+  if (isPreviewActive.value) {
+    return [...CUSTOMER_PREVIEW_MENU_CODES]
+  }
   const codes = auth.allowedMenus.map(item => item.menu_code)
   const extra: string[] = []
   if (userCreateRouteAllowed(auth.allowedMenus) && !codes.includes(USER_CREATE_MENU)) {
@@ -97,12 +110,21 @@ const allowedMenuCodes = computed(() => {
   }
   return extra.length ? [...codes, ...extra] : codes
 })
-const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(router, route, defaultMenuCode, allowedMenuCodes)
+const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(
+  router,
+  route,
+  defaultMenuCode,
+  allowedMenuCodes,
+  isPlatform,
+)
 provide(PortalNavigateKey, navigateToMenu)
 const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU)
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => {
+  if (isPreviewActive.value) {
+    return CUSTOMER_PREVIEW_MENUS
+  }
   const filtered = auth.allowedMenus
     .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
   if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
@@ -132,11 +154,6 @@ const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowle
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
 const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approvals')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
-const isCustomerPreviewPage = computed(() => (
-  isPlatform.value
-  && activeMenuCode.value === CUSTOMER_PREVIEW_MENU
-  && Boolean(route.query.preview_tenant_id)
-))
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
 
 const workspaceFullscreen = useWorkspaceFullscreen()
@@ -186,13 +203,6 @@ const activeMenu = computed(() => {
   if (isUserCreatePage.value && userMenu) return { ...userMenu, menu_code: USER_CREATE_MENU, menu_name: '用户新增' } as MenuInfo
   if (isUserListPage.value && userMenu) return { ...userMenu, menu_code: USER_LIST_MENU, menu_name: '用户列表' } as MenuInfo
   if (isPositionManagementPage.value) return { ...(userManagementMenu.value || menus.value[0]), menu_code: POSITION_MENU, menu_name: '职位管理' } as MenuInfo
-  if (isCustomerPreviewPage.value) {
-    return {
-      ...(menus.value[0] || {}),
-      menu_code: CUSTOMER_PREVIEW_MENU,
-      menu_name: '客户工作台预览',
-    } as MenuInfo
-  }
   return menus.value.find(item => item.menu_code === activeMenuCode.value) || menus.value[0]
 })
 
@@ -210,19 +220,27 @@ provide(PortalAnalyticsKey, portalAnalytics)
 
 const pageTitle = computed(() => activeMenu.value?.menu_name || (isPlatform.value ? '平台运营总览' : '客户运营工作台'))
 const pageSubtitle = computed(() => {
+  if (isPreviewActive.value) {
+    return `只读预览「${previewTenantName.value || '客户'}」门户，可切换左侧菜单核对客户可见数据`
+  }
   if (isUserCreatePage.value) return '创建账号、分配身份、绑定所属企业，并配置可访问菜单'
   if (isUserListPage.value) return '按公司、姓名、身份和状态筛选账号，支持编辑、禁用、重置密码和恢复'
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
   if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
-  if (isCustomerPreviewPage.value) return '只读预览客户工作台，核对客户可见数据后可返回企业管理'
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 
+function exitCustomerPreview() {
+  navigateToMenu('platform.audit')
+}
+
 function parseRouteTenantId(): number | null {
+  const previewId = parsePreviewTenantId(route)
+  if (previewId != null) return previewId
   const raw = route.query.tenant_id
   const text = Array.isArray(raw) ? raw[0] : raw
   const parsed = Number(text)
@@ -289,14 +307,20 @@ function toggleUserSubmenu() {
 }
 
 function ensureActiveMenuAllowed() {
-  const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
-  if (
-    activeMenuCode.value === CUSTOMER_PREVIEW_MENU
-    && isPlatform.value
-    && route.query.preview_tenant_id
-  ) {
+  if (isPreviewActive.value) {
+    const code = activeMenuCode.value
+    if (code === CUSTOMER_PREVIEW_MENU) {
+      navigateToMenu('customer.workspace', true, previewQueryFields(
+        parsePreviewTenantId(route)!,
+        parsePreviewTenantName(route),
+      ))
+      return
+    }
+    if ((CUSTOMER_PREVIEW_MENU_CODES as readonly string[]).includes(code)) return
+    navigateToMenu('customer.workspace', true)
     return
   }
+  const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
   if (isMenuBlocked(activeMenuCode.value) || !allowedCodes.includes(activeMenuCode.value)) {
     navigateToMenu(normalizeMenuCode(auth.allowedMenus[0]?.menu_code || ''), true)
   }
@@ -351,24 +375,27 @@ onMounted(() => {
     :page-title="pageTitle"
     :page-subtitle="pageSubtitle"
     :identity-display-name="identityDisplayName"
-    :portal-identity-name="identityDisplayName(auth.session?.identity)"
-    :portal-identity-subtitle="auth.session?.identity?.tenant_name || 'GEO Monitor 平台'"
+    :portal-identity-name="isPreviewActive ? (previewTenantName || '客户预览') : identityDisplayName(auth.session?.identity)"
+    :portal-identity-subtitle="isPreviewActive ? '只读预览客户门户' : (auth.session?.identity?.tenant_name || 'GEO Monitor 平台')"
     :session-user-name="auth.session?.user.display_name || ''"
     :session-username="auth.session?.user.username || ''"
     :session-display-initial="auth.session?.user.display_name?.slice(0, 1) || ''"
-    :identity-count="auth.session?.identities.length || 0"
-    :identities="auth.session?.identities || []"
+    :identity-count="isPreviewActive ? 0 : (auth.session?.identities.length || 0)"
+    :identities="isPreviewActive ? [] : (auth.session?.identities || [])"
     :current-identity-id="auth.session?.identity?.id"
-    :immersive="isCustomerWorkspacePage || isCustomerPreviewPage"
+    :immersive="isCustomerWorkspacePage"
     :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
+    :preview-mode="isPreviewActive"
+    :preview-tenant-name="previewTenantName"
     @toggle-user-submenu="toggleUserSubmenu"
     @select-menu="selectMenu"
     @set-menu-code="navigateToMenu"
     @switch-identity="switchIdentity"
     @logout="logout"
     @open-alerts="navigateToMenu('platform.alerts', true)"
+    @exit-preview="exitCustomerPreview"
   >
     <PositionPage v-if="isPositionManagementPage" />
 
@@ -377,11 +404,10 @@ onMounted(() => {
     <UserListPage v-else-if="isUserListPage" />
 
     <BrandAuditPage v-else-if="isBrandAssetPage" ref="brandAuditRef" @brand-updated="onBrandUpdated" />
-    <CustomerWorkspacePage v-else-if="isCustomerPreviewPage" />
     <MonitorRealtimePage v-else-if="isRealtimeMonitorPage" />
     <CompetitorAnalysisPage v-else-if="isCompetitorPage" />
     <SourceAnalysisPage v-else-if="isSourcePage" />
-    <ReportCenterPage v-else-if="isReportCenterPage" :is-platform="isPlatform" />
+    <ReportCenterPage v-else-if="isReportCenterPage" :is-platform="isPlatform && !isPreviewActive" />
     <LeadDiagnosisPage v-else-if="isLeadDiagnosisPage" />
     <SnapshotBackfillOpsPage v-else-if="isSnapshotBackfillPage" />
     <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
@@ -390,8 +416,9 @@ onMounted(() => {
 
     <template v-else>
       <template v-if="isDashboardPage">
+        <CustomerWorkspacePage v-if="isCustomerWorkspacePage" />
         <PlatformDashboardPage
-          v-if="isPlatform"
+          v-else-if="isPlatform"
           :platform-label-map="platformLabelMap"
           :monitor-status-label-map="monitorStatusLabelMap"
           :navigate-to="navigateToMenu"
