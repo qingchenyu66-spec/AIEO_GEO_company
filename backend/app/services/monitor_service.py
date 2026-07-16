@@ -481,10 +481,11 @@ def _aggregate_source_stats(
     subtask_tenant_map: dict[int, int],
     purchased_platforms_by_tenant: dict[int, set[str]],
     exposure_terms_by_tenant: dict[int, list[str]],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, dict[str, int]]]:
     """汇总引用信源：标题/链接命中露出词才收录；时间范围由调用方保证（客户=监测日≤昨日全历史）。"""
     source_map: dict[str, dict[str, Any]] = {}
     source_daily_counts: dict[str, int] = {}
+    source_daily_counts_by_platform: dict[str, dict[str, int]] = {}
     for item in completed_items:
         tenant_id = subtask_tenant_map.get(item.id)
         purchased_platforms = purchased_platforms_by_tenant.get(tenant_id) if tenant_id else None
@@ -518,6 +519,9 @@ def _aggregate_source_stats(
             if biz_day:
                 day_key = biz_day.isoformat()
                 source_daily_counts[day_key] = source_daily_counts.get(day_key, 0) + 1
+                if item.platform:
+                    plat_bucket = source_daily_counts_by_platform.setdefault(item.platform, {})
+                    plat_bucket[day_key] = plat_bucket.get(day_key, 0) + 1
             if item.platform and item.platform not in row["platforms"]:
                 row["platforms"].append(item.platform)
             for term in matched_exposure:
@@ -535,7 +539,7 @@ def _aggregate_source_stats(
         row["platforms"] = sort_platform_codes(row["platforms"])[:6]
         row["exposure_terms"] = row["exposure_terms"][:8]
         row["questions"] = row["questions"][:8]
-    return source_stats, source_daily_counts
+    return source_stats, source_daily_counts, source_daily_counts_by_platform
 
 
 def _effective_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int | None:
@@ -808,6 +812,24 @@ def _build_source_citation_trend(
     }
 
 
+def _build_source_citation_trends_by_platform(
+    daily_counts_by_platform: dict[str, dict[str, int]],
+    *,
+    range_start: datetime,
+    range_end: datetime,
+    only_with_data: bool = False,
+) -> dict[str, dict[str, Any]]:
+    return {
+        platform: _build_source_citation_trend(
+            daily_counts,
+            range_start=range_start,
+            range_end=range_end,
+            only_with_data=only_with_data,
+        )
+        for platform, daily_counts in daily_counts_by_platform.items()
+    }
+
+
 def _compute_customer_source_stats_bundle(
     db: Session,
     tenant_id: int,
@@ -840,7 +862,7 @@ def _compute_customer_source_stats_bundle(
         if tid:
             source_tenant_map[item.id] = int(tid)
 
-    source_stats, source_daily_counts = _aggregate_source_stats(
+    source_stats, source_daily_counts, source_daily_by_platform = _aggregate_source_stats(
         source_items,
         business_day_by_id=source_day_by_id,
         subtask_tenant_map=source_tenant_map,
@@ -863,9 +885,16 @@ def _compute_customer_source_stats_bundle(
         range_end=citation_range_end,
         only_with_data=True,
     )
+    source_citation_trend_by_platform = _build_source_citation_trends_by_platform(
+        source_daily_by_platform,
+        range_start=citation_range_start,
+        range_end=citation_range_end,
+        only_with_data=True,
+    )
     return {
         "source_stats": source_stats,
         "source_citation_trend": source_citation_trend,
+        "source_citation_trend_by_platform": source_citation_trend_by_platform,
     }
 
 
@@ -916,6 +945,7 @@ def _empty_monitor_summary(current: CurrentSession) -> dict[str, Any]:
         "platform_stats": [],
         "source_stats": [],
         "source_citation_trend": {"start_at": None, "end_at": None, "points": []},
+        "source_citation_trend_by_platform": {},
         "daily_trend": [],
         "daily_labels": [],
         "recent_tasks": [],
@@ -1138,8 +1168,9 @@ def monitor_summary(
             "end_at": None,
             "points": [],
         }
+        source_citation_trend_by_platform = source_bundle.get("source_citation_trend_by_platform") or {}
     else:
-        source_stats, source_daily_counts = _aggregate_source_stats(
+        source_stats, source_daily_counts, source_daily_by_platform = _aggregate_source_stats(
             completed,
             business_day_by_id=business_day_by_id,
             subtask_tenant_map=subtask_tenant_map,
@@ -1154,6 +1185,12 @@ def monitor_summary(
         )
         source_citation_trend = _build_source_citation_trend(
             source_daily_counts,
+            range_start=citation_range_start,
+            range_end=citation_range_end,
+            only_with_data=False,
+        )
+        source_citation_trend_by_platform = _build_source_citation_trends_by_platform(
+            source_daily_by_platform,
             range_start=citation_range_start,
             range_end=citation_range_end,
             only_with_data=False,
@@ -1207,6 +1244,7 @@ def monitor_summary(
         "platform_stats": platform_stats,
         "source_stats": source_stats,
         "source_citation_trend": source_citation_trend,
+        "source_citation_trend_by_platform": source_citation_trend_by_platform,
         "daily_trend": daily_trend,
         "daily_labels": day_labels,
         "recent_tasks": recent_tasks,

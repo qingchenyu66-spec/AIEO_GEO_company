@@ -185,7 +185,11 @@ export function useSourceAnalysis(options?: {
 
   const topSources = computed(() => filteredSources.value.slice(0, 5))
 
-  const sourceStructureRows = computed(() => structurePlatformCodes.value.map(platform => {
+  const sourceStructureRows = computed(() => {
+    const platforms = platformFilter.value === 'all'
+      ? structurePlatformCodes.value
+      : structurePlatformCodes.value.filter(code => code === platformFilter.value)
+    return platforms.map(platform => {
     const platformSources = filteredSources.value.filter(source => (source.platforms || []).includes(platform))
     const total = platformSources.reduce((sum, source) => sum + source.count, 0)
     const categoryMap = platformSources.reduce((map, source) => {
@@ -201,14 +205,16 @@ export function useSourceAnalysis(options?: {
         value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
       })),
     }
-  }))
-
-  const structureChartHeight = computed(() => Math.max(280, sourceStructureRows.value.length * 46 + 48))
-
-  const hasStructurePanel = computed(() => sourceStructureRows.value.length > 0)
+  })
+  })
 
   const sourceTrendRows = computed(() => {
-    const backendPoints = monitorSummary.value?.source_citation_trend?.points || []
+    const trendByPlatform = monitorSummary.value?.source_citation_trend_by_platform
+    const selected = platformFilter.value !== 'all' ? platformFilter.value : null
+    const backendTrend = selected
+      ? trendByPlatform?.[selected]
+      : monitorSummary.value?.source_citation_trend
+    const backendPoints = backendTrend?.points || []
     if (backendPoints.length) {
       // 客户：整段历史至昨日；运营：按预设截取
       const points = isCustomerView.value
@@ -225,7 +231,13 @@ export function useSourceAnalysis(options?: {
     return []
   })
 
-  const insight = computed(() => {
+  const structureChartHeight = computed(() => Math.max(280, sourceStructureRows.value.length * 46 + 48))
+
+  const hasStructurePanel = computed(() => (
+    platformFilter.value === 'all'
+      ? sourceStructureRows.value.length > 0
+      : sourceStructureRows.value.some(row => row.total > 0)
+  ))
     if (!filteredSources.value.length) {
       return {
         level: 'empty' as const,

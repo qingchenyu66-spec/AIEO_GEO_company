@@ -24,7 +24,7 @@ def test_aggregate_source_stats_requires_exposure_hit():
             },
         ],
     )
-    stats, daily = _aggregate_source_stats(
+    stats, daily, daily_by_platform = _aggregate_source_stats(
         [item],  # type: ignore[arg-type]
         business_day_by_id={1: date(2026, 7, 12)},
         subtask_tenant_map={1: 6},
@@ -35,3 +35,4 @@ def test_aggregate_source_stats_requires_exposure_hit():
     assert stats[0]["url"] == "https://brand.example.com/case"
     assert "艾迪亚" in stats[0]["exposure_terms"]
     assert daily["2026-07-12"] == 1
+    assert daily_by_platform["kimi"]["2026-07-12"] == 1

@@ -134,6 +134,11 @@ export interface MonitorSummary {
     end_at: string
     points: Array<{ label: string; day_key: string; value: number }>
   }
+  source_citation_trend_by_platform?: Record<string, {
+    start_at: string
+    end_at: string
+    points: Array<{ label: string; day_key: string; value: number }>
+  }>
   daily_trend: Array<{ label: string; value: number }>
   daily_labels: string[]
   recent_tasks: Array<MonitorTask & { tenant_name?: string | null }>
