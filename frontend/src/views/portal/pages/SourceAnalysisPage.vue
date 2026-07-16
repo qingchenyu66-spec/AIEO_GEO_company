@@ -274,7 +274,6 @@ const categoryOptions = [
           <span>#</span>
           <span>网站</span>
           <span>类型</span>
-          <span>{{ rankTab === 'all' ? '标记' : '露出词' }}</span>
           <span>文章</span>
           <span>次数</span>
         </div>
@@ -298,15 +297,6 @@ const categoryOptions = [
           </div>
           <div class="source-table-tags">
             <i>{{ sourceCategoryLabel(site.category) }}</i>
-          </div>
-          <div class="source-table-tags">
-            <template v-if="rankTab === 'all'">
-              <i v-if="site.has_exposure" class="is-exposure">含露出词</i>
-              <i v-else class="source-table-muted">未命中</i>
-            </template>
-            <template v-else>
-              <i v-for="term in site.exposure_terms.slice(0, 3)" :key="`${site.domain}-${term}`" class="is-exposure">{{ term }}</i>
-            </template>
           </div>
           <strong>{{ site.articleCount }}</strong>
           <strong>{{ site.count }}</strong>

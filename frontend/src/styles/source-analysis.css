@@ -508,7 +508,7 @@
 
 .source-website-head,
 .source-website-row {
-  grid-template-columns: 44px minmax(180px, 1.6fr) minmax(100px, .8fr) minmax(120px, 1fr) 56px 56px;
+  grid-template-columns: 44px minmax(200px, 1.8fr) minmax(100px, .9fr) 56px 56px;
 }
 
 .source-table-head {
