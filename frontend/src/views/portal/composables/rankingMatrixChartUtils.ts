@@ -655,6 +655,8 @@ export function buildMatrixBarOption(
       },
     tooltip: {
       trigger: 'axis',
+      // ponytail: axis 悬停默认会 triggerEmphasis；ECharts 下 label 易在 emphasis 态消失
+      axisPointer: { type: 'shadow', triggerEmphasis: false },
       backgroundColor: 'rgba(21,48,82,.92)',
       borderWidth: 0,
       textStyle: { color: '#fff', fontSize: 12 },
@@ -732,6 +734,13 @@ export function buildMatrixBarOption(
           return item?.rank == null ? '—' : formatRank(item.rank)
         },
       },
+      emphasis: {
+        focus: 'none',
+        label: { show: true },
+      },
+      blur: {
+        label: { show: true, opacity: 1 },
+      },
     }],
     },
   }
@@ -802,6 +811,13 @@ export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
         },
       },
       itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 3 },
+      emphasis: {
+        focus: 'none',
+        label: { show: true },
+      },
+      blur: {
+        label: { show: true, opacity: 1 },
+      },
     }],
   }
 }
