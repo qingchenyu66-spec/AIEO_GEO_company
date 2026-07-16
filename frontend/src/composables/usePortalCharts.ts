@@ -438,6 +438,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
           axisTick: { show: false },
           axisLine: { show: false },
           axisLabel: { color: '#55708f', fontWeight: 700 },
+          boundaryGap: true,
         },
         series: [
           {

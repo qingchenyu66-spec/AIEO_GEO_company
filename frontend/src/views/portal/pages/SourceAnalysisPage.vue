@@ -10,6 +10,7 @@ import {
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useSourceAnalysis, type SourceDatePreset } from '../composables/useSourceAnalysis'
+import { sourceCategoryColor } from '../sourceCategory'
 import { externalLink } from '../portalUtils'
 import { useAuthStore } from '../../../stores/auth'
 import '../../../styles/source-analysis.css'
@@ -44,6 +45,7 @@ const {
   officialRate,
   sourceTrendRows,
   structureChartHeight,
+  structureChartScrollable,
   hasStructurePanel,
   insight,
   loadSummary,
@@ -180,11 +182,22 @@ const categoryOptions = [
             </div>
             <Database />
           </div>
+          <ul v-if="categoryStats.length" class="source-structure-legend">
+            <li v-for="item in categoryStats" :key="item.key">
+              <i :style="{ background: sourceCategoryColor(item.key) }" />
+              <span>{{ item.name }}</span>
+            </li>
+          </ul>
           <div
-            ref="structureChartRef"
-            class="echart-box source-structure-echart"
-            :style="{ height: `${structureChartHeight}px` }"
-          />
+            class="source-structure-scroll"
+            :class="{ 'is-scrollable': structureChartScrollable }"
+          >
+            <div
+              ref="structureChartRef"
+              class="echart-box source-structure-echart"
+              :style="{ height: `${structureChartHeight}px`, minHeight: `${structureChartHeight}px` }"
+            />
+          </div>
         </article>
 
         <article class="source-panel">

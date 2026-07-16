@@ -261,11 +261,10 @@ export function useSourceAnalysis(options?: {
 
   const structureChartHeight = computed(() => {
     const count = Math.max(structureChartRows.value.length, 1)
-    if (count === 1) return 72
-    if (count === 2) return 108
-    if (count <= 3) return count * 46 + 32
-    return Math.max(280, count * 46 + 32)
+    return count * 50 + 36
   })
+
+  const structureChartScrollable = computed(() => structureChartRows.value.length > 6)
 
   const hasStructurePanel = computed(() => (
     platformFilter.value === 'all'
@@ -381,6 +380,7 @@ export function useSourceAnalysis(options?: {
     sourceStructureRows,
     sourceTrendRows,
     structureChartHeight,
+    structureChartScrollable,
     hasStructurePanel,
     insight,
     loadSummary,
