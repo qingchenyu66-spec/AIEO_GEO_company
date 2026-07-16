@@ -12,7 +12,6 @@ import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
 import { parsePreviewTenantId } from '../customerPreview'
-import { parsePreviewTenantId } from '../customerPreview'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.diagnosis',
