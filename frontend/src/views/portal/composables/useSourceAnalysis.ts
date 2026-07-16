@@ -27,10 +27,14 @@ export type { SourceCategory }
 export { sourceCategoryLabels, sourceCategory, sourceCategoryLabel }
 
 export type SourceDatePreset = '7' | '30' | 'all'
+export type SourceRankTab = 'branded' | 'all'
 
 export type SourceRow = MonitorSummary['source_stats'][number] & {
   category: SourceCategory
+  has_exposure: boolean
 }
+
+const RANK_PAGE_SIZE = 20
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -47,6 +51,21 @@ function domainFromUrl(url: string) {
 function sliceTrendPoints<T extends { label: string; value: number }>(points: T[], days: number) {
   if (!points.length || days >= points.length) return points
   return points.slice(points.length - days)
+}
+
+function mapSourceRows(
+  rows: MonitorSummary['source_stats'],
+  brandOfficialHost: string | null | undefined,
+  brandKnownHosts: string[],
+): SourceRow[] {
+  return rows.map(item => ({
+    ...item,
+    has_exposure: item.has_exposure ?? (item.exposure_terms || []).length > 0,
+    category: sourceCategory(item, {
+      brandOfficialHost,
+      brandKnownHosts,
+    }),
+  }))
 }
 
 export function useSourceAnalysis(options?: {
@@ -79,6 +98,8 @@ export function useSourceAnalysis(options?: {
   const platformFilter = ref('all')
   const categoryFilter = ref<'all' | SourceCategory>('all')
   const keywordFilter = ref('')
+  const rankTab = ref<SourceRankTab>('branded')
+  const rankPage = ref(1)
 
   const structureChartRef = options?.structureChartRef ?? ref<HTMLDivElement | null>(null)
   const categoryChartRef = options?.categoryChartRef ?? ref<HTMLDivElement | null>(null)
@@ -91,17 +112,24 @@ export function useSourceAnalysis(options?: {
 
   const brandKnownHosts = computed(() => collectBrandKnownHosts(brandAsset.value))
 
-  const allSources = computed<SourceRow[]>(() => (
-    (monitorSummary.value?.source_stats || [])
-      .filter(item => (item.exposure_terms || []).length > 0)
-      .map(item => ({
-        ...item,
-        category: sourceCategory(item, {
-          brandOfficialHost: brandAsset.value?.official_url,
-          brandKnownHosts: brandKnownHosts.value,
-        }),
-      }))
+  const brandedSources = computed<SourceRow[]>(() => (
+    mapSourceRows(
+      (monitorSummary.value?.source_stats || []).filter(item => (item.exposure_terms || []).length > 0),
+      brandAsset.value?.official_url,
+      brandKnownHosts.value,
+    )
   ))
+
+  const allCitationSources = computed<SourceRow[]>(() => (
+    mapSourceRows(
+      monitorSummary.value?.source_stats_all || monitorSummary.value?.source_stats || [],
+      brandAsset.value?.official_url,
+      brandKnownHosts.value,
+    )
+  ))
+
+  // 图表 / Hero / 平台 chips 仍用品牌相关口径
+  const allSources = brandedSources
 
   const platformRanking = computed(() => sortPlatformRows(monitorSummary.value?.platform_stats || []))
 
@@ -110,31 +138,49 @@ export function useSourceAnalysis(options?: {
     platformRanking.value.map(item => item.platform),
   ))
 
-  const filteredSources = computed(() => {
+  function applySourceFilters(rows: SourceRow[]) {
     const keyword = keywordFilter.value.trim().toLowerCase()
     const now = Date.now()
     const dayMs = 86400000
     const rangeDays = datePreset.value === 'all' ? null : Number(datePreset.value)
     const rangeStart = rangeDays ? now - rangeDays * dayMs : null
-    return allSources.value.filter(source => {
+    return rows.filter(source => {
       const platformMatched = platformFilter.value === 'all'
         || (source.platforms || []).includes(platformFilter.value)
       const categoryMatched = categoryFilter.value === 'all' || source.category === categoryFilter.value
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
-      // 客户样本后端已按监测日截到昨日；勿再用 latest_time 二次卡——补录刷 updated_at 后会被误杀成个位数。
-      // 客户：后端已按监测日截到昨日且已过露出词门槛；勿再按近 N 天截断
       const dateMatched = isCustomerView.value
         ? true
         : (!rangeStart || (sourceTime != null && sourceTime >= rangeStart))
       return platformMatched && categoryMatched && keywordMatched && dateMatched
-        && (source.exposure_terms || []).length > 0
     }).sort((a, b) => b.count - a.count)
+  }
+
+  const filteredSources = computed(() => applySourceFilters(brandedSources.value))
+  const filteredAllSources = computed(() => applySourceFilters(allCitationSources.value))
+
+  const activeRankSources = computed(() => (
+    rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
+  ))
+
+  const rankTotalPages = computed(() => Math.max(1, Math.ceil(activeRankSources.value.length / RANK_PAGE_SIZE)))
+  const pagedRankSources = computed(() => {
+    const page = Math.min(Math.max(rankPage.value, 1), rankTotalPages.value)
+    const start = (page - 1) * RANK_PAGE_SIZE
+    return activeRankSources.value.slice(start, start + RANK_PAGE_SIZE)
   })
 
   const sourceTotalCount = computed(() => filteredSources.value.reduce((sum, item) => sum + item.count, 0))
   const uniqueSourceCount = computed(() => filteredSources.value.length)
+  const allCitationTotalCount = computed(() => filteredAllSources.value.reduce((sum, item) => sum + item.count, 0))
+  const allCitationUniqueCount = computed(() => filteredAllSources.value.length)
+  const brandedCitationShare = computed(() => {
+    if (!allCitationTotalCount.value) return 0
+    return Math.round((sourceTotalCount.value / allCitationTotalCount.value) * 100)
+  })
+
   const platformWithSourcesCount = computed(() => {
     const allowed = new Set(structurePlatformCodes.value)
     const codes = new Set<string>()
@@ -149,7 +195,6 @@ export function useSourceAnalysis(options?: {
 
   const platformTabs = computed(() => {
     const allowed = new Set(structurePlatformCodes.value)
-    // 与列表同口径：客户侧不再用 latest_time 二次截断
     const scopeSources = allSources.value
     const counts = new Map<string, number>()
     scopeSources.forEach(source => {
@@ -208,8 +253,6 @@ export function useSourceAnalysis(options?: {
   const topCategory = computed(() => categoryStats.value.find(item => item.count > 0) || null)
   const officialRate = computed(() => categoryStats.value.find(item => item.key === 'official')?.percent ?? 0)
 
-  const topSources = computed(() => filteredSources.value.slice(0, 5))
-
   const sourceStructureRows = computed(() => {
     const platforms = platformFilter.value === 'all'
       ? structurePlatformCodes.value
@@ -241,7 +284,6 @@ export function useSourceAnalysis(options?: {
       : monitorSummary.value?.source_citation_trend
     const backendPoints = backendTrend?.points || []
     if (backendPoints.length) {
-      // 客户：整段历史至昨日；运营：按预设截取
       const points = isCustomerView.value
         ? backendPoints
         : sliceTrendPoints(
@@ -262,7 +304,6 @@ export function useSourceAnalysis(options?: {
     return active.length ? active : sourceStructureRows.value
   })
 
-  // 左右共用 min-height：按平台行数撑开，图表在 body 内 100% 自适应
   const analyticsPairMinHeight = computed(() => {
     const rows = Math.max(structureChartRows.value.length, 1)
     return Math.max(280, rows * 36 + 56)
@@ -274,18 +315,24 @@ export function useSourceAnalysis(options?: {
       : sourceStructureRows.value.some(row => row.total > 0)
   ))
 
+  const hasPageContent = computed(() => (
+    hasStructurePanel.value
+    || filteredSources.value.length > 0
+    || filteredAllSources.value.length > 0
+  ))
+
   const insight = computed(() => {
-    if (!filteredSources.value.length) {
+    if (!hasPageContent.value) {
       return {
         level: 'empty' as const,
-        title: '暂无含露出词的信源',
-        body: '仅展示引用标题/链接中包含品牌露出词的文章。若 AI 引用的多为行业通用资讯，此处可能较少；请完成更多监测或切换「全部」时间范围。',
+        title: '暂无信源引用',
+        body: '当前筛选下没有可展示的 AI 引用。请完成更多监测或放宽筛选条件。',
       }
     }
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '本页仅展示引用标题或链接中包含品牌露出词的信源。点击标题可打开原文；「问题」为触发该引用的监测问题，「露出词」为文中实际命中的品牌词。',
+      body: '图表与「品牌相关」榜仅统计标题/链接含露出词的引用；「全部引用」榜不过滤露出词，行内 chip 标记是否含露出词。',
     }
   })
 
@@ -320,21 +367,30 @@ export function useSourceAnalysis(options?: {
     categoryFilter.value = 'all'
     keywordFilter.value = ''
     datePreset.value = isCustomerView.value ? 'all' : '30'
+    rankPage.value = 1
+  }
+
+  function setRankTab(tab: SourceRankTab) {
+    rankTab.value = tab
+    rankPage.value = 1
   }
 
   function exportCsv() {
-    if (!filteredSources.value.length) {
+    const rows = activeRankSources.value
+    if (!rows.length) {
       ElMessage.warning('暂无可导出数据')
       return
     }
+    const tabLabel = rankTab.value === 'all' ? '全部引用' : '品牌相关'
     const lines = [
-      ['标题', '链接', '引用次数', '监测问题', '露出词', '最近检测'].join(','),
-      ...filteredSources.value.map(source => [
+      ['标题', '链接', '引用次数', '监测问题', '露出词', '含露出词', '最近检测'].join(','),
+      ...rows.map(source => [
         `"${(source.title || '').replace(/"/g, '""')}"`,
         `"${source.url || ''}"`,
         source.count,
         `"${(source.questions || []).join('；')}"`,
         `"${(source.exposure_terms || []).join('、')}"`,
+        source.has_exposure ? '是' : '否',
         source.latest_time ? formatDateTime(source.latest_time) : '',
       ].join(',')),
     ]
@@ -342,13 +398,19 @@ export function useSourceAnalysis(options?: {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${brandAsset.value?.brand_name || '信源'}-分析.csv`
+    link.download = `${brandAsset.value?.brand_name || '信源'}-${tabLabel}.csv`
     link.click()
     URL.revokeObjectURL(url)
     ElMessage.success('已导出 CSV')
   }
 
   watch([filteredSources, structureChartRows, sourceTrendRows, activeSourceCategoryLabels, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
+  watch([platformFilter, categoryFilter, keywordFilter, datePreset, rankTab], () => {
+    rankPage.value = 1
+  })
+  watch(rankTotalPages, pages => {
+    if (rankPage.value > pages) rankPage.value = pages
+  })
 
   onMounted(() => {
     void loadSummary()
@@ -369,11 +431,20 @@ export function useSourceAnalysis(options?: {
     platformFilter,
     categoryFilter,
     keywordFilter,
+    rankTab,
+    rankPage,
+    rankPageSize: RANK_PAGE_SIZE,
+    rankTotalPages,
     platformTabs,
     filteredSources,
-    topSources,
+    filteredAllSources,
+    activeRankSources,
+    pagedRankSources,
     sourceTotalCount,
     uniqueSourceCount,
+    allCitationTotalCount,
+    allCitationUniqueCount,
+    brandedCitationShare,
     platformWithSourcesCount,
     categoryStats,
     activeSourceCategoryLabels,
@@ -384,9 +455,11 @@ export function useSourceAnalysis(options?: {
     sourceTrendRows,
     analyticsPairMinHeight,
     hasStructurePanel,
+    hasPageContent,
     insight,
     loadSummary,
     resetFilters,
+    setRankTab,
     exportCsv,
     platformLabelMap,
     sourceCategoryLabels,

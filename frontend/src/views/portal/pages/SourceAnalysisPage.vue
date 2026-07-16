@@ -33,11 +33,19 @@ const {
   platformFilter,
   categoryFilter,
   keywordFilter,
+  rankTab,
+  rankPage,
+  rankPageSize,
+  rankTotalPages,
   platformTabs,
   filteredSources,
-  topSources,
+  activeRankSources,
+  pagedRankSources,
   sourceTotalCount,
   uniqueSourceCount,
+  allCitationTotalCount,
+  allCitationUniqueCount,
+  brandedCitationShare,
   platformWithSourcesCount,
   categoryStats,
   categorySummaryLabel,
@@ -46,14 +54,24 @@ const {
   sourceTrendRows,
   analyticsPairMinHeight,
   hasStructurePanel,
+  hasPageContent,
   insight,
   loadSummary,
   resetFilters,
+  setRankTab,
   exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
   domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
+
+const rankPageLabel = computed(() => {
+  const total = activeRankSources.value.length
+  if (!total) return '暂无数据'
+  const start = (rankPage.value - 1) * rankPageSize + 1
+  const end = Math.min(rankPage.value * rankPageSize, total)
+  return `第 ${start}-${end} 条 / 共 ${total} 条`
+})
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
   { value: '7', label: '近 7 天' },
@@ -103,7 +121,7 @@ const categoryOptions = [
               <RefreshCw />
               刷新
             </button>
-            <button type="button" class="primary-btn small-btn" :disabled="!filteredSources.length" @click="exportCsv">
+            <button type="button" class="primary-btn small-btn" :disabled="!activeRankSources.length" @click="exportCsv">
               <Download />
               导出 CSV
             </button>
@@ -130,32 +148,32 @@ const categoryOptions = [
     <article class="source-hero panel">
       <div class="source-hero-top">
         <span class="source-hero-eyebrow">{{ pageMenuName }} · AI 引用溯源</span>
-        <h2>{{ brandAsset?.brand_name || '本品牌' }} · 含露出词信源</h2>
+        <h2>{{ brandAsset?.brand_name || '本品牌' }} · 信源分析</h2>
         <p class="source-hero-note">
-          仅展示引用<strong>标题或链接中含品牌露出词</strong>的文章，便于追踪 AI 直接引用品牌相关内容的情况。
+          图表默认按<strong>含露出词</strong>统计；排行支持切换「品牌相关」与「全部引用」。
         </p>
       </div>
-      <div v-if="loading && !filteredSources.length" class="mini-empty">信源数据加载中…</div>
+      <div v-if="loading && !hasPageContent" class="mini-empty">信源数据加载中…</div>
       <div v-else class="source-hero-metrics">
         <div class="source-hero-metric primary-metric">
-          <span>引用总次数</span>
+          <span>品牌相关引用</span>
           <b>{{ sourceTotalCount }}</b>
-          <em>筛选范围内累计引用</em>
+          <em>{{ uniqueSourceCount }} 个独立信源</em>
         </div>
         <div class="source-hero-metric">
-          <span>独立信源数</span>
-          <b>{{ uniqueSourceCount }}</b>
-          <em>去重 URL 数量</em>
+          <span>全部引用次数</span>
+          <b>{{ allCitationTotalCount }}</b>
+          <em>{{ allCitationUniqueCount }} 个独立信源</em>
+        </div>
+        <div class="source-hero-metric">
+          <span>品牌相关占比</span>
+          <b>{{ brandedCitationShare }}%</b>
+          <em>含露出词 / 全部引用</em>
         </div>
         <div class="source-hero-metric">
           <span>覆盖平台</span>
           <b>{{ platformWithSourcesCount }}</b>
-          <em>有引用记录的模型平台</em>
-        </div>
-        <div class="source-hero-metric">
-          <span>主要类型</span>
-          <b>{{ topCategory?.name || '—' }}</b>
-          <em>官网占比 {{ officialRate }}%</em>
+          <em>主要类型 {{ topCategory?.name || '—' }} · 官网 {{ officialRate }}%</em>
         </div>
       </div>
     </article>
@@ -171,13 +189,13 @@ const categoryOptions = [
       </div>
     </div>
 
-    <template v-if="hasStructurePanel || filteredSources.length">
-      <section class="source-analytics-grid">
+    <template v-if="hasPageContent">
+      <section v-if="hasStructurePanel || filteredSources.length" class="source-analytics-grid">
         <article v-if="hasStructurePanel" class="source-panel source-panel--paired">
           <div class="source-panel-head">
             <div>
               <h3>分平台信源结构</h3>
-              <p>各已购模型引用来源的类型占比</p>
+              <p>各已购模型引用来源的类型占比（含露出词）</p>
             </div>
             <Database />
           </div>
@@ -213,89 +231,96 @@ const categoryOptions = [
         </article>
       </section>
 
-      <template v-if="filteredSources.length">
-        <article class="source-panel">
-          <div class="source-panel-head">
-            <div>
-              <h3>引用趋势</h3>
-              <p>{{ isCustomerView ? '按检测日统计露出词信源引用次数' : '按检测日统计新增引用次数' }}</p>
-            </div>
-            <span v-if="isCustomerView" class="source-customer-period">{{ trendPeriodLabel }}</span>
-          </div>
-          <div
-            v-if="sourceTrendRows.some(item => item.value > 0)"
-            ref="trendChartRef"
-            class="echart-box source-trend-echart"
-          />
-          <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
-        </article>
-
-      <section class="source-panel">
+      <article v-if="sourceTrendRows.some(item => item.value > 0) || filteredSources.length" class="source-panel">
         <div class="source-panel-head">
           <div>
-            <h3>高频信源 TOP 5</h3>
-            <p>含露出词且被重复引用最多的来源</p>
+            <h3>引用趋势</h3>
+            <p>{{ isCustomerView ? '按检测日统计露出词信源引用次数' : '按检测日统计新增引用次数' }}</p>
           </div>
+          <span v-if="isCustomerView" class="source-customer-period">{{ trendPeriodLabel }}</span>
         </div>
-        <div class="source-top-grid">
-          <article
-            v-for="(source, index) in topSources"
-            :key="source.url"
-            class="source-top-card"
-            :class="{ 'is-top': index === 0 }"
-          >
-            <span class="source-top-rank">{{ index + 1 }}</span>
-            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-top-title-link">
-              {{ source.title || domainFromUrl(source.url) }}
-            </a>
-            <small>{{ domainFromUrl(source.url) }}</small>
-            <div class="source-top-card-foot">
-              <strong>{{ source.count }}</strong>
-              <span class="source-type-tag">{{ sourceCategoryLabel(source.category) }}</span>
-            </div>
-          </article>
-        </div>
-      </section>
+        <div
+          v-if="sourceTrendRows.some(item => item.value > 0)"
+          ref="trendChartRef"
+          class="echart-box source-trend-echart"
+        />
+        <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
+      </article>
 
       <article class="source-panel source-table-panel">
-        <div class="source-panel-head" style="padding: 16px 16px 0">
+        <div class="source-panel-head source-rank-head">
           <div>
-            <h3>信源明细</h3>
-            <p>共 {{ filteredSources.length }} 条含露出词信源 · {{ sourceTotalCount }} 次引用</p>
+            <h3>信源排行</h3>
+            <p>{{ rankPageLabel }}</p>
+          </div>
+          <div class="source-rank-tabs">
+            <button
+              type="button"
+              :class="{ active: rankTab === 'branded' }"
+              @click="setRankTab('branded')"
+            >
+              品牌相关
+            </button>
+            <button
+              type="button"
+              :class="{ active: rankTab === 'all' }"
+              @click="setRankTab('all')"
+            >
+              全部引用
+            </button>
           </div>
         </div>
-        <div class="source-table-head">
+        <div class="source-table-head" :class="{ 'is-all-tab': rankTab === 'all' }">
           <span>#</span>
           <span>信源</span>
           <span>问题</span>
-          <span>露出词</span>
+          <span>{{ rankTab === 'all' ? '标记' : '露出词' }}</span>
           <span>次数</span>
         </div>
-        <div v-for="(source, index) in filteredSources" :key="source.url" class="source-table-row">
-          <span>{{ index + 1 }}</span>
+        <div v-if="!pagedRankSources.length" class="mini-empty chart-empty">当前 Tab / 筛选下暂无信源。</div>
+        <div
+          v-for="(source, index) in pagedRankSources"
+          :key="`${rankTab}-${source.url}`"
+          class="source-table-row"
+          :class="{ 'is-all-tab': rankTab === 'all' }"
+        >
+          <span>{{ (rankPage - 1) * rankPageSize + index + 1 }}</span>
           <div class="source-table-main">
             <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
               {{ source.title || domainFromUrl(source.url) }}
             </a>
-            <small>{{ domainFromUrl(source.url) }}</small>
+            <small>
+              {{ domainFromUrl(source.url) }}
+              · {{ sourceCategoryLabel(source.category) }}
+            </small>
           </div>
           <div class="source-table-tags">
             <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
             <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
           </div>
           <div class="source-table-tags">
-            <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
+            <template v-if="rankTab === 'all'">
+              <i v-if="source.has_exposure" class="is-exposure">含露出词</i>
+              <i v-else class="source-table-muted">未命中</i>
+            </template>
+            <template v-else>
+              <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
+            </template>
           </div>
           <strong>{{ source.count }}</strong>
         </div>
+        <div v-if="rankTotalPages > 1" class="source-rank-pager">
+          <button type="button" class="tiny-btn" :disabled="rankPage <= 1" @click="rankPage -= 1">上一页</button>
+          <span>{{ rankPage }} / {{ rankTotalPages }}</span>
+          <button type="button" class="tiny-btn" :disabled="rankPage >= rankTotalPages" @click="rankPage += 1">下一页</button>
+        </div>
       </article>
-      </template>
     </template>
 
     <div v-else-if="!loading" class="source-empty-state">
       <Database />
-      <h3>暂无含露出词的信源</h3>
-      <p>仅展示标题或链接中包含品牌露出词的引用文章。请尝试切换「全部」时间范围，或等待更多监测结果同步。</p>
+      <h3>暂无信源引用</h3>
+      <p>当前筛选下没有可展示的 AI 引用。请尝试放宽筛选，或等待更多监测结果同步。</p>
     </div>
   </section>
 </template>

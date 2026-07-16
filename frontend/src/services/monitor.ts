@@ -128,6 +128,17 @@ export interface MonitorSummary {
     exposure_terms?: string[]
     questions?: string[]
     latest_time?: string | null
+    has_exposure?: boolean
+  }>
+  source_stats_all?: Array<{
+    title: string
+    url: string
+    count: number
+    platforms?: string[]
+    exposure_terms?: string[]
+    questions?: string[]
+    latest_time?: string | null
+    has_exposure?: boolean
   }>
   source_citation_trend?: {
     start_at: string
