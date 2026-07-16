@@ -195,9 +195,12 @@ export function useSourceAnalysis(options?: {
     Object.fromEntries(categoryStats.value.map(item => [item.key, item.name]))
   ))
 
-  const categorySummaryLabel = computed(() => (
-    categoryStats.value.map(item => item.name).join(' / ') || '—'
-  ))
+  const categorySummaryLabel = computed(() => {
+    const names = categoryStats.value.map(item => item.name)
+    if (!names.length) return '—'
+    if (names.length <= 3) return names.join(' / ')
+    return `共 ${names.length} 类`
+  })
 
   const topCategory = computed(() => categoryStats.value.find(item => item.count > 0) || null)
   const officialRate = computed(() => categoryStats.value.find(item => item.key === 'official')?.percent ?? 0)
