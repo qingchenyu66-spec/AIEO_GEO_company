@@ -254,15 +254,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div class="enterprise-main">
             <b>{{ tenant.name }}</b>
             <small>{{ tenantServicePeriod(tenant) }}</small>
+            <small v-if="showOwnerOnEnterpriseList" class="enterprise-owner">销售 · {{ tenantOwnerLabel(tenant) }}</small>
           </div>
           <div class="enterprise-metrics">
             <span>
               <small>服务状态</small>
               <b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b>
-            </span>
-            <span v-if="showOwnerOnEnterpriseList">
-              <small>归属销售</small>
-              <b>{{ tenantOwnerLabel(tenant) }}</b>
             </span>
             <span>
               <small>自动监测</small>
@@ -270,9 +267,9 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             </span>
           </div>
           <div class="enterprise-actions">
-            <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
             <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
-            <button v-if="canEditTenantList" type="button" class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+            <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+            <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
             <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
             <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
             <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>

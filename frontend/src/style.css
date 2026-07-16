@@ -2728,6 +2728,12 @@ button:disabled {
   color:#71859e;
   font-size:12px;
 }
+.enterprise-main .enterprise-owner {
+  margin-top:4px;
+  color:#4b6482;
+  font-size:12px;
+  font-weight:600;
+}
 .enterprise-metrics {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
