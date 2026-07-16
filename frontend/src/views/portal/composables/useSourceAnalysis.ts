@@ -13,6 +13,7 @@ import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } fro
 import { formatDateTime } from '../portalUtils'
 import {
   createEmptyCategoryBucket,
+  collectBrandKnownHosts,
   sourceCategory,
   sourceCategoryIds,
   sourceCategoryLabel,
@@ -85,14 +86,17 @@ export function useSourceAnalysis(options?: {
     sourceTrend: trendChartRef,
   })
 
-  const brandOfficialHost = computed(() => brandAsset.value?.official_url || null)
+  const brandKnownHosts = computed(() => collectBrandKnownHosts(brandAsset.value))
 
   const allSources = computed<SourceRow[]>(() => (
     (monitorSummary.value?.source_stats || [])
       .filter(item => (item.exposure_terms || []).length > 0)
       .map(item => ({
         ...item,
-        category: sourceCategory(item, { brandOfficialHost: brandOfficialHost.value }),
+        category: sourceCategory(item, {
+          brandOfficialHost: brandAsset.value?.official_url,
+          brandKnownHosts: brandKnownHosts.value,
+        }),
       }))
   ))
 

@@ -10,7 +10,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
-import { sourceCategory, sourceCategoryIds } from '../sourceCategory'
+import { collectBrandKnownHosts, sourceCategory, sourceCategoryIds } from '../sourceCategory'
 import { parsePreviewTenantId } from '../customerPreview'
 
 export const monitorSummaryMenuCodes = new Set([
@@ -164,7 +164,10 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       const platformSources = sourceRanking.value.filter(source => (source.platforms || []).includes(platform))
       const total = platformSources.reduce((sum, source) => sum + source.count, 0)
       const categoryMap = platformSources.reduce((map, source) => {
-        const category = sourceCategory(source, { brandOfficialHost: brandAsset.value?.official_url })
+        const category = sourceCategory(source, {
+          brandOfficialHost: brandAsset.value?.official_url,
+          brandKnownHosts: collectBrandKnownHosts(brandAsset.value),
+        })
         map[category] = (map[category] || 0) + source.count
         return map
       }, {} as Record<string, number>)

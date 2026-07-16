@@ -7,7 +7,7 @@ export interface SourceCategoryRule {
   hostSuffixes?: string[]
 }
 
-/** 按优先级排列：先命中先返回；末尾 other 为兜底。增删类型只改此表。 */
+/** 按优先级排列：先命中先返回；未识别平台类站点默认归官网/企业站点。 */
 export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
   {
     id: 'encyclopedia',
@@ -95,20 +95,25 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
   },
   {
     id: 'official',
-    label: '品牌官网',
+    label: '官网/企业站点',
     color: '#326fea',
-    keywords: ['官网', '官方网站', 'homepage'],
+    keywords: ['官网', '官方网站', 'homepage', '企业介绍', '关于我们'],
   },
   {
     id: 'other',
     label: '其他',
     color: '#94a3b8',
+    keywords: ['未知来源'],
   },
 ]
 
 export type SourceCategory = (typeof SOURCE_CATEGORY_RULES)[number]['id']
 
-export const SOURCE_CATEGORY_FALLBACK: SourceCategory = 'other'
+export const SOURCE_CATEGORY_FALLBACK: SourceCategory = 'official'
+
+const PLATFORM_CATEGORY_IDS = new Set([
+  'encyclopedia', 'government', 'enterprise', 'qa', 'social', 'forum', 'video', 'media', 'ecommerce',
+])
 
 export const sourceCategoryLabels: Record<SourceCategory, string> = Object.fromEntries(
   SOURCE_CATEGORY_RULES.map(rule => [rule.id, rule.label]),
@@ -127,7 +132,29 @@ export function sourceCategoryLabel(id: string) {
 }
 
 export function sourceCategoryColor(id: string) {
-  return sourceCategoryColors[id as SourceCategory] || sourceCategoryColors.other
+  return sourceCategoryColors[id as SourceCategory] || sourceCategoryColors.official
+}
+
+export function collectBrandKnownHosts(brand?: {
+  official_url?: string | null
+  product_keywords?: string[]
+  keyword_groups?: Array<{ exposure_terms?: string[] }>
+} | null): string[] {
+  const hosts = new Set<string>()
+  const add = (raw?: string | null) => {
+    const host = normalizeHost(raw || '')
+    if (host) hosts.add(host)
+  }
+  add(brand?.official_url)
+  for (const term of brand?.product_keywords || []) {
+    if (term.includes('.')) add(term)
+  }
+  for (const group of brand?.keyword_groups || []) {
+    for (const term of group.exposure_terms || []) {
+      if (term.includes('.')) add(term)
+    }
+  }
+  return [...hosts]
 }
 
 function normalizeHost(input: string) {
@@ -164,20 +191,29 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
 
 export function sourceCategory(
   source: { title?: string; url?: string },
-  options?: { brandOfficialHost?: string | null },
+  options?: { brandOfficialHost?: string | null; brandKnownHosts?: string[] },
 ): SourceCategory {
   const text = `${source.title || ''} ${source.url || ''}`.toLowerCase()
   const host = normalizeHost(source.url || '')
 
-  const brandHost = normalizeHost(options?.brandOfficialHost || '')
-  if (brandHost && host && hostsMatch(host, brandHost)) {
-    return 'official'
+  const knownHosts = [
+    ...(options?.brandKnownHosts || []),
+    ...(options?.brandOfficialHost ? [options.brandOfficialHost] : []),
+  ]
+    .map(item => normalizeHost(item))
+    .filter(Boolean)
+  for (const knownHost of knownHosts) {
+    if (host && hostsMatch(host, knownHost)) return 'official'
   }
 
   for (const rule of SOURCE_CATEGORY_RULES) {
-    if (rule.id === SOURCE_CATEGORY_FALLBACK) continue
+    if (!PLATFORM_CATEGORY_IDS.has(rule.id)) continue
     if (matchRule(rule, text, host)) return rule.id as SourceCategory
   }
+
+  const officialRule = SOURCE_CATEGORY_RULES.find(rule => rule.id === 'official')
+  if (officialRule && matchRule(officialRule, text, host)) return 'official'
+
   return SOURCE_CATEGORY_FALLBACK
 }
 
@@ -196,7 +232,7 @@ if (!import.meta.env.PROD) {
     [{ url: 'https://www.sohu.com/a/1' }, 'media'],
     [{ url: 'https://item.taobao.com/1' }, 'ecommerce'],
     [{ title: '品牌官方网站介绍' }, 'official'],
-    [{ title: '某行业观察', url: 'https://example.org/post' }, 'other'],
+    [{ title: '某行业观察', url: 'https://example.org/post' }, 'official'],
   ]
   for (const [input, expected] of checks) {
     const actual = sourceCategory(input)
