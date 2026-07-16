@@ -258,7 +258,8 @@ export function useSourceAnalysis(options?: {
 
   const structureChartHeight = computed(() => {
     const count = Math.max(structureChartRows.value.length, 1)
-    if (count === 1) return 104
+    if (count === 1) return 88
+    if (count === 2) return 118
     if (count <= 3) return count * 46 + 48
     return Math.max(280, count * 46 + 48)
   })
