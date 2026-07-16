@@ -54,7 +54,7 @@ export function usePortalMenu(
       }
       return
     }
-    activeMenuCode.value = code
+
     const query: Record<string, unknown> = { ...route.query, menu: code, ...extraQuery }
 
     if (exitingPreview) {
@@ -72,6 +72,21 @@ export function usePortalMenu(
     }
 
     const nav = replace ? router.replace : router.push
+    const enteringPreview = Boolean(
+      isPlatform?.value
+      && extraQuery?.preview_tenant_id
+      && isCustomerPreviewMenuCode(code),
+    )
+
+    // 预览首跳：先等 query 写入再切菜单，避免工作台在无 tenant_id 时挂载请求
+    if (enteringPreview) {
+      void nav({ path: route.path, query: query as typeof route.query })
+        .then(() => { activeMenuCode.value = code })
+        .catch(() => { activeMenuCode.value = code })
+      return
+    }
+
+    activeMenuCode.value = code
     nav({ path: route.path, query: query as typeof route.query }).catch(() => undefined)
   }
 

@@ -1,4 +1,4 @@
-import { computed, inject, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PortalNavigateKey } from '../injectionKeys'
 import { withRetry } from '../../../composables/useRetry'
@@ -16,7 +16,7 @@ import {
 import { platformLabelMap, platformAccentColor, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { sortPlatformRows } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
-import { previewQueryFields } from '../customerPreview'
+import { parsePreviewTenantId, parsePreviewTenantName, previewQueryFields } from '../customerPreview'
 
 export type WorkspaceHeroTone = 'empty' | 'calm' | 'warn'
 
@@ -293,17 +293,20 @@ export function useCustomerWorkspace() {
 
   const previewTenantId = computed(() => {
     if (auth.session?.identity?.identity_type !== 'PLATFORM') return null
-    const raw = route.query.preview_tenant_id
+    const fromPreview = parsePreviewTenantId(route)
+    if (fromPreview != null) return fromPreview
+    // 预览态下 sticky tenant_id 可作兜底（首跳竞态时 name 可能先于 id 可见）
+    if (!parsePreviewTenantName(route)) return null
+    const raw = route.query.tenant_id
     const text = Array.isArray(raw) ? raw[0] : raw
     const parsed = Number(text)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
   })
-  const previewTenantName = computed(() => {
-    const raw = route.query.preview_tenant_name
-    const text = Array.isArray(raw) ? raw[0] : raw
-    return typeof text === 'string' && text.trim() ? text.trim() : ''
-  })
-  const isPreviewMode = computed(() => previewTenantId.value != null)
+  const previewTenantName = computed(() => parsePreviewTenantName(route))
+  const isPreviewMode = computed(() => (
+    auth.session?.identity?.identity_type === 'PLATFORM'
+    && (parsePreviewTenantId(route) != null || Boolean(previewTenantName.value))
+  ))
   const previewAccessRecorded = ref(false)
 
   const canOpenRealtime = computed(() => hasMenu('customer.realtime') || isPreviewMode.value)
@@ -681,6 +684,11 @@ export function useCustomerWorkspace() {
   }
 
   async function loadBrief() {
+    const isPlatform = auth.session?.identity?.identity_type === 'PLATFORM'
+    // 平台预览：query 未带齐企业 id 时不请求，等路由就绪后 watch 再拉
+    if (isPlatform && isPreviewMode.value && previewTenantId.value == null) {
+      return
+    }
     loading.value = true
     loadError.value = ''
     try {
@@ -771,8 +779,15 @@ export function useCustomerWorkspace() {
   }
 
   onMounted(() => {
-    loadBrief()
+    void loadBrief()
   })
+
+  watch(
+    () => previewTenantId.value,
+    (tenantId, prev) => {
+      if (tenantId != null && tenantId !== prev) void loadBrief()
+    },
+  )
 
   const stopMonitorRefresh = onMonitorRefresh(() => {
     void loadBrief()
