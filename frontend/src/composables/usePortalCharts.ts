@@ -422,12 +422,14 @@ export function usePortalCharts(refs: PortalChartRefs) {
       }
       const legendLabels = categoryKeys.map(type => data.sourceCategoryLabels[type])
       const legendTop = categoryKeys.length > 4 ? 40 : 28
+      const barGap = rows.length <= 2 ? '50%' : rows.length <= 4 ? '36%' : rows.length <= 8 ? '28%' : '18%'
       sourceStructureChart.setOption({
         grid: {
           left: 88,
-          right: 46,
+          right: 28,
           top: legendTop + 8,
-          bottom: rows.length === 1 ? 12 : rows.length <= 2 ? 16 : 20,
+          bottom: 12,
+          containLabel: false,
         },
         tooltip: {
           trigger: compactStructure ? 'item' : 'axis',
@@ -458,7 +460,8 @@ export function usePortalCharts(refs: PortalChartRefs) {
             name: '暂无引用',
             type: 'bar',
             stack: 'source',
-            barWidth: 18,
+            barMaxWidth: 22,
+            barCategoryGap: barGap,
             data: rows.map(row => (row.total ?? 0) > 0 ? 0 : 100),
             itemStyle: { color: '#e8edf3', borderRadius: [0, 8, 8, 0] },
           },
@@ -466,7 +469,8 @@ export function usePortalCharts(refs: PortalChartRefs) {
             name: data.sourceCategoryLabels[type],
             type: 'bar',
             stack: 'source',
-            barWidth: 18,
+            barMaxWidth: 22,
+            barCategoryGap: barGap,
             data: rows.map(row => {
               if ((row.total ?? 0) === 0) return 0
               return row.categories.find(item => item.type === type)?.value || 0
@@ -478,6 +482,8 @@ export function usePortalCharts(refs: PortalChartRefs) {
           })),
         ],
       }, { notMerge: true })
+      // 等 flex/absolute 布局落稳后再 resize，避免首次按错误尺寸绘制
+      requestAnimationFrame(() => sourceStructureChart.resize())
     }
 
     const sourceCategoryChart = getChart(refs.sourceCategoryDistribution?.value ?? null)
@@ -499,28 +505,30 @@ export function usePortalCharts(refs: PortalChartRefs) {
             show: true,
             orient: verticalLegend ? 'vertical' : 'horizontal',
             left: verticalLegend ? undefined : 'center',
-            right: verticalLegend ? 0 : undefined,
+            right: verticalLegend ? 4 : undefined,
             top: verticalLegend ? 'middle' : undefined,
-            bottom: verticalLegend ? undefined : 0,
+            bottom: verticalLegend ? undefined : 4,
             itemWidth: 10,
             itemHeight: 10,
             textStyle: { color: '#526b89', fontSize: 12 },
           },
           series: [{
             type: 'pie',
-            radius: rows.length <= 2 ? ['46%', '68%'] : ['40%', '62%'],
-            center: verticalLegend ? ['36%', '48%'] : ['50%', '44%'],
+            radius: verticalLegend ? ['34%', '54%'] : ['38%', '58%'],
+            center: verticalLegend ? ['38%', '50%'] : ['50%', '46%'],
             data: rows.map(item => ({ name: item.name, value: item.count })),
+            avoidLabelOverlap: true,
             label: {
-              formatter: '{b}\n{d}%',
+              formatter: '{d}%',
               color: '#17324d',
               fontWeight: 700,
               fontSize: 12,
             },
-            labelLine: { length: 10, length2: 8 },
+            labelLine: { length: 8, length2: 6 },
             itemStyle: { borderColor: '#fff', borderWidth: 2 },
           }],
         }, { notMerge: true })
+        requestAnimationFrame(() => sourceCategoryChart.resize())
       }
     }
 

@@ -262,29 +262,17 @@ export function useSourceAnalysis(options?: {
     return active.length ? active : sourceStructureRows.value
   })
 
-  const structureChartHeight = computed(() => {
-    const count = Math.max(structureChartRows.value.length, 1)
-    const legendReserve = categoryStats.value.length > 4 ? 48 : 36
-    return count * 44 + legendReserve + 24
+  // 左右共用 min-height：按平台行数撑开，图表在 body 内 100% 自适应
+  const analyticsPairMinHeight = computed(() => {
+    const rows = Math.max(structureChartRows.value.length, 1)
+    return Math.max(280, rows * 36 + 56)
   })
-
-  // ponytail: 超过 10 平台才滚；常见已购数（≤8）直接撑开，避免丑滚动条
-  const structureChartScrollable = computed(() => structureChartRows.value.length > 10)
 
   const hasStructurePanel = computed(() => (
     platformFilter.value === 'all'
       ? sourceStructureRows.value.length > 0
       : sourceStructureRows.value.some(row => row.total > 0)
   ))
-
-  const analyticsPairBodyHeight = computed(() => {
-    const categoryRows = categoryStats.value.length
-    const categoryMin = Math.max(220, categoryRows * 48 + 96)
-    if (!hasStructurePanel.value) return categoryMin
-    const structureH = structureChartHeight.value
-    if (structureChartScrollable.value) return Math.max(520, categoryMin)
-    return Math.max(structureH, categoryMin)
-  })
 
   const insight = computed(() => {
     if (!filteredSources.value.length) {
@@ -394,9 +382,7 @@ export function useSourceAnalysis(options?: {
     officialRate,
     sourceStructureRows,
     sourceTrendRows,
-    structureChartHeight,
-    structureChartScrollable,
-    analyticsPairBodyHeight,
+    analyticsPairMinHeight,
     hasStructurePanel,
     insight,
     loadSummary,

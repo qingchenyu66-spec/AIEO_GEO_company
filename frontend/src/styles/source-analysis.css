@@ -268,23 +268,25 @@
 .source-panel--paired {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .source-panel-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 280px;
+  overflow: hidden;
 }
 
-.source-panel-body .source-structure-scroll {
-  flex: 1;
-  min-height: 0;
-}
-
-.source-panel-body .source-structure-scroll.is-scrollable {
-  max-height: none;
-  overflow-y: auto;
-  padding-right: 2px;
+/* 覆盖全局 .echart-box min-height:260px，让图表贴合 body */
+.source-panel-body .source-structure-echart.echart-box,
+.source-panel-body .source-category-echart.echart-box {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
 }
 
 .source-panel {
@@ -312,11 +314,6 @@
   margin: 4px 0 0;
   color: #8aa0ba;
   font-size: 12px;
-}
-
-.source-structure-scroll.is-scrollable {
-  overflow-y: auto;
-  padding-right: 2px;
 }
 
 .source-structure-echart {

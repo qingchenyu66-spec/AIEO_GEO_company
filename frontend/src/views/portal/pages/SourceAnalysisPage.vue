@@ -44,9 +44,7 @@ const {
   topCategory,
   officialRate,
   sourceTrendRows,
-  structureChartHeight,
-  structureChartScrollable,
-  analyticsPairBodyHeight,
+  analyticsPairMinHeight,
   hasStructurePanel,
   insight,
   loadSummary,
@@ -185,18 +183,12 @@ const categoryOptions = [
           </div>
           <div
             class="source-panel-body"
-            :style="{ height: `${analyticsPairBodyHeight}px` }"
+            :style="{ minHeight: `${analyticsPairMinHeight}px` }"
           >
             <div
-              class="source-structure-scroll"
-              :class="{ 'is-scrollable': structureChartScrollable }"
-            >
-              <div
-                ref="structureChartRef"
-                class="echart-box source-structure-echart"
-                :style="{ height: `${structureChartHeight}px`, minHeight: `${structureChartHeight}px` }"
-              />
-            </div>
+              ref="structureChartRef"
+              class="echart-box source-structure-echart"
+            />
           </div>
         </article>
 
@@ -209,7 +201,7 @@ const categoryOptions = [
           </div>
           <div
             class="source-panel-body"
-            :style="{ height: `${analyticsPairBodyHeight}px` }"
+            :style="{ minHeight: `${analyticsPairMinHeight}px` }"
           >
             <div
               v-if="categoryStats.length"
