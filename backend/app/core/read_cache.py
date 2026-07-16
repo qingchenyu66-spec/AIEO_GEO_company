@@ -30,7 +30,7 @@ CACHE_BUILD_POLL_INTERVAL = 0.15
 
 
 def monitor_summary_cache_key(identity_type: str, tenant_key: str | int) -> str:
-    return f"monitor:summary:v3:{identity_type}:{tenant_key}"
+    return f"monitor:summary:v4:{identity_type}:{tenant_key}"
 
 
 def source_stats_config_fingerprint(

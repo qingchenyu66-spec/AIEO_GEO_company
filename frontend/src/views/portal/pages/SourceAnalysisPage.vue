@@ -39,6 +39,7 @@ const {
   uniqueSourceCount,
   platformWithSourcesCount,
   categoryStats,
+  categorySummaryLabel,
   topCategory,
   officialRate,
   sourceTrendRows,
@@ -49,6 +50,7 @@ const {
   resetFilters,
   exportCsv,
   sourceCategoryLabels,
+  sourceCategoryLabel,
   domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, trendChartRef })
 
@@ -96,7 +98,7 @@ const categoryOptions = [
           <div class="source-sticky-actions">
             <span v-if="loading" class="competitor-loading-dot">更新中…</span>
             <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
-            <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadSummary()">
+            <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadSummary(true)">
               <RefreshCw />
               刷新
             </button>
@@ -189,10 +191,10 @@ const categoryOptions = [
           <div class="source-panel-head">
             <div>
               <h3>信源类型分布</h3>
-              <p>官网 / 媒体 / 问答 / 社交 / 百科</p>
+              <p>{{ categorySummaryLabel }}</p>
             </div>
           </div>
-          <div v-if="filteredSources.length" class="source-category-list">
+          <div v-if="categoryStats.length" class="source-category-list">
             <div v-for="item in categoryStats" :key="item.key" class="source-category-row">
               <span>{{ item.name }}</span>
               <div class="source-category-bar">
@@ -243,7 +245,7 @@ const categoryOptions = [
             <small>{{ domainFromUrl(source.url) }}</small>
             <div class="source-top-card-foot">
               <strong>{{ source.count }}</strong>
-              <span class="source-type-tag">{{ sourceCategoryLabels[source.category] }}</span>
+              <span class="source-type-tag">{{ sourceCategoryLabel(source.category) }}</span>
             </div>
           </article>
         </div>

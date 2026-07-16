@@ -2,6 +2,7 @@ import { nextTick, onUnmounted, ref, type Ref } from 'vue'
 import type { ECharts } from 'echarts/core'
 import { loadEchartsRuntime } from '../utils/echartsLoader'
 import { platformLabelMap } from '../views/portal/portalMaps'
+import { sourceCategoryColor } from '../views/portal/sourceCategory'
 import type { BrandInsightsTrends } from '../services/analytics'
 
 export type PortalChartRefs = {
@@ -393,22 +394,42 @@ export function usePortalCharts(refs: PortalChartRefs) {
       const categoryKeys = Object.keys(data.sourceCategoryLabels)
       const rows = data.sourceStructureRows
       const legendLabels = Object.values(data.sourceCategoryLabels)
+      const compactStructure = rows.length <= 2
+      const formatStructureTooltip = (params: unknown) => {
+        const items = Array.isArray(params)
+          ? params as Array<{ name: string; marker: string; seriesName: string; value: number; dataIndex?: number }>
+          : [params as { name: string; marker: string; seriesName: string; value: number; dataIndex?: number }]
+        const rowIndex = items[0]?.dataIndex ?? rows.findIndex(row => (
+          (platformLabelMap[row.platform] || row.platform) === items[0]?.name
+        ))
+        const row = rowIndex >= 0 ? rows[rowIndex] : undefined
+        const name = row
+          ? (platformLabelMap[row.platform] || row.platform)
+          : (items[0]?.name || '')
+        if (!row?.total) return `${name}<br/>暂无含露出词的信源引用`
+        const segments = compactStructure
+          ? categoryKeys
+            .map(type => ({
+              seriesName: data.sourceCategoryLabels[type],
+              value: row.categories.find(item => item.type === type)?.value || 0,
+            }))
+            .filter(item => item.value > 0)
+          : items.filter(item => item.seriesName !== '暂无引用' && item.value > 0)
+        return `${name}<br/>${segments
+          .map(item => `${'marker' in item && item.marker ? item.marker : '● '}${item.seriesName}：${item.value}%`)
+          .join('<br/>')}`
+      }
       sourceStructureChart.setOption({
-        color: ['#326fea', '#20b8c9', '#35c58f', '#f0b84e', '#9b7ae7'],
-        grid: { left: 88, right: 46, top: 18, bottom: 34 },
+        grid: {
+          left: 88,
+          right: 46,
+          top: compactStructure ? 20 : 18,
+          bottom: compactStructure ? 28 : 34,
+        },
         tooltip: {
-          trigger: 'axis',
-          axisPointer: { type: 'shadow' },
-          formatter: (params: unknown) => {
-            const items = params as Array<{ name: string; marker: string; seriesName: string; value: number }>
-            const name = items?.[0]?.name || ''
-            const hasData = rows.find(row => (platformLabelMap[row.platform] || row.platform) === name)?.total
-            if (!hasData) return `${name}<br/>暂无含露出词的信源引用`
-            return `${name}<br/>${items
-              .filter(item => item.seriesName !== '暂无引用' && item.value > 0)
-              .map(item => `${item.marker}${item.seriesName}：${item.value}%`)
-              .join('<br/>')}`
-          },
+          trigger: compactStructure ? 'item' : 'axis',
+          ...(compactStructure ? {} : { axisPointer: { type: 'shadow' } }),
+          formatter: formatStructureTooltip,
         },
         legend: { bottom: 0, itemWidth: 22, itemHeight: 5, textStyle: { color: '#526b89' }, data: legendLabels },
         xAxis: { type: 'value', max: 100, show: false },
@@ -437,10 +458,13 @@ export function usePortalCharts(refs: PortalChartRefs) {
               if ((row.total ?? 0) === 0) return 0
               return row.categories.find(item => item.type === type)?.value || 0
             }),
-            itemStyle: { borderRadius: index === categoryKeys.length - 1 ? [0, 8, 8, 0] : 0 },
+            itemStyle: {
+              color: sourceCategoryColor(type),
+              borderRadius: index === categoryKeys.length - 1 ? [0, 8, 8, 0] : 0,
+            },
           })),
         ],
-      })
+      }, { notMerge: true })
     }
 
     const sourceTrendChart = getChart(refs.sourceTrend?.value ?? null)

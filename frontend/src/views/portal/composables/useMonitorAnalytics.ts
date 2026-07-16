@@ -10,7 +10,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { buildFunctionalPage } from '../functionalPageConfig'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
-import { sourceCategory, sourceCategoryLabels } from '../sourceCategory'
+import { sourceCategory, sourceCategoryIds } from '../sourceCategory'
 import { parsePreviewTenantId } from '../customerPreview'
 
 export const monitorSummaryMenuCodes = new Set([
@@ -164,7 +164,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       const platformSources = sourceRanking.value.filter(source => (source.platforms || []).includes(platform))
       const total = platformSources.reduce((sum, source) => sum + source.count, 0)
       const categoryMap = platformSources.reduce((map, source) => {
-        const category = sourceCategory(source)
+        const category = sourceCategory(source, { brandOfficialHost: brandAsset.value?.official_url })
         map[category] = (map[category] || 0) + source.count
         return map
       }, {} as Record<string, number>)
@@ -172,7 +172,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
       return {
         platform,
         total,
-        categories: Object.keys(sourceCategoryLabels).map(type => ({
+        categories: sourceCategoryIds.map(type => ({
           type,
           value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
         })),
@@ -327,7 +327,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     loadingSummary.value = true
     try {
       const summaryTenantId = previewTenantId.value
-      const summary = await withRetry(() => getMonitorSummary(false, summaryTenantId))
+      const summary = await withRetry(() => getMonitorSummary(syncRemote, summaryTenantId))
       monitorSummary.value = summary
       if (syncRemote) {
         const synced = await syncPendingTasksFromSummary(summary)

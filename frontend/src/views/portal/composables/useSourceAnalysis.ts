@@ -11,12 +11,19 @@ import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import { formatDateTime } from '../portalUtils'
-import { sourceCategory, sourceCategoryLabels, type SourceCategory } from '../sourceCategory'
+import {
+  createEmptyCategoryBucket,
+  sourceCategory,
+  sourceCategoryIds,
+  sourceCategoryLabel,
+  sourceCategoryLabels,
+  type SourceCategory,
+} from '../sourceCategory'
 import { isCustomerPreviewActive } from '../customerPreview'
 import { useRoute } from 'vue-router'
 
 export type { SourceCategory }
-export { sourceCategoryLabels, sourceCategory }
+export { sourceCategoryLabels, sourceCategory, sourceCategoryLabel }
 
 export type SourceDatePreset = '7' | '30' | 'all'
 
@@ -78,12 +85,14 @@ export function useSourceAnalysis(options?: {
     sourceTrend: trendChartRef,
   })
 
+  const brandOfficialHost = computed(() => brandAsset.value?.official_url || null)
+
   const allSources = computed<SourceRow[]>(() => (
     (monitorSummary.value?.source_stats || [])
       .filter(item => (item.exposure_terms || []).length > 0)
       .map(item => ({
         ...item,
-        category: sourceCategory(item),
+        category: sourceCategory(item, { brandOfficialHost: brandOfficialHost.value }),
       }))
   ))
 
@@ -161,24 +170,30 @@ export function useSourceAnalysis(options?: {
   })
 
   const categoryStats = computed(() => {
-    const bucket: Record<SourceCategory, number> = {
-      official: 0,
-      media: 0,
-      qa: 0,
-      social: 0,
-      encyclopedia: 0,
-    }
+    const bucket = createEmptyCategoryBucket()
     filteredSources.value.forEach(source => {
-      bucket[source.category] += source.count
+      bucket[source.category] = (bucket[source.category] || 0) + source.count
     })
     const total = Object.values(bucket).reduce((sum, value) => sum + value, 0) || 1
-    return (Object.keys(sourceCategoryLabels) as SourceCategory[]).map(key => ({
+    return sourceCategoryIds.map(key => ({
       key,
       name: sourceCategoryLabels[key],
-      count: bucket[key],
-      percent: Math.round(bucket[key] / total * 100),
-    })).sort((a, b) => b.count - a.count)
+      count: bucket[key] || 0,
+      percent: Math.round((bucket[key] || 0) / total * 100),
+    }))
+      .filter(item => item.count > 0)
+      .sort((a, b) => b.count - a.count)
   })
+
+  const activeCategoryKeys = computed(() => categoryStats.value.map(item => item.key))
+
+  const activeSourceCategoryLabels = computed(() => (
+    Object.fromEntries(categoryStats.value.map(item => [item.key, item.name]))
+  ))
+
+  const categorySummaryLabel = computed(() => (
+    categoryStats.value.map(item => item.name).join(' / ') || '—'
+  ))
 
   const topCategory = computed(() => categoryStats.value.find(item => item.count > 0) || null)
   const officialRate = computed(() => categoryStats.value.find(item => item.key === 'official')?.percent ?? 0)
@@ -200,7 +215,7 @@ export function useSourceAnalysis(options?: {
     return {
       platform,
       total,
-      categories: (Object.keys(sourceCategoryLabels) as SourceCategory[]).map(type => ({
+      categories: activeCategoryKeys.value.map(type => ({
         type,
         value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
       })),
@@ -231,7 +246,18 @@ export function useSourceAnalysis(options?: {
     return []
   })
 
-  const structureChartHeight = computed(() => Math.max(280, sourceStructureRows.value.length * 46 + 48))
+  const structureChartRows = computed(() => {
+    if (platformFilter.value === 'all') return sourceStructureRows.value
+    const active = sourceStructureRows.value.filter(row => row.total > 0)
+    return active.length ? active : sourceStructureRows.value
+  })
+
+  const structureChartHeight = computed(() => {
+    const count = Math.max(structureChartRows.value.length, 1)
+    if (count === 1) return 104
+    if (count <= 3) return count * 46 + 48
+    return Math.max(280, count * 46 + 48)
+  })
 
   const hasStructurePanel = computed(() => (
     platformFilter.value === 'all'
@@ -254,10 +280,10 @@ export function useSourceAnalysis(options?: {
     }
   })
 
-  async function loadSummary() {
+  async function loadSummary(force = false) {
     loading.value = true
     try {
-      await analytics.loadMonitorSummary()
+      await analytics.loadMonitorSummary(force)
     } catch (error: unknown) {
       ElMessage.error(`信源数据加载失败：${errorMessage(error)}`)
     } finally {
@@ -273,9 +299,9 @@ export function useSourceAnalysis(options?: {
       positiveRate: 0,
       diagnosisScore: 0,
       competitorCompareRows: [],
-      sourceStructureRows: sourceStructureRows.value,
+      sourceStructureRows: structureChartRows.value,
       sourceTrendRows: sourceTrendRows.value,
-      sourceCategoryLabels,
+      sourceCategoryLabels: activeSourceCategoryLabels.value,
     })
   }
 
@@ -312,7 +338,7 @@ export function useSourceAnalysis(options?: {
     ElMessage.success('已导出 CSV')
   }
 
-  watch([filteredSources, sourceStructureRows, sourceTrendRows, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
+  watch([filteredSources, structureChartRows, sourceTrendRows, activeSourceCategoryLabels, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
 
   onMounted(() => {
     void loadSummary()
@@ -340,6 +366,8 @@ export function useSourceAnalysis(options?: {
     uniqueSourceCount,
     platformWithSourcesCount,
     categoryStats,
+    activeSourceCategoryLabels,
+    categorySummaryLabel,
     topCategory,
     officialRate,
     sourceStructureRows,
@@ -352,6 +380,7 @@ export function useSourceAnalysis(options?: {
     exportCsv,
     platformLabelMap,
     sourceCategoryLabels,
+    sourceCategoryLabel,
     domainFromUrl,
   }
 }
