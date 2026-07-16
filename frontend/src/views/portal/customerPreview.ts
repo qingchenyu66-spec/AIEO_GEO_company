@@ -26,17 +26,37 @@ export function isCustomerPreviewMenuCode(code: string): boolean {
   return (CUSTOMER_PREVIEW_MENU_CODES as readonly string[]).includes(code)
 }
 
-export function parsePreviewTenantId(route: RouteLocationNormalizedLoaded): number | null {
-  const raw = route.query.preview_tenant_id
+function parsePositiveTenantId(raw: unknown): number | null {
   const text = Array.isArray(raw) ? raw[0] : raw
   const parsed = Number(text)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+export function parsePreviewTenantId(route: RouteLocationNormalizedLoaded): number | null {
+  return parsePositiveTenantId(route.query.preview_tenant_id)
 }
 
 export function parsePreviewTenantName(route: RouteLocationNormalizedLoaded): string {
   const raw = route.query.preview_tenant_name
   const text = Array.isArray(raw) ? raw[0] : raw
   return typeof text === 'string' && text.trim() ? text.trim() : ''
+}
+
+/** 当前路由或即将写入的 extraQuery 上的预览企业（进入预览首跳必须看 extra）。 */
+export function resolvePreviewTenantId(
+  route: RouteLocationNormalizedLoaded,
+  extraQuery?: Record<string, string>,
+): number | null {
+  return parsePositiveTenantId(extraQuery?.preview_tenant_id) ?? parsePreviewTenantId(route)
+}
+
+export function resolvePreviewTenantName(
+  route: RouteLocationNormalizedLoaded,
+  extraQuery?: Record<string, string>,
+): string {
+  const fromExtra = extraQuery?.preview_tenant_name?.trim()
+  if (fromExtra) return fromExtra
+  return parsePreviewTenantName(route)
 }
 
 export function isCustomerPreviewActive(route: RouteLocationNormalizedLoaded, isPlatform: boolean): boolean {

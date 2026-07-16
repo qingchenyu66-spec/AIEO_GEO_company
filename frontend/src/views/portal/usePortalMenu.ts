@@ -5,9 +5,9 @@ import { CUSTOMER_PREVIEW_MENU, normalizeMenuCode, hiddenCustomerMenus, hiddenPl
 import {
   isCustomerPreviewActive,
   isCustomerPreviewMenuCode,
-  parsePreviewTenantId,
-  parsePreviewTenantName,
   previewQueryFields,
+  resolvePreviewTenantId,
+  resolvePreviewTenantName,
 } from './customerPreview'
 import { shouldKeepTenantQuery } from './tenantQueryScope'
 
@@ -28,7 +28,9 @@ export function usePortalMenu(
       return
     }
 
-    const previewTenantId = parsePreviewTenantId(route)
+    // 进入预览时 preview_* 在 extraQuery，还不在当前 route
+    const previewTenantId = resolvePreviewTenantId(route, extraQuery)
+    const previewTenantName = resolvePreviewTenantName(route, extraQuery)
     const previewActive = Boolean(isPlatform?.value && previewTenantId)
 
     // 旧入口 platform.customer_preview → 客户工作台
@@ -38,10 +40,10 @@ export function usePortalMenu(
 
     const allowed = allowedMenuCodes?.value || []
     const previewMenuOk = previewActive && isCustomerPreviewMenuCode(code)
-    const exitingPreview = previewActive && code === 'platform.audit'
+    const exitingPreview = previewActive && code === 'platform.audit' && !extraQuery?.preview_tenant_id
 
     if (allowed.length && !allowed.includes(code) && !previewMenuOk && !exitingPreview) {
-      if (previewActive && !isCustomerPreviewMenuCode(code)) {
+      if (previewActive && !isCustomerPreviewMenuCode(code) && code !== 'platform.audit') {
         ElMessage.info('预览模式为只读，请先返回企业管理')
         return
       }
@@ -60,7 +62,7 @@ export function usePortalMenu(
       delete query.preview_tenant_name
       delete query.tenant_id
     } else if (previewActive && previewTenantId) {
-      Object.assign(query, previewQueryFields(previewTenantId, parsePreviewTenantName(route)))
+      Object.assign(query, previewQueryFields(previewTenantId, previewTenantName))
     } else {
       if (!shouldKeepTenantQuery(code) && extraQuery?.tenant_id === undefined) {
         delete query.tenant_id
