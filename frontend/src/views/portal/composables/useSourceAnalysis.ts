@@ -238,6 +238,8 @@ export function useSourceAnalysis(options?: {
       ? sourceStructureRows.value.length > 0
       : sourceStructureRows.value.some(row => row.total > 0)
   ))
+
+  const insight = computed(() => {
     if (!filteredSources.value.length) {
       return {
         level: 'empty' as const,
