@@ -1,5 +1,6 @@
 import { computed, inject, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { PortalNavigateKey } from '../injectionKeys'
 import { withRetry } from '../../../composables/useRetry'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
@@ -289,7 +290,23 @@ export function useCustomerWorkspace() {
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
   ))
   const hasMenu = (menuCode: string) => auth.allowedMenus.some(menu => menu.menu_code === menuCode)
-  const canOpenRealtime = computed(() => hasMenu('customer.realtime'))
+
+  const previewTenantId = computed(() => {
+    if (auth.session?.identity?.identity_type !== 'PLATFORM') return null
+    const raw = route.query.preview_tenant_id
+    const text = Array.isArray(raw) ? raw[0] : raw
+    const parsed = Number(text)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  })
+  const previewTenantName = computed(() => {
+    const raw = route.query.preview_tenant_name
+    const text = Array.isArray(raw) ? raw[0] : raw
+    return typeof text === 'string' && text.trim() ? text.trim() : ''
+  })
+  const isPreviewMode = computed(() => previewTenantId.value != null)
+  const previewAccessRecorded = ref(false)
+
+  const canOpenRealtime = computed(() => !isPreviewMode.value && hasMenu('customer.realtime'))
 
   const heroTone = computed(() => resolveHeroTone(brief.value))
   const statusBadge = computed(() => {
@@ -304,6 +321,7 @@ export function useCustomerWorkspace() {
     brief.value ? resolveStatusSummary(brief.value, heroTone.value) : ''
   ))
   const primaryAction = computed(() => {
+    if (isPreviewMode.value) return null
     const action = brief.value ? resolvePrimaryAction(brief.value, heroTone.value) : null
     if (!action || !hasMenu(action.menu)) return null
     const menuName = auth.allowedMenus.find(menu => menu.menu_code === action.menu)?.menu_name
@@ -558,6 +576,7 @@ export function useCustomerWorkspace() {
   })
 
   const todoItems = computed(() => {
+    if (isPreviewMode.value) return []
     const data = brief.value
     if (!data) return []
     return [
@@ -663,10 +682,14 @@ export function useCustomerWorkspace() {
     loading.value = true
     loadError.value = ''
     try {
+      const recordAccess = isPreviewMode.value && !previewAccessRecorded.value
       brief.value = await withRetry(() => getWorkspaceBrief({
         start_date: trendStartDate.value,
         end_date: trendEndDate.value,
+        tenant_id: previewTenantId.value ?? undefined,
+        record_access: recordAccess || undefined,
       }))
+      if (recordAccess) previewAccessRecorded.value = true
     } catch (error: unknown) {
       notifyOperationError(error, '工作台数据加载失败')
       loadError.value = extractErrorDetail(error)
@@ -676,11 +699,23 @@ export function useCustomerWorkspace() {
   }
 
   function navigateToMenu(menuCode: string) {
+    if (isPreviewMode.value) {
+      ElMessage.info('预览模式为只读，请返回企业管理后再操作')
+      return
+    }
     if (portalNavigate) {
       portalNavigate(menuCode)
       return
     }
     router.push({ path: route.path, query: { ...route.query, menu: menuCode } }).catch(() => undefined)
+  }
+
+  function exitCustomerPreview() {
+    if (portalNavigate) {
+      portalNavigate('platform.audit')
+      return
+    }
+    router.push({ path: route.path, query: { menu: 'platform.audit' } }).catch(() => undefined)
   }
 
   function focusWorkspaceAlerts() {
@@ -709,6 +744,10 @@ export function useCustomerWorkspace() {
   }
 
   function openSnapshot(snapshot: WorkspaceSnapshot) {
+    if (isPreviewMode.value) {
+      ElMessage.info('预览模式为只读，请返回企业管理后再操作')
+      return
+    }
     if (!hasMenu('customer.realtime')) return
     const nextQuery: Record<string, string | string[]> = { ...route.query, menu: 'customer.realtime' }
     if (snapshot.task_id) nextQuery.task_id = snapshot.task_id
@@ -742,6 +781,9 @@ export function useCustomerWorkspace() {
     hiddenAlertCount,
     loadBrief,
     navigateToMenu,
+    exitCustomerPreview,
+    isPreviewMode,
+    previewTenantName,
     focusWorkspaceAlerts,
     openAlertTarget,
     openSnapshot,

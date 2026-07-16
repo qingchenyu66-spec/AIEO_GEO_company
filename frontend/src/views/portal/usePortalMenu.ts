@@ -1,8 +1,12 @@
 import { ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { Router, RouteLocationNormalizedLoaded } from 'vue-router'
-import { normalizeMenuCode, hiddenCustomerMenus, hiddenPlatformMenus } from './constants'
+import { CUSTOMER_PREVIEW_MENU, normalizeMenuCode, hiddenCustomerMenus, hiddenPlatformMenus } from './constants'
 import { shouldKeepTenantQuery } from './tenantQueryScope'
+
+function isCustomerPreviewAllowed(code: string, route: RouteLocationNormalizedLoaded) {
+  return code === CUSTOMER_PREVIEW_MENU && route.path.startsWith('/platform')
+}
 
 /** Sync active menu with ?menu= query — keeps deep links without breaking in-app navigation. */
 export function usePortalMenu(
@@ -20,7 +24,8 @@ export function usePortalMenu(
       return
     }
     const allowed = allowedMenuCodes?.value || []
-    if (allowed.length && !allowed.includes(code)) {
+    const previewOk = isCustomerPreviewAllowed(code, route)
+    if (allowed.length && !allowed.includes(code) && !previewOk) {
       ElMessage.warning('当前账号没有该菜单权限')
       const fallback = allowed[0]
       if (fallback && fallback !== code) {
@@ -34,6 +39,10 @@ export function usePortalMenu(
     // or PortalView brand prefetch will 403 sales users on unrelated enterprises.
     if (!shouldKeepTenantQuery(code) && extraQuery?.tenant_id === undefined) {
       delete query.tenant_id
+    }
+    if (code !== CUSTOMER_PREVIEW_MENU) {
+      delete query.preview_tenant_id
+      delete query.preview_tenant_name
     }
     const nav = replace ? router.replace : router.push
     nav({ path: route.path, query: query as typeof route.query }).catch(() => undefined)

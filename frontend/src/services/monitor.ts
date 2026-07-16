@@ -423,6 +423,8 @@ export async function getRankingMatrix(params?: RankingMatrixQuery): Promise<Ran
 export interface WorkspaceBriefQuery {
   start_date?: string
   end_date?: string
+  tenant_id?: number
+  record_access?: boolean
 }
 
 export async function getWorkspaceBrief(params?: WorkspaceBriefQuery): Promise<WorkspaceBrief> {

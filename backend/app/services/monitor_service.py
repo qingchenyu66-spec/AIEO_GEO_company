@@ -3117,12 +3117,22 @@ def workspace_brief(
     *,
     start_date: date | None = None,
     end_date: date | None = None,
+    tenant_id: int | None = None,
 ) -> dict[str, Any]:
-    """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources."""
-    if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
-        raise ValueError("运营工作台简报仅支持客户企业账号")
+    """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources.
 
-    tenant_id = current.identity.tenant_id
+    CUSTOMER：强制本企业。PLATFORM：可传 tenant_id 做只读预览（口径与客户一致，截至昨日）。
+    """
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id is None:
+            raise ValueError("运营工作台简报仅支持客户企业账号")
+        tenant_id = current.identity.tenant_id
+    elif current.identity.identity_type == "PLATFORM":
+        if tenant_id is None:
+            raise ValueError("平台端预览客户工作台需指定企业")
+    else:
+        raise ValueError("运营工作台简报仅支持客户企业账号或平台预览")
+
     range_end = customer_display_cutoff()
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None

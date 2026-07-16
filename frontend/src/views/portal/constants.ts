@@ -3,6 +3,8 @@ export const USER_CREATE_PLATFORM_MENU = 'platform.users.create.platform'
 export const USER_CREATE_CUSTOMER_MENU = 'platform.users.create.customer'
 export const USER_LIST_MENU = 'platform.users.list'
 export const POSITION_MENU = 'platform.positions'
+/** 平台端只读预览客户工作台（不进 sys_menu，靠 query 进入） */
+export const CUSTOMER_PREVIEW_MENU = 'platform.customer_preview'
 
 export const SETTINGS_MENU = 'platform.settings'
 export const SETTINGS_SECRETS_MENU = 'platform.settings.secrets'

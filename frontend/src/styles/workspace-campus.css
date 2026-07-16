@@ -35,6 +35,28 @@
   min-height: 100%;
 }
 
+.ws-preview-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #eef5ff;
+  border: 1px solid #c9dcff;
+  color: #1a3a66;
+}
+.ws-preview-banner strong {
+  margin-right: 8px;
+  font-weight: 700;
+}
+.ws-preview-banner span {
+  font-size: 13px;
+  opacity: .92;
+}
+
 /* 页头 */
 .ws-campus-head {
   display: flex;

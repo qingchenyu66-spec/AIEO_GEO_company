@@ -55,6 +55,13 @@ function navigateToReportCenter(reportId: number, tenantId: number) {
   })
 }
 
+function openCustomerPreview(tenant: { id: number; name: string }) {
+  portalNavigate('platform.customer_preview', false, {
+    preview_tenant_id: String(tenant.id),
+    preview_tenant_name: tenant.name,
+  })
+}
+
 const {
   platformLabelMap,
   formatPlatformLabels,
@@ -261,6 +268,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           </div>
           <div class="enterprise-actions">
             <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+            <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
             <button v-if="canEditTenantList" type="button" class="filter-search-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
             <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
             <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>

@@ -23,6 +23,7 @@ import {
   USER_CREATE_CUSTOMER_MENU,
   USER_LIST_MENU,
   POSITION_MENU,
+  CUSTOMER_PREVIEW_MENU,
   SETTINGS_MENU,
   SETTINGS_CHILD_MENUS,
   hiddenCustomerMenus,
@@ -131,6 +132,11 @@ const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowle
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
 const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approvals')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
+const isCustomerPreviewPage = computed(() => (
+  isPlatform.value
+  && activeMenuCode.value === CUSTOMER_PREVIEW_MENU
+  && Boolean(route.query.preview_tenant_id)
+))
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
 
 const workspaceFullscreen = useWorkspaceFullscreen()
@@ -180,6 +186,13 @@ const activeMenu = computed(() => {
   if (isUserCreatePage.value && userMenu) return { ...userMenu, menu_code: USER_CREATE_MENU, menu_name: '用户新增' } as MenuInfo
   if (isUserListPage.value && userMenu) return { ...userMenu, menu_code: USER_LIST_MENU, menu_name: '用户列表' } as MenuInfo
   if (isPositionManagementPage.value) return { ...(userManagementMenu.value || menus.value[0]), menu_code: POSITION_MENU, menu_name: '职位管理' } as MenuInfo
+  if (isCustomerPreviewPage.value) {
+    return {
+      ...(menus.value[0] || {}),
+      menu_code: CUSTOMER_PREVIEW_MENU,
+      menu_name: '客户工作台预览',
+    } as MenuInfo
+  }
   return menus.value.find(item => item.menu_code === activeMenuCode.value) || menus.value[0]
 })
 
@@ -202,6 +215,7 @@ const pageSubtitle = computed(() => {
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
   if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
+  if (isCustomerPreviewPage.value) return '只读预览客户工作台，核对客户可见数据后可返回企业管理'
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'
@@ -276,6 +290,13 @@ function toggleUserSubmenu() {
 
 function ensureActiveMenuAllowed() {
   const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
+  if (
+    activeMenuCode.value === CUSTOMER_PREVIEW_MENU
+    && isPlatform.value
+    && route.query.preview_tenant_id
+  ) {
+    return
+  }
   if (isMenuBlocked(activeMenuCode.value) || !allowedCodes.includes(activeMenuCode.value)) {
     navigateToMenu(normalizeMenuCode(auth.allowedMenus[0]?.menu_code || ''), true)
   }
@@ -338,7 +359,7 @@ onMounted(() => {
     :identity-count="auth.session?.identities.length || 0"
     :identities="auth.session?.identities || []"
     :current-identity-id="auth.session?.identity?.id"
-    :immersive="isCustomerWorkspacePage"
+    :immersive="isCustomerWorkspacePage || isCustomerPreviewPage"
     :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
@@ -356,6 +377,7 @@ onMounted(() => {
     <UserListPage v-else-if="isUserListPage" />
 
     <BrandAuditPage v-else-if="isBrandAssetPage" ref="brandAuditRef" @brand-updated="onBrandUpdated" />
+    <CustomerWorkspacePage v-else-if="isCustomerPreviewPage" />
     <MonitorRealtimePage v-else-if="isRealtimeMonitorPage" />
     <CompetitorAnalysisPage v-else-if="isCompetitorPage" />
     <SourceAnalysisPage v-else-if="isSourcePage" />

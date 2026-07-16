@@ -185,18 +185,53 @@ def monitor_ranking_matrix(
 def monitor_workspace_brief(
     start_date: date | None = Query(default=None, description="趋势起始日（含），客户侧不晚于昨日"),
     end_date: date | None = Query(default=None, description="趋势截止日（含），客户侧不晚于昨日"),
+    tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
+    record_access: bool = Query(default=False, description="平台预览首次进入时记一条审计"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """Return customer workspace morning briefing with intent-aware KPIs."""
-    if current.identity.identity_type != "CUSTOMER" or current.identity.tenant_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="运营工作台简报仅支持客户企业账号")
+    """客户工作台简报；平台端可带 tenant_id 只读预览（销售仅名下企业）。"""
+    from app.services.menu_permission_service import has_identity_menu_permission
+    from app.services.operation_log_service import write_operation_log
+    from app.services.tenant_scope import resolve_and_guard_tenant_id
+
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="起始日期不能晚于结束日期")
-    tenant_id = current.identity.tenant_id
+
+    resolved_tenant_id: int
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="运营工作台简报仅支持客户企业账号")
+        resolved_tenant_id = current.identity.tenant_id
+    elif current.identity.identity_type == "PLATFORM":
+        if tenant_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="平台端预览需指定企业")
+        if not has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权预览客户工作台")
+        try:
+            resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        if record_access:
+            write_operation_log(
+                db,
+                current,
+                "预览客户工作台",
+                f"只读预览企业工作台 tenant_id={resolved_tenant_id}",
+                target_module="企业管理",
+                target_id=resolved_tenant_id,
+                tenant_id=resolved_tenant_id,
+                risk_level="正常",
+            )
+            db.commit()
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问工作台简报")
+
     start_key = start_date.isoformat() if start_date else None
     end_key = end_date.isoformat() if end_date else None
-    cache_key = workspace_brief_cache_key(tenant_id, start_key, end_key)
+    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key)
     try:
         data = get_or_build_json_cache(
             cache_key,
@@ -205,6 +240,7 @@ def monitor_workspace_brief(
                 current,
                 start_date=start_date,
                 end_date=end_date,
+                tenant_id=resolved_tenant_id,
             ),
             ttl_seconds=WORKSPACE_BRIEF_CACHE_TTL,
         )
