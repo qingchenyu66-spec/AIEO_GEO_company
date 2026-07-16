@@ -91,8 +91,8 @@ def _format_rank(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value)
     if number.is_integer():
-        return f"#{int(number)}"
-    return f"#{number:.1f}"
+        return str(int(number))
+    return f"{number:.1f}"
 
 
 def _format_report_timestamp(value: Any) -> str:

@@ -360,21 +360,21 @@ export function usePortalCharts(refs: PortalChartRefs) {
             const index = list?.[0]?.dataIndex ?? 0
             const row = rows[index]
             if (!row) return ''
-            return `${row.name}<br/>平均排名：#${row.rank}`
+            return `${row.name}<br/>平均排名：${row.rank}`
           },
         },
         xAxis: {
           type: 'value',
           min: 0,
           inverse: false,
-          axisLabel: { formatter: '#{value}' },
+          axisLabel: { formatter: '{value}' },
           splitLine: { lineStyle: { color: '#e8eff7' } },
         },
         yAxis: { type: 'category', data: rows.map(item => item.name), axisTick: { show: false } },
         series: [{
           type: 'bar',
           data: rows.map(item => item.rank),
-          label: { show: true, position: 'right', formatter: '#{c}' },
+          label: { show: true, position: 'right', formatter: '{c}' },
           itemStyle: {
             borderRadius: [0, 8, 8, 0],
             color: (params: { dataIndex: number }) => {

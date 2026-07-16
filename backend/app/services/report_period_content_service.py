@@ -484,12 +484,12 @@ def build_report_modules(
                 "title": "平均推荐排名",
                 "body": (
                     (
-                        f"平均推荐排名 #{avg_rank}，整体接近行业 TOP3 曝光位置，"
+                        f"平均推荐排名 {avg_rank}，整体接近行业 TOP3 曝光位置，"
                         f"{meta['scope']} {top3_rate}% 场景可进入头部推荐位，流量获取基础较好。"
                     )
                     if avg_rank is not None and float(avg_rank) <= 3
                     else (
-                        f"平均推荐排名 #{avg_rank or '—'}，"
+                        f"平均推荐排名 {avg_rank or '—'}，"
                         f"{meta['scope']} Top3 率为 {top3_rate}%；"
                         f"{'排名仍有较大提升空间，建议加强高权重场景内容布局。' if avg_rank is not None else '当前样本不足以评价推荐位次。'}"
                     )

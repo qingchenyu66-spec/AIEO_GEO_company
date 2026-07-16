@@ -237,9 +237,9 @@ def build_tenant_monitor_snapshot(
     elif completed:
         highlights.append(f"品牌提及率 {mention_rate}%，仍有提升空间，建议加强权威信源布局。")
     if avg_rank is not None and avg_rank <= 3:
-        highlights.append(f"平均推荐排名 #{avg_rank}，处于推荐列表前列。")
+        highlights.append(f"平均推荐排名 {avg_rank}，处于推荐列表前列。")
     elif avg_rank is not None:
-        highlights.append(f"平均推荐排名 #{avg_rank}，可通过内容优化争取更靠前位置。")
+        highlights.append(f"平均推荐排名 {avg_rank}，可通过内容优化争取更靠前位置。")
     if top_sources:
         highlights.append(f"已识别 {len(source_map)} 个有效引用信源，高频站点可作为内容投放参考。")
     if competitors:

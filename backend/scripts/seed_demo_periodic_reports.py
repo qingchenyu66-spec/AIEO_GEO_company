@@ -109,7 +109,7 @@ def build_demo_monitor_snapshot(
     ]
     highlights = [
         f"统计周期 {label}，共完成 {profile['completed']} 条监测子任务（演示数据）。",
-        f"品牌提及率 {profile['mention_rate']}%，平均推荐排名 #{profile['avg_rank']}。",
+        f"品牌提及率 {profile['mention_rate']}%，平均推荐排名 {profile['avg_rank']}。",
         f"Top3 露出率 {profile['top3_rate']}%，正面情绪占比 {profile['positive_rate']}%。",
     ]
     if competitor_count:

@@ -72,7 +72,7 @@ const customerTrendPresetOptions: Array<{ value: WorkspaceTrendPreset; label: st
 
 function formatRank(value: number | null | undefined) {
   if (value === null || value === undefined) return '—'
-  return Number.isInteger(value) ? `#${value}` : `#${value.toFixed(1)}`
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
 function isPlatformActive(code: string) {

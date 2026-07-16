@@ -2,6 +2,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useLoadingStore } from '../stores/loading'
 import { readCsrfToken } from '../utils/csrf'
+import { isRequestCanceled } from '../utils/requestError'
 
 export const http = axios.create({
   baseURL: '/api',
@@ -60,6 +61,8 @@ http.interceptors.response.use(
     }
 
     if (!hasResponse) {
+      // 页面切换/列表重拉会 abort 旧请求；axios message 常为 "canceled"，不能当网络错误弹红条
+      if (isRequestCanceled(error)) return Promise.reject(error)
       if (!(error.config as { silentError?: boolean } | undefined)?.silentError) {
         ElMessage.error(error.message || '网络异常，请检查连接后重试')
       }

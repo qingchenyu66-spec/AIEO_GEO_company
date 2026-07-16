@@ -188,7 +188,7 @@ def enrich_snapshot(snapshot: dict[str, Any], *, report_type: str, platform_code
         for index, item in enumerate(_DEMO_SOURCES)
     ]
     enriched["highlights"] = [
-        f"统计周期内共完成 {cur_total} 条监测子任务，品牌提及率 {avg_mention}%，平均推荐排名 #{avg_rank}。",
+        f"统计周期内共完成 {cur_total} 条监测子任务，品牌提及率 {avg_mention}%，平均推荐排名 {avg_rank}。",
         "豆包、Kimi 为核心优势渠道，DeepSeek 移动端仍有提升空间。",
         "监控词「电梯广告公司推荐」表现领先，部分场景词仍需加强内容布局。",
     ]
@@ -242,8 +242,8 @@ def enrich_trend(trend: dict[str, Any], *, report_type: str) -> dict[str, Any]:
     if len(points) >= 2:
         summary = (
             f"{trend.get('title') or '趋势'}显示品牌提及率由 {points[0]['mention_rate']}% "
-            f"升至 {points[-1]['mention_rate']}%，平均排名由 #{points[0]['avg_rank']} "
-            f"优化至 #{points[-1]['avg_rank']}。"
+            f"升至 {points[-1]['mention_rate']}%，平均排名由 {points[0]['avg_rank']} "
+            f"优化至 {points[-1]['avg_rank']}。"
         )
     return {**trend, "points": points, "summary": summary}
 
@@ -344,12 +344,12 @@ def enrich_keyword_analytics(
             platform_hint = f"主要短板平台：{'、'.join(row['weakest_platforms'])}。"
         if rd["direction"] == "declined" and rd["delta"] is not None:
             highlights.append(
-                f"监控词「{kw}」排名 #{rk}，较上期 #{rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
+                f"监控词「{kw}」排名 {rk}，较上期 {rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
             )
         elif (mr or 0) <= 0:
             highlights.append(f"监控词「{kw}」本期未进入 AI 推荐列表，建议补充结构化问答与权威引用。{platform_hint}")
         else:
-            highlights.append(f"监控词「{kw}」提及率 {mr}%、排名 #{rk}，表现偏弱，建议针对性优化。{platform_hint}")
+            highlights.append(f"监控词「{kw}」提及率 {mr}%、排名 {rk}，表现偏弱，建议针对性优化。{platform_hint}")
     weak_matrix = build_matrix_from_breakdown(
         [str(item["keyword"]) for item in weak_top3],
         row_map,
@@ -668,7 +668,7 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
                 const p = items[0];
                 const idx = p.dataIndex;
                 const title = fullCats[idx] || p.axisValue;
-                const lines = items.map(it => `${{it.marker}}${{it.seriesName}}：#${{it.data}}`).join('<br/>');
+                const lines = items.map(it => `${{it.marker}}${{it.seriesName}}：${{it.data}}`).join('<br/>');
                 return `${{title}}<br/>${{lines}}`;
               }},
             }},
@@ -691,7 +691,7 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
                 formatter: (v) => {{
                   const n = Number(v);
                   if (!Number.isFinite(n) || n <= 0 || n > 50) return '';
-                  return '#' + (Math.round(n * 10) / 10);
+                  return String(Math.round(n * 10) / 10);
                 }},
               }},
             }},
@@ -1538,11 +1538,11 @@ def _comparison_highlights(
     if cur_rank is not None and prev_rank is not None:
         d = round(float(cur_rank) - float(prev_rank), 1)
         if d < 0:
-            lines.append(f"{scope}平均推荐排名 #{cur_rank}，较{prev_scope} #{prev_rank} 提升 {abs(d)} 位。")
+            lines.append(f"{scope}平均推荐排名 {cur_rank}，较{prev_scope} {prev_rank} 提升 {abs(d)} 位。")
         elif d > 0:
-            lines.append(f"{scope}平均推荐排名 #{cur_rank}，较{prev_scope} #{prev_rank} 回落 {d} 位，需关注短板平台。")
+            lines.append(f"{scope}平均推荐排名 {cur_rank}，较{prev_scope} {prev_rank} 回落 {d} 位，需关注短板平台。")
         else:
-            lines.append(f"{scope}平均推荐排名 #{cur_rank}，与{prev_scope}持平。")
+            lines.append(f"{scope}平均推荐排名 {cur_rank}，与{prev_scope}持平。")
     cur_mr = ck.get("mention_rate")
     prev_mr = pk.get("mention_rate")
     if cur_mr is not None and prev_mr is not None:
@@ -1560,7 +1560,7 @@ def _comparison_highlights(
 def _fmt_rank(v: Any) -> str:
     if v is None:
         return "—"
-    return f"#{v}"
+    return str(v)
 
 
 def _fmt_pct(v: Any) -> str:
@@ -1765,9 +1765,9 @@ def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: d
     if len(valid_rank) >= 2:
         d = round(valid_rank[-1] - valid_rank[0], 1)
         if d < 0:
-            summary += f" 平均排名由 #{valid_rank[0]} 改善至 #{valid_rank[-1]}。"
+            summary += f" 平均排名由 {valid_rank[0]} 改善至 {valid_rank[-1]}。"
         elif d > 0:
-            summary += f" 平均排名由 #{valid_rank[0]} 退步至 #{valid_rank[-1]}。"
+            summary += f" 平均排名由 {valid_rank[0]} 退步至 {valid_rank[-1]}。"
 
     return {"title": meta["title"], "unit": meta["unit"], "points": points, "summary": summary.strip()}
 
@@ -1958,7 +1958,7 @@ def build_keyword_analytics(
             platform_hint = f"主要短板平台：{'、'.join(weak_platforms)}。"
         if rd["direction"] == "declined" and rd["delta"] is not None:
             highlights.append(
-                f"监控词「{kw}」排名 #{rk}，较上期 #{rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
+                f"监控词「{kw}」排名 {rk}，较上期 {rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
             )
         elif (mr or 0) <= 0:
             highlights.append(
@@ -1966,7 +1966,7 @@ def build_keyword_analytics(
             )
         else:
             highlights.append(
-                f"监控词「{kw}」提及率 {mr}%、排名 #{rk}，表现偏弱，建议针对性优化。{platform_hint}"
+                f"监控词「{kw}」提及率 {mr}%、排名 {rk}，表现偏弱，建议针对性优化。{platform_hint}"
             )
 
     weak_matrix = build_weak_keyword_platform_matrix(
@@ -2316,7 +2316,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
             // ponytail: inverse+bar 会生成轴外垃圾刻度（如 #999997），按可视区间滤掉
             if (n < minR - 0.15 || n > maxR + 0.15) return '';
             const text = (Math.round(n * 10) / 10).toString();
-            return '#' + text;
+            return text;
           }},
         }};
         const rankSeries = {{
@@ -2326,7 +2326,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
           label: {{
             show: true,
             position: sparse ? 'top' : 'top',
-            formatter: (p) => '#' + p.data,
+            formatter: (p) => String(p.data),
             color: '#0e7490',
             fontWeight: 600,
           }},
@@ -2349,7 +2349,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
             formatter: params => {{
               const p = params[0];
               const idx = p.dataIndex;
-              return `${{axisTitle(idx)}}<br/>平均排名：<b>#${{p.data}}</b><br/>Top3率：${{data.top3[idx] ?? '—'}}%`;
+              return `${{axisTitle(idx)}}<br/>平均排名：<b>${{p.data}}</b><br/>Top3率：${{data.top3[idx] ?? '—'}}%`;
             }},
           }},
           grid: {{ left: 58, right: 36, top: 42, bottom: gridBottom, containLabel: true }},

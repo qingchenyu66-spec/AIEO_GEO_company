@@ -111,7 +111,7 @@ function formatRank(value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
   const number = Number(value)
   if (Number.isNaN(number)) return String(value)
-  return Number.isInteger(number) ? `#${number}` : `#${number.toFixed(1)}`
+  return Number.isInteger(number) ? String(number) : number.toFixed(1)
 }
 
 function listProgress(item: { completed_run_count: number; schedule_total_count?: number }) {

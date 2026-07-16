@@ -106,7 +106,7 @@
     <div class="grid4" style="margin-bottom:4mm;">
       <div class="card"><div style="font-size:11px;color:var(--muted);">综合健康分</div><div class="kpi-val">{{ overview.kpi_table.health_score or '—' }}</div></div>
       <div class="card"><div style="font-size:11px;color:var(--muted);">品牌提及率</div><div class="kpi-val">{{ overview.kpi_table.mention_rate }}%</div></div>
-      <div class="card"><div style="font-size:11px;color:var(--muted);">平均推荐排名</div><div class="kpi-val">#{{ overview.kpi_table.avg_rank or '—' }}</div></div>
+      <div class="card"><div style="font-size:11px;color:var(--muted);">平均推荐排名</div><div class="kpi-val">{{ overview.kpi_table.avg_rank or '—' }}</div></div>
       <div class="card"><div style="font-size:11px;color:var(--muted);">引用信源</div><div class="kpi-val">{{ overview.kpi_table.source_count }}类</div></div>
     </div>
     <div class="grid2" style="flex:1;">
@@ -168,7 +168,7 @@
             <td class="highlight">{{ row.name }}{% if row.is_leading %} ★{% elif row.is_weak %} ▼{% endif %}</td>
             <td>{{ row.completed }}/{{ row.total or row.completed }}</td>
             <td>{{ row.mention_rate }}%</td>
-            <td>#{{ row.avg_rank or '—' }}</td>
+            <td>{{ row.avg_rank or '—' }}</td>
             <td class="lead">{{ row.positioning }}</td>
           </tr>
           {% endfor %}
@@ -188,7 +188,7 @@
             <tr>
               <td><span class="entity-dot" style="background:{{ row.style.color }};"></span>{{ row.name }}{% if row.is_brand %}（本品牌）{% endif %}</td>
               <td>{{ row.mention_rate }}%</td>
-              <td>#{{ row.avg_rank or '—' }} <span class="risk-badge risk-{{ row.risk.level }}">{{ row.risk.label }}</span></td>
+              <td>{{ row.avg_rank or '—' }} <span class="risk-badge risk-{{ row.risk.level }}">{{ row.risk.label }}</span></td>
             </tr>
             {% endfor %}
           </tbody>

@@ -130,10 +130,11 @@ def molizhishu_balance(
     """查询模力指数账户当前余额。"""
     require_platform(current)
     try:
+        # 与运营总览同权：有 dashboard 即可看余额，不绑系统配置/密钥菜单
         require_platform_menu_permission(
             db,
             current,
-            "platform.settings",
+            "platform.dashboard",
             "can_export",
             detail="当前账号无权查看监测账户余额",
         )
@@ -153,7 +154,7 @@ def deepseek_balance(
         require_platform_menu_permission(
             db,
             current,
-            "platform.settings",
+            "platform.dashboard",
             "can_export",
             detail="当前账号无权查看 DeepSeek 余额",
         )

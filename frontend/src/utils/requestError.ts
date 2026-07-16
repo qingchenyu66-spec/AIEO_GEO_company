@@ -6,6 +6,22 @@ export function isUserCancelled(error: unknown): boolean {
   return error === 'cancel' || error === 'close'
 }
 
+/** Axios / fetch AbortController 取消：不是业务失败，不应弹 toast。 */
+export function isRequestCanceled(error: unknown): boolean {
+  if (error == null || typeof error !== 'object') return false
+  const e = error as {
+    code?: string
+    name?: string
+    message?: string
+    __CANCEL__?: boolean
+  }
+  if (e.__CANCEL__) return true
+  if (e.code === 'ERR_CANCELED') return true
+  if (e.name === 'CanceledError' || e.name === 'AbortError') return true
+  const msg = String(e.message || '').toLowerCase()
+  return msg === 'canceled' || msg === 'cancelled'
+}
+
 export function extractErrorDetail(error: unknown): string {
   const response = (error as { response?: { data?: { detail?: unknown }; status?: number } })?.response
   const detail = response?.data?.detail
@@ -29,7 +45,7 @@ export function notifyOperationError(
   context: string,
   formatDetail: ErrorDetailFormatter = extractErrorDetail,
 ) {
-  if (isUserCancelled(error)) return
+  if (isUserCancelled(error) || isRequestCanceled(error)) return
   if (import.meta.env.DEV && error) console.error(context, error)
   ElMessage.error(`${context}：${formatDetail(error)}`)
 }
