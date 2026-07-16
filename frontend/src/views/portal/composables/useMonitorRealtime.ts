@@ -951,15 +951,17 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     const taskIdFromQuery = String(route.query.task_id || '').trim()
     const subtaskIdFromQuery = String(route.query.subtask_id || '').trim()
     try {
-      const [, tasks, summary] = await Promise.all([
+      const [, tasks] = await Promise.all([
         loadBrandAssetData(),
         withRetry(() => getMonitorTasks(tenantId.value)),
-        withRetry(() => getMonitorSummary(false, tenantId.value)).catch(() => null),
       ])
+      // summary 仅作 KPI 兜底，不阻塞任务列表首屏
+      void withRetry(() => getMonitorSummary(false, tenantId.value))
+        .then(summary => { if (summary) monitorSummary.value = summary })
+        .catch(() => null)
       monitorTasks.value = isCustomerView.value
         ? tasks.filter(task => monitorTaskBeforeToday(task))
         : tasks
-      if (summary) monitorSummary.value = summary
       applyInsightsQuery()
       if (taskIdFromQuery) {
         await selectMonitorTask(taskIdFromQuery)
@@ -1311,8 +1313,10 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       return
     }
 
-    await loadMonitorTasks()
-    await loadRankingMatrix()
+    await Promise.all([
+      loadMonitorTasks(),
+      loadRankingMatrix(),
+    ])
   })
 
   const stopMonitorRefresh = onMonitorRefresh(() => {

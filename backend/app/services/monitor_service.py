@@ -497,7 +497,8 @@ def _aggregate_source_stats(
 
 
 def _finalize_source_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ranked = sorted(rows, key=lambda item: item["count"], reverse=True)
+    # ponytail: 响应/缓存体积上限；排行页只需头部，超过可后续再做分页接口
+    ranked = sorted(rows, key=lambda item: item["count"], reverse=True)[:500]
     for row in ranked:
         row["platforms"] = sort_platform_codes(row["platforms"])[:6]
         row["exposure_terms"] = row["exposure_terms"][:8]

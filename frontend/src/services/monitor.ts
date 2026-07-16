@@ -411,7 +411,7 @@ export async function getMonitorTasks(tenantId?: number | null): Promise<Monitor
 let monitorSummaryCache: { data: MonitorSummary; expiresAt: number; key: string } | null = null
 let monitorSummaryInflight: Promise<MonitorSummary> | null = null
 let monitorSummaryInflightKey: string | null = null
-const MONITOR_SUMMARY_TTL_MS = 15_000
+const MONITOR_SUMMARY_TTL_MS = 60_000
 
 export function invalidateMonitorSummaryCache() {
   monitorSummaryCache = null

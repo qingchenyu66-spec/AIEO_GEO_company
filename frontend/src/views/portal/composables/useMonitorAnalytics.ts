@@ -35,7 +35,9 @@ type MonitorAnalyticsOptions = {
 }
 
 export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
-  const { activeMenuCode, isPlatform, isDashboardPage, brandAsset, brandCompetitors, tenants, notifyError, errorMessage } = options
+  const { activeMenuCode, isPlatform, brandAsset, brandCompetitors, tenants, notifyError, errorMessage } = options
+  // isDashboardPage 仍由 PortalView 传入，供选项兼容；summary 加载不再用它 force
+  void options.isDashboardPage
   const auth = useAuthStore()
   const route = useRoute()
   const previewTenantId = computed(() => parsePreviewTenantId(route))
@@ -381,7 +383,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     selectedSourcePlatform.value = 'all'
   }
 
-  watch(activeMenuCode, () => loadMonitorSummary(isDashboardPage.value))
+  watch(activeMenuCode, () => {
+    // 仅信源/诊断等需要 summary 的菜单才拉；禁止工作台用 isDashboardPage 强制 force
+    if (!shouldLoadMonitorSummary.value) return
+    void loadMonitorSummary(false)
+  })
   watch(activeMenuCode, loadPlatformSystemData)
   watch(activeMenuCode, () => loadPlatformMatrix())
   watch(sourcePlatformTabs, tabs => {
@@ -391,10 +397,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   })
 
   onMounted(() => {
-    if (shouldLoadMonitorSummary.value) loadMonitorSummary(isDashboardPage.value)
+    if (shouldLoadMonitorSummary.value) void loadMonitorSummary(false)
     monitorSummaryTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible' && shouldLoadMonitorSummary.value) {
-        loadMonitorSummary(true)
+        // 轮询走前端 15s+/缓存，勿 force 打穿 Redis
+        void loadMonitorSummary(false)
       }
     }, 30000)
     loadPlatformSystemData()
