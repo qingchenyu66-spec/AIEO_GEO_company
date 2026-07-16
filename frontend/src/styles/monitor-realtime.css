@@ -1592,6 +1592,11 @@
   background: #f8fbff;
 }
 
+.realtime-drawer-source-site {
+  color: #7a8da3;
+  font-weight: 400;
+}
+
 @media (max-width: 1100px) {
   .realtime-hero-metrics,
   .realtime-hero-skeleton {

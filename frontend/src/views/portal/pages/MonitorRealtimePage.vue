@@ -7,8 +7,17 @@ import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RankingMatrixChartPanel from '../components/RankingMatrixChartPanel.vue'
 import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../services/monitor'
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
 import { externalLink } from '../portalUtils'
 import { useMonitorRealtime } from '../composables/useMonitorRealtime'
+
+function citationRows(list: MonitorSubtask['reference_list'] | undefined) {
+  return (list || []).slice(0, 8).map((source, index) => ({
+    key: `${source.index ?? index}-${source.url || source.title || index}`,
+    href: externalLink(source.url),
+    ...citationSourceDisplay(source),
+  }))
+}
 
 const {
   monitorDetail,
@@ -624,12 +633,15 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
                 <div v-if="detailSubtask.reference_list?.length" class="realtime-drawer-sources">
                   <b>引用信源</b>
                   <a
-                    v-for="source in detailSubtask.reference_list.slice(0, 8)"
-                    :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
-                    :href="externalLink(source.url) || undefined"
+                    v-for="row in citationRows(detailSubtask.reference_list)"
+                    :key="`${detailSubtask.subtask_id}-${row.key}`"
+                    :href="row.href || undefined"
                     target="_blank"
                     rel="noopener noreferrer"
-                  >{{ source.title || source.site || source.url }}</a>
+                  >
+                    <span>{{ row.title }}</span>
+                    <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+                  </a>
                 </div>
                 <p v-if="detailSubtask.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
               </template>
@@ -661,12 +673,15 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         <div v-if="detailSubtask?.reference_list?.length" class="realtime-drawer-sources">
           <b>引用信源</b>
           <a
-            v-for="source in detailSubtask.reference_list.slice(0, 8)"
-            :key="`${detailSubtask.subtask_id}-${source.index}-${source.url}`"
-            :href="externalLink(source.url) || undefined"
+            v-for="row in citationRows(detailSubtask.reference_list)"
+            :key="`${detailSubtask.subtask_id}-${row.key}`"
+            :href="row.href || undefined"
             target="_blank"
             rel="noopener noreferrer"
-          >{{ source.title || source.site || source.url }}</a>
+          >
+            <span>{{ row.title }}</span>
+            <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+          </a>
         </div>
 
         <p v-if="detailSubtask?.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
