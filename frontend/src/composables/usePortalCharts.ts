@@ -393,8 +393,6 @@ export function usePortalCharts(refs: PortalChartRefs) {
     if (sourceStructureChart) {
       const categoryKeys = Object.keys(data.sourceCategoryLabels)
       const rows = data.sourceStructureRows
-      const legendLabels = Object.values(data.sourceCategoryLabels)
-      const singleRow = rows.length === 1
       const compactStructure = rows.length <= 2
       const formatStructureTooltip = (params: unknown) => {
         const items = Array.isArray(params)
@@ -424,32 +422,15 @@ export function usePortalCharts(refs: PortalChartRefs) {
         grid: {
           left: 88,
           right: 46,
-          top: singleRow ? 14 : compactStructure ? 26 : 18,
-          bottom: singleRow ? 14 : compactStructure ? 10 : 34,
+          top: 12,
+          bottom: rows.length === 1 ? 12 : rows.length <= 2 ? 16 : 20,
         },
         tooltip: {
           trigger: compactStructure ? 'item' : 'axis',
           ...(compactStructure ? {} : { axisPointer: { type: 'shadow' } }),
           formatter: formatStructureTooltip,
         },
-        legend: singleRow
-          ? { show: false }
-          : compactStructure
-            ? {
-              top: 0,
-              left: 'center',
-              itemWidth: 22,
-              itemHeight: 5,
-              textStyle: { color: '#526b89' },
-              data: legendLabels,
-            }
-            : {
-              bottom: 0,
-              itemWidth: 22,
-              itemHeight: 5,
-              textStyle: { color: '#526b89' },
-              data: legendLabels,
-            },
+        legend: { show: false },
         xAxis: { type: 'value', max: 100, show: false },
         yAxis: {
           type: 'category',
