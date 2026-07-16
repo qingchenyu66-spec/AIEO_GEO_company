@@ -734,13 +734,8 @@ export function buildMatrixBarOption(
           return item?.rank == null ? '—' : formatRank(item.rank)
         },
       },
-      emphasis: {
-        focus: 'none',
-        label: { show: true },
-      },
-      blur: {
-        label: { show: true, opacity: 1 },
-      },
+      // ponytail: ECharts bar/heatmap 悬停进 emphasis 后常丢掉自定义 label（含 formatter），直接禁用
+      emphasis: { disabled: true },
     }],
     },
   }
@@ -811,13 +806,8 @@ export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
         },
       },
       itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 3 },
-      emphasis: {
-        focus: 'none',
-        label: { show: true },
-      },
-      blur: {
-        label: { show: true, opacity: 1 },
-      },
+      // ponytail: 热力悬停 emphasis 会清掉格子数字；禁用后 tooltip 仍可用
+      emphasis: { disabled: true },
     }],
   }
 }
