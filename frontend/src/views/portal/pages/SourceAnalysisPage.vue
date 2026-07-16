@@ -37,10 +37,14 @@ const {
   rankPage,
   rankPageSize,
   rankTotalPages,
+  articlePage,
+  articleTotalPages,
   platformTabs,
   filteredSources,
   activeRankWebsites,
   pagedRankWebsites,
+  activeRankArticles,
+  pagedRankArticles,
   sourceTotalCount,
   uniqueSourceCount,
   brandedWebsiteCount,
@@ -63,6 +67,7 @@ const {
   exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
+  domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
 
 const rankPageLabel = computed(() => {
@@ -71,6 +76,15 @@ const rankPageLabel = computed(() => {
   const start = (rankPage.value - 1) * rankPageSize + 1
   const end = Math.min(rankPage.value * rankPageSize, total)
   return `第 ${start}-${end} 个网站 / 共 ${total} 个`
+})
+
+const articlePageLabel = computed(() => {
+  const total = activeRankArticles.value.length
+  if (!total) return '暂无文章'
+  const start = (articlePage.value - 1) * rankPageSize + 1
+  const end = Math.min(articlePage.value * rankPageSize, total)
+  const scope = rankTab.value === 'all' ? '全部引用' : '含露出词'
+  return `${scope} · 第 ${start}-${end} 条 / 共 ${total} 条`
 })
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
@@ -305,6 +319,53 @@ const categoryOptions = [
           <button type="button" class="tiny-btn" :disabled="rankPage <= 1" @click="rankPage -= 1">上一页</button>
           <span>{{ rankPage }} / {{ rankTotalPages }}</span>
           <button type="button" class="tiny-btn" :disabled="rankPage >= rankTotalPages" @click="rankPage += 1">下一页</button>
+        </div>
+      </article>
+
+      <article class="source-panel source-table-panel">
+        <div class="source-panel-head" style="padding: 16px 16px 12px">
+          <div>
+            <h3>信源明细</h3>
+            <p>{{ articlePageLabel }}</p>
+          </div>
+        </div>
+        <div class="source-table-head">
+          <span>#</span>
+          <span>信源</span>
+          <span>问题</span>
+          <span>露出词</span>
+          <span>次数</span>
+        </div>
+        <div v-if="!pagedRankArticles.length" class="mini-empty chart-empty">当前筛选下暂无文章。</div>
+        <div
+          v-for="(source, index) in pagedRankArticles"
+          :key="`${rankTab}-article-${source.url}`"
+          class="source-table-row"
+        >
+          <span>{{ (articlePage - 1) * rankPageSize + index + 1 }}</span>
+          <div class="source-table-main">
+            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
+              {{ source.title || domainFromUrl(source.url) }}
+            </a>
+            <small>
+              {{ domainFromUrl(source.url) }}
+              · {{ sourceCategoryLabel(source.category) }}
+            </small>
+          </div>
+          <div class="source-table-tags">
+            <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
+            <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
+          </div>
+          <div class="source-table-tags">
+            <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
+            <i v-if="!(source.exposure_terms || []).length" class="source-table-muted">—</i>
+          </div>
+          <strong>{{ source.count }}</strong>
+        </div>
+        <div v-if="articleTotalPages > 1" class="source-rank-pager">
+          <button type="button" class="tiny-btn" :disabled="articlePage <= 1" @click="articlePage -= 1">上一页</button>
+          <span>{{ articlePage }} / {{ articleTotalPages }}</span>
+          <button type="button" class="tiny-btn" :disabled="articlePage >= articleTotalPages" @click="articlePage += 1">下一页</button>
         </div>
       </article>
     </template>

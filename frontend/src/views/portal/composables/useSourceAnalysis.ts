@@ -235,6 +235,18 @@ export function useSourceAnalysis(options?: {
     rankTab.value === 'all' ? allWebsites.value : brandedWebsites.value
   ))
 
+  const activeRankArticles = computed(() => (
+    rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
+  ))
+
+  const articlePage = ref(1)
+  const articleTotalPages = computed(() => Math.max(1, Math.ceil(activeRankArticles.value.length / RANK_PAGE_SIZE)))
+  const pagedRankArticles = computed(() => {
+    const page = Math.min(Math.max(articlePage.value, 1), articleTotalPages.value)
+    const start = (page - 1) * RANK_PAGE_SIZE
+    return activeRankArticles.value.slice(start, start + RANK_PAGE_SIZE)
+  })
+
   const rankTotalPages = computed(() => Math.max(1, Math.ceil(activeRankWebsites.value.length / RANK_PAGE_SIZE)))
   const pagedRankWebsites = computed(() => {
     const page = Math.min(Math.max(rankPage.value, 1), rankTotalPages.value)
@@ -404,7 +416,7 @@ export function useSourceAnalysis(options?: {
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '图表按含露出词的引用文章统计；下方「引用网站排行」按域名聚合。「品牌相关」只含命中露出词的网站，「全部网站」含所有被引用域名。',
+      body: '图表按含露出词的引用文章统计；「引用网站排行」按域名聚合；下方「信源明细」为文章列表，随 Tab 切换品牌相关 / 全部引用。',
     }
   })
 
@@ -440,11 +452,13 @@ export function useSourceAnalysis(options?: {
     keywordFilter.value = ''
     datePreset.value = isCustomerView.value ? 'all' : '30'
     rankPage.value = 1
+    articlePage.value = 1
   }
 
   function setRankTab(tab: SourceRankTab) {
     rankTab.value = tab
     rankPage.value = 1
+    articlePage.value = 1
   }
 
   function exportCsv() {
@@ -479,9 +493,13 @@ export function useSourceAnalysis(options?: {
   watch([filteredSources, structureChartRows, sourceTrendRows, activeSourceCategoryLabels, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
   watch([platformFilter, categoryFilter, keywordFilter, datePreset, rankTab], () => {
     rankPage.value = 1
+    articlePage.value = 1
   })
   watch(rankTotalPages, pages => {
     if (rankPage.value > pages) rankPage.value = pages
+  })
+  watch(articleTotalPages, pages => {
+    if (articlePage.value > pages) articlePage.value = pages
   })
 
   onMounted(() => {
@@ -507,11 +525,15 @@ export function useSourceAnalysis(options?: {
     rankPage,
     rankPageSize: RANK_PAGE_SIZE,
     rankTotalPages,
+    articlePage,
+    articleTotalPages,
     platformTabs,
     filteredSources,
     filteredAllSources,
     activeRankWebsites,
     pagedRankWebsites,
+    activeRankArticles,
+    pagedRankArticles,
     sourceTotalCount,
     uniqueSourceCount,
     brandedWebsiteCount,
