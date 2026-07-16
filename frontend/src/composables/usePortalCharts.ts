@@ -15,6 +15,7 @@ export type PortalChartRefs = {
   competitorRank?: Ref<HTMLDivElement | null>
   mentionTrend?: Ref<HTMLDivElement | null>
   sourceStructure?: Ref<HTMLDivElement | null>
+  sourceCategoryDistribution?: Ref<HTMLDivElement | null>
   sourceTrend?: Ref<HTMLDivElement | null>
 }
 
@@ -35,6 +36,7 @@ export type PortalChartData = {
   }>
   sourceTrendRows: Array<{ label: string; value: number }>
   sourceCategoryLabels: Record<string, string>
+  sourceCategoryStats?: Array<{ key: string; name: string; count: number; percent: number }>
   chartClickHandlers?: {
     mentionTrend?: (payload: { label: string; seriesName?: string }) => void
     sentimentTrend?: (payload: { label: string }) => void
@@ -465,6 +467,50 @@ export function usePortalCharts(refs: PortalChartRefs) {
           })),
         ],
       }, { notMerge: true })
+    }
+
+    const sourceCategoryChart = getChart(refs.sourceCategoryDistribution?.value ?? null)
+    if (sourceCategoryChart) {
+      const rows = data.sourceCategoryStats || []
+      if (!rows.length) {
+        sourceCategoryChart.clear()
+      } else {
+        const verticalLegend = rows.length > 3
+        sourceCategoryChart.setOption({
+          color: rows.map(item => sourceCategoryColor(item.key)),
+          tooltip: {
+            trigger: 'item',
+            formatter: (params: { name?: string; value?: number; percent?: number }) => (
+              `${params.name || ''}：${params.value || 0} 次（${Math.round(params.percent || 0)}%）`
+            ),
+          },
+          legend: {
+            show: true,
+            orient: verticalLegend ? 'vertical' : 'horizontal',
+            left: verticalLegend ? undefined : 'center',
+            right: verticalLegend ? 0 : undefined,
+            top: verticalLegend ? 'middle' : undefined,
+            bottom: verticalLegend ? undefined : 0,
+            itemWidth: 10,
+            itemHeight: 10,
+            textStyle: { color: '#526b89', fontSize: 12 },
+          },
+          series: [{
+            type: 'pie',
+            radius: rows.length <= 2 ? ['46%', '68%'] : ['40%', '62%'],
+            center: verticalLegend ? ['36%', '48%'] : ['50%', '44%'],
+            data: rows.map(item => ({ name: item.name, value: item.count })),
+            label: {
+              formatter: '{b}\n{d}%',
+              color: '#17324d',
+              fontWeight: 700,
+              fontSize: 12,
+            },
+            labelLine: { length: 10, length2: 8 },
+            itemStyle: { borderColor: '#fff', borderWidth: 2 },
+          }],
+        }, { notMerge: true })
+      }
     }
 
     const sourceTrendChart = getChart(refs.sourceTrend?.value ?? null)

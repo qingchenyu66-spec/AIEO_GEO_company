@@ -21,6 +21,7 @@ const pageMenuName = computed(() => (
 ))
 
 const structureChartRef = ref<HTMLDivElement | null>(null)
+const categoryChartRef = ref<HTMLDivElement | null>(null)
 const trendChartRef = ref<HTMLDivElement | null>(null)
 
 const {
@@ -46,6 +47,7 @@ const {
   sourceTrendRows,
   structureChartHeight,
   structureChartScrollable,
+  analyticsPairBodyHeight,
   hasStructurePanel,
   insight,
   loadSummary,
@@ -54,7 +56,7 @@ const {
   sourceCategoryLabels,
   sourceCategoryLabel,
   domainFromUrl,
-} = useSourceAnalysis({ structureChartRef, trendChartRef })
+} = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
   { value: '7', label: '近 7 天' },
@@ -174,7 +176,7 @@ const categoryOptions = [
 
     <template v-if="hasStructurePanel || filteredSources.length">
       <section class="source-analytics-grid">
-        <article v-if="hasStructurePanel" class="source-panel">
+        <article v-if="hasStructurePanel" class="source-panel source-panel--paired">
           <div class="source-panel-head">
             <div>
               <h3>分平台信源结构</h3>
@@ -182,41 +184,47 @@ const categoryOptions = [
             </div>
             <Database />
           </div>
-          <ul v-if="categoryStats.length" class="source-structure-legend">
-            <li v-for="item in categoryStats" :key="item.key">
-              <i :style="{ background: sourceCategoryColor(item.key) }" />
-              <span>{{ item.name }}</span>
-            </li>
-          </ul>
           <div
-            class="source-structure-scroll"
-            :class="{ 'is-scrollable': structureChartScrollable }"
+            class="source-panel-body"
+            :style="{ height: `${analyticsPairBodyHeight}px` }"
           >
+            <ul v-if="categoryStats.length" class="source-structure-legend">
+              <li v-for="item in categoryStats" :key="item.key">
+                <i :style="{ background: sourceCategoryColor(item.key) }" />
+                <span>{{ item.name }}</span>
+              </li>
+            </ul>
             <div
-              ref="structureChartRef"
-              class="echart-box source-structure-echart"
-              :style="{ height: `${structureChartHeight}px`, minHeight: `${structureChartHeight}px` }"
-            />
+              class="source-structure-scroll"
+              :class="{ 'is-scrollable': structureChartScrollable }"
+            >
+              <div
+                ref="structureChartRef"
+                class="echart-box source-structure-echart"
+                :style="{ height: `${structureChartHeight}px`, minHeight: `${structureChartHeight}px` }"
+              />
+            </div>
           </div>
         </article>
 
-        <article class="source-panel">
+        <article class="source-panel source-panel--paired">
           <div class="source-panel-head">
             <div>
               <h3>信源类型分布</h3>
               <p>{{ categorySummaryLabel }}</p>
             </div>
           </div>
-          <div v-if="categoryStats.length" class="source-category-list">
-            <div v-for="item in categoryStats" :key="item.key" class="source-category-row">
-              <span>{{ item.name }}</span>
-              <div class="source-category-bar">
-                <i :style="{ width: `${Math.max(item.percent, item.count ? 4 : 0)}%` }" />
-              </div>
-              <em>{{ item.percent }}%</em>
-            </div>
+          <div
+            class="source-panel-body"
+            :style="{ height: `${analyticsPairBodyHeight}px` }"
+          >
+            <div
+              v-if="categoryStats.length"
+              ref="categoryChartRef"
+              class="echart-box source-category-echart"
+            />
+            <div v-else class="mini-empty chart-empty">当前筛选下暂无含露出词信源。</div>
           </div>
-          <div v-else class="mini-empty chart-empty">当前筛选下暂无含露出词信源。</div>
         </article>
       </section>
 

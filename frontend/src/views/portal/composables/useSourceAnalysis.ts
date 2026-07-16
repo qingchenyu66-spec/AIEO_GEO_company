@@ -51,6 +51,7 @@ function sliceTrendPoints<T extends { label: string; value: number }>(points: T[
 
 export function useSourceAnalysis(options?: {
   structureChartRef?: Ref<HTMLDivElement | null>
+  categoryChartRef?: Ref<HTMLDivElement | null>
   trendChartRef?: Ref<HTMLDivElement | null>
 }) {
   const analytics = inject(PortalAnalyticsKey)!
@@ -80,9 +81,11 @@ export function useSourceAnalysis(options?: {
   const keywordFilter = ref('')
 
   const structureChartRef = options?.structureChartRef ?? ref<HTMLDivElement | null>(null)
+  const categoryChartRef = options?.categoryChartRef ?? ref<HTMLDivElement | null>(null)
   const trendChartRef = options?.trendChartRef ?? ref<HTMLDivElement | null>(null)
   const { renderCharts } = usePortalCharts({
     sourceStructure: structureChartRef,
+    sourceCategoryDistribution: categoryChartRef,
     sourceTrend: trendChartRef,
   })
 
@@ -272,6 +275,15 @@ export function useSourceAnalysis(options?: {
       : sourceStructureRows.value.some(row => row.total > 0)
   ))
 
+  const analyticsPairBodyHeight = computed(() => {
+    const categoryRows = categoryStats.value.length
+    const categoryMin = Math.max(220, categoryRows * 48 + 96)
+    if (!hasStructurePanel.value) return categoryMin
+    const structureH = structureChartHeight.value
+    if (structureChartScrollable.value) return Math.max(460, categoryMin)
+    return Math.max(structureH, categoryMin)
+  })
+
   const insight = computed(() => {
     if (!filteredSources.value.length) {
       return {
@@ -309,6 +321,7 @@ export function useSourceAnalysis(options?: {
       sourceStructureRows: structureChartRows.value,
       sourceTrendRows: sourceTrendRows.value,
       sourceCategoryLabels: activeSourceCategoryLabels.value,
+      sourceCategoryStats: categoryStats.value,
     })
   }
 
@@ -381,6 +394,7 @@ export function useSourceAnalysis(options?: {
     sourceTrendRows,
     structureChartHeight,
     structureChartScrollable,
+    analyticsPairBodyHeight,
     hasStructurePanel,
     insight,
     loadSummary,
