@@ -450,7 +450,8 @@ def management_create_position(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    _require_platform_menu(db, current, "platform.positions", "can_create", "当前账号无权新增职位")
+    # ponytail: 矩阵无 can_create（仅 export/update/delete）；新增与编辑共用 can_update
+    _require_platform_menu(db, current, "platform.positions", "can_update", "当前账号无权新增职位")
     role = db.scalar(select(Role).where(Role.role_code == payload.role_code, Role.identity_type == payload.identity_type, Role.status.is_(True), Role.deleted.is_(False)))
     if role is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="角色不存在或已停用")

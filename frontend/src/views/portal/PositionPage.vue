@@ -6,6 +6,9 @@ const {
   openCreatePosition,
   editPosition,
   removePosition,
+  canCreatePosition,
+  canUpdatePosition,
+  canDeletePosition,
 } = usePlatformAdminInject()
 </script>
 
@@ -16,7 +19,7 @@ const {
         <div><h2>职位列表</h2><p>维护运营、销售、交付、客户管理员等职位模板。</p></div>
         <div class="user-list-actions">
           <span>共 {{ positionRows.length }} 个职位</span>
-          <button class="primary-btn small-btn" @click="openCreatePosition('PLATFORM')">新增职位</button>
+          <button v-if="canCreatePosition" class="primary-btn small-btn" @click="openCreatePosition('PLATFORM')">新增职位</button>
         </div>
       </div>
       <div class="managed-user-list">
@@ -25,8 +28,8 @@ const {
           <span>{{ (position.menu_grants?.length || position.menu_ids.length) }} 项权限</span>
           <p>{{ position.description || '暂无说明' }}</p>
           <div class="managed-user-actions">
-            <button @click="editPosition(position)">编辑</button>
-            <button class="danger" @click="removePosition(position)">删除</button>
+            <button v-if="canUpdatePosition" @click="editPosition(position)">编辑</button>
+            <button v-if="canDeletePosition" class="danger" @click="removePosition(position)">删除</button>
           </div>
         </div>
         <div v-if="!positionRows.length" class="mini-empty">暂无职位，请先新增一个。</div>

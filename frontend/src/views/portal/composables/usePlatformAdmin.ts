@@ -36,6 +36,10 @@ export function usePlatformAdmin(options: PlatformAdminOptions) {
 
   const canCreatePlatformUser = computed(() => Boolean(menuGrant(USER_CREATE_PLATFORM_MENU)?.can_create))
   const canCreateCustomerUser = computed(() => Boolean(menuGrant(USER_CREATE_CUSTOMER_MENU)?.can_create))
+  // 职位矩阵无 can_create：新增与编辑均看 can_update
+  const canCreatePosition = computed(() => Boolean(menuGrant(POSITION_MENU)?.can_update))
+  const canUpdatePosition = computed(() => Boolean(menuGrant(POSITION_MENU)?.can_update))
+  const canDeletePosition = computed(() => Boolean(menuGrant(POSITION_MENU)?.can_delete))
   const creatableIdentityTypes = computed(() => {
     const types: IdentityType[] = []
     if (canCreatePlatformUser.value) types.push('PLATFORM')
@@ -93,6 +97,9 @@ export function usePlatformAdmin(options: PlatformAdminOptions) {
     ...menuConfig,
     canCreatePlatformUser,
     canCreateCustomerUser,
+    canCreatePosition,
+    canUpdatePosition,
+    canDeletePosition,
     creatableIdentityTypes,
     isUserCreatePage,
     isUserListPage,
