@@ -228,6 +228,9 @@ const pageSubtitle = computed(() => {
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
   if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
+  if (isApprovalPage.value) {
+    return '审核销售提交的用户、企业、报告与诊断操作；通过后才会真正生效'
+  }
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'

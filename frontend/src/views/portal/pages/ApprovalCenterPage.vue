@@ -73,8 +73,9 @@ async function approveRow(row: OperationApproval) {
       : '已通过并执行，相关数据已生效'
     ElMessage.success(hint)
     await loadRows()
-  } catch {
-    ElMessage.error('审批失败')
+  } catch (error: unknown) {
+    const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' && detail ? detail : '审批失败')
   } finally {
     actingId.value = null
     loading.value = false
@@ -113,19 +114,14 @@ onMounted(loadRows)
 
 <template>
   <section class="panel approval-page">
-    <div class="panel-head">
-      <div>
-        <h2>操作审批</h2>
-        <p>{{ canReview ? '审核销售提交的用户、企业、报告与诊断操作，通过后才会真正生效。' : '查看您已提交、等待运营或管理员审核的操作。' }}</p>
+    <div class="approval-toolbar">
+      <div class="approval-filter-bar">
+        <button type="button" :class="{ active: statusFilter === 'pending' }" @click="statusFilter = 'pending'; loadRows()">待审批</button>
+        <button type="button" :class="{ active: statusFilter === 'approved' }" @click="statusFilter = 'approved'; loadRows()">已通过</button>
+        <button type="button" :class="{ active: statusFilter === 'rejected' }" @click="statusFilter = 'rejected'; loadRows()">已驳回</button>
+        <button type="button" :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'; loadRows()">全部</button>
       </div>
-      <button class="filter-reset-btn" :disabled="loading" @click="loadRows">刷新</button>
-    </div>
-
-    <div class="approval-filter-bar">
-      <button :class="{ active: statusFilter === 'pending' }" @click="statusFilter = 'pending'; loadRows()">待审批</button>
-      <button :class="{ active: statusFilter === 'approved' }" @click="statusFilter = 'approved'; loadRows()">已通过</button>
-      <button :class="{ active: statusFilter === 'rejected' }" @click="statusFilter = 'rejected'; loadRows()">已驳回</button>
-      <button :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'; loadRows()">全部</button>
+      <button type="button" class="filter-reset-btn" :disabled="loading" @click="loadRows">刷新</button>
     </div>
 
     <div v-if="loading" class="mini-empty">加载中...</div>
@@ -142,6 +138,10 @@ onMounted(loadRows)
             {{ expandedId === row.id ? '收起详情' : '查看变更详情' }}
             <template v-if="row.preview?.change_count">（{{ row.preview.change_count }} 项）</template>
           </button>
+        </div>
+        <div v-if="canReview && row.status === 'pending'" class="approval-card-actions">
+          <button type="button" class="filter-search-btn" @click="approveRow(row)">通过</button>
+          <button type="button" class="danger-text-btn" @click="rejectRow(row)">驳回</button>
         </div>
         <div v-if="expandedId === row.id" class="approval-detail-panel">
           <table v-if="row.preview?.changes?.length" class="approval-change-table">
@@ -164,17 +164,21 @@ onMounted(loadRows)
           </table>
           <div v-else class="mini-empty compact">暂无结构化变更明细</div>
         </div>
-        <div v-if="canReview && row.status === 'pending'" class="approval-card-actions">
-          <button class="filter-search-btn" @click="approveRow(row)">通过</button>
-          <button class="danger-text-btn" @click="rejectRow(row)">驳回</button>
-        </div>
       </article>
     </div>
   </section>
 </template>
 
 <style scoped>
-.approval-filter-bar { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+.approval-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.approval-filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin:0; }
 .approval-filter-bar button {
   border:1px solid #d7e6f7; background:#fff; border-radius:999px; padding:6px 14px; cursor:pointer;
 }
@@ -183,17 +187,17 @@ onMounted(loadRows)
 .approval-card {
   display:grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap:12px;
-  padding:14px 16px;
+  gap:12px 16px;
+  align-items: start;
+  padding:16px 18px;
   border:1px solid #dbe8f5;
-  border-radius:12px;
+  border-radius:14px;
   background:#fff;
 }
-.approval-card.expanded { grid-template-columns: 1fr; }
 .approval-card.is-pending { border-left:4px solid #d97706; }
 .approval-card.is-approved { border-left:4px solid #059669; }
 .approval-card.is-rejected { border-left:4px solid #dc2626; }
-.approval-card-main { display:grid; gap:4px; min-width:0; grid-column: 1 / -1; }
+.approval-card-main { display:grid; gap:4px; min-width:0; }
 .approval-card-main strong { font-size:15px; color:#12253f; }
 .approval-card-main span { color:#6d8099; font-size:12px; }
 .approval-detail-toggle {
@@ -241,14 +245,8 @@ onMounted(loadRows)
 .approval-card-actions {
   display:flex;
   gap:8px;
-  align-items:flex-start;
+  align-items:center;
   flex-shrink:0;
-  grid-column: 2;
-  grid-row: 1;
 }
-.approval-card.expanded .approval-card-actions {
-  grid-column: 1 / -1;
-  justify-content:flex-end;
-}
-.mini-empty.compact { padding:8px 0; }
+.mini-empty.compact { padding:12px; margin:0; }
 </style>
