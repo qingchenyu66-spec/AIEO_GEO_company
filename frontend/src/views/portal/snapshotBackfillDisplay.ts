@@ -38,6 +38,8 @@ export function mergeSnapshotBackfillItem(
     sentiment: subtask.sentiment ?? partial.sentiment,
     page_screenshot: subtask.page_screenshot ?? partial.page_screenshot,
     needs_backfill: subtask.needs_backfill ?? partial.needs_backfill,
+    needs_backfill_raw: subtask.needs_backfill_raw ?? partial.needs_backfill_raw,
+    backfill_dismissed: subtask.backfill_dismissed ?? partial.backfill_dismissed,
     has_answer: subtask.has_answer ?? partial.has_answer ?? Boolean(subtask.answer_content),
     status: subtask.status || partial.status,
   }

@@ -327,13 +327,20 @@
   line-height: 1.45;
 }
 
+.snapshot-backfill-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
 .snapshot-backfill-card-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   align-self: flex-start;
-  margin-top: auto;
+  margin-top: 0;
   padding: 7px 12px;
   border: 1px solid #d9e8f6;
   border-radius: 10px;
@@ -354,6 +361,17 @@
   border-color: rgba(45, 108, 223, 0.2);
   background: rgba(45, 108, 223, 0.06);
   color: #2d6cdf;
+}
+
+.snapshot-backfill-card-action.is-dismiss {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.snapshot-backfill-card-action.is-dismiss:hover {
+  border-color: #cbd5e1;
+  color: #475569;
 }
 
 .snapshot-backfill-empty {

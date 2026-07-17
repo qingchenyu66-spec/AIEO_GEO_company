@@ -92,6 +92,8 @@ export interface MonitorSubtask {
   brand_name?: string | null
   task_created_at?: string | null
   needs_backfill?: boolean
+  needs_backfill_raw?: boolean
+  backfill_dismissed?: boolean
   has_answer?: boolean
 }
 

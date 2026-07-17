@@ -22,6 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   backfill: []
+  undismiss: []
 }>()
 
 const drawerVisible = computed({
@@ -34,6 +35,8 @@ const headline = computed(() => props.item?.tenant_name || props.item?.brand_nam
 const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props.subtask))
 
 const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
+
+const isDismissed = computed(() => Boolean(props.item?.backfill_dismissed || props.subtask?.backfill_dismissed))
 
 function showRankNote() {
   if (props.subtask?.prompt_intent !== 'ranking' && props.item?.prompt_intent !== 'ranking') return false
@@ -50,6 +53,14 @@ function sourceLabel(item: SnapshotBackfillPendingItem | null) {
   if (!item) return '—'
   if (item.source === 'lead_diagnosis') return '售前诊断'
   return 'GEO 监测'
+}
+
+function statusLabel(item: SnapshotBackfillPendingItem | null) {
+  if (!item) return '—'
+  if (item.backfill_dismissed) return '已忽略'
+  if (item.needs_backfill) return '待补录'
+  if (item.has_answer) return '已有结果'
+  return item.status || '—'
 }
 
 function actionLabel(item: SnapshotBackfillPendingItem | null) {
@@ -77,8 +88,15 @@ const answerPreview = computed(() => {
     <template v-else-if="item && subtask">
       <div class="snapshot-detail-tags">
         <span class="snapshot-detail-tag">{{ sourceLabel(item) }}</span>
-        <span class="snapshot-detail-tag" :class="{ pending: item.needs_backfill, done: item.has_answer && !item.needs_backfill }">
-          {{ item.needs_backfill ? '待补录' : item.has_answer ? '已有结果' : item.status || '—' }}
+        <span
+          class="snapshot-detail-tag"
+          :class="{
+            pending: item.needs_backfill && !isDismissed,
+            done: item.has_answer && !item.needs_backfill && !isDismissed,
+            dismissed: isDismissed,
+          }"
+        >
+          {{ statusLabel(item) }}
         </span>
       </div>
 
@@ -151,10 +169,26 @@ const answerPreview = computed(() => {
       </dl>
 
       <p v-if="item.error_message" class="snapshot-detail-error">{{ item.error_message }}</p>
+      <p v-if="isDismissed" class="snapshot-detail-dismiss-hint">
+        已忽略待补录提醒，现有答案与排名仍计入客户；可取消忽略以重新纳入待办。
+      </p>
 
       <div v-if="canSubmit !== false" class="snapshot-detail-actions">
-        <button type="button" class="primary-btn" @click="emit('backfill')">
+        <button
+          v-if="!isDismissed"
+          type="button"
+          class="primary-btn"
+          @click="emit('backfill')"
+        >
           {{ actionLabel(item) }}
+        </button>
+        <button
+          v-if="isDismissed"
+          type="button"
+          class="primary-btn"
+          @click="emit('undismiss')"
+        >
+          取消忽略
         </button>
       </div>
     </template>
@@ -187,6 +221,19 @@ const answerPreview = computed(() => {
 .snapshot-detail-tag.done {
   background: rgba(22, 163, 74, 0.1);
   color: #15803d;
+}
+.snapshot-detail-tag.dismissed {
+  background: rgba(100, 116, 139, 0.12);
+  color: #475569;
+}
+.snapshot-detail-dismiss-hint {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(100, 116, 139, 0.08);
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .snapshot-detail-grid {
   display: grid;

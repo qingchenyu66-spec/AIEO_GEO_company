@@ -68,6 +68,14 @@ class GeoMonitorSubtask(Base):
     competitor_rankings_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="竞品排名JSON")
     all_rankings_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="全部品牌排名JSON")
     raw_result_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="子任务原始结果JSON")
+    # 运营主动忽略待补录：保留答案/排名，仅退出待补池与提醒
+    backfill_dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="快照补录忽略时间")
+    backfill_dismissed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("sys_user.id"),
+        nullable=True,
+        index=True,
+        comment="快照补录忽略操作人",
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="本地更新时间")
 
     task: Mapped[GeoMonitorTask] = relationship(back_populates="subtasks")

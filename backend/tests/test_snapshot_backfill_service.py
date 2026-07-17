@@ -574,3 +574,142 @@ def test_list_snapshot_backfill_items_filters_by_keyword(db_session) -> None:
 
     empty = list_snapshot_backfill_items(db_session, tenant_id=tenant.id, keyword="公交", limit=10)
     assert empty == []
+
+
+def test_dismissed_subtask_excluded_from_eligible_and_list(db_session) -> None:
+    from datetime import datetime
+
+    from app.services.snapshot_backfill_service import subtask_backfill_dismissed
+
+    tenant = Tenant(name="忽略企业", code="tenant-dismiss", deleted=False)
+    db_session.add(tenant)
+    db_session.flush()
+    task = GeoMonitorTask(
+        tenant_id=tenant.id,
+        task_id="task-dismiss",
+        monitor_keywords="品牌D",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["弱排名问题"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-dismiss",
+        task_id="task-dismiss",
+        platform="doubao",
+        mode="standard",
+        prompt="弱排名问题",
+        status="completed",
+        answer_content="品牌D 排在后面",
+        mention_position=8,
+        raw_result_json={},
+        backfill_dismissed_at=datetime(2026, 7, 17, 12, 0, 0),
+        backfill_dismissed_by=1,
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    assert subtask_backfill_dismissed(subtask) is True
+    assert subtask_needs_snapshot_backfill(subtask) is True
+    assert subtask_backfill_eligible(subtask, pending_only=True) is False
+    assert subtask_backfill_eligible(subtask, pending_only=False) is False
+
+    page = list_snapshot_backfill_page(db_session, tenant_id=tenant.id, pending_only=True, limit=10)
+    assert page["summary"]["pending"] == 0
+    assert page["items"] == []
+    assert notify_failed_subtasks_for_task(db_session, task) == 0
+
+
+def test_dismiss_and_undismiss_snapshot_backfill(db_session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app.services.snapshot_backfill_service import (
+        dismiss_snapshot_backfill,
+        undismiss_snapshot_backfill,
+    )
+
+    tenant = Tenant(name="取消忽略企业", code="tenant-undismiss", deleted=False, owner_user_id=3)
+    db_session.add(tenant)
+    db_session.flush()
+    task = GeoMonitorTask(
+        tenant_id=tenant.id,
+        task_id="task-undismiss",
+        monitor_keywords="品牌U",
+        status="failed",
+        total_items=1,
+        completed_items=0,
+        failed_items=1,
+        prompts_json=["失败问题"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-undismiss",
+        task_id="task-undismiss",
+        platform="doubao",
+        mode="standard",
+        prompt="失败问题",
+        status="failed",
+        error_message="timeout",
+        raw_result_json={},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+            role_code="PLATFORM_ADMIN",
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+
+    def _fake_get_subtask(db, subtask_id, _current):
+        return db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id))
+
+    def _fake_get_task(db, task_id, _current):
+        return db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
+
+    monkeypatch.setattr("app.services.snapshot_backfill_service.get_monitor_subtask", _fake_get_subtask)
+    monkeypatch.setattr("app.services.snapshot_backfill_service.get_monitor_task", _fake_get_task)
+
+    assert notify_failed_subtasks_for_task(db_session, task) == 1
+    assert db_session.query(SystemNotification).count() == 1
+
+    dismissed = dismiss_snapshot_backfill(db_session, subtask_id="st-undismiss", current=current)
+    assert dismissed["backfill_dismissed"] is True
+    assert subtask.backfill_dismissed_at is not None
+    assert subtask.answer_content is None
+    assert db_session.query(SystemNotification).count() == 0
+    log = db_session.scalar(select(OperationLog).where(OperationLog.action_type == "忽略补录"))
+    assert log is not None
+    assert log.target_module == "快照补录"
+    assert "st-undismiss" in log.description
+
+    page = list_snapshot_backfill_page(db_session, tenant_id=tenant.id, pending_only=True, limit=10)
+    assert page["summary"]["pending"] == 0
+
+    restored = undismiss_snapshot_backfill(db_session, subtask_id="st-undismiss", current=current)
+    assert restored["backfill_dismissed"] is False
+    assert subtask.backfill_dismissed_at is None
+    assert restored["item"]["needs_backfill"] is True
+    assert db_session.query(SystemNotification).count() == 1
+    undo_log = db_session.scalar(select(OperationLog).where(OperationLog.action_type == "取消忽略补录"))
+    assert undo_log is not None
+
+    page2 = list_snapshot_backfill_page(db_session, tenant_id=tenant.id, pending_only=True, limit=10)
+    assert page2["summary"]["pending"] == 1
+    assert page2["items"][0]["subtask_id"] == "st-undismiss"

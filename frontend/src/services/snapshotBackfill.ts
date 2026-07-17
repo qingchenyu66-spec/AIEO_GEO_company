@@ -36,6 +36,8 @@ export interface SnapshotBackfillPendingItem {
   region_code?: string | null
   region_label?: string | null
   brand_name?: string | null
+  backfill_dismissed?: boolean
+  needs_backfill_raw?: boolean
 }
 
 export interface SnapshotBackfillQuery {
@@ -126,5 +128,25 @@ export async function submitSnapshotBackfill(
   const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill`, payload)
   invalidateCache('/v1/monitor')
   invalidateCache('/v1/brand/asset')
+  return response.data.data
+}
+
+export async function dismissSnapshotBackfill(subtaskId: string): Promise<{
+  subtask_id: string
+  backfill_dismissed: boolean
+  item: SnapshotBackfillPendingItem
+}> {
+  const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill/dismiss`)
+  invalidateCache('/v1/monitor')
+  return response.data.data
+}
+
+export async function undismissSnapshotBackfill(subtaskId: string): Promise<{
+  subtask_id: string
+  backfill_dismissed: boolean
+  item: SnapshotBackfillPendingItem
+}> {
+  const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill/undismiss`)
+  invalidateCache('/v1/monitor')
   return response.data.data
 }

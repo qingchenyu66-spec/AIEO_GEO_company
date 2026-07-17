@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { RefreshCw, Upload } from '@lucide/vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { EyeOff, RefreshCw, Upload } from '@lucide/vue'
 import '../../../styles/snapshot-backfill.css'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import SnapshotBackfillDialog from '../components/SnapshotBackfillDialog.vue'
 import SnapshotBackfillDetailDrawer from '../components/SnapshotBackfillDetailDrawer.vue'
 import {
+  dismissSnapshotBackfill,
   getPendingSnapshotBackfills,
+  undismissSnapshotBackfill,
   type SnapshotBackfillPendingItem,
 } from '../../../services/snapshotBackfill'
 import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
@@ -348,6 +350,51 @@ async function openBackfill(item: SnapshotBackfillPendingItem) {
   }
 }
 
+function isFailurePending(item: SnapshotBackfillPendingItem) {
+  return Boolean(item.needs_backfill) && !item.has_answer
+}
+
+async function dismissItem(item: SnapshotBackfillPendingItem) {
+  if (!canSubmitBackfill.value || !item.needs_backfill) return
+  try {
+    if (isFailurePending(item)) {
+      await ElMessageBox.confirm(
+        '当前无有效回答，忽略后将不再提醒补录，客户侧仍按未抓取/失败统计（不会补出排名）。确认忽略？',
+        '忽略待补录',
+        { type: 'warning', confirmButtonText: '确认忽略', cancelButtonText: '取消' },
+      )
+    }
+    await dismissSnapshotBackfill(item.subtask_id)
+    items.value = items.value.filter(row => row.subtask_id !== item.subtask_id)
+    if (listSummary.value.pending > 0) listSummary.value.pending -= 1
+    if (listSummary.value.total > 0) listSummary.value.total -= 1
+    if (detailItem.value?.subtask_id === item.subtask_id) {
+      detailVisible.value = false
+      detailItem.value = null
+      detailSubtask.value = null
+    }
+    ElMessage.success('已忽略，不再提醒')
+    emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+  } catch (error: unknown) {
+    if (error === 'cancel' || (error as { ===?: string })?. === === 'cancel') return
+    notifyOperationError(error, '忽略失败')
+  }
+}
+
+async function undismissFromDetail() {
+  const subtaskId = detailItem.value?.subtask_id || detailSubtask.value?.subtask_id
+  if (!canSubmitBackfill.value || !subtaskId) return
+  try {
+    const result = await undismissSnapshotBackfill(subtaskId)
+    ElMessage.success(result.item.needs_backfill ? '已取消忽略，已重新纳入待补录' : '已取消忽略')
+    await loadItems()
+    emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+    await openDetailById(subtaskId, result.item)
+  } catch (error: unknown) {
+    notifyOperationError(error, '取消忽略失败')
+  }
+}
+
 function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendingItem {
   return {
     subtask_id: subtask.subtask_id,
@@ -364,6 +411,7 @@ function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendi
     mention_position: subtask.mention_position ?? null,
     has_answer: Boolean(subtask.answer_content),
     needs_backfill: subtask.needs_backfill ?? false,
+    backfill_dismissed: subtask.backfill_dismissed ?? false,
     status: subtask.status ?? null,
   }
 }
@@ -626,16 +674,26 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
             </div>
           </dl>
           <p v-if="item.error_message" class="snapshot-backfill-card-error">{{ item.error_message }}</p>
-          <button
-            v-if="canSubmitBackfill"
-            type="button"
-            class="snapshot-backfill-card-action"
-            :class="{ 'is-overwrite': !item.needs_backfill }"
-            @click.stop="openBackfill(item)"
-          >
-            <Upload :size="14" />
-            {{ actionLabel(item) }}
-          </button>
+          <div v-if="canSubmitBackfill" class="snapshot-backfill-card-actions" @click.stop>
+            <button
+              type="button"
+              class="snapshot-backfill-card-action"
+              :class="{ 'is-overwrite': !item.needs_backfill }"
+              @click="openBackfill(item)"
+            >
+              <Upload :size="14" />
+              {{ actionLabel(item) }}
+            </button>
+            <button
+              v-if="item.needs_backfill"
+              type="button"
+              class="snapshot-backfill-card-action is-dismiss"
+              @click="dismissItem(item)"
+            >
+              <EyeOff :size="14" />
+              忽略
+            </button>
+          </div>
         </article>
       </div>
       <div
@@ -656,6 +714,7 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
       :subtask="detailSubtask"
       :can-submit="canSubmitBackfill"
       @backfill="openBackfillFromDetail"
+      @undismiss="undismissFromDetail"
     />
 
     <SnapshotBackfillDialog

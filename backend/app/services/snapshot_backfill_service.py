@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -179,12 +179,24 @@ def _schedule_context_for_task(
     return resolve_task_schedule_context(task, schedule_run, asset, lead_run)
 
 
+def subtask_backfill_dismissed(subtask: GeoMonitorSubtask) -> bool:
+    """运营已忽略该子任务的待补录提醒。"""
+    return getattr(subtask, "backfill_dismissed_at", None) is not None
+
+
+def clear_subtask_backfill_dismiss(subtask: GeoMonitorSubtask) -> None:
+    subtask.backfill_dismissed_at = None
+    subtask.backfill_dismissed_by = None
+
+
 def notify_failed_subtasks_for_task(db: Session, task: GeoMonitorTask) -> int:
     """任务进入终态或存在失败子任务时，为待补录项写入单条通知。"""
     if task.status not in TERMINAL_STATUSES and (task.failed_items or 0) <= 0:
         return 0
     count = 0
     for subtask in task.subtasks or []:
+        if subtask_backfill_dismissed(subtask):
+            continue
         ctx = build_snapshot_backfill_item(db, subtask, task)
         if not ctx.get("needs_backfill"):
             continue
@@ -261,6 +273,7 @@ def apply_snapshot_backfill(
     previous_raw = dict(subtask.raw_result_json or {})
     previous_source = previous_raw.get("source")
 
+    clear_subtask_backfill_dismiss(subtask)
     subtask.page_screenshot = url
     subtask.answer_content = content
     subtask.error_message = None
@@ -466,12 +479,90 @@ def _snapshot_backfill_log_description(
 
 
 def subtask_backfill_eligible(subtask: GeoMonitorSubtask, *, pending_only: bool = False) -> bool:
-    """待补录项，或已有回答可覆盖更正的子任务。"""
+    """待补录项，或已有回答可覆盖更正的子任务。已忽略的不进运营列表。"""
+    if subtask_backfill_dismissed(subtask):
+        return False
     if pending_only:
         return subtask_needs_snapshot_backfill(subtask)
     if subtask_needs_snapshot_backfill(subtask):
         return True
     return bool((subtask.answer_content or "").strip())
+
+
+def dismiss_snapshot_backfill(
+    db: Session,
+    *,
+    subtask_id: str,
+    current: CurrentSession,
+) -> dict[str, Any]:
+    """永久忽略该子任务待补录：保留答案/排名，退出列表与提醒。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可忽略快照补录")
+
+    subtask = get_monitor_subtask(db, subtask_id, current)
+    task = get_monitor_task(db, subtask.task_id, current)
+
+    if subtask_backfill_dismissed(subtask):
+        item = build_snapshot_backfill_item(db, subtask, task)
+        return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
+
+    item_probe = build_snapshot_backfill_item(db, subtask, task)
+    if not item_probe.get("needs_backfill"):
+        raise ValueError("当前子任务不在待补录状态，无需忽略")
+
+    subtask.backfill_dismissed_at = datetime.now(UTC).replace(tzinfo=None)
+    subtask.backfill_dismissed_by = current.user.id
+    dismiss_desc = _snapshot_backfill_log_description(db, subtask, task, action_type="忽略补录")
+    write_operation_log(
+        db,
+        current,
+        "忽略补录",
+        f"{dismiss_desc} · 子任务 {subtask.subtask_id}",
+        target_module="快照补录",
+        tenant_id=task.tenant_id,
+        risk_level="关注",
+    )
+    db.commit()
+    resolve_subtask_backfill_notification(db, subtask.subtask_id)
+    db.refresh(subtask)
+    item = build_snapshot_backfill_item(db, subtask, task)
+    return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
+
+
+def undismiss_snapshot_backfill(
+    db: Session,
+    *,
+    subtask_id: str,
+    current: CurrentSession,
+) -> dict[str, Any]:
+    """取消忽略：若仍待补录则回列表并重新通知。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可取消忽略快照补录")
+
+    subtask = get_monitor_subtask(db, subtask_id, current)
+    task = get_monitor_task(db, subtask.task_id, current)
+
+    if not subtask_backfill_dismissed(subtask):
+        item = build_snapshot_backfill_item(db, subtask, task)
+        return {"subtask_id": subtask.subtask_id, "backfill_dismissed": False, "item": item}
+
+    clear_subtask_backfill_dismiss(subtask)
+    undismiss_desc = _snapshot_backfill_log_description(db, subtask, task, action_type="取消忽略补录")
+    write_operation_log(
+        db,
+        current,
+        "取消忽略补录",
+        f"{undismiss_desc} · 子任务 {subtask.subtask_id}",
+        target_module="快照补录",
+        tenant_id=task.tenant_id,
+        risk_level="正常",
+    )
+    db.commit()
+    db.refresh(subtask)
+    item = build_snapshot_backfill_item(db, subtask, task)
+    if item.get("needs_backfill"):
+        _notify_subtask_backfill(db, subtask, task, ctx=item)
+    return {"subtask_id": subtask.subtask_id, "backfill_dismissed": False, "item": item}
 
 
 def build_snapshot_backfill_item(
@@ -565,11 +656,16 @@ def build_snapshot_backfill_item(
         effective = int(display_rank) if display_rank is not None else None
     except (TypeError, ValueError):
         effective = None
-    ctx["needs_backfill"] = subtask_needs_snapshot_backfill(
+    needs = subtask_needs_snapshot_backfill(
         subtask,
         effective_rank=effective,
         use_effective_rank=True,
     )
+    dismissed = subtask_backfill_dismissed(subtask)
+    ctx["backfill_dismissed"] = dismissed
+    # 列表口径：已忽略不再算待补录；详情深链仍可通过 backfill_dismissed 看到并取消忽略
+    ctx["needs_backfill"] = bool(needs) and not dismissed
+    ctx["needs_backfill_raw"] = bool(needs)
     return ctx
 
 
@@ -762,6 +858,9 @@ def list_snapshot_backfill_page(
                 func.date(GeoMonitorTask.created_at) == detect_date,
             )
         )
+
+    # 已忽略项不进运营列表（取消忽略仅靠 subtask_id 深链进详情）
+    stmt = stmt.where(GeoMonitorSubtask.backfill_dismissed_at.is_(None))
 
     no_answer = or_(GeoMonitorSubtask.answer_content.is_(None), GeoMonitorSubtask.answer_content == "")
     if pending_only:

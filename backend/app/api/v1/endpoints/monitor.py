@@ -39,7 +39,9 @@ from app.services.monitor_service import (
 from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
+    dismiss_snapshot_backfill,
     list_snapshot_backfill_page,
+    undismiss_snapshot_backfill,
 )
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
@@ -375,6 +377,48 @@ def monitor_subtask_snapshot_backfill(
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="monitor.snapshot_backfill")
+    return ApiResponse(data=data)
+
+
+@router.post("/subtasks/{subtask_id}/snapshot-backfill/dismiss", response_model=ApiResponse[dict])
+def monitor_subtask_snapshot_backfill_dismiss(
+    subtask_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """忽略待补录：保留答案与排名，退出待补列表并不再提醒。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+        data = dismiss_snapshot_backfill(db, subtask_id=subtask_id, current=current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="monitor.snapshot_backfill_dismiss")
+    return ApiResponse(data=data)
+
+
+@router.post("/subtasks/{subtask_id}/snapshot-backfill/undismiss", response_model=ApiResponse[dict])
+def monitor_subtask_snapshot_backfill_undismiss(
+    subtask_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """取消忽略：若仍待补录则回列表并重新发出通知。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+        data = undismiss_snapshot_backfill(db, subtask_id=subtask_id, current=current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="monitor.snapshot_backfill_undismiss")
     return ApiResponse(data=data)
 
 
