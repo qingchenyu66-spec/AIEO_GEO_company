@@ -333,60 +333,62 @@
 
 .source-type-panel .source-panel-head {
   align-items: center;
+  padding: 16px 16px 12px;
 }
 
-.source-type-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 12px;
-  padding: 0 16px 16px;
-}
-
-.source-type-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-start;
-  padding: 14px 14px 12px;
-  border: 1px solid #e8f0f8;
-  border-radius: 14px;
-  background: #fbfdff;
+.source-type-head,
+.source-type-row {
+  grid-template-columns: minmax(140px, 1.6fr) 64px 64px 72px 72px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
   text-align: left;
   cursor: pointer;
-  font-family: inherit;
-  transition: border-color .15s, box-shadow .15s, background .15s;
-  border-left: 3px solid var(--type-color, #2d6cdf);
 }
 
-.source-type-card:hover {
-  border-color: rgba(45, 108, 223, .35);
-  box-shadow: 0 6px 18px rgba(21, 48, 82, .06);
+.source-type-row {
+  color: inherit;
 }
 
-.source-type-card.active {
-  border-color: var(--type-color, #2d6cdf);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--type-color, #2d6cdf) 10%, #fff), #fbfdff);
-  box-shadow: 0 6px 18px rgba(21, 48, 82, .08);
+.source-type-row:hover {
+  background: #fbfdff;
 }
 
-.source-type-card-name {
-  font-size: 13px;
+.source-type-row.active {
+  background: color-mix(in srgb, var(--type-color, #2d6cdf) 8%, #fff);
+  box-shadow: inset 3px 0 0 var(--type-color, #2d6cdf);
+}
+
+.source-type-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   font-weight: 600;
-  color: #3d5674;
-}
-
-.source-type-card-count {
-  font-size: 22px;
-  font-weight: 800;
   color: #153052;
-  line-height: 1.1;
-  font-style: normal;
 }
 
-.source-type-card-meta {
+.source-type-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--type-color, #2d6cdf);
+}
+
+.source-type-percent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eef5fd;
+  color: #3d5674;
   font-size: 12px;
-  color: #7a91ab;
   font-style: normal;
+  font-weight: 600;
 }
 
 .source-category-list {

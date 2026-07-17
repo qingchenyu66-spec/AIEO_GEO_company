@@ -281,11 +281,11 @@ const categoryOptions = [
         <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
       </article>
 
-      <article class="source-panel source-type-panel">
+      <article class="source-panel source-table-panel source-type-panel">
         <div class="source-panel-head">
           <div>
             <h3>按类型统计</h3>
-            <p>点击类型查看对应网站与文章明细（与下方排行联动）</p>
+            <p>点击类型行筛选下方网站与文章明细</p>
           </div>
           <button
             v-if="categoryFilter !== 'all'"
@@ -299,21 +299,33 @@ const categoryOptions = [
         <div v-if="!typeBreakdownStats.length" class="mini-empty chart-empty" style="padding: 0 16px 16px">
           当前筛选下暂无类型统计。
         </div>
-        <div v-else class="source-type-grid">
+        <template v-else>
+          <div class="source-table-head source-type-head">
+            <span>类型</span>
+            <span>站数</span>
+            <span>篇数</span>
+            <span>次数</span>
+            <span>占比</span>
+          </div>
           <button
             v-for="item in typeBreakdownStats"
             :key="item.key"
             type="button"
-            class="source-type-card"
+            class="source-table-row source-type-row"
             :class="{ active: categoryFilter === item.key }"
             :style="{ '--type-color': sourceCategoryColor(item.key) }"
             @click="openTypeDetail(item.key)"
           >
-            <span class="source-type-card-name">{{ item.name }}</span>
-            <strong class="source-type-card-count">{{ item.count }}</strong>
-            <em class="source-type-card-meta">{{ item.websiteCount }} 站 · {{ item.articleCount }} 篇 · {{ item.percent }}%</em>
+            <div class="source-type-name">
+              <i class="source-type-dot" aria-hidden="true" />
+              <span>{{ item.name }}</span>
+            </div>
+            <span>{{ item.websiteCount }}</span>
+            <span>{{ item.articleCount }}</span>
+            <strong>{{ item.count }}</strong>
+            <em class="source-type-percent">{{ item.percent }}%</em>
           </button>
-        </div>
+        </template>
       </article>
 
       <article id="source-rank-section" ref="rankSectionRef" class="source-panel source-table-panel">
