@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import {
   AlertTriangle,
   Database,
@@ -10,6 +10,7 @@ import {
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useSourceAnalysis, type SourceDatePreset } from '../composables/useSourceAnalysis'
+import { sourceCategoryColor } from '../sourceCategory'
 import { externalLink } from '../portalUtils'
 import { useAuthStore } from '../../../stores/auth'
 import '../../../styles/source-analysis.css'
@@ -22,6 +23,7 @@ const pageMenuName = computed(() => (
 const structureChartRef = ref<HTMLDivElement | null>(null)
 const categoryChartRef = ref<HTMLDivElement | null>(null)
 const trendChartRef = ref<HTMLDivElement | null>(null)
+const rankSectionRef = ref<HTMLElement | null>(null)
 
 const {
   brandAsset,
@@ -53,6 +55,7 @@ const {
   brandedCitationShare,
   platformWithSourcesCount,
   categoryStats,
+  typeBreakdownStats,
   categorySummaryLabel,
   topCategory,
   officialRate,
@@ -64,11 +67,18 @@ const {
   loadSummary,
   resetFilters,
   setRankTab,
+  selectSourceCategory,
   exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
   domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
+
+async function openTypeDetail(key: typeof categoryFilter.value) {
+  selectSourceCategory(key)
+  await nextTick()
+  rankSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 const rankPageLabel = computed(() => {
   const total = activeRankWebsites.value.length
@@ -228,7 +238,7 @@ const categoryOptions = [
           <div class="source-panel-head">
             <div>
               <h3>信源类型分布</h3>
-              <p>{{ categorySummaryLabel }}</p>
+              <p>{{ categorySummaryLabel }} · 点击扇区可筛选类型</p>
             </div>
           </div>
           <div
@@ -261,11 +271,51 @@ const categoryOptions = [
         <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
       </article>
 
-      <article class="source-panel source-table-panel">
+      <article class="source-panel source-type-panel">
+        <div class="source-panel-head">
+          <div>
+            <h3>按类型统计</h3>
+            <p>点击类型查看对应网站与文章明细（与下方排行联动）</p>
+          </div>
+          <button
+            v-if="categoryFilter !== 'all'"
+            type="button"
+            class="tiny-btn"
+            @click="openTypeDetail('all')"
+          >
+            清除类型筛选
+          </button>
+        </div>
+        <div v-if="!typeBreakdownStats.length" class="mini-empty chart-empty" style="padding: 0 16px 16px">
+          当前筛选下暂无类型统计。
+        </div>
+        <div v-else class="source-type-grid">
+          <button
+            v-for="item in typeBreakdownStats"
+            :key="item.key"
+            type="button"
+            class="source-type-card"
+            :class="{ active: categoryFilter === item.key }"
+            :style="{ '--type-color': sourceCategoryColor(item.key) }"
+            @click="openTypeDetail(item.key)"
+          >
+            <span class="source-type-card-name">{{ item.name }}</span>
+            <strong class="source-type-card-count">{{ item.count }}</strong>
+            <em class="source-type-card-meta">{{ item.websiteCount }} 站 · {{ item.articleCount }} 篇 · {{ item.percent }}%</em>
+          </button>
+        </div>
+      </article>
+
+      <article id="source-rank-section" ref="rankSectionRef" class="source-panel source-table-panel">
         <div class="source-panel-head source-rank-head">
           <div>
             <h3>引用网站排行</h3>
-            <p>{{ rankPageLabel }}</p>
+            <p>
+              {{ rankPageLabel }}
+              <template v-if="categoryFilter !== 'all'">
+                · 已筛选「{{ sourceCategoryLabel(categoryFilter) }}」
+              </template>
+            </p>
           </div>
           <div class="source-rank-tabs">
             <button
@@ -326,7 +376,12 @@ const categoryOptions = [
         <div class="source-panel-head" style="padding: 16px 16px 12px">
           <div>
             <h3>信源明细</h3>
-            <p>{{ articlePageLabel }}</p>
+            <p>
+              {{ articlePageLabel }}
+              <template v-if="categoryFilter !== 'all'">
+                · 已筛选「{{ sourceCategoryLabel(categoryFilter) }}」
+              </template>
+            </p>
           </div>
         </div>
         <div class="source-table-head">

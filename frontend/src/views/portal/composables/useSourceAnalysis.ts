@@ -205,16 +205,19 @@ export function useSourceAnalysis(options?: {
     platformRanking.value.map(item => item.platform),
   ))
 
-  function applySourceFilters(rows: SourceRow[]) {
+  function applySourceFilters(rows: SourceRow[], options?: { ignoreCategory?: boolean }) {
     const keyword = keywordFilter.value.trim().toLowerCase()
     const now = Date.now()
     const dayMs = 86400000
     const rangeDays = datePreset.value === 'all' ? null : Number(datePreset.value)
     const rangeStart = rangeDays ? now - rangeDays * dayMs : null
+    const ignoreCategory = options?.ignoreCategory === true
     return rows.filter(source => {
       const platformMatched = platformFilter.value === 'all'
         || (source.platforms || []).includes(platformFilter.value)
-      const categoryMatched = categoryFilter.value === 'all' || source.category === categoryFilter.value
+      const categoryMatched = ignoreCategory
+        || categoryFilter.value === 'all'
+        || source.category === categoryFilter.value
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
@@ -320,6 +323,41 @@ export function useSourceAnalysis(options?: {
       .filter(item => item.count > 0)
       .sort((a, b) => b.count - a.count)
   })
+
+  /** 按类型统计（不受类型筛选自身影响，便于下钻前看全貌） */
+  const typeBreakdownStats = computed(() => {
+    const base = rankTab.value === 'all' ? allCitationSources.value : brandedSources.value
+    const rows = applySourceFilters(base, { ignoreCategory: true })
+    const citationBucket = createEmptyCategoryBucket()
+    const articleBucket = createEmptyCategoryBucket()
+    const domainBucket = Object.fromEntries(
+      sourceCategoryIds.map(key => [key, new Set<string>()]),
+    ) as Record<SourceCategory, Set<string>>
+    for (const source of rows) {
+      const key = source.category
+      citationBucket[key] = (citationBucket[key] || 0) + source.count
+      articleBucket[key] = (articleBucket[key] || 0) + 1
+      const domain = domainFromUrl(source.url || '')
+      if (domain) domainBucket[key].add(domain)
+    }
+    const totalCitations = Object.values(citationBucket).reduce((sum, value) => sum + value, 0) || 1
+    return sourceCategoryIds.map(key => ({
+      key,
+      name: sourceCategoryLabels[key],
+      count: citationBucket[key] || 0,
+      articleCount: articleBucket[key] || 0,
+      websiteCount: domainBucket[key].size,
+      percent: Math.round((citationBucket[key] || 0) / totalCitations * 100),
+    }))
+      .filter(item => item.count > 0)
+      .sort((a, b) => b.count - a.count || b.websiteCount - a.websiteCount)
+  })
+
+  function selectSourceCategory(key: 'all' | SourceCategory) {
+    categoryFilter.value = key
+    rankPage.value = 1
+    articlePage.value = 1
+  }
 
   const activeCategoryKeys = computed(() => categoryStats.value.map(item => item.key))
 
@@ -443,6 +481,12 @@ export function useSourceAnalysis(options?: {
       sourceTrendRows: sourceTrendRows.value,
       sourceCategoryLabels: activeSourceCategoryLabels.value,
       sourceCategoryStats: categoryStats.value,
+      onSourceCategoryClick: (key: string) => {
+        selectSourceCategory(key as SourceCategory)
+        requestAnimationFrame(() => {
+          document.getElementById('source-rank-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+      },
     })
   }
 
@@ -543,10 +587,12 @@ export function useSourceAnalysis(options?: {
     brandedCitationShare,
     platformWithSourcesCount,
     categoryStats,
+    typeBreakdownStats,
     activeSourceCategoryLabels,
     categorySummaryLabel,
     topCategory,
     officialRate,
+    selectSourceCategory,
     sourceStructureRows,
     sourceTrendRows,
     analyticsPairMinHeight,

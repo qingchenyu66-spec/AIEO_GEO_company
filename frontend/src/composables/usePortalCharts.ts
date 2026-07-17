@@ -37,6 +37,7 @@ export type PortalChartData = {
   sourceTrendRows: Array<{ label: string; value: number }>
   sourceCategoryLabels: Record<string, string>
   sourceCategoryStats?: Array<{ key: string; name: string; count: number; percent: number }>
+  onSourceCategoryClick?: (key: string) => void
   chartClickHandlers?: {
     mentionTrend?: (payload: { label: string; seriesName?: string }) => void
     sentimentTrend?: (payload: { label: string }) => void
@@ -489,16 +490,18 @@ export function usePortalCharts(refs: PortalChartRefs) {
     const sourceCategoryChart = getChart(refs.sourceCategoryDistribution?.value ?? null)
     if (sourceCategoryChart) {
       const rows = data.sourceCategoryStats || []
+      sourceCategoryChart.off('click')
       if (!rows.length) {
         sourceCategoryChart.clear()
       } else {
         const verticalLegend = rows.length > 3
+        const nameToKey = Object.fromEntries(rows.map(item => [item.name, item.key]))
         sourceCategoryChart.setOption({
           color: rows.map(item => sourceCategoryColor(item.key)),
           tooltip: {
             trigger: 'item',
             formatter: (params: { name?: string; value?: number; percent?: number }) => (
-              `${params.name || ''}：${params.value || 0} 次（${Math.round(params.percent || 0)}%）`
+              `${params.name || ''}：${params.value || 0} 次（${Math.round(params.percent || 0)}%）<br/><span style="opacity:.75">点击筛选该类型</span>`
             ),
           },
           legend: {
@@ -516,7 +519,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
             type: 'pie',
             radius: verticalLegend ? ['34%', '54%'] : ['38%', '58%'],
             center: verticalLegend ? ['38%', '50%'] : ['50%', '46%'],
-            data: rows.map(item => ({ name: item.name, value: item.count })),
+            data: rows.map(item => ({ name: item.name, value: item.count, key: item.key })),
             avoidLabelOverlap: true,
             label: {
               formatter: '{d}%',
@@ -528,6 +531,12 @@ export function usePortalCharts(refs: PortalChartRefs) {
             itemStyle: { borderColor: '#fff', borderWidth: 2 },
           }],
         }, { notMerge: true })
+        if (data.onSourceCategoryClick) {
+          sourceCategoryChart.on('click', (params: { name?: string; data?: { key?: string } }) => {
+            const key = params.data?.key || (params.name ? nameToKey[params.name] : undefined)
+            if (key) data.onSourceCategoryClick?.(key)
+          })
+        }
         requestAnimationFrame(() => sourceCategoryChart.resize())
       }
     }
