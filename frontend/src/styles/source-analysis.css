@@ -336,9 +336,10 @@
   padding: 16px 16px 12px;
 }
 
-.source-type-head,
-.source-type-row {
-  grid-template-columns: minmax(120px, 1.4fr) minmax(120px, 1.2fr) 64px 72px;
+/* 必须压过 .source-table-row 的 5 列模板，否则站名被挤进 44px 只显示一字… */
+.source-table-head.source-type-head,
+.source-table-row.source-type-row {
+  grid-template-columns: minmax(180px, 1.8fr) minmax(140px, 1.2fr) 64px 80px;
   width: 100%;
   border: none;
   background: transparent;
@@ -362,23 +363,28 @@
 
 .source-type-name {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   min-width: 0;
   font-weight: 600;
   color: #153052;
+  line-height: 1.35;
 }
 
 .source-type-name span {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .source-type-dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
+  margin-top: 5px;
   border-radius: 50%;
   background: var(--type-color, #2d6cdf);
 }
