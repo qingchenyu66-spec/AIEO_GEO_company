@@ -47,7 +47,6 @@ const {
   sentimentKeywordTab,
   activeSentimentKeywords,
   activeSentimentKeywordSample,
-  sentimentKeywordSource,
   mentionTrendHiddenCount,
   loadSummary,
   resetFilters,
@@ -320,7 +319,6 @@ function isPlatformActive(code: string) {
             <h3>品牌情绪词</h3>
             <p>
               从本品牌被提及的回答中提取短语 · 点击词条直达快照
-              <span v-if="sentimentKeywordSource === 'deepseek'" class="brand-insights-ai-badge">DeepSeek 提炼</span>
             </p>
           </div>
           <Cloud />
