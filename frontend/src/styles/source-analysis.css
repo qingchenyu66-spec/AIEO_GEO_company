@@ -336,16 +336,17 @@
   padding: 16px 16px 12px;
 }
 
-/* 必须压过 .source-table-row 的 5 列模板，否则站名被挤进 44px 只显示一字… */
+/* 压过 .source-table-row 的 5 列模板；站名/域名按内容自适应，次数占比随内容定宽 */
 .source-table-head.source-type-head,
 .source-table-row.source-type-row {
-  grid-template-columns: minmax(180px, 1.8fr) minmax(140px, 1.2fr) 64px 80px;
+  grid-template-columns: minmax(10rem, 1.6fr) minmax(8rem, 1fr) max-content max-content;
   width: 100%;
   border: none;
   background: transparent;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  column-gap: 16px;
 }
 
 .source-type-row {
@@ -368,15 +369,13 @@
   min-width: 0;
   font-weight: 600;
   color: #153052;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .source-type-name span {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  min-width: 0;
   white-space: normal;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -384,16 +383,18 @@
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: 5px;
+  margin-top: 6px;
   border-radius: 50%;
   background: var(--type-color, #2d6cdf);
 }
 
 .source-type-domain {
+  min-width: 0;
   color: #2d6cdf;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: normal;
+  line-height: 1.4;
 }
 
 .source-type-percent {
@@ -408,10 +409,16 @@
   font-size: 12px;
   font-style: normal;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.source-type-row > strong {
+  white-space: nowrap;
+  justify-self: end;
 }
 
 .source-website-short-list {
-  max-height: 420px;
+  max-height: 480px;
   overflow-y: auto;
 }
 
@@ -733,6 +740,10 @@
   }
   .source-table-head,
   .source-table-row {
+    grid-template-columns: 1fr;
+  }
+  .source-table-head.source-type-head,
+  .source-table-row.source-type-row {
     grid-template-columns: 1fr;
   }
   .source-table-head {
