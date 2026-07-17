@@ -445,15 +445,24 @@ def _source_filter_terms(asset: BrandAsset | None) -> list[str]:
 def _citation_site_label(source: dict[str, Any]) -> str | None:
     """引用里的中文站名；若 site 实际是 URL/域名则返回 None。"""
     raw = str(source.get("site") or "").strip()
-    if not raw:
-        return None
-    lower = raw.lower()
-    if "://" in lower:
-        return None
-    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in raw)
-    if "." in raw and not has_cjk:
-        return None
-    return raw
+    if raw:
+        lower = raw.lower()
+        if "://" not in lower:
+            has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in raw)
+            if has_cjk or ("." not in raw and len(raw) <= 40):
+                # 多标签如「广告传媒,户外大屏」取第一段
+                first = re.split(r"[,，/|、]", raw, maxsplit=1)[0].strip()
+                if first:
+                    return first[:40]
+    # site 为空时，从标题尾部「_站名 / - 站名」兜底
+    title = str(source.get("title") or "").strip()
+    if title:
+        m = re.search(r"(?:_|[-–—]\s*)([\u4e00-\u9fffA-Za-z0-9·]{2,24})$", title)
+        if m and any("\u4e00" <= ch <= "\u9fff" for ch in m.group(1)):
+            return m.group(1)
+        if len(title) <= 16 and any("\u4e00" <= ch <= "\u9fff" for ch in title) and "://" not in title:
+            return title
+    return None
 
 
 def _is_valid_citation_source(source: dict[str, Any]) -> bool:

@@ -48,7 +48,6 @@ export type WebsiteRankRow = {
 }
 
 const RANK_PAGE_SIZE = 20
-const WEBSITE_SHORT_LIST_SIZE = 15
 
 /** 常见域名中文名兜底（引用未带 site 字段时） */
 const KNOWN_SITE_LABELS: Record<string, string> = {
@@ -65,6 +64,16 @@ const KNOWN_SITE_LABELS: Record<string, string> = {
   'weibo.com': '微博',
   'xiaohongshu.com': '小红书',
   'bilibili.com': '哔哩哔哩',
+  'toutiao.com': '今日头条',
+  'm.toutiao.com': '今日头条',
+  'ifeng.com': '凤凰网',
+  'i.ifeng.com': '手机凤凰网',
+  'qq.com': '腾讯网',
+  'news.qq.com': '腾讯新闻',
+  'dzwww.com': '大众网',
+  'zgswcn.com': '中国商报网',
+  'pchouse.com.cn': 'PChouse太平洋家居网',
+  'm.pchouse.com.cn': 'PChouse太平洋家居网',
 }
 
 function errorMessage(error: unknown) {
@@ -86,6 +95,10 @@ function isChineseSiteLabel(value: string) {
 function knownSiteLabel(domain: string) {
   if (KNOWN_SITE_LABELS[domain]) return KNOWN_SITE_LABELS[domain]
   const parts = domain.split('.')
+  for (let i = 1; i < parts.length - 1; i += 1) {
+    const parent = parts.slice(i).join('.')
+    if (KNOWN_SITE_LABELS[parent]) return KNOWN_SITE_LABELS[parent]
+  }
   if (parts.length > 2) {
     const parent = parts.slice(-2).join('.')
     if (KNOWN_SITE_LABELS[parent]) return KNOWN_SITE_LABELS[parent]
@@ -93,9 +106,19 @@ function knownSiteLabel(domain: string) {
   return ''
 }
 
+/** 从文章标题尾部兜底站名，如「…_大众网」「… - 中国商报网」 */
+function siteLabelFromTitle(title: string) {
+  const text = (title || '').trim()
+  if (!text) return ''
+  const tail = text.match(/(?:_|[-–—]\s*)([\u4e00-\u9fffA-Za-z0-9·]{2,24})$/)
+  if (tail?.[1] && isChineseSiteLabel(tail[1])) return tail[1]
+  if (text.length <= 16 && isChineseSiteLabel(text) && !/[，。；：?]/.test(text)) return text
+  return ''
+}
+
 function resolveSiteDisplayName(domain: string, siteCandidates: string[]) {
   for (const candidate of siteCandidates) {
-    const text = (candidate || '').trim()
+    const text = (candidate || '').trim().split(/[,，/|、]/)[0]?.trim() || ''
     if (text && isChineseSiteLabel(text)) return text
   }
   return knownSiteLabel(domain) || domain
@@ -156,7 +179,13 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
     entry.categoryCounts[row.category] = (entry.categoryCounts[row.category] || 0) + row.count
     const siteLabel = (row.site || '').trim()
     if (siteLabel && isChineseSiteLabel(siteLabel)) {
-      entry.siteVotes.set(siteLabel, (entry.siteVotes.get(siteLabel) || 0) + row.count)
+      const first = siteLabel.split(/[,，/|、]/)[0]?.trim() || siteLabel
+      entry.siteVotes.set(first, (entry.siteVotes.get(first) || 0) + row.count)
+    } else {
+      const fromTitle = siteLabelFromTitle(row.title || '')
+      if (fromTitle) {
+        entry.siteVotes.set(fromTitle, (entry.siteVotes.get(fromTitle) || 0) + row.count)
+      }
     }
     if (row.count > entry.topArticleCount) {
       entry.topArticleCount = row.count
@@ -384,11 +413,11 @@ export function useSourceAnalysis(options?: {
       .sort((a, b) => b.count - a.count)
   })
 
-  /** 高频网站短名单（与下方排行同数据源，截取 Top N） */
+  /** 引用网站全量列表（与下方排行同数据源；面板内滚动） */
   const websiteShortList = computed(() => {
     const rows = activeRankWebsites.value
     const total = rows.reduce((sum, item) => sum + item.count, 0) || 1
-    return rows.slice(0, WEBSITE_SHORT_LIST_SIZE).map(item => ({
+    return rows.map(item => ({
       ...item,
       percent: Math.round((item.count / total) * 10000) / 100,
     }))

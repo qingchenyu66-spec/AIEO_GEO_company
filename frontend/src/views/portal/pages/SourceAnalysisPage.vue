@@ -277,7 +277,7 @@ const categoryOptions = [
         <div class="source-panel-head">
           <div>
             <h3>引用网站</h3>
-            <p>按引用次数排序的网站短名单；点击查看该站文章明细</p>
+            <p>全部网站按引用次数排序；优先显示中文站名，点击查看文章明细</p>
           </div>
           <button
             v-if="domainFilter"

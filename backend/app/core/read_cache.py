@@ -30,7 +30,7 @@ CACHE_BUILD_POLL_INTERVAL = 0.15
 
 
 def monitor_summary_cache_key(identity_type: str, tenant_key: str | int) -> str:
-    return f"monitor:summary:v5:{identity_type}:{tenant_key}"
+    return f"monitor:summary:v6:{identity_type}:{tenant_key}"
 
 
 def source_stats_config_fingerprint(
@@ -45,7 +45,8 @@ def source_stats_config_fingerprint(
 
 
 def source_stats_cache_key(tenant_id: int, cutoff_day: str, config_fp: str = "default") -> str:
-    return f"monitor:source-stats:v4:{tenant_id}:{cutoff_day}:{config_fp}"
+    # v5：聚合行带 site 中文站名；升版本强制丢弃无 site 的旧缓存
+    return f"monitor:source-stats:v5:{tenant_id}:{cutoff_day}:{config_fp}"
 
 
 def competitor_compare_cache_key(
@@ -178,6 +179,7 @@ def invalidate_dashboard_caches(tenant_id: int | None = None) -> None:
         delete_cache_pattern(f"monitor:source-stats:v2:{tenant_id}:*")
         delete_cache_pattern(f"monitor:source-stats:v3:{tenant_id}:*")
         delete_cache_pattern(f"monitor:source-stats:v4:{tenant_id}:*")
+        delete_cache_pattern(f"monitor:source-stats:v5:{tenant_id}:*")
         delete_cache_pattern(f"analytics:competitor-compare:v1:*:{tenant_id}:*")
         delete_cache_pattern(f"analytics:sentiment-keywords:v1:*:{tenant_id}:*")
     delete_cache(monitor_summary_cache_key("PLATFORM", "platform"))

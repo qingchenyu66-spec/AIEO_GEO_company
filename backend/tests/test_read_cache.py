@@ -63,8 +63,9 @@ def test_invalidate_dashboard_caches_deletes_summary_and_overview() -> None:
     assert "monitor:source-stats:v2:6:*" in patterns
     assert "monitor:source-stats:v3:6:*" in patterns
     assert "monitor:source-stats:v4:6:*" in patterns
+    assert "monitor:source-stats:v5:6:*" in patterns
     assert "analytics:competitor-compare:v1:*:6:*" in patterns
 
 
 def test_source_stats_cache_key_includes_cutoff_day() -> None:
-    assert source_stats_cache_key(6, "2026-07-13", "abc123") == "monitor:source-stats:v4:6:2026-07-13:abc123"
+    assert source_stats_cache_key(6, "2026-07-13", "abc123") == "monitor:source-stats:v5:6:2026-07-13:abc123"
