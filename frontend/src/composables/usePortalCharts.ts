@@ -532,8 +532,10 @@ export function usePortalCharts(refs: PortalChartRefs) {
           }],
         }, { notMerge: true })
         if (data.onSourceCategoryClick) {
-          sourceCategoryChart.on('click', (params: { name?: string; data?: { key?: string } }) => {
-            const key = params.data?.key || (params.name ? nameToKey[params.name] : undefined)
+          sourceCategoryChart.on('click', (params: unknown) => {
+            const p = params as { name?: string; data?: { key?: string } | null }
+            const key = (p.data && typeof p.data === 'object' ? p.data.key : undefined)
+              || (p.name ? nameToKey[p.name] : undefined)
             if (key) data.onSourceCategoryClick?.(key)
           })
         }
