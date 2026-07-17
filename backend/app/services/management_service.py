@@ -99,9 +99,10 @@ def _resolve_tenant(db: Session, item: UserIdentityCreateItem, owner_user_id: in
     if item.identity_type != "CUSTOMER":
         return None
     if item.tenant_id is not None:
-        tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id, Tenant.status.is_(True), Tenant.deleted.is_(False)))
+        # ponytail: 未开服/停服仍可绑账号（开服由 login/dependencies 拦）；与按名称解析一致
+        tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id, Tenant.deleted.is_(False)))
         if tenant is None:
-            raise ValueError("所属企业不存在、未开始或已停服")
+            raise ValueError("所属企业不存在或已删除")
         return tenant
     if not item.tenant_name or not item.tenant_name.strip():
         raise ValueError("客户企业端账号必须选择或输入所属企业")
