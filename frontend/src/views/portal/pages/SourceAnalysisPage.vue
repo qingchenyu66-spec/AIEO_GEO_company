@@ -277,7 +277,7 @@ const categoryOptions = [
         <div class="source-panel-head">
           <div>
             <h3>引用网站</h3>
-            <p>全部网站按引用次数排序；优先显示中文站名，点击查看文章明细</p>
+            <p>按注册域合并；发布方与域名对齐，文中主体单独标注</p>
           </div>
           <button
             v-if="domainFilter"
@@ -293,7 +293,7 @@ const categoryOptions = [
         </div>
         <template v-else>
           <div class="source-table-head source-type-head">
-            <span>网站名称</span>
+            <span>发布方</span>
             <span>域名</span>
             <span>次数</span>
             <span>占比</span>
@@ -310,7 +310,10 @@ const categoryOptions = [
             >
               <div class="source-type-name">
                 <i class="source-type-dot" aria-hidden="true" />
-                <span>{{ item.displayName }}</span>
+                <div class="source-type-name-text">
+                  <span>{{ item.displayName }}</span>
+                  <small v-if="item.subjectHint">文中主体：{{ item.subjectHint }}</small>
+                </div>
               </div>
               <span class="source-type-domain">{{ item.domain }}</span>
               <strong>{{ item.count }}</strong>
@@ -371,7 +374,10 @@ const categoryOptions = [
             >
               {{ site.displayName }}
             </a>
-            <small>{{ site.domain }} · {{ site.platforms.length }} 个平台引用</small>
+            <small>
+              {{ site.domain }} · {{ site.platforms.length }} 个平台引用
+              <template v-if="site.subjectHint"> · 文中主体：{{ site.subjectHint }}</template>
+            </small>
           </div>
           <div class="source-table-tags">
             <i>{{ sourceCategoryLabel(site.category) }}</i>

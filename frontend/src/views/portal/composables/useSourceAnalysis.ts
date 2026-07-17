@@ -34,9 +34,12 @@ export type SourceRow = MonitorSummary['source_stats'][number] & {
 }
 
 export type WebsiteRankRow = {
+  /** 注册域，如 163.com（已合并 m.163.com / c.m.163.com） */
   domain: string
-  /** 中文站名；无可靠站名时等于 domain */
+  /** 发布方名称（域名词典优先；不可靠时退回域名） */
   displayName: string
+  /** 文中主体（露出词 / 被引用串里的品牌向站点名） */
+  subjectHint: string
   count: number
   articleCount: number
   category: SourceCategory
@@ -49,32 +52,40 @@ export type WebsiteRankRow = {
 
 const RANK_PAGE_SIZE = 20
 
-/** 常见域名中文名兜底（引用未带 site 字段时） */
+/** 多段公共后缀：取 eTLD+1 时多拿一级 */
+const MULTI_PART_TLDS = new Set([
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'co.uk', 'com.hk', 'com.tw',
+])
+
+/** 注册域 → 发布方（方案 A 主路径） */
 const KNOWN_SITE_LABELS: Record<string, string> = {
-  'to8to.com': '土巴兔装修网',
+  '163.com': '网易',
+  'toutiao.com': '今日头条',
+  'sohu.com': '搜狐',
+  'sina.com.cn': '新浪',
+  'qq.com': '腾讯',
+  'weibo.com': '微博',
+  'zhihu.com': '知乎',
   'douyin.com': '抖音',
   'iesdouyin.com': '抖音',
-  'sohu.com': '手机搜狐网',
-  'm.sohu.com': '手机搜狐网',
+  'xiaohongshu.com': '小红书',
+  'bilibili.com': '哔哩哔哩',
+  'baidu.com': '百度',
+  'baike.baidu.com': '百度百科',
+  'ifeng.com': '凤凰网',
+  'smzdm.com': '什么值得买',
+  'to8to.com': '土巴兔装修网',
   'shangyexinzhi.com': '商业新知',
   'lieju.com': '济南列举网',
   'liebiao.com': '列表网',
-  'zhihu.com': '知乎',
-  'baike.baidu.com': '百度百科',
-  'weibo.com': '微博',
-  'xiaohongshu.com': '小红书',
-  'bilibili.com': '哔哩哔哩',
-  'toutiao.com': '今日头条',
-  'm.toutiao.com': '今日头条',
-  'ifeng.com': '凤凰网',
-  'i.ifeng.com': '手机凤凰网',
-  'qq.com': '腾讯网',
-  'news.qq.com': '腾讯新闻',
   'dzwww.com': '大众网',
   'zgswcn.com': '中国商报网',
   'pchouse.com.cn': 'PChouse太平洋家居网',
-  'm.pchouse.com.cn': 'PChouse太平洋家居网',
+  'tianyancha.com': '天眼查',
+  'qcc.com': '企查查',
 }
+
+const PUBLISHER_NAME_HINT = /网|新闻|日报|晚报|时报|媒体|资讯|头条|百科|论坛|博客|视频|电台|电视|客户端|周刊|杂志|值得买/
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -88,40 +99,89 @@ function domainFromUrl(url: string) {
   }
 }
 
+/** m.163.com / c.m.163.com → 163.com；m.pchouse.com.cn → pchouse.com.cn */
+function registrableDomain(hostOrUrl: string) {
+  const host = (hostOrUrl.includes('://') ? domainFromUrl(hostOrUrl) : hostOrUrl)
+    .replace(/^www\./i, '')
+    .toLowerCase()
+    .trim()
+  if (!host) return ''
+  const parts = host.split('.').filter(Boolean)
+  if (parts.length <= 2) return host
+  const last2 = parts.slice(-2).join('.')
+  if (MULTI_PART_TLDS.has(last2) && parts.length >= 3) {
+    return parts.slice(-3).join('.')
+  }
+  return last2
+}
+
 function isChineseSiteLabel(value: string) {
   return /[\u4e00-\u9fff]/.test(value) && !/^https?:\/\//i.test(value.trim())
 }
 
-function knownSiteLabel(domain: string) {
+function knownPublisherLabel(domain: string) {
   if (KNOWN_SITE_LABELS[domain]) return KNOWN_SITE_LABELS[domain]
-  const parts = domain.split('.')
-  for (let i = 1; i < parts.length - 1; i += 1) {
-    const parent = parts.slice(i).join('.')
-    if (KNOWN_SITE_LABELS[parent]) return KNOWN_SITE_LABELS[parent]
-  }
-  if (parts.length > 2) {
-    const parent = parts.slice(-2).join('.')
-    if (KNOWN_SITE_LABELS[parent]) return KNOWN_SITE_LABELS[parent]
+  // 兼容历史子域词条
+  for (const [key, label] of Object.entries(KNOWN_SITE_LABELS)) {
+    if (domain === key || domain.endsWith(`.${key}`)) return label
   }
   return ''
 }
 
-/** 从文章标题尾部兜底站名，如「…_大众网」「… - 中国商报网」 */
-function siteLabelFromTitle(title: string) {
-  const text = (title || '').trim()
-  if (!text) return ''
-  const tail = text.match(/(?:_|[-–—]\s*)([\u4e00-\u9fffA-Za-z0-9·]{2,24})$/)
-  if (tail?.[1] && isChineseSiteLabel(tail[1])) return tail[1]
-  if (text.length <= 16 && isChineseSiteLabel(text) && !/[，。；：?]/.test(text)) return text
-  return ''
+function normalizeSiteCandidate(raw: string) {
+  return (raw || '').trim().split(/[,，/|、]/)[0]?.trim() || ''
 }
 
-function resolveSiteDisplayName(domain: string, siteCandidates: string[]) {
-  for (const candidate of siteCandidates) {
-    const text = (candidate || '').trim().split(/[,，/|、]/)[0]?.trim() || ''
-    if (text && isChineseSiteLabel(text)) return text
+function isBrandLikeName(name: string, brandTokens: string[]) {
+  const text = name.trim()
+  if (!text) return false
+  if (/集团|有限公司|股份有限|广告投放|控股/.test(text)) return true
+  const lower = text.toLowerCase()
+  for (const token of brandTokens) {
+    const t = token.trim().toLowerCase()
+    if (t.length < 2) continue
+    if (lower.includes(t) || t.includes(lower)) return true
   }
-  return knownSiteLabel(domain) || domain
+  return false
+}
+
+function looksLikePublisherName(name: string, brandTokens: string[]) {
+  if (!isChineseSiteLabel(name)) return false
+  if (isBrandLikeName(name, brandTokens)) return false
+  if (PUBLISHER_NAME_HINT.test(name)) return true
+  // 短名且不像公司主体时，谨慎采信（如「博客园」）
+  return name.length <= 10 && !/公司|集团|投放|传媒$/.test(name)
+}
+
+function resolvePublisherAndSubject(
+  domain: string,
+  siteVotes: Array<[string, number]>,
+  exposureTerms: string[],
+  brandTokens: string[],
+) {
+  const known = knownPublisherLabel(domain)
+  const publisherFromVotes = siteVotes
+    .map(([name]) => normalizeSiteCandidate(name))
+    .filter(name => looksLikePublisherName(name, brandTokens))
+  const displayName = known || publisherFromVotes[0] || domain
+
+  const subjectFromExposure = exposureTerms.map(t => t.trim()).filter(Boolean)
+  const subjectFromVotes = siteVotes
+    .map(([name]) => normalizeSiteCandidate(name))
+    .filter(name => (
+      name
+      && name !== displayName
+      && isChineseSiteLabel(name)
+      && (isBrandLikeName(name, brandTokens) || !looksLikePublisherName(name, brandTokens))
+    ))
+  const subjects = [...subjectFromExposure, ...subjectFromVotes]
+    .filter((name, index, arr) => arr.indexOf(name) === index)
+    .filter(name => name !== displayName)
+    .slice(0, 3)
+  return {
+    displayName,
+    subjectHint: subjects.join('、'),
+  }
 }
 
 function sliceTrendPoints<T extends { label: string; value: number }>(points: T[], days: number) {
@@ -144,7 +204,7 @@ function mapSourceRows(
   }))
 }
 
-function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
+function aggregateByWebsite(rows: SourceRow[], brandTokens: string[] = []): WebsiteRankRow[] {
   type Acc = WebsiteRankRow & {
     categoryCounts: Record<string, number>
     topArticleCount: number
@@ -152,13 +212,15 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
   }
   const map = new Map<string, Acc>()
   for (const row of rows) {
-    const domain = domainFromUrl(row.url || '')
+    const host = domainFromUrl(row.url || '')
+    const domain = registrableDomain(host)
     if (!domain) continue
     let entry = map.get(domain)
     if (!entry) {
       entry = {
         domain,
         displayName: domain,
+        subjectHint: '',
         count: 0,
         articleCount: 0,
         category: row.category,
@@ -177,15 +239,10 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
     entry.articleCount += 1
     entry.has_exposure = entry.has_exposure || row.has_exposure
     entry.categoryCounts[row.category] = (entry.categoryCounts[row.category] || 0) + row.count
-    const siteLabel = (row.site || '').trim()
+    // 方案 A：仅采信引用 site 字段投票；标题尾部不再充当发布方
+    const siteLabel = normalizeSiteCandidate(row.site || '')
     if (siteLabel && isChineseSiteLabel(siteLabel)) {
-      const first = siteLabel.split(/[,，/|、]/)[0]?.trim() || siteLabel
-      entry.siteVotes.set(first, (entry.siteVotes.get(first) || 0) + row.count)
-    } else {
-      const fromTitle = siteLabelFromTitle(row.title || '')
-      if (fromTitle) {
-        entry.siteVotes.set(fromTitle, (entry.siteVotes.get(fromTitle) || 0) + row.count)
-      }
+      entry.siteVotes.set(siteLabel, (entry.siteVotes.get(siteLabel) || 0) + row.count)
     }
     if (row.count > entry.topArticleCount) {
       entry.topArticleCount = row.count
@@ -206,12 +263,17 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
   return Array.from(map.values())
     .map(({ categoryCounts, topArticleCount: _top, siteVotes, ...row }) => {
       const bestCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0]?.[0]
-      const votedSites = Array.from(siteVotes.entries())
-        .sort((a, b) => b[1] - a[1])
-        .map(([name]) => name)
+      const voted = Array.from(siteVotes.entries()).sort((a, b) => b[1] - a[1])
+      const naming = resolvePublisherAndSubject(
+        row.domain,
+        voted,
+        row.exposure_terms,
+        brandTokens,
+      )
       return {
         ...row,
-        displayName: resolveSiteDisplayName(row.domain, votedSites),
+        displayName: naming.displayName,
+        subjectHint: naming.subjectHint,
         category: (bestCategory as SourceCategory) || row.category,
         exposure_terms: row.exposure_terms.slice(0, 8),
         platforms: row.platforms.slice(0, 6),
@@ -317,8 +379,28 @@ export function useSourceAnalysis(options?: {
   const filteredSources = computed(() => applySourceFilters(brandedSources.value))
   const filteredAllSources = computed(() => applySourceFilters(allCitationSources.value))
 
-  const brandedWebsites = computed(() => aggregateByWebsite(filteredSources.value))
-  const allWebsites = computed(() => aggregateByWebsite(filteredAllSources.value))
+  const brandNameTokens = computed(() => {
+    const asset = brandAsset.value
+    const tokens = new Set<string>()
+    for (const key of ['brand_name', 'brand_short_name', 'company_full_name'] as const) {
+      const text = String(asset?.[key] || '').trim()
+      if (text) tokens.add(text)
+    }
+    for (const alias of asset?.aliases || []) {
+      const text = String(alias || '').trim()
+      if (text) tokens.add(text)
+    }
+    for (const group of asset?.keyword_groups || []) {
+      for (const term of group.exposure_terms || []) {
+        const text = String(term || '').trim()
+        if (text) tokens.add(text)
+      }
+    }
+    return Array.from(tokens)
+  })
+
+  const brandedWebsites = computed(() => aggregateByWebsite(filteredSources.value, brandNameTokens.value))
+  const allWebsites = computed(() => aggregateByWebsite(filteredAllSources.value, brandNameTokens.value))
 
   const activeRankWebsites = computed(() => (
     rankTab.value === 'all' ? allWebsites.value : brandedWebsites.value
@@ -328,7 +410,7 @@ export function useSourceAnalysis(options?: {
     const rows = rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
     const domain = domainFilter.value.trim().toLowerCase()
     if (!domain) return rows
-    return rows.filter(source => domainFromUrl(source.url || '').toLowerCase() === domain)
+    return rows.filter(source => registrableDomain(domainFromUrl(source.url || '')).toLowerCase() === domain)
   })
 
   const articlePage = ref(1)

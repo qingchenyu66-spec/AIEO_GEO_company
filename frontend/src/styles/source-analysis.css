@@ -372,11 +372,27 @@
   line-height: 1.4;
 }
 
-.source-type-name span {
+.source-type-name-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.source-type-name-text span {
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.source-type-name-text small {
+  color: #8aa0ba;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .source-type-dot {
