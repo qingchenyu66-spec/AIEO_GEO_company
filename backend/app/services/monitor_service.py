@@ -442,6 +442,20 @@ def _source_filter_terms(asset: BrandAsset | None) -> list[str]:
     return list(result)
 
 
+def _citation_site_label(source: dict[str, Any]) -> str | None:
+    """引用里的中文站名；若 site 实际是 URL/域名则返回 None。"""
+    raw = str(source.get("site") or "").strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    if "://" in lower:
+        return None
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in raw)
+    if "." in raw and not has_cjk:
+        return None
+    return raw
+
+
 def _is_valid_citation_source(source: dict[str, Any]) -> bool:
     """判断是否为可纳入统计的 AI 引用来源（排除搜索热榜等噪音）。"""
     title_site = " ".join(str(source.get(key) or "") for key in ("title", "site")).lower()
@@ -536,6 +550,7 @@ def _aggregate_source_stats_pair(
             {
                 "title": source.get("title") or source.get("site") or key,
                 "url": url,
+                "site": _citation_site_label(source),
                 "count": 0,
                 "platforms": [],
                 "exposure_terms": [],
@@ -544,6 +559,10 @@ def _aggregate_source_stats_pair(
             },
         )
         row["count"] += 1
+        if not row.get("site"):
+            site_label = _citation_site_label(source)
+            if site_label:
+                row["site"] = site_label
         if item.platform and item.platform not in row["platforms"]:
             row["platforms"].append(item.platform)
         for term in matched_exposure:

@@ -35,6 +35,8 @@ export type SourceRow = MonitorSummary['source_stats'][number] & {
 
 export type WebsiteRankRow = {
   domain: string
+  /** 中文站名；无可靠站名时等于 domain */
+  displayName: string
   count: number
   articleCount: number
   category: SourceCategory
@@ -46,6 +48,24 @@ export type WebsiteRankRow = {
 }
 
 const RANK_PAGE_SIZE = 20
+const WEBSITE_SHORT_LIST_SIZE = 15
+
+/** 常见域名中文名兜底（引用未带 site 字段时） */
+const KNOWN_SITE_LABELS: Record<string, string> = {
+  'to8to.com': '土巴兔装修网',
+  'douyin.com': '抖音',
+  'iesdouyin.com': '抖音',
+  'sohu.com': '手机搜狐网',
+  'm.sohu.com': '手机搜狐网',
+  'shangyexinzhi.com': '商业新知',
+  'lieju.com': '济南列举网',
+  'liebiao.com': '列表网',
+  'zhihu.com': '知乎',
+  'baike.baidu.com': '百度百科',
+  'weibo.com': '微博',
+  'xiaohongshu.com': '小红书',
+  'bilibili.com': '哔哩哔哩',
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -57,6 +77,28 @@ function domainFromUrl(url: string) {
   } catch {
     return url.replace(/^https?:\/\//, '').split('/')[0]?.replace(/^www\./, '') || url
   }
+}
+
+function isChineseSiteLabel(value: string) {
+  return /[\u4e00-\u9fff]/.test(value) && !/^https?:\/\//i.test(value.trim())
+}
+
+function knownSiteLabel(domain: string) {
+  if (KNOWN_SITE_LABELS[domain]) return KNOWN_SITE_LABELS[domain]
+  const parts = domain.split('.')
+  if (parts.length > 2) {
+    const parent = parts.slice(-2).join('.')
+    if (KNOWN_SITE_LABELS[parent]) return KNOWN_SITE_LABELS[parent]
+  }
+  return ''
+}
+
+function resolveSiteDisplayName(domain: string, siteCandidates: string[]) {
+  for (const candidate of siteCandidates) {
+    const text = (candidate || '').trim()
+    if (text && isChineseSiteLabel(text)) return text
+  }
+  return knownSiteLabel(domain) || domain
 }
 
 function sliceTrendPoints<T extends { label: string; value: number }>(points: T[], days: number) {
@@ -80,7 +122,11 @@ function mapSourceRows(
 }
 
 function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
-  type Acc = WebsiteRankRow & { categoryCounts: Record<string, number>; topArticleCount: number }
+  type Acc = WebsiteRankRow & {
+    categoryCounts: Record<string, number>
+    topArticleCount: number
+    siteVotes: Map<string, number>
+  }
   const map = new Map<string, Acc>()
   for (const row of rows) {
     const domain = domainFromUrl(row.url || '')
@@ -89,6 +135,7 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
     if (!entry) {
       entry = {
         domain,
+        displayName: domain,
         count: 0,
         articleCount: 0,
         category: row.category,
@@ -99,6 +146,7 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
         questions: [],
         categoryCounts: {},
         topArticleCount: row.count,
+        siteVotes: new Map(),
       }
       map.set(domain, entry)
     }
@@ -106,6 +154,10 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
     entry.articleCount += 1
     entry.has_exposure = entry.has_exposure || row.has_exposure
     entry.categoryCounts[row.category] = (entry.categoryCounts[row.category] || 0) + row.count
+    const siteLabel = (row.site || '').trim()
+    if (siteLabel && isChineseSiteLabel(siteLabel)) {
+      entry.siteVotes.set(siteLabel, (entry.siteVotes.get(siteLabel) || 0) + row.count)
+    }
     if (row.count > entry.topArticleCount) {
       entry.topArticleCount = row.count
       entry.sampleUrl = row.url
@@ -123,10 +175,14 @@ function aggregateByWebsite(rows: SourceRow[]): WebsiteRankRow[] {
     }
   }
   return Array.from(map.values())
-    .map(({ categoryCounts, topArticleCount: _top, ...row }) => {
+    .map(({ categoryCounts, topArticleCount: _top, siteVotes, ...row }) => {
       const bestCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0]?.[0]
+      const votedSites = Array.from(siteVotes.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name)
       return {
         ...row,
+        displayName: resolveSiteDisplayName(row.domain, votedSites),
         category: (bestCategory as SourceCategory) || row.category,
         exposure_terms: row.exposure_terms.slice(0, 8),
         platforms: row.platforms.slice(0, 6),
@@ -328,33 +384,14 @@ export function useSourceAnalysis(options?: {
       .sort((a, b) => b.count - a.count)
   })
 
-  /** 按类型统计（不受类型筛选自身影响，便于下钻前看全貌） */
-  const typeBreakdownStats = computed(() => {
-    const base = rankTab.value === 'all' ? allCitationSources.value : brandedSources.value
-    const rows = applySourceFilters(base, { ignoreCategory: true })
-    const citationBucket = createEmptyCategoryBucket()
-    const articleBucket = createEmptyCategoryBucket()
-    const domainBucket = Object.fromEntries(
-      sourceCategoryIds.map(key => [key, new Set<string>()]),
-    ) as Record<SourceCategory, Set<string>>
-    for (const source of rows) {
-      const key = source.category
-      citationBucket[key] = (citationBucket[key] || 0) + source.count
-      articleBucket[key] = (articleBucket[key] || 0) + 1
-      const domain = domainFromUrl(source.url || '')
-      if (domain) domainBucket[key].add(domain)
-    }
-    const totalCitations = Object.values(citationBucket).reduce((sum, value) => sum + value, 0) || 1
-    return sourceCategoryIds.map(key => ({
-      key,
-      name: sourceCategoryLabels[key],
-      count: citationBucket[key] || 0,
-      articleCount: articleBucket[key] || 0,
-      websiteCount: domainBucket[key].size,
-      percent: Math.round((citationBucket[key] || 0) / totalCitations * 100),
+  /** 高频网站短名单（与下方排行同数据源，截取 Top N） */
+  const websiteShortList = computed(() => {
+    const rows = activeRankWebsites.value
+    const total = rows.reduce((sum, item) => sum + item.count, 0) || 1
+    return rows.slice(0, WEBSITE_SHORT_LIST_SIZE).map(item => ({
+      ...item,
+      percent: Math.round((item.count / total) * 10000) / 100,
     }))
-      .filter(item => item.count > 0)
-      .sort((a, b) => b.count - a.count || b.websiteCount - a.websiteCount)
   })
 
   function selectSourceCategory(key: 'all' | SourceCategory) {
@@ -606,7 +643,7 @@ export function useSourceAnalysis(options?: {
     brandedCitationShare,
     platformWithSourcesCount,
     categoryStats,
-    typeBreakdownStats,
+    websiteShortList,
     activeSourceCategoryLabels,
     categorySummaryLabel,
     topCategory,

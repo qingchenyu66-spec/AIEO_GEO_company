@@ -23,7 +23,6 @@ const pageMenuName = computed(() => (
 const structureChartRef = ref<HTMLDivElement | null>(null)
 const categoryChartRef = ref<HTMLDivElement | null>(null)
 const trendChartRef = ref<HTMLDivElement | null>(null)
-const rankSectionRef = ref<HTMLElement | null>(null)
 
 const {
   brandAsset,
@@ -56,7 +55,7 @@ const {
   brandedCitationShare,
   platformWithSourcesCount,
   categoryStats,
-  typeBreakdownStats,
+  websiteShortList,
   categorySummaryLabel,
   topCategory,
   officialRate,
@@ -68,7 +67,6 @@ const {
   loadSummary,
   resetFilters,
   setRankTab,
-  selectSourceCategory,
   selectWebsiteDomain,
   clearWebsiteDomain,
   exportCsv,
@@ -77,10 +75,11 @@ const {
   domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
 
-async function openTypeDetail(key: typeof categoryFilter.value) {
-  selectSourceCategory(key)
+async function openWebsiteArticles(domain: string) {
+  if (!domain) return
+  selectWebsiteDomain(domain)
   await nextTick()
-  rankSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  document.getElementById('source-article-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 const rankPageLabel = computed(() => {
@@ -99,13 +98,6 @@ const articlePageLabel = computed(() => {
   const scope = rankTab.value === 'all' ? '全部引用' : '含露出词'
   return `${scope} · 第 ${start}-${end} 条 / 共 ${total} 条`
 })
-
-async function openWebsiteArticles(domain: string) {
-  if (!domain) return
-  selectWebsiteDomain(domain)
-  await nextTick()
-  document.getElementById('source-article-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
   { value: '7', label: '近 7 天' },
@@ -284,51 +276,51 @@ const categoryOptions = [
       <article class="source-panel source-table-panel source-type-panel">
         <div class="source-panel-head">
           <div>
-            <h3>按类型统计</h3>
-            <p>点击类型行筛选下方网站与文章明细</p>
+            <h3>引用网站</h3>
+            <p>按引用次数排序的网站短名单；点击查看该站文章明细</p>
           </div>
           <button
-            v-if="categoryFilter !== 'all'"
+            v-if="domainFilter"
             type="button"
             class="tiny-btn"
-            @click="openTypeDetail('all')"
+            @click="clearWebsiteDomain"
           >
-            清除类型筛选
+            清除网站筛选
           </button>
         </div>
-        <div v-if="!typeBreakdownStats.length" class="mini-empty chart-empty" style="padding: 0 16px 16px">
-          当前筛选下暂无类型统计。
+        <div v-if="!websiteShortList.length" class="mini-empty chart-empty" style="padding: 0 16px 16px">
+          当前筛选下暂无网站。
         </div>
         <template v-else>
           <div class="source-table-head source-type-head">
-            <span>类型</span>
-            <span>站数</span>
-            <span>篇数</span>
+            <span>网站名称</span>
+            <span>域名</span>
             <span>次数</span>
             <span>占比</span>
           </div>
-          <button
-            v-for="item in typeBreakdownStats"
-            :key="item.key"
-            type="button"
-            class="source-table-row source-type-row"
-            :class="{ active: categoryFilter === item.key }"
-            :style="{ '--type-color': sourceCategoryColor(item.key) }"
-            @click="openTypeDetail(item.key)"
-          >
-            <div class="source-type-name">
-              <i class="source-type-dot" aria-hidden="true" />
-              <span>{{ item.name }}</span>
-            </div>
-            <span>{{ item.websiteCount }}</span>
-            <span>{{ item.articleCount }}</span>
-            <strong>{{ item.count }}</strong>
-            <em class="source-type-percent">{{ item.percent }}%</em>
-          </button>
+          <div class="source-website-short-list">
+            <button
+              v-for="item in websiteShortList"
+              :key="item.domain"
+              type="button"
+              class="source-table-row source-type-row"
+              :class="{ active: domainFilter === item.domain }"
+              :style="{ '--type-color': sourceCategoryColor(item.category) }"
+              @click="openWebsiteArticles(item.domain)"
+            >
+              <div class="source-type-name">
+                <i class="source-type-dot" aria-hidden="true" />
+                <span>{{ item.displayName }}</span>
+              </div>
+              <span class="source-type-domain">{{ item.domain }}</span>
+              <strong>{{ item.count }}</strong>
+              <em class="source-type-percent">{{ item.percent }}%</em>
+            </button>
+          </div>
         </template>
       </article>
 
-      <article id="source-rank-section" ref="rankSectionRef" class="source-panel source-table-panel">
+      <article id="source-rank-section" class="source-panel source-table-panel">
         <div class="source-panel-head source-rank-head">
           <div>
             <h3>引用网站排行</h3>
@@ -377,9 +369,9 @@ const categoryOptions = [
               rel="noopener noreferrer"
               class="source-table-title-link"
             >
-              {{ site.domain }}
+              {{ site.displayName }}
             </a>
-            <small>{{ site.platforms.length }} 个平台引用</small>
+            <small>{{ site.domain }} · {{ site.platforms.length }} 个平台引用</small>
           </div>
           <div class="source-table-tags">
             <i>{{ sourceCategoryLabel(site.category) }}</i>

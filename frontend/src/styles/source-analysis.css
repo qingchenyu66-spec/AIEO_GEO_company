@@ -338,7 +338,7 @@
 
 .source-type-head,
 .source-type-row {
-  grid-template-columns: minmax(140px, 1.6fr) 64px 64px 72px 72px;
+  grid-template-columns: minmax(120px, 1.4fr) minmax(120px, 1.2fr) 64px 72px;
   width: 100%;
   border: none;
   background: transparent;
@@ -369,12 +369,25 @@
   color: #153052;
 }
 
+.source-type-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .source-type-dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--type-color, #2d6cdf);
+}
+
+.source-type-domain {
+  color: #2d6cdf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-type-percent {
@@ -389,6 +402,11 @@
   font-size: 12px;
   font-style: normal;
   font-weight: 600;
+}
+
+.source-website-short-list {
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .source-category-list {

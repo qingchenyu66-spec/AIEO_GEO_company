@@ -125,6 +125,7 @@ export interface MonitorSummary {
   source_stats: Array<{
     title: string
     url: string
+    site?: string | null
     count: number
     platforms?: string[]
     exposure_terms?: string[]
@@ -135,6 +136,7 @@ export interface MonitorSummary {
   source_stats_all?: Array<{
     title: string
     url: string
+    site?: string | null
     count: number
     platforms?: string[]
     exposure_terms?: string[]
