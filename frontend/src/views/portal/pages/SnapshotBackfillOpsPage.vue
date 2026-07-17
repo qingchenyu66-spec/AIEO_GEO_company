@@ -376,7 +376,7 @@ async function dismissItem(item: SnapshotBackfillPendingItem) {
     ElMessage.success('已忽略，不再提醒')
     emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
   } catch (error: unknown) {
-    if (error === 'cancel' || (error as { ===?: string })?. === === 'cancel') return
+    if (error === 'cancel') return
     notifyOperationError(error, '忽略失败')
   }
 }
