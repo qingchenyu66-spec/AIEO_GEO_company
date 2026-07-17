@@ -165,6 +165,7 @@ export function useSourceAnalysis(options?: {
   const platformFilter = ref('all')
   const categoryFilter = ref<'all' | SourceCategory>('all')
   const keywordFilter = ref('')
+  const domainFilter = ref('')
   const rankTab = ref<SourceRankTab>('branded')
   const rankPage = ref(1)
 
@@ -238,9 +239,12 @@ export function useSourceAnalysis(options?: {
     rankTab.value === 'all' ? allWebsites.value : brandedWebsites.value
   ))
 
-  const activeRankArticles = computed(() => (
-    rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
-  ))
+  const activeRankArticles = computed(() => {
+    const rows = rankTab.value === 'all' ? filteredAllSources.value : filteredSources.value
+    const domain = domainFilter.value.trim().toLowerCase()
+    if (!domain) return rows
+    return rows.filter(source => domainFromUrl(source.url || '').toLowerCase() === domain)
+  })
 
   const articlePage = ref(1)
   const articleTotalPages = computed(() => Math.max(1, Math.ceil(activeRankArticles.value.length / RANK_PAGE_SIZE)))
@@ -355,7 +359,18 @@ export function useSourceAnalysis(options?: {
 
   function selectSourceCategory(key: 'all' | SourceCategory) {
     categoryFilter.value = key
+    domainFilter.value = ''
     rankPage.value = 1
+    articlePage.value = 1
+  }
+
+  function selectWebsiteDomain(domain: string) {
+    domainFilter.value = domain
+    articlePage.value = 1
+  }
+
+  function clearWebsiteDomain() {
+    domainFilter.value = ''
     articlePage.value = 1
   }
 
@@ -494,6 +509,7 @@ export function useSourceAnalysis(options?: {
     platformFilter.value = 'all'
     categoryFilter.value = 'all'
     keywordFilter.value = ''
+    domainFilter.value = ''
     datePreset.value = isCustomerView.value ? 'all' : '30'
     rankPage.value = 1
     articlePage.value = 1
@@ -501,6 +517,7 @@ export function useSourceAnalysis(options?: {
 
   function setRankTab(tab: SourceRankTab) {
     rankTab.value = tab
+    domainFilter.value = ''
     rankPage.value = 1
     articlePage.value = 1
   }
@@ -538,6 +555,7 @@ export function useSourceAnalysis(options?: {
   watch([platformFilter, categoryFilter, keywordFilter, datePreset, rankTab], () => {
     rankPage.value = 1
     articlePage.value = 1
+    if (domainFilter.value) domainFilter.value = ''
   })
   watch(rankTotalPages, pages => {
     if (rankPage.value > pages) rankPage.value = pages
@@ -565,6 +583,7 @@ export function useSourceAnalysis(options?: {
     platformFilter,
     categoryFilter,
     keywordFilter,
+    domainFilter,
     rankTab,
     rankPage,
     rankPageSize: RANK_PAGE_SIZE,
@@ -593,6 +612,8 @@ export function useSourceAnalysis(options?: {
     topCategory,
     officialRate,
     selectSourceCategory,
+    selectWebsiteDomain,
+    clearWebsiteDomain,
     sourceStructureRows,
     sourceTrendRows,
     analyticsPairMinHeight,

@@ -566,7 +566,27 @@
 
 .source-website-head,
 .source-website-row {
-  grid-template-columns: 44px minmax(200px, 1.8fr) minmax(100px, .9fr) 56px 56px;
+  grid-template-columns: 44px minmax(200px, 1.8fr) minmax(100px, .9fr) 64px 56px;
+}
+
+.source-article-count-btn {
+  justify-self: start;
+  margin: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #2d6cdf;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.source-article-count-btn:hover {
+  background: rgba(45, 108, 223, .08);
+  color: #1d4ed8;
 }
 
 .source-table-head {

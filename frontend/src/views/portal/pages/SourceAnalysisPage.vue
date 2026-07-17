@@ -34,6 +34,7 @@ const {
   datePreset,
   platformFilter,
   categoryFilter,
+  domainFilter,
   keywordFilter,
   rankTab,
   rankPage,
@@ -68,6 +69,8 @@ const {
   resetFilters,
   setRankTab,
   selectSourceCategory,
+  selectWebsiteDomain,
+  clearWebsiteDomain,
   exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
@@ -96,6 +99,13 @@ const articlePageLabel = computed(() => {
   const scope = rankTab.value === 'all' ? '全部引用' : '含露出词'
   return `${scope} · 第 ${start}-${end} 条 / 共 ${total} 条`
 })
+
+async function openWebsiteArticles(domain: string) {
+  if (!domain) return
+  selectWebsiteDomain(domain)
+  await nextTick()
+  document.getElementById('source-article-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 const datePresets: Array<{ value: SourceDatePreset; label: string }> = [
   { value: '7', label: '近 7 天' },
@@ -362,7 +372,14 @@ const categoryOptions = [
           <div class="source-table-tags">
             <i>{{ sourceCategoryLabel(site.category) }}</i>
           </div>
-          <strong>{{ site.articleCount }}</strong>
+          <button
+            type="button"
+            class="source-article-count-btn"
+            :title="`查看 ${site.domain} 的 ${site.articleCount} 篇文章`"
+            @click="openWebsiteArticles(site.domain)"
+          >
+            {{ site.articleCount }}
+          </button>
           <strong>{{ site.count }}</strong>
         </div>
         <div v-if="rankTotalPages > 1" class="source-rank-pager">
@@ -372,7 +389,7 @@ const categoryOptions = [
         </div>
       </article>
 
-      <article class="source-panel source-table-panel">
+      <article id="source-article-section" class="source-panel source-table-panel">
         <div class="source-panel-head" style="padding: 16px 16px 12px">
           <div>
             <h3>信源明细</h3>
@@ -381,8 +398,19 @@ const categoryOptions = [
               <template v-if="categoryFilter !== 'all'">
                 · 已筛选「{{ sourceCategoryLabel(categoryFilter) }}」
               </template>
+              <template v-if="domainFilter">
+                · 网站「{{ domainFilter }}」
+              </template>
             </p>
           </div>
+          <button
+            v-if="domainFilter"
+            type="button"
+            class="tiny-btn"
+            @click="clearWebsiteDomain"
+          >
+            清除网站筛选
+          </button>
         </div>
         <div class="source-table-head">
           <span>#</span>
