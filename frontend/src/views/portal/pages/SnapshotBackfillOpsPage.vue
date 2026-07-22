@@ -55,6 +55,7 @@ const listSummary = ref({
   limit: PAGE_SIZE,
   has_more: false,
   scan_capped: false,
+  summary_partial: false,
 })
 const loadMoreSentinel = ref<HTMLElement | null>(null)
 let loadMoreObserver: IntersectionObserver | null = null
