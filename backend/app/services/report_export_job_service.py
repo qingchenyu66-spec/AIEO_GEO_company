@@ -366,12 +366,12 @@ def get_export_job(job_id: str) -> dict[str, Any] | None:
     return _public_meta(meta) if meta else None
 
 
-def read_export_job_file(job_id: str) -> tuple[bytes, str, str]:
+def export_job_file_path(job_id: str) -> tuple[Path, str, str]:
+    """返回已就绪导出文件路径（供 FileResponse 流式下载，避免整包进内存）。"""
     meta = _load_meta(job_id)
     if not meta:
         raise FileNotFoundError("导出任务不存在")
     if meta.get("status") != "ready":
-        # 再读一次盘：Redis 偶发滞后时盘上可能已是 ready
         path_meta = _meta_path(job_id)
         if path_meta.is_file():
             try:
@@ -389,4 +389,9 @@ def read_export_job_file(job_id: str) -> tuple[bytes, str, str]:
         raise FileNotFoundError("导出文件已过期或不存在")
     filename = str(meta.get("filename") or f"export-{job_id}.bin")
     mime = str(meta.get("mime") or "application/octet-stream")
+    return path, filename, mime
+
+
+def read_export_job_file(job_id: str) -> tuple[bytes, str, str]:
+    path, filename, mime = export_job_file_path(job_id)
     return path.read_bytes(), filename, mime

@@ -1,5 +1,4 @@
 import { http } from './http'
-import type { GeoHttpRequestConfig } from './http'
 
 export type LeadDiagnosisStatus = 'pending' | 'collecting' | 'ready' | 'failed'
 
@@ -75,20 +74,6 @@ export interface CreateLeadDiagnosisPayload {
   start_immediately?: boolean
 }
 
-function parseExportFilename(contentDisposition: string | undefined, fallback: string) {
-  if (!contentDisposition) return fallback
-  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (utfMatch?.[1]) {
-    try {
-      return decodeURIComponent(utfMatch[1])
-    } catch {
-      return utfMatch[1]
-    }
-  }
-  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-  return plainMatch?.[1] || fallback
-}
-
 export async function getLeadDiagnosisList(params?: { keyword?: string; status?: string }): Promise<LeadDiagnosisItem[]> {
   const response = await http.get('/v1/lead-diagnosis/list', { params })
   return response.data.data
@@ -127,7 +112,7 @@ export async function downloadLeadDiagnosisExport(
   format: 'pdf' | 'docx' | 'html' = 'pdf',
   onProgress?: (label: string, pct?: number | null) => void,
 ) {
-  // 方案 B：异步任务 + 轮询下载（避免长连接卡死）
+  // 异步任务 + 轮询；就绪后走浏览器原生下载（避免 XHR 整包进内存干等）
   onProgress?.('内容写入中…', 0)
   const created = await http.post(`/v1/lead-diagnosis/${leadId}/export-jobs`, null, {
     params: { format },
@@ -137,6 +122,7 @@ export async function downloadLeadDiagnosisExport(
   const jobId = String(job.job_id || '')
   if (!jobId) throw new Error('创建导出任务失败')
 
+  let filename = String(job.filename || `lead-diagnosis-${leadId}.${format}`)
   if (job.status === 'ready') {
     onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
   } else {
@@ -148,47 +134,20 @@ export async function downloadLeadDiagnosisExport(
       const label = String(statusJob.progress || (format === 'pdf' ? 'PDF渲染中…' : '内容写入中…'))
       const pct = typeof statusJob.progress_pct === 'number' ? statusJob.progress_pct : undefined
       onProgress?.(label, pct)
+      if (statusJob.filename) filename = String(statusJob.filename)
       if (statusJob.status === 'ready') break
       if (statusJob.status === 'failed') throw new Error(String(statusJob.error || '导出失败'))
       await new Promise(resolve => setTimeout(resolve, statusJob.cached ? 200 : 800))
     }
   }
 
-  onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
-  // 模力风格 PDF 可达数十 MB；nginx/前端需 ≥ 数分钟，409 多为多 worker 瞬时态再试
-  const EXPORT_DOWNLOAD_TIMEOUT_MS = 600_000
-  let response
-  let lastError: unknown
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      response = await http.get(`/v1/lead-diagnosis/export-jobs/${jobId}/download`, {
-        responseType: 'blob',
-        timeout: EXPORT_DOWNLOAD_TIMEOUT_MS,
-        silentError: attempt < 3,
-      } as GeoHttpRequestConfig)
-      lastError = undefined
-      break
-    } catch (error: unknown) {
-      lastError = error
-      const status = (error as { response?: { status?: number } })?.response?.status
-      if (status === 409 && attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
-        continue
-      }
-      throw error
-    }
-  }
-  if (!response) throw lastError instanceof Error ? lastError : new Error('导出下载失败')
-  const fallback = `lead-diagnosis-${leadId}.${format}`
-  const filename = parseExportFilename(response.headers['content-disposition'], fallback)
-  const contentType = String(response.headers['content-type'] || 'application/octet-stream')
-  const blob = new Blob([response.data], { type: contentType })
-  const url = URL.createObjectURL(blob)
+  onProgress?.('开始下载…', 100)
   const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
+  anchor.href = `/api/v1/lead-diagnosis/export-jobs/${encodeURIComponent(jobId)}/download`
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
   anchor.click()
-  URL.revokeObjectURL(url)
+  anchor.remove()
   return filename
 }
 

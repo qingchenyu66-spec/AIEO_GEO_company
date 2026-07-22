@@ -80,3 +80,17 @@ def test_load_meta_prefers_redis_over_stale_local(monkeypatch, tmp_path) -> None
     assert meta is not None
     assert meta["status"] == "ready"
     assert svc._jobs[job_id]["status"] == "ready"
+
+
+def test_pdf_from_slide_images_accepts_jpeg() -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.report_molizhishu_pdf_service import pdf_from_slide_images
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 36), (240, 240, 240)).save(buf, format="JPEG", quality=90)
+    pdf = pdf_from_slide_images([buf.getvalue()])
+    assert pdf.startswith(b"%PDF")
+    assert len(pdf) < 50_000

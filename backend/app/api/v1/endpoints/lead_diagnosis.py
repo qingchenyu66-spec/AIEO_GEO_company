@@ -1,7 +1,7 @@
 """售前诊断 API。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
@@ -216,8 +216,8 @@ def download_export_job(
     job_id: str,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
-) -> Response:
-    from app.services.report_export_job_service import get_export_job, read_export_job_file
+) -> FileResponse:
+    from app.services.report_export_job_service import export_job_file_path, get_export_job
 
     try:
         require_lead_diagnosis_access(db, current, "can_export")
@@ -225,10 +225,11 @@ def download_export_job(
         if not job or job.get("kind") != "lead_diagnosis":
             raise FileNotFoundError("导出任务不存在")
         get_lead_diagnosis(db, int(job["ref_id"]), current=current)
-        content, filename, mime = read_export_job_file(job_id)
-        return Response(
-            content=content,
+        path, filename, mime = export_job_file_path(job_id)
+        return FileResponse(
+            path,
             media_type=mime,
+            filename=filename,
             headers={"Content-Disposition": content_disposition(filename)},
         )
     except PermissionError as exc:

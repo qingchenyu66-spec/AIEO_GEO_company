@@ -25,8 +25,10 @@ _SLIDE_WIDTH_PX = 2520
 _SLIDE_HEIGHT_PX = 1417
 _PDF_PAGE_W_PT = _SLIDE_WIDTH_PX * 72 / 96
 _PDF_PAGE_H_PT = _SLIDE_HEIGHT_PX * 72 / 96
-# 指纹用：改导出链路时 bump，避免命中旧 Chromium-pdf 缓存
-_PDF_PIPELINE = "png-pages-v1"
+# 指纹用：改导出链路时 bump，避免命中旧缓存
+# jpeg-pages-v2：单页 JPEG 一次编码（避开 Chromium page.pdf 二次 DCT），体积远小于 PNG 无损
+_PDF_PIPELINE = "jpeg-pages-v2"
+_JPEG_SCREENSHOT_QUALITY = 90
 
 _tls = threading.local()
 
@@ -110,22 +112,21 @@ def render_molizhishu_report_html(
         return template.render(**context)
 
 
-def pdf_from_slide_pngs(png_pages: list[bytes]) -> bytes:
-    """把逐页 PNG 无损打进 PDF。
+def pdf_from_slide_images(image_pages: list[bytes]) -> bytes:
+    """把逐页截图打进 PDF（JPEG 优先，体积约为 PNG 无损的 1/5～1/10）。
 
-    Chromium ``page.pdf()`` 会把位图再压成 JPEG，亮底出现蚊噪；
-    截图 PNG + reportlab 嵌入可避开这条压图链路。
+    不用 Chromium ``page.pdf()``，避免母版再被压成脏 JPEG；截图侧只编码一次。
     """
-    if not png_pages:
+    if not image_pages:
         raise ValueError("no slide pages to assemble")
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(_PDF_PAGE_W_PT, _PDF_PAGE_H_PT))
-    for png in png_pages:
+    for raw in image_pages:
         c.drawImage(
-            ImageReader(BytesIO(png)),
+            ImageReader(BytesIO(raw)),
             0,
             0,
             width=_PDF_PAGE_W_PT,
@@ -136,6 +137,10 @@ def pdf_from_slide_pngs(png_pages: list[bytes]) -> bytes:
         c.showPage()
     c.save()
     return buf.getvalue()
+
+
+# 兼容旧名
+pdf_from_slide_pngs = pdf_from_slide_images
 
 
 def build_molizhishu_pdf(
@@ -175,7 +180,7 @@ def build_molizhishu_pdf(
         viewport={"width": _SLIDE_WIDTH_PX, "height": _SLIDE_HEIGHT_PX},
         device_scale_factor=1,
     )
-    png_pages: list[bytes] = []
+    page_images: list[bytes] = []
     try:
         page.set_content(html, wait_until="load", timeout=120_000)
         page.evaluate(
@@ -202,16 +207,23 @@ def build_molizhishu_pdf(
             raise RuntimeError("诊断报告无可用幻灯片，无法生成 PDF")
         _progress("PDF渲染中…", 70)
         for i in range(n):
-            png_pages.append(slides.nth(i).screenshot(type="png", animations="disabled"))
+            page_images.append(
+                slides.nth(i).screenshot(
+                    type="jpeg",
+                    quality=_JPEG_SCREENSHOT_QUALITY,
+                    animations="disabled",
+                )
+            )
 
         _progress("PDF生成中…", 90)
-        pdf_bytes = pdf_from_slide_pngs(png_pages)
+        pdf_bytes = pdf_from_slide_images(page_images)
     finally:
         page.close()
     logger.info(
-        "molizhishu-style diagnosis PDF generated for %s pages=%s pipeline=%s",
+        "molizhishu-style diagnosis PDF generated for %s pages=%s pipeline=%s bytes=%s",
         payload.get("title"),
-        len(png_pages),
+        len(page_images),
         _PDF_PIPELINE,
+        len(pdf_bytes),
     )
     return pdf_bytes

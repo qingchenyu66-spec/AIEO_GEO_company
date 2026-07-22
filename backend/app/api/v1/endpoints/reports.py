@@ -3,7 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
@@ -246,9 +246,9 @@ def download_report_export_job(
     request: Request,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
-) -> Response:
+) -> FileResponse:
     from app.services.menu_permission_service import require_report_permission
-    from app.services.report_export_job_service import get_export_job, read_export_job_file
+    from app.services.report_export_job_service import export_job_file_path, get_export_job
 
     try:
         require_report_permission(db, current, "can_export")
@@ -256,7 +256,7 @@ def download_report_export_job(
         if not job or job.get("kind") != "report":
             raise FileNotFoundError("导出任务不存在")
         detail = get_report_detail(db, int(job["ref_id"]), current)
-        content, filename, mime = read_export_job_file(job_id)
+        path, filename, mime = export_job_file_path(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
@@ -275,9 +275,10 @@ def download_report_export_job(
         risk_level="关注",
     )
     db.commit()
-    return Response(
-        content=content,
+    return FileResponse(
+        path,
         media_type=mime,
+        filename=filename,
         headers={"Content-Disposition": content_disposition(filename)},
     )
 

@@ -1,4 +1,4 @@
-import { http, type GeoHttpRequestConfig } from './http'
+import { http } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx' | 'html'
 
@@ -151,20 +151,6 @@ export async function createReport(data: GenerateReportPayload): Promise<ReportL
   return response.data.data
 }
 
-function parseExportFilename(contentDisposition: string | undefined, fallback: string) {
-  if (!contentDisposition) return fallback
-  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (utfMatch?.[1]) {
-    try {
-      return decodeURIComponent(utfMatch[1])
-    } catch {
-      return utfMatch[1]
-    }
-  }
-  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-  return plainMatch?.[1] || fallback
-}
-
 export async function downloadReportExport(
   reportId: number,
   format: ReportExportFormat,
@@ -178,6 +164,7 @@ export async function downloadReportExport(
   const jobId = String(job.job_id || '')
   if (!jobId) throw new Error('创建导出任务失败')
 
+  let filename = String(job.filename || `report-${reportId}.${format}`)
   if (job.status === 'ready') {
     onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
   } else {
@@ -189,45 +176,19 @@ export async function downloadReportExport(
       const label = String(statusJob.progress || (format === 'pdf' ? 'PDF渲染中…' : '内容写入中…'))
       const pct = typeof statusJob.progress_pct === 'number' ? statusJob.progress_pct : undefined
       onProgress?.(label, pct)
+      if (statusJob.filename) filename = String(statusJob.filename)
       if (statusJob.status === 'ready') break
       if (statusJob.status === 'failed') throw new Error(String(statusJob.error || '导出失败'))
       await new Promise(resolve => setTimeout(resolve, statusJob.cached ? 200 : 800))
     }
   }
 
-  onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
-  const EXPORT_DOWNLOAD_TIMEOUT_MS = 600_000
-  let response
-  let lastError: unknown
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      response = await http.get(`/v1/reports/export-jobs/${jobId}/download`, {
-        responseType: 'blob',
-        timeout: EXPORT_DOWNLOAD_TIMEOUT_MS,
-        silentError: attempt < 3,
-      } as GeoHttpRequestConfig)
-      lastError = undefined
-      break
-    } catch (error: unknown) {
-      lastError = error
-      const status = (error as { response?: { status?: number } })?.response?.status
-      if (status === 409 && attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
-        continue
-      }
-      throw error
-    }
-  }
-  if (!response) throw lastError instanceof Error ? lastError : new Error('导出下载失败')
-  const fallback = `report-${reportId}.${format}`
-  const filename = parseExportFilename(response.headers['content-disposition'], fallback)
-  const blob = response.data instanceof Blob ? response.data : new Blob([response.data])
-  const url = URL.createObjectURL(blob)
+  onProgress?.('开始下载…', 100)
   const link = document.createElement('a')
-  link.href = url
-  link.download = filename
+  link.href = `/api/v1/reports/export-jobs/${encodeURIComponent(jobId)}/download`
+  link.rel = 'noopener'
   document.body.appendChild(link)
   link.click()
   link.remove()
-  URL.revokeObjectURL(url)
+  return filename
 }
