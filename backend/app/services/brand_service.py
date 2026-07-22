@@ -8,9 +8,15 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.api.dependencies import CurrentSession
 from app.core.platform_order import sort_platform_codes
 from app.core.region_catalog import normalize_region_codes
-from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup
+from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup, BrandWordGroup
 from app.models.tenant import Tenant
-from app.schemas.brand import BrandAssetSaveRequest, BrandKeywordGroupSaveRequest, CompetitorSaveRequest
+from app.schemas.brand import (
+    BrandAssetSaveRequest,
+    BrandKeywordGroupSaveRequest,
+    BrandWordGroupSaveRequest,
+    BrandWordGroupsSaveRequest,
+    CompetitorSaveRequest,
+)
 from app.services.platform_selection import normalize_platform_selections, selection_codes
 from app.services.tenant_scope import ensure_sales_tenant_access
 
@@ -312,6 +318,153 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
 
 
+def default_brand_word_group_name(index: int) -> str:
+    return f"品牌词组 {index + 1}"
+
+
+def list_brand_word_groups(db: Session, tenant_id: int) -> list[BrandWordGroup]:
+    """读取企业品牌词组，按排序稳定返回。"""
+    return list(
+        db.scalars(
+            select(BrandWordGroup)
+            .where(BrandWordGroup.tenant_id == tenant_id, BrandWordGroup.deleted.is_(False))
+            .order_by(BrandWordGroup.sort_order.asc(), BrandWordGroup.id.asc())
+        )
+    )
+
+
+def brand_word_group_to_dict(group: BrandWordGroup) -> dict[str, Any]:
+    """序列化品牌词组（无露出词字段）。"""
+    monitor_keywords = keyword_group_monitor_keywords(
+        {
+            "monitor_keyword": group.monitor_keyword,
+            "monitor_keywords": group.monitor_keywords_json or [],
+        }
+    )
+    primary = monitor_keywords[0] if monitor_keywords else str(group.monitor_keyword or "").strip()
+    run_mode = str(group.run_mode or "once").strip().lower()
+    if run_mode not in {"once", "weekly"}:
+        run_mode = "once"
+    payload = {
+        "id": group.id,
+        "tenant_id": group.tenant_id,
+        "name": str(group.name or "").strip() or default_brand_word_group_name(group.sort_order or 0),
+        "monitor_keyword": primary,
+        "monitor_keywords": monitor_keywords,
+        "platforms": normalize_platform_selections(group.platforms_json or []),
+        "run_mode": run_mode,
+        "sort_order": group.sort_order,
+        "status": group.status,
+    }
+    payload["display_name"] = keyword_group_display_label(payload)
+    return payload
+
+
+def _normalize_brand_word_monitor_keywords(item: BrandWordGroupSaveRequest) -> list[str]:
+    keywords = _dedupe([str(value or "").strip() for value in (item.monitor_keywords or []) if str(value or "").strip()])
+    legacy = str(item.monitor_keyword or "").strip()
+    if legacy and legacy not in keywords:
+        keywords.insert(0, legacy)
+    return keywords
+
+
+def save_brand_word_groups(
+    db: Session,
+    payload: BrandWordGroupsSaveRequest,
+    current: CurrentSession,
+) -> tuple[BrandAsset, list[BrandWordGroup]]:
+    """覆盖保存品牌词组；不触碰监测词组。返回资产与保存后的启用「仅本次」词组（供立即提交）。"""
+    tenant_id = resolve_tenant_id(current, payload.tenant_id)
+    _guard_tenant_write(db, current, tenant_id)
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        raise ValueError("请先保存企业资料或监测词配置，再配置品牌词")
+
+    existing = {item.id: item for item in list_brand_word_groups(db, tenant_id)}
+    seen_ids: set[int] = set()
+
+    for index, item in enumerate(payload.groups or []):
+        keywords = _normalize_brand_word_monitor_keywords(item)
+        if not keywords:
+            continue
+        platforms = normalize_platform_selections(item.platforms or [])
+        if item.status and not platforms:
+            raise ValueError("每个启用的品牌词组至少选择一个监测平台")
+        primary = keywords[0]
+        group_name = str(item.name or "").strip() or default_brand_word_group_name(index)
+        run_mode = str(item.run_mode or "once").strip().lower()
+        if run_mode not in {"once", "weekly"}:
+            raise ValueError("运行时间仅支持「仅本次」或「周」")
+        group = existing.get(item.id) if item.id else None
+        if group is None:
+            group = BrandWordGroup(
+                tenant_id=asset.tenant_id,
+                brand_asset_id=asset.id,
+                name=group_name,
+                monitor_keyword=primary,
+                monitor_keywords_json=list(keywords),
+                platforms_json=platforms,
+                run_mode=run_mode,
+            )
+            db.add(group)
+        group.brand_asset_id = asset.id
+        group.name = group_name
+        group.monitor_keyword = primary
+        group.monitor_keywords_json = list(keywords)
+        flag_modified(group, "monitor_keywords_json")
+        group.platforms_json = platforms
+        flag_modified(group, "platforms_json")
+        group.run_mode = run_mode
+        group.sort_order = item.sort_order if item.sort_order is not None else index
+        group.status = item.status
+        group.deleted = False
+        if group.id:
+            seen_ids.add(group.id)
+
+    for group_id, group in existing.items():
+        if group_id not in seen_ids:
+            group.deleted = True
+
+    db.commit()
+    db.refresh(asset)
+    once_groups = [
+        item
+        for item in list_brand_word_groups(db, tenant_id)
+        if item.status
+        and str(item.run_mode or "").lower() == "once"
+        and keyword_group_monitor_keywords(
+            {
+                "monitor_keyword": item.monitor_keyword,
+                "monitor_keywords": item.monitor_keywords_json or [],
+            }
+        )
+    ]
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    invalidate_monitor_summary_cache(tenant_id, bust_overview=True)
+    return asset, once_groups
+
+
+def active_brand_word_groups(
+    db: Session,
+    tenant_id: int,
+    *,
+    run_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """启用中的品牌词组；可按 run_mode 过滤。"""
+    rows = []
+    for item in list_brand_word_groups(db, tenant_id):
+        if not item.status:
+            continue
+        payload = brand_word_group_to_dict(item)
+        if not payload.get("monitor_keywords"):
+            continue
+        if run_mode and payload.get("run_mode") != run_mode:
+            continue
+        rows.append(payload)
+    return rows
+
+
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
     """新增或更新企业品牌资产。"""
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
@@ -428,6 +581,7 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
 def asset_to_dict(
     asset: BrandAsset | None,
     keyword_groups: list[BrandKeywordGroup | dict[str, Any]] | None = None,
+    brand_word_groups: list[BrandWordGroup | dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """序列化品牌资产。"""
     if asset is None:
@@ -435,6 +589,17 @@ def asset_to_dict(
     normalized_groups: list[dict[str, Any]] = []
     for index, item in enumerate(keyword_groups or []):
         normalized_groups.append(ensure_keyword_group_payload(item, index))
+    normalized_brand_words: list[dict[str, Any]] = []
+    for item in brand_word_groups or []:
+        if isinstance(item, BrandWordGroup):
+            normalized_brand_words.append(brand_word_group_to_dict(item))
+        else:
+            run_mode = str(item.get("run_mode") or "once").strip().lower()
+            if run_mode not in {"once", "weekly"}:
+                run_mode = "once"
+            row = ensure_keyword_group_payload(item)
+            row["run_mode"] = run_mode
+            normalized_brand_words.append(row)
     return {
         "id": asset.id,
         "tenant_id": asset.tenant_id,
@@ -446,6 +611,7 @@ def asset_to_dict(
         "product_keywords": asset.product_keywords_json,
         "monitored_platforms": sort_platform_codes(asset.monitored_platforms_json),
         "keyword_groups": normalized_groups,
+        "brand_word_groups": normalized_brand_words,
         "region_codes": normalize_region_codes(asset.region_codes_json or []),
         "official_url": asset.official_url,
         "description": asset.description,
@@ -579,7 +745,10 @@ def molizhishu_monitor_terms(
     *,
     keyword_group: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
-    """生成提交模力指数的 monitorKeywords 与 aliases：主词用简称/品牌名，别名用露出词。"""
+    """生成提交模力的 monitorKeywords / aliases。
+
+    监测词组：别名以露出词为主；品牌词组无露出词，别名用组内品牌词 + 企业资产别名。
+    """
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         raise ValueError("当前企业未配置品牌资产，请先维护品牌主词和简称")
@@ -591,12 +760,21 @@ def molizhishu_monitor_terms(
     )
     exposure = brand_exposure_terms(asset, groups)
     if keyword_group and keyword_group.get("status", True):
-        for group_keyword in keyword_group_monitor_keywords(keyword_group):
+        group_keywords = keyword_group_monitor_keywords(keyword_group)
+        group_exposure = [
+            str(term or "").strip()
+            for term in (keyword_group.get("exposure_terms") or [])
+            if str(term or "").strip()
+        ]
+        # 品牌词组无露出词：组内品牌词本身作为匹配别名
+        match_terms = group_exposure or [
+            kw for kw in group_keywords if kw and not _is_industry_monitor_keyword(kw, asset)
+        ]
+        for group_keyword in group_keywords:
             if group_keyword and not _is_industry_monitor_keyword(group_keyword, asset):
                 if not monitor_keyword:
                     monitor_keyword = group_keyword
-        for term in keyword_group.get("exposure_terms") or []:
-            text = str(term or "").strip()
+        for text in match_terms:
             if text and text not in exposure:
                 exposure.append(text)
     aliases = _dedupe([
