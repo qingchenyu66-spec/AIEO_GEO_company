@@ -251,6 +251,7 @@ async function fetchPage(offset: number, append: boolean, includeSummary = false
   listSummary.value = {
     ...result.summary,
     scan_capped: Boolean(result.summary.scan_capped),
+    summary_partial: Boolean(result.summary.summary_partial),
   }
 }
 
