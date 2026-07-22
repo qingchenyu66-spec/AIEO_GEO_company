@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, brand, health, knowledge, management, monitor, notifications
+from app.api.v1.endpoints import auth, brand, health, knowledge, management, media, monitor, notifications
 from app.api.v1.endpoints import approvals as approvals_endpoints
 from app.api.v1.endpoints import ops as ops_endpoints
 from app.api.v1.endpoints import diagnosis as diagnosis_endpoints
@@ -15,6 +15,7 @@ api_router.include_router(auth.router, tags=["Authentication"])
 api_router.include_router(management.router, tags=["Management"])
 api_router.include_router(approvals_endpoints.router, tags=["Approvals"])
 api_router.include_router(monitor.router, tags=["GEO Monitor"])
+api_router.include_router(media.router, tags=["Media"])
 api_router.include_router(brand.router, tags=["Brand Asset"])
 api_router.include_router(knowledge.router, tags=["Knowledge File"])
 api_router.include_router(ops_endpoints.router, tags=["Operations & Config"])

@@ -625,7 +625,9 @@ def monitor_subtask_detail(
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     ops_meta = build_snapshot_backfill_item(db, subtask, task)
-    return ApiResponse(data={**display, **ops_meta})
+    # display 的 page_screenshot 已代理；ops_meta 同字段不得用库内原文覆盖
+    merged = {**ops_meta, **display}
+    return ApiResponse(data=merged)
 
 
 def _resolve_schedule_tenant_scope(

@@ -23,6 +23,7 @@ from app.services.brand_service import (
     list_keyword_groups,
 )
 from app.services.operation_log_service import write_operation_log
+from app.services.media_proxy_service import public_screenshot_url
 from app.services.monitor_service import (
     backfill_weak_rank_threshold,
     TERMINAL_STATUSES,
@@ -624,7 +625,8 @@ def build_snapshot_backfill_item(
     else:
         ctx["keyword_group"] = str(task.monitor_keywords or "").strip() or None
     ctx["sentiment"] = subtask.sentiment
-    ctx["page_screenshot"] = subtask.page_screenshot
+    # 对外展示走代理；勿覆盖 serialize 后的脱敏 URL（include_ops 合并时会带上本字段）
+    ctx["page_screenshot"] = public_screenshot_url(subtask.page_screenshot)
     ctx["has_answer"] = bool((subtask.answer_content or "").strip())
     ctx["status"] = subtask.status
 

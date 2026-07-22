@@ -20,6 +20,7 @@ from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMoni
 from app.models.tenant import Tenant
 from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
 from app.services.molizhishu_platforms import filter_submittable_platforms
+from app.services.media_proxy_service import public_screenshot_url
 from app.services.brand_service import (
     _is_industry_monitor_keyword,
     active_keyword_groups,
@@ -1705,7 +1706,7 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
         "mode": subtask.mode,
         "prompt": subtask.prompt,
         "status": subtask.status,
-        "page_screenshot": subtask.page_screenshot,
+        "page_screenshot": public_screenshot_url(subtask.page_screenshot),
         "answer_content": subtask.answer_content,
         "reference_list": subtask.reference_list_json or [],
         "citation_list": subtask.citation_list_json or [],
@@ -1731,7 +1732,7 @@ def serialize_summary_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
         "mode": subtask.mode,
         "prompt": subtask.prompt,
         "status": subtask.status,
-        "page_screenshot": subtask.page_screenshot,
+        "page_screenshot": public_screenshot_url(subtask.page_screenshot),
         "reference_count": reference_count,
         "reference_list": [],
         "error_message": subtask.error_message,
@@ -4093,7 +4094,7 @@ def list_inclusion_snapshots(
             "brand_mentioned": brand_mentioned,
             "sentiment": _normalize_sentiment_label(item.sentiment),
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
-            "page_screenshot": item.page_screenshot,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         })
@@ -4440,7 +4441,7 @@ def _workspace_brief_full_from_daily_stats(
             "brand_mentioned": brand_mentioned,
             "sentiment": sentiment_label,
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
-            "page_screenshot": item.page_screenshot,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         }
@@ -4762,7 +4763,7 @@ def workspace_brief(
             "brand_mentioned": brand_mentioned,
             "sentiment": sentiment_label,
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
-            "page_screenshot": item.page_screenshot,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         }

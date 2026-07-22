@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import type { MonitorSubtask } from '../../../services/monitor'
 import { submitSnapshotBackfill } from '../../../services/snapshotBackfill'
 import { notifyOperationError } from '../../../utils/requestError'
+import { isProxiedScreenshotUrl } from '../../../utils/safeUrl'
 import { platformLabelMap } from '../portalMaps'
 import { parseSnapshotBackfillMentionPosition } from '../snapshotBackfillDisplay'
 
@@ -40,7 +41,9 @@ watch(
   () => props.visible,
   (open) => {
     if (!open) return
-    form.snapshot_url = props.subtask?.page_screenshot || ''
+    const shot = props.subtask?.page_screenshot || ''
+    // 代理 URL 不能当作模力分享链接回填
+    form.snapshot_url = isProxiedScreenshotUrl(shot) ? '' : shot
     form.answer_content = props.subtask?.answer_content || ''
     form.mention_position = props.subtask?.mention_position != null ? String(props.subtask.mention_position) : ''
   },

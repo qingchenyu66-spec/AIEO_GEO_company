@@ -23,6 +23,7 @@ from app.services.monitor_service import (
     _subtask_answer_plaintext,
 )
 from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+from app.services.media_proxy_service import public_screenshot_url
 
 logger = logging.getLogger(__name__)
 
@@ -322,7 +323,7 @@ def _group_ai_descriptions(
             "excerpt": excerpt,
             "sentiment": label,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            "page_screenshot": item.page_screenshot,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
         }
         bucket = groups.get(key)
         if bucket is None:
@@ -531,7 +532,7 @@ def build_brand_analysis_dashboard(
             "excerpt": excerpt,
             "sentiment": label,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            "page_screenshot": item.page_screenshot,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
         })
 
     # 列表只含有样本的已购平台；已购全集在 purchased_platforms
