@@ -1,4 +1,5 @@
 import { http } from './http'
+import type { GeoHttpRequestConfig } from './http'
 
 export type LeadDiagnosisStatus = 'pending' | 'collecting' | 'ready' | 'failed'
 
@@ -164,7 +165,7 @@ export async function downloadLeadDiagnosisExport(
         responseType: 'blob',
         timeout: EXPORT_DOWNLOAD_TIMEOUT_MS,
         silentError: attempt < 3,
-      })
+      } as GeoHttpRequestConfig)
       lastError = undefined
       break
     } catch (error: unknown) {

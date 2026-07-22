@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx' | 'html'
 
@@ -205,7 +205,7 @@ export async function downloadReportExport(
         responseType: 'blob',
         timeout: EXPORT_DOWNLOAD_TIMEOUT_MS,
         silentError: attempt < 3,
-      })
+      } as GeoHttpRequestConfig)
       lastError = undefined
       break
     } catch (error: unknown) {
