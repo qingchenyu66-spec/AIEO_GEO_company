@@ -79,6 +79,7 @@ const pendingOnly = ref(false)
 let listRequestSeq = 0
 let listAbortController: AbortController | null = null
 let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let filterBootstrapping = false
 
 const platformFilterOptions = computed(() => {
   if (tenantFilter.value === '') return supportedPlatforms
@@ -116,7 +117,6 @@ const totalCount = computed(() => listSummary.value.total)
 const shownCount = computed(() => items.value.length)
 const hasMore = computed(() => listSummary.value.has_more && items.value.length < listSummary.value.total)
 const statsTruncated = computed(() => items.value.length < listSummary.value.total)
-const scanCapped = computed(() => Boolean(listSummary.value.scan_capped))
 
 const hasActiveFilters = computed(() => Boolean(
   tenantFilter.value !== ''
@@ -154,11 +154,35 @@ function statusLabel(item: SnapshotBackfillPendingItem) {
   return item.status || '—'
 }
 
+function isTenantInService(tenant: TenantInfo) {
+  // 与后端 tenant_service_is_operational 对齐：服务中 = 启用且在合同期内、非人工停服
+  if (!tenant.status) return false
+  if (tenant.stop_reason === 'manual' || tenant.stop_reason === 'canceled') return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  if (tenant.service_start_date) {
+    const startDate = new Date(`${tenant.service_start_date} 00:00:00`)
+    if (startDate.getTime() > today.getTime()) return false
+  }
+  if (tenant.service_end_date) {
+    const endDate = new Date(`${tenant.service_end_date} 23:59:59`)
+    if (endDate.getTime() < today.getTime()) return false
+  }
+  return true
+}
+
 async function loadTenants() {
   try {
-    tenants.value = await withRetry(() => getTenants())
+    const rows = await withRetry(() => getTenants())
+    tenants.value = rows.filter(isTenantInService)
   } catch {
     tenants.value = []
+  }
+  if (
+    tenantFilter.value !== ''
+    && !tenants.value.some(tenant => tenant.id === tenantFilter.value)
+  ) {
+    tenantFilter.value = tenants.value[0]?.id ?? ''
   }
 }
 
@@ -191,7 +215,7 @@ async function loadTenantKeywordGroups() {
   }
 }
 
-function buildListQuery(offset = 0) {
+function buildListQuery(offset = 0, includeSummary = false) {
   return {
     limit: PAGE_SIZE,
     offset,
@@ -202,15 +226,16 @@ function buildListQuery(offset = 0) {
     platform: platformFilter.value || undefined,
     keyword: keywordFilter.value.trim() || undefined,
     keyword_group: keywordGroupFilter.value || undefined,
+    include_summary: includeSummary,
   }
 }
 
-async function fetchPage(offset: number, append: boolean) {
+async function fetchPage(offset: number, append: boolean, includeSummary = false) {
   listAbortController?.abort()
   const controller = new AbortController()
   listAbortController = controller
   const seq = ++listRequestSeq
-  const result = await getPendingSnapshotBackfills(buildListQuery(offset), { signal: controller.signal })
+  const result = await getPendingSnapshotBackfills(buildListQuery(offset, includeSummary), { signal: controller.signal })
   if (seq !== listRequestSeq) return
   if (append) {
     const existing = new Set(items.value.map(item => item.subtask_id))
@@ -228,10 +253,31 @@ async function fetchPage(offset: number, append: boolean) {
   }
 }
 
+async function refreshSummaryInBackground() {
+  // 全企业汇总极慢且易触发截断提示；仅在已选企业时后台补全统计
+  if (tenantFilter.value === '') return
+  const seq = listRequestSeq
+  try {
+    const result = await getPendingSnapshotBackfills(buildListQuery(0, true))
+    if (seq !== listRequestSeq) return
+    listSummary.value = {
+      ...listSummary.value,
+      total: result.summary.total,
+      pending: result.summary.pending,
+      overwrite: result.summary.overwrite,
+      scan_capped: Boolean(result.summary.scan_capped),
+      summary_partial: false,
+    }
+  } catch {
+    // 汇总失败不挡列表
+  }
+}
+
 async function loadItems() {
   loading.value = true
   try {
-    await fetchPage(0, false)
+    await fetchPage(0, false, false)
+    void refreshSummaryInBackground()
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if ((error as { code?: string })?.code === 'ERR_CANCELED') return
@@ -479,13 +525,22 @@ async function openFromQuery() {
 }
 
 onMounted(async () => {
+  if (!canViewBackfill.value) {
+    await loadTenants()
+    return
+  }
   await loadTenants()
-  if (canViewBackfill.value) {
-    await loadItems()
-    setupLoadMoreObserver()
-    if (String(route.query.backfill || '') === '1' || route.query.subtask_id) {
-      await openFromQuery()
-    }
+  const hasDeepLink = String(route.query.backfill || '') === '1' || Boolean(route.query.subtask_id)
+  // 进页默认落到具体企业，避免 all_tenants 全库扫描（数秒～十余秒）
+  if (!hasDeepLink && tenantFilter.value === '' && tenants.value.length) {
+    filterBootstrapping = true
+    tenantFilter.value = tenants.value[0].id
+    filterBootstrapping = false
+  }
+  await loadItems()
+  setupLoadMoreObserver()
+  if (hasDeepLink) {
+    await openFromQuery()
   }
 })
 
@@ -523,6 +578,7 @@ watch(platformFilterOptions, (options) => {
 })
 
 watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter, pendingOnly], () => {
+  if (filterBootstrapping) return
   scheduleLoadItems()
 })
 </script>
@@ -551,10 +607,6 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
         </article>
       </div>
     </Teleport>
-
-    <p v-if="scanCapped" class="snapshot-backfill-scan-cap">
-      全部企业筛选时仅扫描部分历史任务，统计与列表可能不完整，请选择具体企业后刷新。
-    </p>
 
     <div class="snapshot-backfill-toolbar">
       <div class="snapshot-backfill-toolbar-inner">

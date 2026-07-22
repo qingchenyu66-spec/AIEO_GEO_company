@@ -275,26 +275,31 @@ def render_prompt_scorecard(rows: list[dict[str, Any]]) -> str:
 
 def render_sentiment_overview(sentiment_counts: dict[str, Any], *, positive_rate: Any) -> str:
     total = sum(int(v or 0) for v in sentiment_counts.values()) or 1
-    labels = {
-        "positive": "正面",
-        "neutral": "中性",
-        "negative": "负面",
-        "unknown": "未知",
-    }
-    rows = []
-    for key in ("positive", "neutral", "negative", "unknown"):
+    meta = (
+        ("positive", "正面", "is-positive"),
+        ("neutral", "中性", "is-neutral"),
+        ("negative", "负面", "is-negative"),
+        ("unknown", "未知", "is-unknown"),
+    )
+    cards = []
+    for key, label, css in meta:
         count = int(sentiment_counts.get(key) or 0)
         if count <= 0 and key == "unknown":
             continue
         pct = round(count / total * 100, 1)
-        rows.append(f"<tr><td>{labels.get(key, key)}</td><td>{count}</td><td>{pct}%</td></tr>")
-    summary = f'<p class="insight-text">综合正面情绪占比 <strong>{_esc(positive_rate)}%</strong>（含中性）。</p>'
-    table = (
-        '<table class="report-table overview-table">'
-        "<thead><tr><th>情绪</th><th>样本数</th><th>占比</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        cards.append(
+            f'<div class="sentiment-kpi-item {css}">'
+            f'<div class="sentiment-kpi-label">{label}</div>'
+            f'<div class="sentiment-kpi-value">{count}</div>'
+            f'<div class="sentiment-kpi-pct">{pct}%</div>'
+            f"</div>"
+        )
+    summary = (
+        f'<p class="insight-text sentiment-kpi-summary">'
+        f'综合正面情绪占比 <strong>{_esc(positive_rate)}%</strong>（含中性）。'
+        f"</p>"
     )
-    return summary + table
+    return summary + f'<div class="sentiment-kpi">{"".join(cards)}</div>'
 
 
 def render_diagnosis_swot(
@@ -312,11 +317,12 @@ def render_diagnosis_swot(
         text = str(content or "").strip()
         if not text:
             continue
-        body = text if text.startswith("<") else f"<p>{_esc(text)}</p>"
+        # plain text 保留换行，避免纵向块里挤成一段
+        body = text if text.startswith("<") else f'<p class="swot-body">{_esc(text)}</p>'
         blocks.append(f'<div class="swot-card {css}"><h4>{_esc(title)}</h4>{body}</div>')
     if not blocks:
         return ""
-    return f'<div class="swot-grid">{"".join(blocks)}</div>'
+    return f'<div class="swot-stack">{"".join(blocks)}</div>'
 
 
 def render_competitor_landscape_table(rows: list[dict[str, Any]]) -> str:

@@ -47,6 +47,10 @@ SUBSECTION_LABELS = frozenset({
     "资源覆盖", "服务特色", "特色服务", "适合客户", "适合对象", "适合需求",
     "覆盖范围", "服务范围", "服务优势", "服务特点", "资源规模", "资源真实性",
     "核心资质",
+    # 公司详情 / 选型段标题（常见被误当成选手）
+    "成立时间", "注册资金", "一站式服务", "标杆项目", "全链条资质", "生产设备齐全",
+    "选择建议", "补充推荐", "选择要点", "按需求类型选", "核实资质", "看案例",
+    "价格透明", "媒体资源型", "技术创新型",
 })
 # 公司详情字段名：资质层面 / 规模体量 / XX能力 / XX优势… — 不是选手
 _FIELD_LABEL_RE = re.compile(
@@ -60,7 +64,14 @@ _FIELD_LABEL_RE = re.compile(
     r"|(?:服务|资源|产品|渠道|品牌|技术|团队)"
     r"(?:能力|特色|特点|优势|规模|范围|覆盖|体系|真实性)"
     r"|投放建议|快速选型|覆盖面|覆盖规模|覆盖范围"
+    r"|成立时间|注册资金|一站式服务|标杆项目|全链条资质|生产设备齐全"
+    r"|选择建议|补充推荐|选择要点|按需求类型选"
     r")$"
+)
+# 「一、广州伟源光电科技有限公司」= 选手；「一、电梯广告公司」= 分类
+_COMPANY_ENTITY_HINT_RE = re.compile(
+    r"(有限公司|股份有限公司|有限责任公司|集团有限|股份公司|（集团）|株式会社|"
+    r"Co\.,?\s*Ltd\.?|Inc\.?)"
 )
 # 学科/学习项误入榜（教育类正文），不当作公司
 _NON_COMPANY_TOKENS = frozenset({
@@ -89,6 +100,7 @@ _NON_RANK_CATEGORY_HINTS = (
     "核心判断", "选型建议", "快速对照", "快速参考", "对照",
     "关键考量", "决策路径", "评估", "checklist", "Checklist",
     "下一步", "建议的下一步", "维度", "关键问题",
+    "选择建议", "补充推荐", "选择要点", "案例总结",
 )
 _SENTENCE_NAME_HINTS = (
     "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
@@ -132,6 +144,10 @@ def _looks_like_company_list_name(name: str) -> bool:
     cleaned = str(name or "").strip()
     if not cleaned or len(cleaned) > 40:
         return False
+    if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
+        return False
+    if cleaned in _NON_COMPANY_TOKENS:
+        return False
     if any(hint in cleaned for hint in _SENTENCE_NAME_HINTS):
         return False
     if any(ch in cleaned for ch in "，。；！？"):
@@ -142,6 +158,34 @@ def _looks_like_company_list_name(name: str) -> bool:
     if len(cleaned) > 14 and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
         return False
     return True
+
+
+def _strip_numbered_heading_prefix(content: str) -> str | None:
+    """Strip 一、 / 1. prefix; return body or None if not numbered."""
+    text = str(content or "").strip()
+    match = re.match(r"^[一二三四五六七八九十百]+[、.．]\s*(.+)$", text)
+    if match:
+        return match.group(1).strip()
+    numbered = NUMBERED_TITLE_RE.match(text)
+    if numbered:
+        return numbered.group(2).strip()
+    return None
+
+
+def _company_from_numbered_heading(content: str) -> str | None:
+    """「一、广州伟源光电科技有限公司（…）」→ 公司名；「一、电梯广告公司」→ None（分类）。"""
+    body = _strip_numbered_heading_prefix(content)
+    if not body:
+        return None
+    name = re.split(r"[（(]", body, maxsplit=1)[0].strip()
+    name = _clean_item_name(name)
+    if not name or _is_subsection_label(name) or name in SUBSECTION_LABELS:
+        return None
+    if not _COMPANY_ENTITY_HINT_RE.search(name):
+        return None
+    if not _looks_like_company_list_name(name):
+        return None
+    return name
 
 
 def _is_non_rank_category(category: str | None) -> bool:
@@ -242,9 +286,23 @@ def _split_markdown_table_cells(line: str) -> list[str]:
     return [cell.strip() for cell in stripped.split("|")]
 
 
-_TABLE_COMPANY_HEADERS = ("企业名称", "公司名称", "公司名", "品牌名称", "机构名称")
-_TABLE_COMPANY_FALLBACK = ("公司", "企业", "品牌")
+_TABLE_COMPANY_HEADERS = (
+    "企业名称",
+    "公司名称",
+    "公司名",
+    "品牌名称",
+    "机构名称",
+    "代表公司",
+    "代表厂商",
+    "推荐公司",
+    "供应商",
+    "服务商",
+    "供应商梯队",
+)
+_TABLE_COMPANY_FALLBACK = ("公司", "企业", "品牌", "供应商", "服务商", "厂商")
+_TABLE_COMPANY_HEADER_EXCLUDE = ("诉求", "红线", "场景", "能力", "标签", "适合", "指标", "数值", "说明", "特点")
 _TABLE_RANK_HEADERS = ("排名", "序号", "位次", "rank", "no")
+_TABLE_CATEGORY_LABEL_HINTS = ("梯队", "优先", "应对", "场景", "诉求", "头部人力", "驱动型", "科技驱动")
 
 
 def _normalize_table_header(cell: str) -> str:
@@ -253,9 +311,13 @@ def _normalize_table_header(cell: str) -> str:
 
 def _header_matches_company(column: str) -> bool:
     norm = _normalize_table_header(column)
-    if any(token.casefold() in norm or norm in token.casefold() for token in _TABLE_COMPANY_HEADERS):
+    if not norm:
+        return False
+    if any(hint in norm for hint in _TABLE_COMPANY_HEADER_EXCLUDE):
+        return False
+    if any(token.casefold() in norm for token in _TABLE_COMPANY_HEADERS):
         return True
-    return norm in {token.casefold() for token in _TABLE_COMPANY_FALLBACK}
+    return any(token in norm for token in _TABLE_COMPANY_FALLBACK)
 
 
 def _header_matches_rank(column: str) -> bool:
@@ -276,12 +338,73 @@ def _resolve_table_columns(header_cells: list[str]) -> tuple[int | None, int | N
     return company_col, rank_col
 
 
+def _looks_like_table_category_label(name: str) -> bool:
+    text = str(name or "").strip()
+    if not text:
+        return True
+    if any(hint in text for hint in _TABLE_CATEGORY_LABEL_HINTS):
+        return True
+    if len(text) >= 4 and (text.endswith("型") or text.endswith("类")):
+        return True
+    if re.fullmatch(r".*(BPO|外包)$", text) and len(text) >= 6:
+        return True
+    return False
+
+
+def _split_table_company_cell(cell: str) -> list[str]:
+    """格内并列公司拆成名单（按出现顺序）；方案 B：位次=格内第几个。"""
+    raw = str(cell or "").strip()
+    if not raw:
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        cleaned = _clean_item_name(value)
+        if not cleaned or cleaned in seen:
+            return
+        if _looks_like_table_category_label(cleaned):
+            return
+        if not _looks_like_company_list_name(cleaned):
+            return
+        seen.add(cleaned)
+        names.append(cleaned)
+
+    # 优先：加粗公司名（表格常见 **泰盈**、**鸿联九五**）
+    bolds = re.findall(r"\*\*([^*]+)\*\*", raw)
+    if bolds:
+        for item in bolds:
+            add(item)
+        if names:
+            return names
+
+    # （如A、B）/ （例如A、B）
+    like = re.search(r"[（(](?:如|例如|比如)?([^）)]+)[)）]", raw)
+    if like:
+        for part in re.split(r"[、，,/]", like.group(1)):
+            add(part)
+        if names:
+            return names
+
+    # 去括号说明后按顿号拆
+    stripped = re.sub(r"[（(][^）)]*[)）]", "", raw)
+    if any(sep in stripped for sep in ("、", "，", ",")):
+        for part in re.split(r"[、，,]", stripped):
+            add(part)
+        if names:
+            return names
+
+    add(raw)
+    return names
+
+
 def _parse_markdown_table_block(
     lines: list[str],
     append_item: Callable[..., None],
     category: str | None,
 ) -> bool:
-    """Parse company rows from a markdown table; rank by row order under category."""
+    """Parse company rows from a markdown table; multi-name cells rank by in-cell order."""
     parsed_lines = [
         line.strip()
         for line in lines
@@ -294,19 +417,32 @@ def _parse_markdown_table_block(
     if company_col is None:
         return False
     row_rank = 0
+    parsed_any = False
     for row in parsed_lines[1:]:
         cells = _split_markdown_table_cells(row)
         if company_col >= len(cells):
             continue
-        name = _clean_item_name(cells[company_col])
-        if not name or _header_matches_company(name):
+        names = _split_table_company_cell(cells[company_col])
+        if not names:
             continue
-        row_rank += 1
         explicit_rank = None
         if rank_col is not None and rank_col < len(cells):
             explicit_rank = _parse_rank_token(cells[rank_col])
-        append_item(name, explicit_rank if explicit_rank is not None else row_rank, category=category)
-    return row_rank > 0
+        if len(names) == 1:
+            row_rank += 1
+            append_item(
+                names[0],
+                explicit_rank if explicit_rank is not None else row_rank,
+                category=category,
+            )
+            parsed_any = True
+            continue
+        # 方案 B：格内并列按出现顺序记 1..n（展示仍是普通名次）
+        for index, name in enumerate(names, 1):
+            append_item(name, index, category=category)
+            parsed_any = True
+        row_rank += 1
+    return parsed_any
 
 
 def _split_combined_header_brands(text: str) -> list[str]:
@@ -537,6 +673,12 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         header = _parse_markdown_header(line)
         if header:
             level, content = header
+            numbered_company = _company_from_numbered_heading(content)
+            if numbered_company:
+                # ### 一、广州伟源光电科技有限公司（…）→ 选手，不是分类
+                append_item(numbered_company, None)
+                in_company_block = True
+                continue
             numbered = NUMBERED_TITLE_RE.match(content)
             if numbered:
                 append_item(numbered.group(2), _next_section_rank(appearance_counters, current_section))
@@ -570,14 +712,24 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 in_company_block = True
                 continue
             if _is_subsection_label(content):
-                current_category = _extract_category_name(line)
-                in_company_block = True
+                # 选择建议 / 补充推荐：结束公司详情块，不当选手
+                in_company_block = False
+                if _is_non_rank_category(content) or content in SUBSECTION_LABELS:
+                    current_section = _extract_category_name(line)
+                    current_category = current_section
                 continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True
             continue
 
         if _is_category_header(line):
+            stripped = re.sub(r"^\*\*|\*\*$", "", line.strip())
+            stripped = re.sub(r"^【|】$", "", stripped).strip()
+            numbered_company = _company_from_numbered_heading(stripped)
+            if numbered_company:
+                append_item(numbered_company, None)
+                in_company_block = True
+                continue
             category_name = _extract_category_name(line)
             combined = _split_combined_header_brands(category_name)
             if combined:
@@ -816,6 +968,34 @@ def _is_rankable_content_line(line: str) -> bool:
     return bool(NUMBERED_TITLE_RE.match(plain))
 
 
+def _is_company_nomination_line(line: str) -> bool:
+    """Appearance 只计「提名公司」的行，不计成立时间/核心优势等字段 bullet。"""
+    stripped = line.strip()
+    if not stripped or len(stripped) > 120:
+        return False
+    header = _parse_markdown_header(stripped)
+    if header:
+        return _company_from_numbered_heading(header[1]) is not None
+    plain = re.sub(r"^\*\*|\*\*$", "", stripped).strip()
+    if _company_from_numbered_heading(plain):
+        return True
+    list_match = LIST_ITEM_RE.match(stripped)
+    if list_match:
+        name = _extract_list_item_name(list_match.group(4))
+        return bool(name) and _looks_like_company_list_name(name)
+    bullet = BULLET_ITEM_RE.match(stripped)
+    if bullet:
+        name = _extract_list_item_name(bullet.group(1) or bullet.group(2) or "")
+        if not name or not _looks_like_company_list_name(name):
+            return False
+        # 字段短标签已在 _looks_like_company_list_name 拦掉；无公司后缀的短词也不计
+        return any(hint in name for hint in _CORP_NAME_HINTS) or bool(_COMPANY_ENTITY_HINT_RE.search(name))
+    if NUMBERED_TITLE_RE.match(plain):
+        name = _extract_list_item_name(NUMBERED_TITLE_RE.match(plain).group(2))
+        return bool(name) and _looks_like_company_list_name(name)
+    return False
+
+
 def appearance_order_rank_scoped(
     text: str,
     match_line: Callable[[str], bool],
@@ -843,7 +1023,7 @@ def appearance_order_rank_scoped(
         for line in lines[start + 1:end]:
             if not line or _is_major_section_line(line):
                 continue
-            if not _is_rankable_content_line(line):
+            if not _is_company_nomination_line(line):
                 continue
             order += 1
             if match_line(line):
@@ -866,7 +1046,7 @@ def appearance_order_rank_scoped(
 
     order = 0
     for line in lines:
-        if not _is_rankable_content_line(line):
+        if not _is_company_nomination_line(line):
             continue
         order += 1
         if match_line(line):

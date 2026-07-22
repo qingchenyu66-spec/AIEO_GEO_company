@@ -156,12 +156,147 @@ class DeepseekClient:
                 return json.loads(raw[start:end + 1])
             raise DeepseekApiError("DeepSeek 返回内容无法解析为 JSON") from None
 
+    def classify_brand_answer_sentiments(
+        self,
+        *,
+        brand_name: str,
+        items: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """二次解析：对品牌相关回答做正/中/负归类。
+
+        items: [{id, text}]，返回 [{id, sentiment}]，sentiment 为 positive|neutral|negative。
+        """
+        rows = [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "text": str(item.get("text") or "").strip()[:1200],
+            }
+            for item in items
+            if str(item.get("id") or "").strip() and str(item.get("text") or "").strip()
+        ]
+        if not rows:
+            return []
+        numbered = "\n\n".join(
+            f"[{index}] id={row['id']}\n{row['text']}"
+            for index, row in enumerate(rows, start=1)
+        )
+        system_prompt = (
+            "你是品牌舆情分析助手。根据 AI 搜索/问答原文，判断对指定品牌的情感倾向。"
+            "只输出 JSON，不要解释。"
+        )
+        user_prompt = (
+            f"品牌名称：{brand_name}\n"
+            "请对下列编号摘录分别判定情感：positive（正面）、neutral（中性）、negative（负面）。\n"
+            "规则：\n"
+            "1. 以该品牌在文中的评价口径为准，忽略无关竞品褒贬\n"
+            "2. 无明显褒贬或仅客观罗列 → neutral\n"
+            "3. 批评、风险、不推荐、差评 → negative\n"
+            "4. 推荐、优势、认可 → positive\n"
+            '5. 严格输出：{"items":[{"id":"...","sentiment":"positive|neutral|negative"}]}\n'
+            "6. 必须覆盖全部输入 id\n\n"
+            f"{numbered}"
+        )
+        content = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1200,
+            source="brand-analysis-sentiment",
+        )
+        payload = self._parse_json_payload(content)
+        raw_items = payload.get("items") if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            raise DeepseekApiError("DeepSeek JSON 缺少 items 数组")
+        allowed = {"positive", "neutral", "negative"}
+        known_ids = {row["id"] for row in rows}
+        results: list[dict[str, str]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            sentiment = str(item.get("sentiment") or "").strip().lower()
+            if item_id not in known_ids or sentiment not in allowed:
+                continue
+            results.append({"id": item_id, "sentiment": sentiment})
+        return results
+
+    def extract_brand_answer_descriptions(
+        self,
+        *,
+        brand_name: str,
+        items: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """抽取每条回答中对该品牌的一句短描述。
+
+        items: [{id, text}]，返回 [{id, description}]。
+        """
+        rows = [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "text": str(item.get("text") or "").strip()[:1200],
+            }
+            for item in items
+            if str(item.get("id") or "").strip() and str(item.get("text") or "").strip()
+        ]
+        if not rows:
+            return []
+        numbered = "\n\n".join(
+            f"[{index}] id={row['id']}\n{row['text']}"
+            for index, row in enumerate(rows, start=1)
+        )
+        system_prompt = (
+            "你是品牌监测文案助手。根据 AI 回答原文，抽取一句关于指定品牌的客观短描述。"
+            "只输出 JSON，不要解释。"
+        )
+        user_prompt = (
+            f"品牌名称：{brand_name}\n"
+            "请对下列编号摘录各写一句中文短描述（12～36 字），概括该文对该品牌的核心说法。\n"
+            "规则：\n"
+            "1. 只写与该品牌相关的内容，忽略无关竞品\n"
+            "2. 客观陈述，不要加「我认为」\n"
+            "3. 同类说法尽量使用相同措辞，便于归并\n"
+            "4. 文中未实质提及该品牌 → description 用空字符串\n"
+            '5. 严格输出：{"items":[{"id":"...","description":"..."}]}\n'
+            "6. 必须覆盖全部输入 id\n\n"
+            f"{numbered}"
+        )
+        content = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1600,
+            source="brand-analysis-description",
+        )
+        payload = self._parse_json_payload(content)
+        raw_items = payload.get("items") if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            raise DeepseekApiError("DeepSeek JSON 缺少 items 数组")
+        known_ids = {row["id"] for row in rows}
+        results: list[dict[str, str]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            description = str(item.get("description") or "").strip()
+            description = re.sub(r"\s+", "", description)
+            if item_id not in known_ids:
+                continue
+            if len(description) > 60:
+                description = description[:60]
+            results.append({"id": item_id, "description": description})
+        return results
+
     def extract_sentiment_phrases(
         self,
         *,
         brand_name: str,
         polarity: str,
         excerpts: list[dict[str, str]],
+        exclude_names: list[str] | None = None,
     ) -> list[dict[str, str]]:
         """Extract brand sentiment phrases from numbered monitor excerpts."""
         if not excerpts:
@@ -172,21 +307,33 @@ class DeepseekClient:
         for index, item in enumerate(excerpts, start=1):
             lines.append(f"[{index}] {item['text']}")
 
+        exclude_block = ""
+        cleaned_exclude = [str(name).strip() for name in (exclude_names or []) if str(name).strip()]
+        if cleaned_exclude:
+            exclude_block = (
+                "禁止输出的实体名（品牌/竞品/别名），也勿输出仅含这些名字的短语：\n"
+                + "、".join(cleaned_exclude[:40])
+                + "\n\n"
+            )
+
         system_prompt = (
-            "你是 GEO 品牌监测分析助手。请从 AI 回答摘录中提取与指定品牌相关的情绪关键词/短语，"
-            "用于词云展示。只输出 JSON，不要解释。"
+            "你是 GEO 品牌监测分析助手。请从 AI 回答摘录中提取与指定品牌相关的情绪评价短语，"
+            "用于正负面词云。只输出 JSON，不要解释。"
         )
         user_prompt = (
             f"品牌：{brand_name}\n"
             f"情感倾向：{polarity_label}\n\n"
+            f"{exclude_block}"
             "摘录：\n"
             f"{chr(10).join(lines)}\n\n"
             "要求：\n"
-            "1. 只提取与品牌评价相关的短语，4-16 个汉字为宜\n"
+            "1. 只提取对该品牌的评价/口碑短语（能力、口碑、风险、短板等），4-16 个汉字为宜\n"
             "2. 短语必须能在对应编号摘录中找到原文（可去掉标点差异）\n"
-            "3. 不要输出品牌名本身，不要输出「核心优势」「覆盖全国」等空泛词\n"
-            "4. 最多 20 条\n"
-            '5. 严格输出 JSON：{"keywords":[{"text":"短语","index":1}]}\n'
+            "3. 不要输出：品牌/竞品公司名、客户名、地名、行业泛词"
+            "（如「核心优势」「覆盖全国」）、问答套话（如「作为参考」「您的需求」）\n"
+            "4. 不要输出仅罗列对比公司的短语\n"
+            "5. 最多 20 条\n"
+            '6. 严格输出 JSON：{"keywords":[{"text":"短语","index":1}]}\n'
             "   index 为摘录编号（从 1 开始）"
         )
 

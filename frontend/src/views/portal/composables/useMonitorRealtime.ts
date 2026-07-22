@@ -963,7 +963,13 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         ? tasks.filter(task => monitorTaskBeforeToday(task))
         : tasks
       applyInsightsQuery()
-      if (taskIdFromQuery) {
+      if (subtaskIdFromQuery) {
+        // 深链：先开抽屉（单条 subtask），矩阵后台加载，避免卡在整页矩阵
+        viewMode.value = 'matrix'
+        void loadRankingMatrix()
+        await openSubtaskById('', subtaskIdFromQuery)
+        clearDeepLinkQuery()
+      } else if (taskIdFromQuery) {
         await selectMonitorTask(taskIdFromQuery)
       } else if (
         loadTaskDetail
@@ -972,12 +978,6 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         && monitorTasks.value[0]?.task_id
       ) {
         await selectMonitorTask(monitorTasks.value[0].task_id)
-      }
-      if (subtaskIdFromQuery) {
-        viewMode.value = 'matrix'
-        await loadRankingMatrix()
-        await openSubtaskById(taskIdFromQuery || monitorDetail.value?.task.task_id || '', subtaskIdFromQuery)
-        clearDeepLinkQuery()
       }
     } catch (error: unknown) {
       notifyOperationError(error, '检测任务加载失败')

@@ -61,6 +61,7 @@ const SnapshotBackfillOpsPage = defineAsyncComponent(() => import('./portal/page
 const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
 const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
+const BrandAnalysisPage = defineAsyncComponent(() => import('./portal/pages/BrandAnalysisPage.vue'))
 const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/ApprovalCenterPage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
 
@@ -154,6 +155,7 @@ const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowle
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
 const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approvals')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
+const isBrandAnalysisPage = computed(() => activeMenuCode.value === 'customer.brand_analysis')
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
 
 const workspaceFullscreen = useWorkspaceFullscreen()
@@ -234,6 +236,9 @@ const pageSubtitle = computed(() => {
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'
+  if (activeMenuCode.value === 'customer.brand_analysis') {
+    return '基于已购平台样本的文字诊断：提及率、短板、AI 描述与分端表现'
+  }
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 
@@ -415,6 +420,7 @@ onMounted(() => {
     <SnapshotBackfillOpsPage v-else-if="isSnapshotBackfillPage" />
     <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
     <KnowledgeBasePage v-else-if="isKnowledgePage" />
+    <BrandAnalysisPage v-else-if="isBrandAnalysisPage" />
     <ApprovalCenterPage v-else-if="isApprovalPage" />
 
     <template v-else>

@@ -1,0 +1,50 @@
+"""Brand word group helpers: run_mode keys and no exposure_terms."""
+
+from datetime import datetime
+
+from app.services.schedule_service import (
+    brand_word_once_schedule_key,
+    brand_word_weekly_schedule_key,
+    is_brand_word_schedule_key,
+)
+
+
+def test_brand_word_schedule_key_helpers():
+    now = datetime(2026, 7, 20, 9, 0, 0)  # Monday
+    weekly = brand_word_weekly_schedule_key(now)
+    once = brand_word_once_schedule_key(now)
+    assert weekly == "bw20260720-0900"
+    assert once.startswith("bwonce-202607200900")
+    assert is_brand_word_schedule_key(f"{weekly}-kw12")
+    assert is_brand_word_schedule_key(f"{once}-kw12")
+    assert not is_brand_word_schedule_key("20260720-0930-kw12")
+
+
+def test_brand_word_group_save_request_run_mode():
+    from app.schemas.brand import BrandWordGroupSaveRequest
+
+    once = BrandWordGroupSaveRequest(monitor_keywords=["品牌A"], run_mode="once", platforms=["deepseek"])
+    weekly = BrandWordGroupSaveRequest(monitor_keywords=["品牌A"], run_mode="weekly", platforms=["deepseek"])
+    assert once.run_mode == "once"
+    assert weekly.run_mode == "weekly"
+    assert "exposure_terms" not in BrandWordGroupSaveRequest.model_fields
+
+
+def test_brand_word_match_terms_fallback_logic():
+    """品牌词组无露出词时，应用非行业品牌词作为匹配别名（与 molizhishu_monitor_terms 一致）。"""
+    from app.services.brand_service import _is_industry_monitor_keyword
+
+    class _Asset:
+        brand_name = "鸿联九五"
+        brand_short_name = "鸿联"
+        company_full_name = "鸿联九五信息产业股份有限公司"
+        aliases_json = ["HL95"]
+
+    asset = _Asset()
+    group_keywords = ["鸿联九五", "鸿联"]
+    group_exposure: list[str] = []
+    match_terms = group_exposure or [
+        kw for kw in group_keywords if kw and not _is_industry_monitor_keyword(kw, asset)
+    ]
+    assert match_terms == ["鸿联九五", "鸿联"]
+    assert _is_industry_monitor_keyword("电梯广告投放", asset)

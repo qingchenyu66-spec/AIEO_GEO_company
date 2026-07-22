@@ -36,6 +36,7 @@ class MonitorTaskCreateRequest(BaseModel):
     platforms: list[PlatformConfig] = Field(min_length=1)
     region_code: list[str] | None = Field(default=None, max_length=1)
     callback_url: HttpUrl | None = None
+    purpose: Literal["geo", "brand_word"] = "geo"
 
 
 class MonitorTaskQuery(BaseModel):
@@ -79,6 +80,7 @@ class SnapshotBackfillListSummary(BaseModel):
     limit: int = 50
     has_more: bool = False
     scan_capped: bool = False
+    summary_partial: bool = False
 
 
 class SnapshotBackfillListResponse(BaseModel):

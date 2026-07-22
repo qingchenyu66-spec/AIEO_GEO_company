@@ -1,9 +1,10 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { withRetry } from '../../../composables/useRetry'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
+import { withRetry } from '../../../composables/useRetry'
 import { getCompetitorCompare, getSentimentKeywords, type CompetitorCompareSummary, type SentimentKeywordItem, type SentimentKeywordsSummary } from '../../../services/analytics'
+import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
 import { useSentimentWordCloud, preloadSentimentWordCloudRuntime } from '../../../composables/useSentimentWordCloud'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -12,6 +13,7 @@ import {
   workspaceTrendPeriodLabel,
   type WorkspaceTrendPreset,
 } from '../../../utils/customerMonitorDate'
+import { notifyOperationError } from '../../../utils/requestError'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { resolveRealtimeMenu } from '../portalNavigation'
 import { platformLabelMap } from '../portalMaps'
@@ -86,9 +88,14 @@ export function useBrandInsights(options?: {
     mentionTrend: mentionTrendChartRef,
     sentimentTrend: sentimentTrendChartRef,
   })
+  const snapshotVisible = ref(false)
+  const snapshotLoading = ref(false)
+  const snapshotSubtask = ref<MonitorSubtask | null>(null)
+  const snapshotPhrase = ref('')
+
   const { render: renderWordCloud } = useSentimentWordCloud(
     sentimentWordCloudRef,
-    item => drillDownToSnapshot(item),
+    item => void openKeywordSnapshot(item),
   )
 
   const days = computed(() => Number(datePreset.value))
@@ -322,26 +329,29 @@ export function useBrandInsights(options?: {
     router.push({ path: route.path, query }).catch(() => undefined)
   }
 
-  function drillDownToSnapshot(item: SentimentKeywordItem) {
-    const query: Record<string, string> = {
-      ...Object.fromEntries(
-        Object.entries(route.query).filter(([, value]) => value != null).map(([key, value]) => [key, String(value)]),
-      ),
-      menu: isCustomerView.value ? 'customer.realtime' : 'platform.snapshot_backfill',
-      view: 'matrix',
-      task_id: item.task_id,
-      subtask_id: item.subtask_id,
-      date_days: datePreset.value,
+  async function openKeywordSnapshot(item: SentimentKeywordItem) {
+    const subtaskId = String(item.subtask_id || '').trim()
+    if (!subtaskId) {
+      ElMessage.warning('该词暂无关联快照')
+      return
     }
+    snapshotPhrase.value = item.text
+    snapshotVisible.value = true
+    snapshotLoading.value = true
+    snapshotSubtask.value = null
+    try {
+      snapshotSubtask.value = await withRetry(() => getMonitorSubtask(subtaskId))
+    } catch (error: unknown) {
+      notifyOperationError(error, '快照加载失败')
+      snapshotVisible.value = false
+    } finally {
+      snapshotLoading.value = false
+    }
+  }
 
-    if (selectedPlatforms.value.length === 1) {
-      query.platform = selectedPlatforms.value[0]
-    }
-    if (promptFilter.value) {
-      query.monitor_prompt = promptFilter.value
-    }
-
-    router.push({ path: route.path, query }).catch(() => undefined)
+  function closeKeywordSnapshot() {
+    snapshotSubtask.value = null
+    snapshotPhrase.value = ''
   }
 
   function togglePlatform(code: string) {
@@ -355,34 +365,67 @@ export function useBrandInsights(options?: {
     selectedPlatforms.value = [...set]
   }
 
+  let keywordsRequested = false
+  let keywordsObserver: IntersectionObserver | null = null
+
   async function loadSummary() {
     const version = ++loadVersion
     loading.value = true
-    keywordsLoading.value = true
+    keywordsLoading.value = false
     sentimentKeywords.value = null
+    keywordsRequested = false
     try {
       const params = buildCompareParams()
-      const keywordParams = { ...params, limit: 55 }
-      const comparePromise = withRetry(() => getCompetitorCompare(params))
-      const keywordsPromise = withRetry(() => getSentimentKeywords(keywordParams)).catch(() => null)
-
-      const compareData = await comparePromise
+      // ponytail: 不与词云并行抢库；不重试超时（避免连弹 toast）
+      const compareData = await getCompetitorCompare(params)
       if (version !== loadVersion) return
       summary.value = compareData
-      loading.value = false
-
-      void keywordsPromise.then(keywordData => {
-        if (version !== loadVersion) return
-        if (keywordData) sentimentKeywords.value = keywordData
-        keywordsLoading.value = false
-      })
     } catch (error: unknown) {
       if (version !== loadVersion) return
-      keywordsLoading.value = false
       ElMessage.error(`品牌洞察数据加载失败：${errorMessage(error)}`)
     } finally {
       if (version === loadVersion) loading.value = false
     }
+  }
+
+  async function loadSentimentKeywords() {
+    if (!summary.value || keywordsRequested || keywordsLoading.value) return
+    keywordsRequested = true
+    const version = loadVersion
+    keywordsLoading.value = true
+    try {
+      const params = { ...buildCompareParams(), limit: 55 }
+      const keywordData = await getSentimentKeywords(params)
+      if (version !== loadVersion) return
+      if (keywordData) sentimentKeywords.value = keywordData
+    } catch {
+      if (version !== loadVersion) return
+      keywordsRequested = false
+    } finally {
+      if (version === loadVersion) keywordsLoading.value = false
+    }
+  }
+
+  /** 词云面板进入视口后再拉情绪词（首屏不抢主接口）。 */
+  function observeWordcloudPanel(el: HTMLElement | null) {
+    keywordsObserver?.disconnect()
+    keywordsObserver = null
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      void loadSentimentKeywords()
+      return
+    }
+    keywordsObserver = new IntersectionObserver((entries) => {
+      if (!entries.some(entry => entry.isIntersecting)) return
+      keywordsObserver?.disconnect()
+      keywordsObserver = null
+      void loadSentimentKeywords()
+    }, { rootMargin: '120px 0px' })
+    keywordsObserver.observe(el)
+  }
+
+  function disposeWordcloudObserver() {
+    keywordsObserver?.disconnect()
+    keywordsObserver = null
   }
 
   async function refreshTrendCharts() {
@@ -452,10 +495,19 @@ export function useBrandInsights(options?: {
     ElMessage.success('已导出 CSV')
   }
 
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleReload() {
+    if (reloadTimer != null) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null
+      void loadSummary()
+    }, 200)
+  }
+
   watch([datePreset], () => {
-    if (!isCustomerView.value) void loadSummary()
+    if (!isCustomerView.value) scheduleReload()
   })
-  watch([selectedPlatforms, promptFilter], () => { void loadSummary() })
+  watch([selectedPlatforms, promptFilter], () => { scheduleReload() })
   watch(promptOptions, (options) => {
     if (promptFilter.value && !options.includes(promptFilter.value)) {
       promptFilter.value = ''
@@ -466,13 +518,13 @@ export function useBrandInsights(options?: {
       .map(group => `${group.id}:${group.status}:${(group.monitor_keywords || []).join('|')}`)
       .join('||'),
     (next, prev) => {
-      if (prev && next !== prev) void loadSummary()
+      if (prev && next !== prev) scheduleReload()
     },
   )
   watch(
     () => brandCompetitors.value.map(item => `${item.id}:${item.name}`).join('|'),
     (next, prev) => {
-      if (prev && next !== prev) void loadSummary()
+      if (prev && next !== prev) scheduleReload()
     },
   )
   watch([focusedMentionTrendSeries, sentimentTrendRows, loading], () => {
@@ -491,6 +543,7 @@ export function useBrandInsights(options?: {
   })
 
   onUnmounted(() => {
+    disposeWordcloudObserver()
     window.removeEventListener('resize', refreshCharts)
   })
 
@@ -532,11 +585,17 @@ export function useBrandInsights(options?: {
     sentimentTrendChartRef,
     sentimentWordCloudRef,
     loadSummary,
+    observeWordcloudPanel,
     resetFilters,
     exportCsv,
     togglePlatform,
     drillDownToRealtime,
-    drillDownToSnapshot,
+    openKeywordSnapshot,
+    closeKeywordSnapshot,
+    snapshotVisible,
+    snapshotLoading,
+    snapshotSubtask,
+    snapshotPhrase,
     platformLabelMap,
   }
 }

@@ -37,6 +37,7 @@ def _today_global_platform_health(db: Session) -> dict[str, dict[str, Any]]:
             .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
             .where(
                 GeoMonitorTask.deleted.is_(False),
+                GeoMonitorTask.purpose == "geo",
                 GeoMonitorTask.created_at >= start_at,
                 GeoMonitorTask.created_at <= end_at,
             )

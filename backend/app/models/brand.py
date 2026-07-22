@@ -79,6 +79,44 @@ class BrandKeywordGroup(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
 
 
+class BrandWordGroup(Base):
+    """企业品牌词组：品牌词 + 平台 + 运行时间（仅本次 / 每周一）。无露出词（匹配用语企业资产别名）。"""
+
+    __tablename__ = "geo_brand_word_group"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="品牌词组ID")
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False, comment="所属企业ID")
+    brand_asset_id: Mapped[int] = mapped_column(ForeignKey("geo_brand_asset.id"), index=True, nullable=False, comment="品牌资产ID")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="品牌词组", comment="词组名称")
+    monitor_keyword: Mapped[str] = mapped_column(String(150), nullable=False, comment="品牌词（主）")
+    monitor_keywords_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="品牌词列表JSON",
+    )
+    platforms_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="监测平台编码JSON",
+    )
+    run_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="once",
+        server_default="once",
+        comment="运行时间：once仅本次 / weekly每周一",
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序")
+    status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False, comment="逻辑删除")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="更新时间")
+
+
 class BrandCompetitor(Base):
     """企业竞品库。"""
 

@@ -108,9 +108,13 @@ async function handleRead(item: SystemNotification) {
 }
 
 async function handleReadAll() {
-  await markAllNotificationsRead()
-  items.value = items.value.map(item => ({ ...item, is_read: true }))
-  unreadCount.value = 0
+  try {
+    await markAllNotificationsRead()
+    items.value = items.value.map(item => ({ ...item, is_read: true }))
+    unreadCount.value = await getUnreadNotificationCount()
+  } catch (error: unknown) {
+    errorText.value = extractErrorDetail(error)
+  }
 }
 
 onMounted(() => {

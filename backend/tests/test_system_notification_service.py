@@ -1,5 +1,7 @@
 import pytest
-from sqlalchemy import create_engine, select
+from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -7,7 +9,9 @@ from app.core.database import Base
 from app.models.notification import SystemNotification, SystemNotificationRead
 from app.services.system_notification_service import (
     can_view_notification_category,
+    count_unread_notifications,
     list_notifications_for_user,
+    mark_all_notifications_read,
     mark_notification_read,
     resolve_stale_monitor_alert_notifications,
     upsert_monitor_alert_notification,
@@ -17,7 +21,17 @@ from app.services.system_notification_service import (
 
 @pytest.fixture()
 def db_session():
+    from sqlalchemy import event
+
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+
+    def _register_json_helpers(dbapi_conn, _connection_record):
+        # MySQL 可见性过滤用了 json_unquote/json_extract；SQLite 单测补同名空壳
+        dbapi_conn.create_function("json_unquote", 1, lambda value: value)
+        dbapi_conn.create_function("json_extract", 2, lambda _doc, _path: None)
+
+    event.listen(engine, "connect", _register_json_helpers)
+
     Base.metadata.create_all(
         bind=engine,
         tables=[SystemNotification.__table__, SystemNotificationRead.__table__],
@@ -226,3 +240,68 @@ def test_resolve_stale_monitor_alert_notifications(db_session):
     removed = resolve_stale_monitor_alert_notifications(db_session, [])
     assert removed == 1
     assert db_session.scalar(select(SystemNotification).where(SystemNotification.category == "celery_queue")) is None
+
+
+def test_mark_all_read_covers_older_unread_beyond_recent_window(db_session):
+    """全部已读必须覆盖「不在最近 N 条里」的更早未读，否则刷新角标会回来。"""
+    now = datetime.utcnow().replace(tzinfo=None)
+    for index in range(5):
+        db_session.add(SystemNotification(
+            audience_type="PLATFORM",
+            tenant_id=None,
+            category="celery_queue",
+            level="warning",
+            title=f"旧告警 {index}",
+            message="older unread",
+            payload_json="{}",
+            source_key=f"test:old:{index}",
+            created_at=now - timedelta(days=10 - index),
+            updated_at=now - timedelta(days=10 - index),
+        ))
+    newer_read = []
+    for index in range(3):
+        row = SystemNotification(
+            audience_type="PLATFORM",
+            tenant_id=None,
+            category="celery_queue",
+            level="info",
+            title=f"新已读 {index}",
+            message="newer read",
+            payload_json="{}",
+            source_key=f"test:new:{index}",
+            created_at=now - timedelta(hours=3 - index),
+            updated_at=now - timedelta(hours=3 - index),
+        )
+        db_session.add(row)
+        newer_read.append(row)
+    db_session.commit()
+    for row in newer_read:
+        db_session.add(SystemNotificationRead(user_id=7, notification_id=row.id))
+    db_session.commit()
+
+    assert count_unread_notifications(
+        db_session,
+        user_id=7,
+        identity_type="PLATFORM",
+        tenant_id=None,
+        can_view_ops_alerts=True,
+    ) == 5
+
+    marked = mark_all_notifications_read(
+        db_session,
+        user_id=7,
+        identity_type="PLATFORM",
+        tenant_id=None,
+        can_view_ops_alerts=True,
+    )
+    assert marked == 5
+    assert count_unread_notifications(
+        db_session,
+        user_id=7,
+        identity_type="PLATFORM",
+        tenant_id=None,
+        can_view_ops_alerts=True,
+    ) == 0
+    assert int(db_session.scalar(select(func.count()).select_from(SystemNotificationRead).where(
+        SystemNotificationRead.user_id == 7,
+    )) or 0) == 8

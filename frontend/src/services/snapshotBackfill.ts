@@ -51,6 +51,7 @@ export interface SnapshotBackfillQuery {
   pending_only?: boolean
   offset?: number
   limit?: number
+  include_summary?: boolean
 }
 
 export function subtaskNeedsSnapshotBackfill(subtask: { answer_content?: string | null; status?: string; error_message?: string | null }) {
@@ -68,6 +69,7 @@ export interface SnapshotBackfillListSummary {
   limit: number
   has_more: boolean
   scan_capped?: boolean
+  summary_partial?: boolean
 }
 
 export interface SnapshotBackfillListResult {
@@ -92,6 +94,7 @@ export async function getPendingSnapshotBackfills(
       platform: query.platform || undefined,
       keyword: query.keyword || undefined,
       keyword_group: query.keyword_group || undefined,
+      include_summary: query.include_summary,
     },
   })
   const data = response.data.data

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.services.monitor_service import (
     BrandRankResolution,
+    fill_missing_subtask_ranks_for_task,
     _filter_matrix_columns_for_scope,
     _filter_subtasks_by_exposure_term,
     _keyword_groups_for_exposure_term,
@@ -11,6 +12,38 @@ from app.services.monitor_service import (
     _resolve_prompt_monitor_keyword,
 )
 from app.services.rank_llm_service import should_trigger_llm_fallback
+
+
+class _FakeRankBackfillSession:
+    def __init__(self, subtasks):
+        self._subtasks = subtasks
+
+    def scalars(self, _stmt):
+        return self._subtasks
+
+
+def test_fill_subtask_ranks_recomputes_existing_wrong_rank() -> None:
+    task = SimpleNamespace(
+        task_id="task-1",
+        tenant_id=None,
+        monitor_keywords="BrandCo",
+        raw_request_json={},
+    )
+    subtask = SimpleNamespace(
+        task_id="task-1",
+        prompt="best vendor ranking",
+        answer_content="1. CompetitorCo\n2. BrandCo\n3. OtherCo",
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=8,
+        raw_result_json={},
+    )
+
+    changed = fill_missing_subtask_ranks_for_task(_FakeRankBackfillSession([subtask]), task)
+
+    assert changed == 1
+    assert subtask.mention_position == 2
+    assert subtask.raw_result_json["rank_resolution"]["source"] == "structured"
 
 
 def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:

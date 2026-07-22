@@ -311,7 +311,8 @@ def apply_snapshot_backfill(
     if previous_answer:
         manual_meta["replaced_previous_source"] = previous_source
         manual_meta["replaced_previous_answer_preview"] = excerpt_sensitive_text(previous_answer, limit=80)
-    raw = dict(previous_raw)
+    # 在重算后的 raw 上合并补录元数据，避免冲掉 rank_resolution
+    raw = dict(subtask.raw_result_json or previous_raw or {})
     raw.update(manual_meta)
     subtask.raw_result_json = raw
 
@@ -351,9 +352,9 @@ def apply_snapshot_backfill(
             previous_stat_date=previous_stat_date,
         )
         db.commit()
-        invalidate_monitor_summary_cache(task.tenant_id)
+        invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
     else:
-        invalidate_monitor_summary_cache()
+        invalidate_monitor_summary_cache(bust_overview=True)
     resolve_subtask_backfill_notification(db, subtask.subtask_id)
 
     from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
@@ -660,6 +661,7 @@ def build_snapshot_backfill_item(
         subtask,
         effective_rank=effective,
         use_effective_rank=True,
+        brand_mentioned=rank_display.get("brand_mentioned"),
     )
     dismissed = subtask_backfill_dismissed(subtask)
     ctx["backfill_dismissed"] = dismissed
@@ -777,8 +779,13 @@ def list_snapshot_backfill_page(
     pending_only: bool = False,
     offset: int = 0,
     limit: int = 50,
+    include_summary: bool = True,
 ) -> dict[str, Any]:
-    """运营端快照补录列表（含汇总统计），可按企业/检测日/来源/平台/关键词筛选。"""
+    """运营端快照补录列表（含汇总统计），可按企业/检测日/来源/平台/关键词筛选。
+
+    include_summary=False 时尽早凑齐本页后停止扫描，供首屏轻量加载；
+    汇总请另请求 include_summary=True（可走短缓存）。
+    """
     platform_code = str(platform or "").strip()
     keyword_text = str(keyword or "").strip()
     keyword_group_filter = str(keyword_group or "").strip()
@@ -787,7 +794,11 @@ def list_snapshot_backfill_page(
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .where(GeoMonitorTask.deleted.is_(False))
+        .where(
+            GeoMonitorTask.deleted.is_(False),
+            # 品牌词不进补录运营台；售前无 tenant 的 lead 任务仍可进
+            or_(GeoMonitorTask.purpose == "geo", GeoMonitorTask.tenant_id.is_(None)),
+        )
         .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorSubtask.updated_at.desc())
     )
     if tenant_ids is not None:
@@ -875,11 +886,8 @@ def list_snapshot_backfill_page(
                 ),
             ),
         )
-        weak_rank_pending = and_(
-            GeoMonitorSubtask.mention_position.isnot(None),
-            GeoMonitorSubtask.mention_position > backfill_weak_rank_threshold(),
-        )
-        stmt = stmt.where(or_(fail_pending, weak_rank_pending))
+        # 有回答先全捞，再按展示位次筛：仅前 N 放过（库内 Top3 但展示无位次也要进）
+        stmt = stmt.where(or_(fail_pending, ~no_answer))
     if keyword_text:
         stmt = stmt.where(GeoMonitorSubtask.prompt.like(f"%{keyword_text}%"))
 
@@ -896,6 +904,10 @@ def list_snapshot_backfill_page(
         scan_cap = min(max(limit * 20, 1000), 2500) if not has_scope_filter else min(max(limit * 40, 2000), 4000)
     else:
         scan_cap = None
+    # 首屏轻量：缩小扫描窗口，稍后再拉全量汇总
+    if not include_summary:
+        light_cap = max(int(limit or 50) * 5, 100)
+        scan_cap = light_cap if scan_cap is None else min(scan_cap, light_cap)
     if scan_cap is not None:
         stmt = stmt.limit(scan_cap)
 
@@ -1010,6 +1022,7 @@ def list_snapshot_backfill_page(
             "limit": limit,
             "has_more": page_offset + len(page_items) < total,
             "scan_capped": bool(scan_cap is not None and len(rows) >= scan_cap),
+            "summary_partial": not include_summary,
         },
     }
 

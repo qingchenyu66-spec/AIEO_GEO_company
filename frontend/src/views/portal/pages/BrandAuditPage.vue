@@ -97,6 +97,7 @@ const {
   loadingKnowledgeFiles,
   competitorRows,
   keywordGroupRows,
+  brandWordGroupRows,
   competitorNameInput,
   loadingBrand,
   brandForm,
@@ -116,12 +117,19 @@ const {
   tenantServicePeriod,
   tenantOwnerLabel,
   editingGroupIndex,
+  editingBrandWordGroupIndex,
   keywordGroupDisplayName,
+  brandWordGroupDisplayName,
   startEditGroupName,
   finishEditGroupName,
   cancelEditGroupName,
+  startEditBrandWordGroupName,
+  finishEditBrandWordGroupName,
+  cancelEditBrandWordGroupName,
   addKeywordGroup,
   removeKeywordGroup,
+  addBrandWordGroup,
+  removeBrandWordGroup,
   removeExposureTerm,
   commitMonitorKeywordInput,
   handleMonitorKeywordPaste,
@@ -135,6 +143,7 @@ const {
   openEnterpriseInfo,
   backToEnterpriseList,
   submitBrandAsset,
+  submitBrandWordGroups,
   submitTenant,
   removeTenant,
   restoreTenantService,
@@ -450,6 +459,134 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </div>
         <div class="section-save-actions keyword-save-actions">
           <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测词配置已保存')">保存监测词配置</button>
+        </div>
+      </section>
+      <section v-if="enterpriseDetailTab === 'brand_words'" class="keyword-group-panel">
+        <div class="panel-head">
+          <div>
+            <h2>品牌词组配置</h2>
+            <p>配置品牌词、监测平台与<strong>运行时间</strong>：仅本次（保存后立刻跑一轮）或周（每周一约 9:00）。匹配别名取自企业资料，无需单独配置露出词。</p>
+          </div>
+          <button v-if="canEditEnterpriseTab('brand_words')" class="filter-search-btn" @click="addBrandWordGroup">新增词组</button>
+        </div>
+        <div class="keyword-group-list">
+          <div v-for="(group, index) in brandWordGroupRows" :key="group.id || `bw-${index}`" class="keyword-group-card">
+            <div class="keyword-group-toolbar">
+              <div class="keyword-group-title">
+                <input
+                  v-if="editingBrandWordGroupIndex === index && canEditEnterpriseTab('brand_words')"
+                  :id="`brand-word-group-name-${index}`"
+                  class="keyword-group-name-input"
+                  :value="group.name || brandWordGroupDisplayName(group, index)"
+                  maxlength="100"
+                  @keydown.enter="finishEditBrandWordGroupName(group, index, ($event.target as HTMLInputElement).value)"
+                  @keydown.esc.prevent="cancelEditBrandWordGroupName"
+                  @blur="finishEditBrandWordGroupName(group, index, ($event.target as HTMLInputElement).value)"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="keyword-group-name"
+                  :class="{ readonly: !canEditEnterpriseTab('brand_words') }"
+                  :disabled="!canEditEnterpriseTab('brand_words')"
+                  @click="startEditBrandWordGroupName(index)"
+                >
+                  {{ brandWordGroupDisplayName(group, index) }}
+                </button>
+              </div>
+              <div class="keyword-group-actions">
+                <label class="keyword-group-status">
+                  <span>运行时间</span>
+                  <select v-model="group.run_mode" :disabled="!canEditEnterpriseTab('brand_words')">
+                    <option value="once">仅本次</option>
+                    <option value="weekly">周</option>
+                  </select>
+                </label>
+                <label class="keyword-group-status">
+                  <span>状态</span>
+                  <select v-model="group.status" :disabled="!canEditEnterpriseTab('brand_words')">
+                    <option :value="true">启用</option>
+                    <option :value="false">停用</option>
+                  </select>
+                </label>
+                <button
+                  v-if="canEditEnterpriseTab('brand_words')"
+                  type="button"
+                  class="danger-text-btn keyword-group-delete-btn"
+                  @click="removeBrandWordGroup(index)"
+                >
+                  删除词组
+                </button>
+              </div>
+            </div>
+            <div class="keyword-group-fields">
+              <div class="keyword-field monitor-keyword-field">
+                <span class="keyword-field-label">品牌词（{{ keywordGroupMonitorKeywords(group).length }}）</span>
+                <div class="keyword-tag-box">
+                  <i v-for="(term, keywordIndex) in keywordGroupMonitorKeywords(group)" :key="`bw-${index}-kw-${keywordIndex}-${term}`">
+                    {{ term }}
+                    <button v-if="canEditEnterpriseTab('brand_words')" type="button" @click="removeMonitorKeyword(group, keywordIndex)">×</button>
+                  </i>
+                  <input
+                    placeholder="输入后回车添加，支持粘贴多行批量添加"
+                    :disabled="!canEditEnterpriseTab('brand_words')"
+                    @keyup.enter="commitMonitorKeywordInput(group, $event)"
+                    @blur="commitMonitorKeywordInput(group, $event)"
+                    @paste="handleMonitorKeywordPaste(group, $event)"
+                  />
+                </div>
+              </div>
+              <div class="keyword-field keyword-group-platform-field">
+                <span class="keyword-field-label">监测平台（{{ platformSelectionCount(group) }}）</span>
+                <div class="platform-check-grid compact">
+                  <label
+                    v-for="platform in (catalogPlatforms.length ? catalogPlatforms : supportedPlatforms)"
+                    :key="`bw-${index}-${platform.code}`"
+                    class="platform-check"
+                    :class="{
+                      'is-disabled': 'selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code),
+                      'is-unavailable': 'labels' in platform && (platform.labels || []).includes('无服务'),
+                      'is-delisted': 'labels' in platform && (platform.labels || []).includes('已下架'),
+                    }"
+                    @click.prevent="onPlatformCheckClick(index, platform.code, 'brand_words')"
+                  >
+                    <input
+                      type="checkbox"
+                      tabindex="-1"
+                      :checked="groupHasPlatform(group, platform.code)"
+                      :disabled="!canEditEnterpriseTab('brand_words') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
+                    />
+                    <PlatformBadge
+                      :code="platform.code"
+                      size="sm"
+                      :label="'name' in platform && platform.name ? platform.name : undefined"
+                    />
+                    <small
+                      v-if="groupHasPlatform(group, platform.code)"
+                      class="platform-mode-tag"
+                      :title="'点击整块可修改模式'"
+                    >
+                      {{ platformModeLabel(group, platform.code) }}
+                    </small>
+                    <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
+                    <button
+                      v-if="canEditEnterpriseTab('brand_words') && groupHasPlatform(group, platform.code)"
+                      type="button"
+                      class="platform-uncheck-btn"
+                      title="取消勾选"
+                      @click.stop.prevent="removeGroupPlatform(index, platform.code, 'brand_words')"
+                    >
+                      ×
+                    </button>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-if="!brandWordGroupRows.length" class="mini-empty">暂无品牌词组，请先新增一个。</div>
+        </div>
+        <div class="section-save-actions keyword-save-actions">
+          <button v-if="canEditEnterpriseTab('brand_words')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandWordGroups('品牌词配置已保存')">保存品牌词配置</button>
         </div>
       </section>
       <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">

@@ -24,6 +24,14 @@ class GeoMonitorTask(Base):
     prompts_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="提交的问题列表JSON")
     platforms_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="提交的平台配置JSON")
     region_code_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="提交的地区编码JSON")
+    purpose: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="geo",
+        server_default="geo",
+        index=True,
+        comment="任务用途：geo日常监测 / brand_word品牌词分析",
+    )
     callback_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="本次任务回调地址")
     poll_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="远端轮询地址")
     remote_created_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="远端创建时间毫秒时间戳")

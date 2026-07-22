@@ -33,6 +33,7 @@ from app.services.monitor_service import (
 from app.services.platform_session import load_platform_session
 from app.services.schedule_service import (
     DueScheduleGroup,
+    enumerate_due_brand_word_weekly_groups,
     enumerate_due_schedule_groups,
     get_schedule_run,
     persist_schedule_group_failure,
@@ -127,6 +128,49 @@ def scan_due_schedules(max_prompts: int | None = None) -> dict[str, Any]:
     result = {"status": "ok", "enqueued": enqueued, "skipped": skipped}
     logger.info("scan_due_schedules enqueued=%s skipped=%s", enqueued, skipped)
     record_beat_scan("app.tasks.monitor.scan_due_schedules", result)
+    return result
+
+
+@celery_app.task(name="app.tasks.monitor.scan_due_brand_word_weekly", ignore_result=True)
+def scan_due_brand_word_weekly(max_prompts: int | None = None) -> dict[str, Any]:
+    """每周一约 09:00 扫描品牌词（run_mode=weekly）并入队提交。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    max_prompts = max_prompts or settings.celery_scan_submit_max_prompts
+    lock_key = _scan_lock_key("scan-bw-weekly", bucket_minutes=5)
+    with redis_lock(lock_key, ttl_seconds=300) as acquired:
+        if not acquired:
+            result = {"status": "locked", "message": "已有其他进程正在扫描品牌词周调度"}
+            record_beat_scan("app.tasks.monitor.scan_due_brand_word_weekly", result)
+            return result
+
+        db = SessionLocal()
+        enqueued = 0
+        skipped = 0
+        try:
+            for item in enumerate_due_brand_word_weekly_groups(db, max_prompts=max_prompts):
+                existing = get_schedule_run(db, item.tenant_id, item.group_key)
+                is_retry = existing is not None and existing.status == "failed"
+                if _enqueue_task(
+                    submit_schedule_group_task,
+                    task_id=_schedule_submit_task_id(item.group_key, is_retry=is_retry),
+                    kwargs={
+                        "tenant_id": item.tenant_id,
+                        "group_key": item.group_key,
+                        "max_prompts": item.max_prompts,
+                        "keyword": item.keyword,
+                    },
+                ):
+                    enqueued += 1
+                else:
+                    skipped += 1
+        finally:
+            db.close()
+
+    result = {"status": "ok", "enqueued": enqueued, "skipped": skipped}
+    logger.info("scan_due_brand_word_weekly enqueued=%s skipped=%s", enqueued, skipped)
+    record_beat_scan("app.tasks.monitor.scan_due_brand_word_weekly", result)
     return result
 
 
@@ -600,3 +644,23 @@ def finalize_platform_probes_task() -> dict[str, Any]:
     finally:
         db.close()
     return {"status": "ok", "finalized": finalized}
+
+
+@celery_app.task(name="app.tasks.monitor.refresh_ops_overview_rollup", bind=True, ignore_result=True)
+def refresh_ops_overview_rollup(self) -> dict[str, Any]:
+    """预热运营总览物理预聚合（全平台 scope）。"""
+    from app.services.ops_overview_rollup_service import refresh_platform_overview_rollup
+
+    db = SessionLocal()
+    try:
+        payload = refresh_platform_overview_rollup(db)
+        return {
+            "status": "ok",
+            "pending_backfill": int((payload or {}).get("pending_backfill") or 0),
+            "platform_stats": len((payload or {}).get("platform_stats") or []),
+        }
+    except Exception as exc:
+        logger.exception("refresh_ops_overview_rollup failed")
+        return {"status": "error", "error": str(exc)}
+    finally:
+        db.close()

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Building2, ChevronDown, LogOut, ShieldCheck } from '@lucide/vue'
+import { onMounted, ref } from 'vue'
+import { Building2, ChevronDown, LogOut, PanelLeft, ShieldCheck } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
 import AppBrandLogo from '../../components/AppBrandLogo.vue'
@@ -9,6 +10,8 @@ import {
   USER_CREATE_MENU,
   USER_LIST_MENU,
 } from './constants'
+
+const SIDEBAR_PIN_KEY = 'geo.portal.sidebarPinned'
 
 defineProps<{
   isPlatform: boolean
@@ -46,6 +49,25 @@ const emit = defineEmits<{
   openAlerts: []
   exitPreview: []
 }>()
+
+const sidebarPinned = ref(false)
+
+onMounted(() => {
+  try {
+    sidebarPinned.value = localStorage.getItem(SIDEBAR_PIN_KEY) === '1'
+  } catch {
+    sidebarPinned.value = false
+  }
+})
+
+function toggleSidebarPin() {
+  sidebarPinned.value = !sidebarPinned.value
+  try {
+    localStorage.setItem(SIDEBAR_PIN_KEY, sidebarPinned.value ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
 </script>
 
 <template>
@@ -54,12 +76,24 @@ const emit = defineEmits<{
     :class="{
       'portal-fullscreen': fullscreen,
       'portal-sidebar-expanded': userMenuExpanded,
+      'portal-sidebar-pinned': sidebarPinned,
     }"
   >
     <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
         <div class="brand-mark"><AppBrandLogo variant="icon" /></div>
         <div><strong>GEO Monitor</strong><span>{{ previewMode ? '客户门户预览' : (isPlatform ? '平台运营端' : '客户企业端') }}</span></div>
+        <button
+          type="button"
+          class="sidebar-pin"
+          :class="{ active: sidebarPinned }"
+          :title="sidebarPinned ? '收起菜单栏' : '固定展开菜单栏'"
+          :aria-pressed="sidebarPinned"
+          aria-label="固定或收起侧栏"
+          @click="toggleSidebarPin"
+        >
+          <PanelLeft />
+        </button>
       </div>
       <div class="portal-tag">
         <ShieldCheck v-if="isPlatform && !previewMode" />

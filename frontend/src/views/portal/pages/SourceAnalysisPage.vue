@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   AlertTriangle,
   Database,
@@ -9,13 +9,17 @@ import {
   RefreshCw,
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import InclusionDetailPanel from '../components/InclusionDetailPanel.vue'
 import { useSourceAnalysis, type SourceDatePreset } from '../composables/useSourceAnalysis'
 import { sourceCategoryColor } from '../sourceCategory'
 import { externalLink } from '../portalUtils'
 import { useAuthStore } from '../../../stores/auth'
+import { parsePreviewTenantId } from '../customerPreview'
+import { useRoute } from 'vue-router'
 import '../../../styles/source-analysis.css'
 
 const auth = useAuthStore()
+const route = useRoute()
 const pageMenuName = computed(() => (
   auth.allowedMenus.find(menu => ['customer.sources', 'platform.sources'].includes(menu.menu_code))?.menu_name || '信源'
 ))
@@ -31,20 +35,17 @@ const {
   trendPeriodLabel,
   loading,
   datePreset,
+  inclusionDateRange,
   platformFilter,
   categoryFilter,
   domainFilter,
   keywordFilter,
   rankTab,
-  rankPage,
-  rankPageSize,
-  rankTotalPages,
   articlePage,
   articleTotalPages,
+  rankPageSize,
   platformTabs,
   filteredSources,
-  activeRankWebsites,
-  pagedRankWebsites,
   activeRankArticles,
   pagedRankArticles,
   sourceTotalCount,
@@ -75,20 +76,21 @@ const {
   domainFromUrl,
 } = useSourceAnalysis({ structureChartRef, categoryChartRef, trendChartRef })
 
+const inclusionTenantId = computed(() => {
+  const preview = parsePreviewTenantId(route)
+  if (preview != null) return preview
+  return brandAsset.value?.tenant_id ?? null
+})
+
 async function openWebsiteArticles(domain: string) {
   if (!domain) return
+  // 并排时再次点击同一域名 = 取消筛选，回到全部信源
+  if (domainFilter.value === domain) {
+    clearWebsiteDomain()
+    return
+  }
   selectWebsiteDomain(domain)
-  await nextTick()
-  document.getElementById('source-article-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
-
-const rankPageLabel = computed(() => {
-  const total = activeRankWebsites.value.length
-  if (!total) return '暂无数据'
-  const start = (rankPage.value - 1) * rankPageSize + 1
-  const end = Math.min(rankPage.value * rankPageSize, total)
-  return `第 ${start}-${end} 个网站 / 共 ${total} 个`
-})
 
 const articlePageLabel = computed(() => {
   const total = activeRankArticles.value.length
@@ -117,7 +119,7 @@ const categoryOptions = [
       <div class="source-sticky-inner">
         <div class="source-sticky-row">
           <div v-if="isCustomerView" class="source-customer-period">{{ customerPeriodLabel }}</div>
-          <div v-else class="source-date-presets">
+          <div class="source-date-presets">
             <button
               v-for="preset in datePresets"
               :key="preset.value"
@@ -147,7 +149,7 @@ const categoryOptions = [
               <RefreshCw />
               刷新
             </button>
-            <button type="button" class="primary-btn small-btn" :disabled="!activeRankWebsites.length" @click="exportCsv">
+            <button type="button" class="primary-btn small-btn" :disabled="!websiteShortList.length" @click="exportCsv">
               <Download />
               导出 CSV
             </button>
@@ -273,20 +275,29 @@ const categoryOptions = [
         <div v-else class="mini-empty chart-empty">当前筛选下暂无趋势数据。</div>
       </article>
 
+      <section class="source-website-detail-grid">
       <article class="source-panel source-table-panel source-type-panel">
-        <div class="source-panel-head">
+        <div class="source-panel-head source-rank-head">
           <div>
             <h3>引用网站</h3>
-            <p>按注册域合并；发布方与域名对齐，文中主体单独标注</p>
+            <p>按注册域合并；点击网站查看右侧信源 · 共 {{ websiteShortList.length }} 个</p>
           </div>
-          <button
-            v-if="domainFilter"
-            type="button"
-            class="tiny-btn"
-            @click="clearWebsiteDomain"
-          >
-            清除网站筛选
-          </button>
+          <div class="source-rank-tabs">
+            <button
+              type="button"
+              :class="{ active: rankTab === 'branded' }"
+              @click="setRankTab('branded')"
+            >
+              品牌相关
+            </button>
+            <button
+              type="button"
+              :class="{ active: rankTab === 'all' }"
+              @click="setRankTab('all')"
+            >
+              全部网站
+            </button>
+          </div>
         </div>
         <div v-if="!websiteShortList.length" class="mini-empty chart-empty" style="padding: 0 16px 16px">
           当前筛选下暂无网站。
@@ -315,7 +326,7 @@ const categoryOptions = [
                   <small v-if="item.subjectHint">文中主体：{{ item.subjectHint }}</small>
                 </div>
               </div>
-              <span class="source-type-domain">{{ item.domain }}</span>
+              <span class="source-domain-tag">{{ item.domain }}</span>
               <strong>{{ item.count }}</strong>
               <em class="source-type-percent">{{ item.percent }}%</em>
             </button>
@@ -323,84 +334,8 @@ const categoryOptions = [
         </template>
       </article>
 
-      <article id="source-rank-section" class="source-panel source-table-panel">
-        <div class="source-panel-head source-rank-head">
-          <div>
-            <h3>引用网站排行</h3>
-            <p>
-              {{ rankPageLabel }}
-              <template v-if="categoryFilter !== 'all'">
-                · 已筛选「{{ sourceCategoryLabel(categoryFilter) }}」
-              </template>
-            </p>
-          </div>
-          <div class="source-rank-tabs">
-            <button
-              type="button"
-              :class="{ active: rankTab === 'branded' }"
-              @click="setRankTab('branded')"
-            >
-              品牌相关
-            </button>
-            <button
-              type="button"
-              :class="{ active: rankTab === 'all' }"
-              @click="setRankTab('all')"
-            >
-              全部网站
-            </button>
-          </div>
-        </div>
-        <div class="source-table-head source-website-head">
-          <span>#</span>
-          <span>网站</span>
-          <span>类型</span>
-          <span>文章</span>
-          <span>次数</span>
-        </div>
-        <div v-if="!pagedRankWebsites.length" class="mini-empty chart-empty">当前 Tab / 筛选下暂无网站。</div>
-        <div
-          v-for="(site, index) in pagedRankWebsites"
-          :key="`${rankTab}-${site.domain}`"
-          class="source-table-row source-website-row"
-        >
-          <span>{{ (rankPage - 1) * rankPageSize + index + 1 }}</span>
-          <div class="source-table-main">
-            <a
-              :href="externalLink(site.sampleUrl || `https://${site.domain}`) || undefined"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="source-table-title-link"
-            >
-              {{ site.displayName }}
-            </a>
-            <small>
-              {{ site.domain }} · {{ site.platforms.length }} 个平台引用
-              <template v-if="site.subjectHint"> · 文中主体：{{ site.subjectHint }}</template>
-            </small>
-          </div>
-          <div class="source-table-tags">
-            <i>{{ sourceCategoryLabel(site.category) }}</i>
-          </div>
-          <button
-            type="button"
-            class="source-article-count-btn"
-            :title="`查看 ${site.domain} 的 ${site.articleCount} 篇文章`"
-            @click="openWebsiteArticles(site.domain)"
-          >
-            {{ site.articleCount }}
-          </button>
-          <strong>{{ site.count }}</strong>
-        </div>
-        <div v-if="rankTotalPages > 1" class="source-rank-pager">
-          <button type="button" class="tiny-btn" :disabled="rankPage <= 1" @click="rankPage -= 1">上一页</button>
-          <span>{{ rankPage }} / {{ rankTotalPages }}</span>
-          <button type="button" class="tiny-btn" :disabled="rankPage >= rankTotalPages" @click="rankPage += 1">下一页</button>
-        </div>
-      </article>
-
-      <article id="source-article-section" class="source-panel source-table-panel">
-        <div class="source-panel-head" style="padding: 16px 16px 12px">
+      <article id="source-article-section" class="source-panel source-table-panel source-article-panel">
+        <div class="source-panel-head source-article-head">
           <div>
             <h3>信源明细</h3>
             <p>
@@ -416,7 +351,7 @@ const categoryOptions = [
           <button
             v-if="domainFilter"
             type="button"
-            class="tiny-btn"
+            class="source-soft-btn"
             @click="clearWebsiteDomain"
           >
             清除网站筛选
@@ -430,37 +365,44 @@ const categoryOptions = [
           <span>次数</span>
         </div>
         <div v-if="!pagedRankArticles.length" class="mini-empty chart-empty">当前筛选下暂无文章。</div>
-        <div
-          v-for="(source, index) in pagedRankArticles"
-          :key="`${rankTab}-article-${source.url}`"
-          class="source-table-row"
-        >
-          <span>{{ (articlePage - 1) * rankPageSize + index + 1 }}</span>
-          <div class="source-table-main">
-            <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
-              {{ source.title || domainFromUrl(source.url) }}
-            </a>
-            <small>
-              {{ domainFromUrl(source.url) }}
-              · {{ sourceCategoryLabel(source.category) }}
-            </small>
+        <div v-else class="source-article-scroll">
+          <div
+            v-for="(source, index) in pagedRankArticles"
+            :key="`${rankTab}-article-${source.url}`"
+            class="source-table-row"
+          >
+            <span>{{ (articlePage - 1) * rankPageSize + index + 1 }}</span>
+            <div class="source-table-main">
+              <a :href="externalLink(source.url) || undefined" target="_blank" rel="noopener noreferrer" class="source-table-title-link">
+                {{ source.title || domainFromUrl(source.url) }}
+              </a>
+              <small>
+                <span class="source-domain-tag is-inline">{{ domainFromUrl(source.url) }}</span>
+                · {{ sourceCategoryLabel(source.category) }}
+              </small>
+            </div>
+            <div class="source-table-tags">
+              <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
+              <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
+            </div>
+            <div class="source-table-tags">
+              <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
+              <i v-if="!(source.exposure_terms || []).length" class="source-table-muted">—</i>
+            </div>
+            <strong>{{ source.count }}</strong>
           </div>
-          <div class="source-table-tags">
-            <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
-            <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
-          </div>
-          <div class="source-table-tags">
-            <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
-            <i v-if="!(source.exposure_terms || []).length" class="source-table-muted">—</i>
-          </div>
-          <strong>{{ source.count }}</strong>
         </div>
-        <div v-if="articleTotalPages > 1" class="source-rank-pager">
-          <button type="button" class="tiny-btn" :disabled="articlePage <= 1" @click="articlePage -= 1">上一页</button>
+        <div v-if="articleTotalPages > 1" class="source-soft-pager">
+          <button type="button" class="source-soft-btn" :disabled="articlePage <= 1" @click="articlePage -= 1">
+            上一页
+          </button>
           <span>{{ articlePage }} / {{ articleTotalPages }}</span>
-          <button type="button" class="tiny-btn" :disabled="articlePage >= articleTotalPages" @click="articlePage += 1">下一页</button>
+          <button type="button" class="source-soft-btn" :disabled="articlePage >= articleTotalPages" @click="articlePage += 1">
+            下一页
+          </button>
         </div>
       </article>
+      </section>
     </template>
 
     <div v-else-if="!loading" class="source-empty-state">
@@ -468,5 +410,13 @@ const categoryOptions = [
       <h3>暂无信源引用</h3>
       <p>当前筛选下没有可展示的 AI 引用。请尝试放宽筛选，或等待更多监测结果同步。</p>
     </div>
+
+    <InclusionDetailPanel
+      :tenant-id="inclusionTenantId"
+      :start-date="inclusionDateRange.startDate"
+      :end-date="inclusionDateRange.endDate"
+      :platform-filter="platformFilter"
+      :keyword-filter="keywordFilter"
+    />
   </section>
 </template>

@@ -29,6 +29,8 @@ const pageMenuName = computed(() => (
 const {
   loading,
   exporting,
+  exportingFormat,
+  exportProgress,
   detailLoading,
   previewHtmlLoading,
   filteredReports,
@@ -214,7 +216,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div v-if="selectedReport" class="report-preview-actions">
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
-              PDF
+              {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : 'PDF' }}
             </button>
             <button v-if="canExportReport && usesHtmlTemplatePreview" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
               <FileText />
@@ -248,7 +250,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div class="report-preview-actions">
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
-              导出 PDF
+              {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
             </button>
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
               <FileText />
@@ -408,7 +410,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div class="report-preview-actions">
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
-              导出 PDF
+              {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
             </button>
             <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
               <FileType />

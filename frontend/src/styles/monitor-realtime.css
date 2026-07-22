@@ -624,7 +624,8 @@
 .matrix-chart-wrap {
   padding: 4px 12px 16px 18px;
   background: linear-gradient(180deg, #fff, #f8fbff);
-  overflow: hidden;
+  overflow: auto;
+  max-height: min(78vh, 900px);
 }
 
 .matrix-chart-canvas {
@@ -685,6 +686,36 @@
   flex-direction: column;
   gap: 10px;
   padding-right: 2px;
+  min-height: 0;
+}
+
+.matrix-platform-rail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* 超过 5 个平台时固定约 5 卡高度，内部滚动（对齐报告列表下拉） */
+.matrix-platform-rail-body.is-scrollable {
+  max-height: calc(5 * 108px + 4 * 10px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.matrix-platform-rail-body.is-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.matrix-platform-rail-body.is-scrollable::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #c5d5e8;
+}
+
+.matrix-platform-rail-body.is-scrollable::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .matrix-keyword-rail {
@@ -893,7 +924,7 @@
 }
 
 .matrix-keyword-table-wrap {
-  max-height: 560px;
+  max-height: min(78vh, 900px);
   overflow: auto;
 }
 

@@ -24,7 +24,7 @@ export function useCountUp(
 
   function animateTo(target: number) {
     cancelAnimationFrame(frameId)
-    const startValue = 0
+    const startValue = display.value
     const startedAt = performance.now()
 
     const tick = (now: number) => {
@@ -40,7 +40,7 @@ export function useCountUp(
     frameId = requestAnimationFrame(tick)
   }
 
-  function restart() {
+  function restart(fromZero = false) {
     const enabled = options.enabled?.() ?? true
     const target = getTarget()
     if (!enabled || target === null || target === undefined || Number.isNaN(Number(target))) {
@@ -48,12 +48,13 @@ export function useCountUp(
       display.value = 0
       return
     }
+    if (fromZero) display.value = 0
     animateTo(Number(target))
   }
 
   watch(
     () => [getTarget(), options.enabled?.() ?? true] as const,
-    () => restart(),
+    () => restart(false),
     { immediate: true },
   )
 
@@ -64,7 +65,7 @@ export function useCountUp(
   return {
     display,
     formatted: () => format(display.value),
-    restart,
+    restart: () => restart(true),
   }
 }
 

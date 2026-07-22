@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,6 @@ from app.api.dependencies import CurrentSession, get_current_session, require_pl
 from app.api.http_errors import raise_read_endpoint_error
 from app.core.database import get_db
 from app.core.celery_queue_monitor import format_celery_monitor_zh, get_queue_monitor_snapshot
-from app.core.platform_order import sort_platform_items
 from app.core.redis_client import redis_health
 from app.core.http_rate_limit import enforce_overview_rate_limit
 from app.core.read_cache import (
@@ -30,11 +29,10 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.common import ApiResponse
 from app.services.deepseek_balance_service import fetch_deepseek_balance
-from app.services.lead_diagnosis_service import build_platform_cost_ranking, lead_diagnosis_task_displays
+from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.services.operation_log_service import tenant_names_by_id, write_operation_log
 from app.services.operation_log_labels import humanize_action_type, humanize_description, humanize_target_module
-from app.services.snapshot_backfill_service import list_snapshot_backfill_page
 from app.schemas.permission import (
     MenuConfigBatchItem,
     MenuConfigUpdateRequest,
@@ -689,6 +687,14 @@ def management_overview(
         raise_read_endpoint_error(exc, context="management.overview")
 
 
+# 方案 C：平台分布近窗；费用排行稍宽；重聚合走物理预聚合表
+from app.services.ops_overview_rollup_service import (
+    COST_RANKING_WINDOW_DAYS,
+    PLATFORM_STATS_WINDOW_DAYS,
+    load_or_refresh_overview_rollup,
+)
+
+
 def _empty_management_overview() -> dict:
     return {
         "kpis": {
@@ -727,6 +733,10 @@ def _empty_management_overview() -> dict:
         "celery_queues": {},
         "molizhishu_balance": fetch_molizhishu_balance(),
         "deepseek_balance": fetch_deepseek_balance(),
+        "meta": {
+            "platform_stats_window_days": PLATFORM_STATS_WINDOW_DAYS,
+            "cost_ranking_window_days": COST_RANKING_WINDOW_DAYS,
+        },
     }
 
 
@@ -784,76 +794,37 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
             select(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0)).where(GeoMonitorSubtask.task_id.in_(today_task_ids))
         ) or 0)
 
-    platform_stmt = (
-        select(
-            GeoMonitorSubtask.platform,
-            func.count(GeoMonitorSubtask.id),
-            func.sum(case((GeoMonitorSubtask.status.in_(terminal_statuses), 1), else_=0)),
-            func.sum(case((GeoMonitorSubtask.status == "failed", 1), else_=0)),
-            func.coalesce(func.sum(GeoMonitorSubtask.amount), 0),
-        )
-        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .where(GeoMonitorTask.deleted.is_(False))
-    )
-    if tenant_ids is not None:
-        platform_stmt = platform_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-    platform_rows = db.execute(
-        platform_stmt.group_by(GeoMonitorSubtask.platform)
-        .order_by(func.count(GeoMonitorSubtask.id).desc())
-        .limit(12)
-    ).all()
-    platform_stats = sort_platform_items([
-        {
-            "platform": row[0],
-            "total": int(row[1] or 0),
-            "completed": int(row[2] or 0),
-            "failed": int(row[3] or 0),
-            "cost": float(row[4] or 0),
-            "success_rate": round(((int(row[2] or 0) - int(row[3] or 0)) / max(1, int(row[2] or 0))) * 100, 1),
-        }
-        for row in platform_rows
-    ])
-
-    cost_ranking = build_platform_cost_ranking(
+    heavy = load_or_refresh_overview_rollup(
         db,
-        tenant_name_map=tenant_name_map,
         tenant_ids=tenant_ids,
-        limit=8,
+        tenant_name_map=tenant_name_map,
+        service_active=service_counts.get("active", 0),
+        tenant_total=len(tenants),
+        today_cost=today_cost,
     )
-    total_cost = round(sum(row["cost"] for row in cost_ranking), 4)
-    total_subtasks_stmt = select(func.count(GeoMonitorSubtask.id)).join(
-        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
-    ).where(GeoMonitorTask.deleted.is_(False))
-    mentioned_subtasks_stmt = select(func.count(GeoMonitorSubtask.id)).join(
-        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
-    ).where(GeoMonitorTask.deleted.is_(False), GeoMonitorSubtask.mention_position.isnot(None))
-    source_count_stmt = select(func.count(GeoMonitorSubtask.id)).join(
-        GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id
-    ).where(GeoMonitorTask.deleted.is_(False), GeoMonitorSubtask.reference_list_json.isnot(None))
-    task_total_stmt = select(func.count(GeoMonitorTask.id)).where(GeoMonitorTask.deleted.is_(False))
-    if tenant_ids is not None:
-        total_subtasks_stmt = total_subtasks_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-        mentioned_subtasks_stmt = mentioned_subtasks_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-        source_count_stmt = source_count_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-        task_total_stmt = task_total_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
-    total_subtasks = int(db.scalar(total_subtasks_stmt) or 0)
-    mentioned_subtasks = int(db.scalar(mentioned_subtasks_stmt) or 0)
-    source_count = int(db.scalar(source_count_stmt) or 0)
-    mention_rate = round((mentioned_subtasks / max(1, total_subtasks)) * 100, 1)
-    quota_overview = {
-        "used_amount": total_cost,
-        "today_amount": round(today_cost, 4),
-        "estimated_month_amount": round(today_cost * 30, 4),
-        "total_subtasks": total_subtasks,
-        "avg_cost_per_subtask": round(total_cost / max(1, total_subtasks), 4),
-    }
-    customer_data = {
+    # today_cost 当日变化：覆盖 rollup 里可能过期的今日金额
+    quota_overview = dict(heavy.get("quota_overview") or {})
+    quota_overview["today_amount"] = round(today_cost, 4)
+    quota_overview["estimated_month_amount"] = round(today_cost * 30, 4)
+    platform_stats = heavy.get("platform_stats") or []
+    cost_ranking = heavy.get("cost_ranking") or []
+    customer_data = heavy.get("customer_data") or {
         "tenant_total": len(tenants),
         "active_tenants": service_counts.get("active", 0),
-        "task_total": int(db.scalar(task_total_stmt) or 0),
-        "subtask_total": total_subtasks,
-        "mention_rate": mention_rate,
-        "source_count": source_count,
+        "task_total": 0,
+        "subtask_total": 0,
+        "mention_rate": 0,
+        "source_count": 0,
+    }
+    customer_data = {
+        **customer_data,
+        "tenant_total": len(tenants),
+        "active_tenants": service_counts.get("active", 0),
+    }
+    pending_backfill = int(heavy.get("pending_backfill") or 0)
+    overview_meta = heavy.get("meta") or {
+        "platform_stats_window_days": PLATFORM_STATS_WINDOW_DAYS,
+        "cost_ranking_window_days": COST_RANKING_WINDOW_DAYS,
     }
 
     schedule_stmt = (
@@ -883,13 +854,6 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         todo_items.append({"type": "renewal", "title": "客户服务即将到期", "count": len(expiring_tenants), "level": "warning"})
     if failed_tasks:
         todo_items.append({"type": "failed_task", "title": "失败任务待处理", "count": len(failed_tasks), "level": "danger"})
-    backfill_summary = list_snapshot_backfill_page(
-        db,
-        tenant_ids=tenant_ids,
-        pending_only=True,
-        limit=1,
-    )
-    pending_backfill = int(backfill_summary.get("summary", {}).get("pending") or 0)
     if pending_backfill:
         todo_items.append({
             "type": "snapshot_backfill",
@@ -977,6 +941,7 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         "celery_queues": queue_snapshot,
         "molizhishu_balance": fetch_molizhishu_balance(),
         "deepseek_balance": fetch_deepseek_balance(),
+        "meta": overview_meta,
     }
     return data
 

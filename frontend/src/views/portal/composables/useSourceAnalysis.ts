@@ -4,6 +4,7 @@ import { usePortalCharts } from '../../../composables/usePortalCharts'
 import type { MonitorSummary } from '../../../services/monitor'
 import { useAuthStore } from '../../../stores/auth'
 import {
+  customerDisplayDateRange,
   customerDisplayPeriodLabel,
   customerTrendPeriodLabel,
 } from '../../../utils/customerMonitorDate'
@@ -295,20 +296,28 @@ export function useSourceAnalysis(options?: {
     || isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
   ))
   const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
-  const trendPeriodLabel = computed(() => {
-    if (!isCustomerView.value) {
-      const days = datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14
-      return `近 ${days} 日引用趋势`
-    }
-    return customerTrendPeriodLabel(14)
-  })
   const brandAsset = analytics.brandAsset
 
   const loading = ref(false)
   const monitorSummary = analytics.monitorSummary
-  // 客户页不展示近 7/30；运营端默认近 30 天
+  // 客户/运营共用周期；运营默认近 30 天，客户默认全部（截至昨日）
   const datePreset = ref<SourceDatePreset>('all')
   if (!isCustomerView.value) datePreset.value = '30'
+
+  const inclusionDateRange = computed(() => {
+    if (datePreset.value === 'all') {
+      // brief 无日期时后端默认近 7 天；「全部」显式拉宽到近 365 天
+      return customerDisplayDateRange(365)
+    }
+    return customerDisplayDateRange(Number(datePreset.value))
+  })
+
+  const trendPeriodLabel = computed(() => {
+    if (datePreset.value === 'all') return '全部周期引用趋势'
+    const days = Number(datePreset.value)
+    if (isCustomerView.value) return customerTrendPeriodLabel(days)
+    return `近 ${days} 日引用趋势`
+  })
   const platformFilter = ref('all')
   const categoryFilter = ref<'all' | SourceCategory>('all')
   const keywordFilter = ref('')
@@ -369,9 +378,7 @@ export function useSourceAnalysis(options?: {
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
       const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
-      const dateMatched = isCustomerView.value
-        ? true
-        : (!rangeStart || (sourceTime != null && sourceTime >= rangeStart))
+      const dateMatched = !rangeStart || (sourceTime != null && sourceTime >= rangeStart)
       return platformMatched && categoryMatched && keywordMatched && dateMatched
     }).sort((a, b) => b.count - a.count)
   }
@@ -569,11 +576,11 @@ export function useSourceAnalysis(options?: {
       : monitorSummary.value?.source_citation_trend
     const backendPoints = backendTrend?.points || []
     if (backendPoints.length) {
-      const points = isCustomerView.value
+      const points = datePreset.value === 'all'
         ? backendPoints
         : sliceTrendPoints(
           backendPoints,
-          datePreset.value === '7' ? 7 : datePreset.value === '30' ? 30 : 14,
+          datePreset.value === '7' ? 7 : 30,
         )
       return points.map(point => ({
         label: point.label,
@@ -617,7 +624,7 @@ export function useSourceAnalysis(options?: {
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '图表按含露出词的引用文章统计；「引用网站排行」按域名聚合；下方「信源明细」为文章列表，随 Tab 切换品牌相关 / 全部引用。',
+      body: '图表按含露出词的引用文章统计；左侧「引用网站」按域名聚合，点击后右侧「信源明细」仅展示该站文章；可用 Tab 切换品牌相关 / 全部引用。',
     }
   })
 
@@ -647,7 +654,7 @@ export function useSourceAnalysis(options?: {
       onSourceCategoryClick: (key: string) => {
         selectSourceCategory(key as SourceCategory)
         requestAnimationFrame(() => {
-          document.getElementById('source-rank-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          document.getElementById('source-article-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         })
       },
     })
@@ -728,6 +735,7 @@ export function useSourceAnalysis(options?: {
     trendPeriodLabel,
     loading,
     datePreset,
+    inclusionDateRange,
     platformFilter,
     categoryFilter,
     keywordFilter,

@@ -563,10 +563,20 @@ const BAR_CHART_MAX = 640
 const BAR_GRID_MIN_TOP = 18
 const BAR_GRID_MIN_BOTTOM = 12
 const BAR_AXIS_RESERVE = 24
+const HEAT_ROW_PITCH = 28
+const HEAT_CHART_PAD = 64
+const HEAT_CHART_MIN = 360
 
 export function matrixBarChartHeight(itemCount: number) {
   const count = Math.max(itemCount, 1)
-  return Math.max(BAR_CHART_MIN, Math.min(BAR_CHART_MAX, count * BAR_ROW_PITCH + BAR_CHART_PAD))
+  // 不封顶：词多时由 .matrix-chart-wrap 纵向滚动，保证 35 词都能展开看到
+  return Math.max(BAR_CHART_MIN, count * BAR_ROW_PITCH + BAR_CHART_PAD)
+}
+
+/** 热力图 Y 轴是监测词，高度必须按词数算；超出由外层 wrap 滚动，避免把词挤没。 */
+export function matrixHeatChartHeight(keywordCount: number) {
+  const count = Math.max(keywordCount, 1)
+  return Math.max(HEAT_CHART_MIN, count * HEAT_ROW_PITCH + HEAT_CHART_PAD)
 }
 
 export type MatrixBarLayoutHint = {
@@ -813,9 +823,8 @@ export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
 }
 
 export function matrixChartHeight(chartType: MatrixChartType, slice: MatrixPlatformSlice) {
-  const count = chartType === 'bar' ? slice.columns.length : slice.rows.length
   if (chartType === 'bar') {
-    return matrixBarChartHeight(count)
+    return matrixBarChartHeight(slice.columns.length)
   }
-  return Math.max(BAR_CHART_MIN, Math.min(BAR_CHART_MAX, count * BAR_ROW_PITCH + BAR_CHART_PAD))
+  return matrixHeatChartHeight(slice.columns.length)
 }

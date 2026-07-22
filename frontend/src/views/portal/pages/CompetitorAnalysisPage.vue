@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   AlertTriangle,
   ArrowRight,
@@ -12,9 +12,15 @@ import {
   RefreshCw,
   Trophy,
 } from '@lucide/vue'
+import { ElDialog } from 'element-plus'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
+import { inferDeviceLabel } from '../composables/useWorkspaceBoardExtras'
 import { useBrandInsights, type CompetitorDatePreset } from '../composables/useCompetitorAnalysis'
+import { parseAnswerBlocks } from '../answerBlocks'
+import { formatDateTime, externalLink } from '../portalUtils'
+import { platformLabelMap, sentimentLabelMap } from '../portalMaps'
 import '../../../styles/competitor-analysis.css'
 
 const mentionTrendChartRef = ref<HTMLDivElement | null>(null)
@@ -49,11 +55,24 @@ const {
   activeSentimentKeywordSample,
   mentionTrendHiddenCount,
   loadSummary,
+  observeWordcloudPanel,
   resetFilters,
   exportCsv,
   togglePlatform,
   drillDownToRealtime,
+  closeKeywordSnapshot,
+  snapshotVisible,
+  snapshotLoading,
+  snapshotSubtask,
+  snapshotPhrase,
 } = useBrandInsights({ mentionTrendChartRef, sentimentTrendChartRef, sentimentWordCloudRef })
+
+const wordcloudPanelRef = ref<HTMLElement | null>(null)
+
+watch([loading, wordcloudPanelRef], () => {
+  if (loading.value) return
+  observeWordcloudPanel(wordcloudPanelRef.value)
+})
 
 const datePresets: Array<{ value: CompetitorDatePreset; label: string }> = [
   { value: '7', label: '近 7 天' },
@@ -77,6 +96,35 @@ function formatRank(value: number | null | undefined) {
 function isPlatformActive(code: string) {
   return code === 'all' ? selectedPlatforms.value.length === 0 : selectedPlatforms.value.includes(code)
 }
+
+const snapshotRankLabel = computed(() => {
+  const subtask = snapshotSubtask.value
+  const rank = subtask?.brand_rank ?? subtask?.mention_position
+  if (rank != null) return `第 ${formatRank(rank)} 位`
+  if (subtask?.brand_mentioned) return '已提及'
+  return '未提及'
+})
+
+const snapshotAnswerBlocks = computed(() => {
+  const text = snapshotSubtask.value?.answer_content?.trim()
+    || snapshotSubtask.value?.mention_context?.trim()
+    || ''
+  return text ? parseAnswerBlocks(text) : []
+})
+
+const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?.page_screenshot))
+
+const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at))
+
+const snapshotSourceRows = computed(() => {
+  const subtask = snapshotSubtask.value
+  const list = subtask?.reference_list?.length ? subtask.reference_list : subtask?.citation_list
+  return (list || []).slice(0, 12).map((source, index) => ({
+    key: `${source.index ?? index}-${source.url || source.title || index}`,
+    href: externalLink(source.url),
+    ...citationSourceDisplay(source),
+  }))
+})
 </script>
 
 <template>
@@ -198,7 +246,13 @@ function isPlatformActive(code: string) {
       </div>
     </div>
 
-    <template v-if="sampleTotal > 0">
+    <div v-if="loading && !sampleTotal" class="competitor-empty-state">
+      <BarChart3 />
+      <h3>洞察数据加载中…</h3>
+      <p>正在汇总品牌与竞品提及率，请稍候。</p>
+    </div>
+
+    <template v-else-if="sampleTotal > 0">
       <section class="brand-insights-grid">
         <article class="competitor-panel brand-insights-quadrant">
           <div class="competitor-panel-head">
@@ -313,7 +367,7 @@ function isPlatformActive(code: string) {
         </article>
       </section>
 
-      <section class="competitor-panel brand-insights-wordcloud-panel">
+      <section ref="wordcloudPanelRef" class="competitor-panel brand-insights-wordcloud-panel">
         <div class="competitor-panel-head">
           <div>
             <h3>品牌情绪词</h3>
@@ -359,5 +413,83 @@ function isPlatformActive(code: string) {
       <h3>暂无洞察样本</h3>
       <p>请先完成定时监测并同步结果。若已配置竞品库，数据会在检测完成后自动汇总。</p>
     </div>
+
+    <ElDialog
+      v-model="snapshotVisible"
+      width="680px"
+      align-center
+      destroy-on-close
+      append-to-body
+      class="ws-board-detail-dialog"
+      @closed="closeKeywordSnapshot"
+    >
+      <template #header>
+        <div class="ws-board-dialog-head">
+          <h3>快照摘要</h3>
+          <p v-if="snapshotPhrase || snapshotSubtask?.prompt">
+            <template v-if="snapshotPhrase">情绪词「{{ snapshotPhrase }}」</template>
+            <template v-if="snapshotPhrase && snapshotSubtask?.prompt"> · </template>
+            <template v-if="snapshotSubtask?.prompt">{{ snapshotSubtask.prompt }}</template>
+          </p>
+        </div>
+      </template>
+
+      <div v-if="snapshotLoading" class="ws-board-mini-empty">加载详情…</div>
+      <template v-else-if="snapshotSubtask">
+        <div class="ws-board-drawer-metrics">
+          <span class="ws-board-drawer-chip">
+            平台 {{ platformLabelMap[snapshotSubtask.platform] || snapshotSubtask.platform || '—' }}
+          </span>
+          <span class="ws-board-drawer-chip">排名 {{ snapshotRankLabel }}</span>
+          <span class="ws-board-drawer-chip">设备 {{ inferDeviceLabel(snapshotSubtask.platform || '') }}</span>
+          <span class="ws-board-drawer-chip">
+            情感 {{ sentimentLabelMap[snapshotSubtask.sentiment || ''] || '暂无' }}
+          </span>
+          <span v-if="snapshotUpdatedAt" class="ws-board-drawer-chip">更新 {{ snapshotUpdatedAt }}</span>
+          <a
+            v-if="snapshotScreenshotUrl"
+            :href="snapshotScreenshotUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="ws-board-drawer-chip ws-board-drawer-chip-link"
+          >查看页面快照</a>
+          <span v-else class="ws-board-drawer-chip is-muted">暂无页面快照</span>
+        </div>
+        <div v-if="snapshotAnswerBlocks.length" class="ws-board-drawer-body">
+          <div class="ws-board-drawer-answer">
+            <template v-for="(block, index) in snapshotAnswerBlocks" :key="index">
+              <h4 v-if="block.type === 'h'" class="ws-board-answer-h">{{ block.text }}</h4>
+              <p v-else-if="block.type === 'p'" class="ws-board-answer-p">{{ block.text }}</p>
+              <div v-else-if="block.type === 'kv'" class="ws-board-answer-kv">
+                <span class="ws-board-answer-kv-label">{{ block.label }}</span>
+                <span class="ws-board-answer-kv-value">{{ block.value }}</span>
+              </div>
+              <ul v-else-if="block.type === 'ul'" class="ws-board-answer-list">
+                <li v-for="(item, itemIndex) in block.items" :key="itemIndex">{{ item }}</li>
+              </ul>
+              <ol v-else-if="block.type === 'ol'" class="ws-board-answer-list is-ordered">
+                <li v-for="(item, itemIndex) in block.items" :key="itemIndex">{{ item }}</li>
+              </ol>
+            </template>
+          </div>
+        </div>
+        <div v-else class="ws-board-mini-empty">暂无回答正文</div>
+        <div v-if="snapshotSourceRows.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">引用信源 · {{ snapshotSourceRows.length }}</div>
+          <a
+            v-for="row in snapshotSourceRows"
+            :key="row.key"
+            class="ws-board-source-link"
+            :class="{ 'is-plain': !row.href }"
+            :href="row.href || undefined"
+            :target="row.href ? '_blank' : undefined"
+            :rel="row.href ? 'noopener noreferrer' : undefined"
+          >
+            <span class="ws-board-source-title">{{ row.title }}</span>
+            <span v-if="row.site" class="ws-board-source-site">{{ row.site }}</span>
+          </a>
+        </div>
+      </template>
+    </ElDialog>
   </section>
 </template>

@@ -11,13 +11,14 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
-from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import (
     active_keyword_groups,
     get_brand_asset,
     keyword_group_monitor_keywords,
     list_competitors,
 )
+from app.services.lead_diagnosis_analytics import names_match as _strict_entity_names_match
 from app.services.monitor_service import customer_display_cutoff, customer_display_date_range
 from app.services.monitor_stats_service import _detect_stat_date
 from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
@@ -30,23 +31,53 @@ from app.services.ranking_parser import (
 )
 
 
-def _normalize_name_key(name: str | None) -> str:
-    text = str(name or "").strip().lower()
-    return re.sub(r"\s+", "", text)
-
-
 def _names_match(left: str | None, right: str | None) -> bool:
-    a = _normalize_name_key(left)
-    b = _normalize_name_key(right)
-    if not a or not b:
-        return False
-    if a == b or a in b or b in a:
-        return True
-    if len(a) >= 2 and len(b) >= 2 and (a[:2] in b or b[:2] in a):
-        return True
-    return False
+    """与售前诊断同一套严格实体匹配：禁止「保研*」两字前缀互撞导致全员同分。"""
+    return _strict_entity_names_match(left, right)
 
 
+def _schedule_task_day_map(
+    db: Session,
+    tenant_id: int,
+    *,
+    range_start_day: date,
+    range_end_day: date,
+) -> dict[str, date]:
+    """业务检测日 → task_id：用 schedule_key 前缀，避免宽窗扫 updated_at。"""
+    start_key = range_start_day.strftime("%Y%m%d")
+    end_key_exclusive = (range_end_day + timedelta(days=1)).strftime("%Y%m%d")
+    rows = db.execute(
+        select(GeoMonitorScheduleRun.task_id, GeoMonitorScheduleRun.schedule_key).where(
+            GeoMonitorScheduleRun.tenant_id == tenant_id,
+            GeoMonitorScheduleRun.task_id.isnot(None),
+            GeoMonitorScheduleRun.schedule_key >= start_key,
+            GeoMonitorScheduleRun.schedule_key < end_key_exclusive,
+        )
+    ).all()
+    out: dict[str, date] = {}
+    for task_id, schedule_key in rows:
+        tid = str(task_id or "").strip()
+        key = str(schedule_key or "").strip()
+        if not tid or len(key) < 8:
+            continue
+        try:
+            day = datetime.strptime(key[:8], "%Y%m%d").date()
+        except ValueError:
+            continue
+        if range_start_day <= day <= range_end_day:
+            out[tid] = day
+    return out
+
+
+_SUBTASK_LIGHT_COLS = (
+    GeoMonitorSubtask.task_id,
+    GeoMonitorSubtask.platform,
+    GeoMonitorSubtask.prompt,
+    GeoMonitorSubtask.mention_position,
+    GeoMonitorSubtask.all_rankings_json,
+    GeoMonitorSubtask.sentiment,
+    GeoMonitorSubtask.updated_at,
+)
 def _find_entity_rank(entries: list[dict[str, Any]], entity_name: str) -> float | None:
     for entry in entries:
         if _names_match(ranking_entry_name(entry), entity_name):
@@ -108,6 +139,29 @@ def _tracked_entities(asset: BrandAsset | None, competitors: list[Any]) -> list[
     return rows
 
 
+def _entity_match_stats_from_names(
+    named_entries: list[tuple[str, float | None]],
+    match_terms: list[str],
+    *,
+    mention_position: int | None = None,
+    is_brand: bool = False,
+) -> tuple[bool, float | None]:
+    """named_entries: (entry_name, explicit_rank)；每条子任务只解析一次推荐列表。"""
+    rank: float | None = None
+    mentioned = False
+    for term in match_terms:
+        for entry_name, entry_rank in named_entries:
+            if not _names_match(entry_name, term):
+                continue
+            mentioned = True
+            if entry_rank is not None and (rank is None or entry_rank < rank):
+                rank = float(entry_rank)
+    if is_brand and rank is None and mention_position is not None:
+        rank = float(mention_position)
+        mentioned = True
+    return mentioned, rank
+
+
 def _entity_match_stats(
     entries: list[dict[str, Any]],
     match_terms: list[str],
@@ -115,19 +169,16 @@ def _entity_match_stats(
     mention_position: int | None = None,
     is_brand: bool = False,
 ) -> tuple[bool, float | None]:
-    rank: float | None = None
-    mentioned = False
-    for term in match_terms:
-        term_rank = _find_entity_rank(entries, term)
-        if term_rank is not None and (rank is None or term_rank < rank):
-            rank = term_rank
-        if _entity_mentioned_in_entries(entries, term):
-            mentioned = True
-    if is_brand and rank is None and mention_position is not None:
-        rank = float(mention_position)
-        mentioned = True
-    return mentioned, rank
-
+    named = [
+        (ranking_entry_name(entry), ranking_entry_explicit_rank(entry))
+        for entry in entries
+    ]
+    return _entity_match_stats_from_names(
+        named,
+        match_terms,
+        mention_position=mention_position,
+        is_brand=is_brand,
+    )
 
 def _init_bucket(name: str, *, is_brand: bool) -> dict[str, Any]:
     return {
@@ -346,69 +397,87 @@ def _aggregate_competitor_stats(
     brand_display = (asset.brand_name if asset else None) or "本品牌"
     range_start_day = range_start.date()
     range_end_day = range_end.date()
+    row_cap = max(1, min(subtask_limit, 5000))
 
-    # Broad SQL window on created_at OR updated_at, then pin to business day via
-    # _detect_stat_date (schedule window > task.created_at > updated_at). Pure
-    # updated_at filtering collapses trends after backfill rewrites timestamps.
-    stmt = (
-        select(GeoMonitorSubtask)
-        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            load_only(
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.mention_position,
-                GeoMonitorSubtask.competitor_rankings_json,
-                GeoMonitorSubtask.all_rankings_json,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.updated_at,
-            ),
-            joinedload(GeoMonitorSubtask.task),
-        )
-        .where(
-            GeoMonitorTask.deleted.is_(False),
-            GeoMonitorTask.tenant_id == tenant_id,
-            or_(
-                and_(
-                    GeoMonitorTask.created_at >= range_start,
-                    GeoMonitorTask.created_at <= range_end,
-                ),
-                and_(
-                    GeoMonitorSubtask.updated_at >= range_start,
-                    GeoMonitorSubtask.updated_at <= range_end,
-                ),
-            ),
-            GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-        )
+    # 快路径：按 schedule_key 业务日取 task，再按 task_id 拉轻字段（与工作台热力同源）。
+    # 无调度记录时回退宽窗 + _detect_stat_date，保证手工/补录任务不丢。
+    task_day_map = _schedule_task_day_map(
+        db,
+        tenant_id,
+        range_start_day=range_start_day,
+        range_end_day=range_end_day,
     )
-    if platform_filters:
-        stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
-    if prompt_filter:
-        stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
-
-    fetched = list(db.scalars(stmt.limit(max(1, min(subtask_limit, 5000)))).unique())
-    task_ids = list({item.task_id for item in fetched if item.task_id})
-    schedule_runs_map = schedule_runs_for_tasks(db, task_ids) if task_ids else {}
-    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids) if task_ids else {}
-
     subtasks: list[GeoMonitorSubtask] = []
     subtask_day_keys: dict[int, str] = {}
-    for item in fetched:
-        task = item.task
-        if task is None:
-            continue
-        detect_day = _detect_stat_date(
-            item,
-            task,
-            schedule_run=schedule_runs_map.get(item.task_id),
-            lead_run=lead_runs_map.get(item.task_id),
-            asset=asset,
+
+    if task_day_map:
+        stmt = (
+            select(GeoMonitorSubtask)
+            .options(load_only(*_SUBTASK_LIGHT_COLS))
+            .where(
+                GeoMonitorSubtask.task_id.in_(list(task_day_map.keys())),
+                GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
+            )
         )
-        if detect_day is None or detect_day < range_start_day or detect_day > range_end_day:
-            continue
-        subtasks.append(item)
-        subtask_day_keys[id(item)] = detect_day.isoformat()
+        if platform_filters:
+            stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
+        if prompt_filter:
+            stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
+        for item in db.scalars(stmt.limit(row_cap)):
+            day = task_day_map.get(str(item.task_id or ""))
+            if day is None:
+                continue
+            subtasks.append(item)
+            subtask_day_keys[id(item)] = day.isoformat()
+    else:
+        stmt = (
+            select(GeoMonitorSubtask)
+            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+            .options(
+                load_only(*_SUBTASK_LIGHT_COLS),
+                joinedload(GeoMonitorSubtask.task),
+            )
+            .where(
+                GeoMonitorTask.deleted.is_(False),
+                GeoMonitorTask.tenant_id == tenant_id,
+                GeoMonitorTask.purpose == "geo",
+                or_(
+                    and_(
+                        GeoMonitorTask.created_at >= range_start,
+                        GeoMonitorTask.created_at <= range_end,
+                    ),
+                    and_(
+                        GeoMonitorSubtask.updated_at >= range_start,
+                        GeoMonitorSubtask.updated_at <= range_end,
+                    ),
+                ),
+                GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
+            )
+        )
+        if platform_filters:
+            stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
+        if prompt_filter:
+            stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
+
+        fetched = list(db.scalars(stmt.limit(row_cap)).unique())
+        task_ids = list({item.task_id for item in fetched if item.task_id})
+        schedule_runs_map = schedule_runs_for_tasks(db, task_ids) if task_ids else {}
+        lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids) if task_ids else {}
+        for item in fetched:
+            task = item.task
+            if task is None:
+                continue
+            detect_day = _detect_stat_date(
+                item,
+                task,
+                schedule_run=schedule_runs_map.get(item.task_id),
+                lead_run=lead_runs_map.get(item.task_id),
+                asset=asset,
+            )
+            if detect_day is None or detect_day < range_start_day or detect_day > range_end_day:
+                continue
+            subtasks.append(item)
+            subtask_day_keys[id(item)] = detect_day.isoformat()
 
     sample_total = len(subtasks)
 
@@ -430,6 +499,10 @@ def _aggregate_competitor_stats(
 
     for item in subtasks:
         entries = normalize_structured_rankings(item.all_rankings_json or [])
+        named_entries = [
+            (ranking_entry_name(entry), ranking_entry_explicit_rank(entry))
+            for entry in entries
+        ]
         day_key = subtask_day_keys.get(id(item))
         if day_key:
             daily_samples[day_key] = daily_samples.get(day_key, 0) + 1
@@ -444,8 +517,8 @@ def _aggregate_competitor_stats(
             is_brand = entity["is_brand"]
             display_name = brand_display if is_brand else entity["name"]
             match_terms = entity.get("match_terms") or [entity["name"]]
-            mentioned, rank = _entity_match_stats(
-                entries,
+            mentioned, rank = _entity_match_stats_from_names(
+                named_entries,
                 match_terms,
                 mention_position=item.mention_position,
                 is_brand=is_brand,

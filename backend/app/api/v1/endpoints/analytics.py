@@ -70,6 +70,7 @@ def wordcloud(
         task_ids_sub = select(GeoMonitorTask.task_id).where(
             GeoMonitorTask.tenant_id == resolved_tenant_id,
             GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.purpose == "geo",
         )
         stmt = stmt.where(GeoMonitorSubtask.task_id.in_(task_ids_sub))
         if task_id:
@@ -94,6 +95,7 @@ def sentiment_keywords(
     end_date: date | None = Query(default=None, description="截止日（含），客户侧不晚于昨日"),
     prompt: str | None = None,
     limit: int = Query(default=80, ge=1, le=120),
+    llm: bool = Query(default=True, description="是否启用 DeepSeek 精修（默认开启；llm=0 仅规则抽词）"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -108,7 +110,7 @@ def sentiment_keywords(
             days=days,
             start_date=start_date.isoformat() if start_date else None,
             end_date=end_date.isoformat() if end_date else None,
-            prompt=prompt,
+            prompt=f"{prompt or 'all'}|llm={int(llm)}",
             limit=limit,
         )
 
@@ -124,6 +126,7 @@ def sentiment_keywords(
                 end_date=end_date,
                 prompt=prompt,
                 limit=limit,
+                use_llm=llm,
             )
 
         data = get_or_build_json_cache(
@@ -201,7 +204,7 @@ def competitor_compare(
             _build,
             ttl_seconds=COMPETITOR_COMPARE_CACHE_TTL,
             lock_ttl_seconds=90,
-            wait_seconds=30.0,
+            wait_seconds=3.0,
         )
         return ApiResponse(data=data)
     except Exception as exc:

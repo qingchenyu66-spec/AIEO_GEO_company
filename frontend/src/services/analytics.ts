@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export interface WordCloudItem {
   word: string
@@ -133,8 +133,13 @@ export async function getSentimentKeywords(params?: {
   end_date?: string
   prompt?: string
   limit?: number
+  llm?: boolean
 }): Promise<SentimentKeywordsSummary> {
-  const response = await http.get('/v1/analytics/sentiment-keywords', { params })
+  const response = await http.get('/v1/analytics/sentiment-keywords', {
+    params: { llm: true, ...params },
+    timeout: 90000,
+    silentError: true,
+  } as GeoHttpRequestConfig)
   return response.data.data
 }
 
@@ -152,7 +157,10 @@ export async function getCompetitorCompare(params?: {
   end_date?: string
   prompt?: string
 }): Promise<CompetitorCompareSummary> {
-  const response = await http.get('/v1/analytics/competitor-compare', { params })
+  const response = await http.get('/v1/analytics/competitor-compare', {
+    params,
+    timeout: 60000,
+  })
   return response.data.data
 }
 

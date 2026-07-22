@@ -13,6 +13,7 @@ from app.core.region_catalog import region_display_name, normalize_region_codes
 from app.services.monitor_sample_metrics import SUCCESS_STATUSES
 from app.services.ranking_parser import (
     normalize_structured_rankings,
+    ranking_entry_category,
     ranking_entry_explicit_rank,
     ranking_entry_name,
 )
@@ -323,14 +324,16 @@ def _build_molizhishu_ranking_rows(
         batch = by_execution.get(day) or []
         aggregated: dict[tuple[str, str], list[float]] = {}
         for item in batch:
-            for entry in normalize_structured_rankings(item.all_rankings_json or []):
+            for entry in item.all_rankings_json or []:
+                if not isinstance(entry, dict):
+                    continue
                 name = ranking_entry_name(entry)
                 if not name or not _is_tracked_entity(name, brand, competitors):
                     continue
                 rank = ranking_entry_explicit_rank(entry)
                 if rank is None:
                     continue
-                category = str(entry.get("category") or "默认分类")
+                category = str(ranking_entry_category(entry) or "默认分类")
                 canonical = canonical_ranking_name(name, brand, competitors)
                 aggregated.setdefault((canonical, category), []).append(float(rank))
         collected_at = day

@@ -206,9 +206,24 @@ export function usePortalCharts(refs: PortalChartRefs) {
     if (mentionTrendChart) {
       const trend = data.mentionTrendSeries
       if (trend?.labels?.length && trend.series?.length) {
-        const palette = ['#2d6cdf', '#94a3b8', '#a8b4c4', '#b8c2d0', '#c8d0dc', '#d0d8e4']
+        const brandColor = '#2d6cdf'
+        // 竞品各自一色；灰阶会导致多条线糊成一片
+        const competitorPalette = [
+          '#16a34a', '#ea580c', '#9333ea', '#0891b2',
+          '#db2777', '#ca8a04', '#4f46e5', '#0d9488',
+        ]
+        const competitorSymbols = ['triangle', 'diamond', 'rect', 'pin', 'arrow', 'circle'] as const
+        const competitorLineTypes = ['solid', 'dashed', 'dotted'] as const
+        let competitorOrdinal = 0
+        const seriesColors = trend.series.map(item => {
+          if (item.is_brand) return brandColor
+          const color = competitorPalette[competitorOrdinal % competitorPalette.length]
+          competitorOrdinal += 1
+          return color
+        })
+        competitorOrdinal = 0
         mentionTrendChart.setOption({
-          color: palette,
+          color: seriesColors,
           grid: { left: 42, right: 18, top: trend.series.length > 4 ? 48 : 36, bottom: 28 },
           tooltip: {
             trigger: 'axis',
@@ -234,7 +249,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
             left: 8,
             right: 8,
             itemWidth: 14,
-            itemHeight: 4,
+            itemHeight: 8,
             itemGap: 14,
             textStyle: { color: '#58708f', fontSize: 11 },
           },
@@ -251,33 +266,47 @@ export function usePortalCharts(refs: PortalChartRefs) {
             axisLabel: { formatter: '{value}%', color: '#8aa0ba', fontSize: 11 },
             splitLine: { lineStyle: { color: '#eef2f7' } },
           },
-          series: trend.series.map((item, index) => ({
-            name: item.name,
-            type: 'line',
-            smooth: 0.35,
-            showSymbol: item.is_brand,
-            symbolSize: item.is_brand ? 7 : 4,
-            z: item.is_brand ? 3 : 1,
-            data: item.values,
-            lineStyle: {
-              width: item.is_brand ? 3 : 1.5,
-              type: item.is_brand ? 'solid' : 'dashed',
-              opacity: item.is_brand ? 1 : 0.82,
-            },
-            itemStyle: {
-              color: item.is_brand ? palette[0] : palette[Math.min(index, palette.length - 1)],
-            },
-            emphasis: {
-              focus: 'series',
-              lineStyle: { width: item.is_brand ? 3.5 : 2.5 },
-            },
-            areaStyle: item.is_brand ? {
-              color: new graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: 'rgba(45,108,223,.14)' },
-                { offset: 1, color: 'rgba(45,108,223,0)' },
-              ]),
-            } : undefined,
-          })),
+          series: trend.series.map((item, index) => {
+            const color = seriesColors[index] || brandColor
+            if (item.is_brand) {
+              return {
+                name: item.name,
+                type: 'line',
+                smooth: 0.35,
+                showSymbol: true,
+                symbol: 'circle',
+                symbolSize: 7,
+                z: 3,
+                data: item.values,
+                lineStyle: { width: 3, type: 'solid', color },
+                itemStyle: { color },
+                emphasis: { focus: 'series', lineStyle: { width: 3.5 } },
+                areaStyle: {
+                  color: new graphic.LinearGradient(0, 0, 0, 1, [
+                    { offset: 0, color: 'rgba(45,108,223,.14)' },
+                    { offset: 1, color: 'rgba(45,108,223,0)' },
+                  ]),
+                },
+              }
+            }
+            const ordinal = competitorOrdinal
+            competitorOrdinal += 1
+            const symbol = competitorSymbols[ordinal % competitorSymbols.length]
+            const lineType = competitorLineTypes[ordinal % competitorLineTypes.length]
+            return {
+              name: item.name,
+              type: 'line',
+              smooth: 0.35,
+              showSymbol: true,
+              symbol,
+              symbolSize: 8,
+              z: 2,
+              data: item.values,
+              lineStyle: { width: 2, type: lineType, color },
+              itemStyle: { color },
+              emphasis: { focus: 'series', lineStyle: { width: 2.8 } },
+            }
+          }),
         })
         mentionTrendChart.off('click')
         if (data.chartClickHandlers?.mentionTrend) {

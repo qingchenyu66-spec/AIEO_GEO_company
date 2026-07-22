@@ -196,6 +196,92 @@ def preview_report_html(
     return HTMLResponse(content=html)
 
 
+@router.post("/{report_id}/export-jobs/{export_format}", response_model=ApiResponse[dict])
+def create_report_export_job(
+    report_id: int,
+    export_format: Literal["pdf", "docx", "html"],
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """异步导出报告：立即返回 job_id。"""
+    from app.services.menu_permission_service import require_report_permission
+    from app.services.report_export_job_service import start_export_job
+
+    try:
+        require_report_permission(db, current, "can_export")
+        get_report_detail(db, report_id, current)
+        job = start_export_job(
+            kind="report",
+            ref_id=report_id,
+            export_format=export_format,
+            owner_user_id=current.user.id,
+        )
+        return ApiResponse(data=job)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="reports.export_job_create")
+
+
+@router.get("/export-jobs/{job_id}", response_model=ApiResponse[dict])
+def get_report_export_job(
+    job_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    from app.services.menu_permission_service import require_report_permission
+    from app.services.report_export_job_service import get_export_job
+
+    try:
+        require_report_permission(db, current, "can_export")
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="reports.export_job_status")
+    job = get_export_job(job_id)
+    if not job or job.get("kind") != "report":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
+    return ApiResponse(data=job)
+
+
+@router.get("/export-jobs/{job_id}/download")
+def download_report_export_job(
+    job_id: str,
+    request: Request,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> Response:
+    from app.services.menu_permission_service import require_report_permission
+    from app.services.report_export_job_service import get_export_job, read_export_job_file
+
+    try:
+        require_report_permission(db, current, "can_export")
+        job = get_export_job(job_id)
+        if not job or job.get("kind") != "report":
+            raise FileNotFoundError("导出任务不存在")
+        detail = get_report_detail(db, int(job["ref_id"]), current)
+        content, filename, mime = read_export_job_file(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="reports.export_job_download")
+    write_business_audit(
+        db,
+        current,
+        "报告导出",
+        f"异步导出 {str(job.get('format') or '').upper()}：{detail.get('report_title') or job.get('ref_id')}",
+        request=request,
+        target_module="报告中心",
+        target_id=int(job["ref_id"]),
+        tenant_id=detail.get("tenant_id"),
+        risk_level="关注",
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Content-Disposition": content_disposition(filename)},
+    )
+
+
 @router.get("/{report_id}/export/{export_format}")
 def export_report(
     report_id: int,

@@ -9,7 +9,29 @@ WORDCLOUD_STOP_WORDS: frozenset[str] = frozenset(
 
 # Sentiment phrase extraction adds domain-noise terms on top of the base set.
 SENTIMENT_EXTRA_STOP_WORDS: frozenset[str] = frozenset(
-    "回答 推荐 选择 适合 适合谁 适合您 基于 最新 市场 行业 头部 代表 传媒 广告 电梯 媒体 投放 覆盖 全国 区域 本地 中小 客户 目标 受众 预算 规模 属性 分类 整理 对比 速览 主流 核心 优势 地位 特点 定位 一句话 表格 公司类型 如下 以下 第一 第二 第三 第四 第五".split()
+    (
+        "回答 推荐 选择 适合 适合谁 适合您 基于 最新 市场 行业 头部 代表 传媒 广告 电梯 媒体 投放 "
+        "覆盖 全国 区域 本地 中小 客户 目标 受众 预算 规模 属性 分类 整理 对比 速览 主流 核心 优势 "
+        "地位 特点 定位 一句话 表格 公司类型 如下 以下 第一 第二 第三 第四 第五 "
+        "覆盖全国 核心优势 选择建议 您的需求 作为参考 资料作为参考 篇资料作为参考 "
+        "预算有限 中小预算 本地生活 上海浦东 整理如下 综合来看 值得关注"
+    ).split()
+)
+
+# 套话 / 问答模板噪声（子串命中即丢；避免过短词误伤正常评价）
+SENTIMENT_NOISE_SUBSTRINGS: tuple[str, ...] = (
+    "作为参考",
+    "您的需求",
+    "选择建议",
+    "资料作为参考",
+    "篇资料",
+    "整理如下",
+    "一句话总结",
+    "公司类型",
+    "表格如下",
+    "综合来看",
+    "值得一提",
+    "综上所述",
 )
 
 SENTIMENT_STOP_WORDS: frozenset[str] = WORDCLOUD_STOP_WORDS | SENTIMENT_EXTRA_STOP_WORDS

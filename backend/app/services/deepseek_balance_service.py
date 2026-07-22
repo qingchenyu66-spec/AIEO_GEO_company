@@ -8,6 +8,9 @@ from typing import Any
 
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 
+BALANCE_CACHE_KEY = "ops:balance:deepseek:v1"
+BALANCE_CACHE_TTL = 120
+
 
 def _parse_balance(value: Any) -> float | None:
     if value is None:
@@ -29,8 +32,7 @@ def _pick_balance_info(items: list[Any]) -> dict[str, Any] | None:
     return first if isinstance(first, dict) else None
 
 
-def fetch_deepseek_balance() -> dict[str, Any]:
-    """Return DeepSeek balance snapshot; never raise to callers."""
+def _fetch_deepseek_balance_uncached() -> dict[str, Any]:
     from app.services.system_config_service import get_runtime_config
 
     fetched_at = datetime.now().isoformat(timespec="seconds")
@@ -90,3 +92,14 @@ def fetch_deepseek_balance() -> dict[str, Any]:
             "fetched_at": fetched_at,
             "error": f"查询 DeepSeek 余额失败：{exc}",
         }
+
+
+def fetch_deepseek_balance() -> dict[str, Any]:
+    """Return DeepSeek balance snapshot; never raise. 短缓存，避免总览被外呼拖死。"""
+    from app.core.read_cache import get_or_build_json_cache
+
+    return get_or_build_json_cache(
+        BALANCE_CACHE_KEY,
+        _fetch_deepseek_balance_uncached,
+        ttl_seconds=BALANCE_CACHE_TTL,
+    )

@@ -18,21 +18,6 @@
   gap: 12px;
 }
 
-.snapshot-backfill-scan-cap {
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(45, 108, 223, 0.08);
-  color: #315070;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.snapshot-backfill-scan-cap.is-warn {
-  background: rgba(194, 65, 12, 0.08);
-  color: #9a3412;
-}
-
 .snapshot-backfill-toolbar {
   position: sticky;
   top: 0;

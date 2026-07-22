@@ -8,6 +8,9 @@ from typing import Any
 
 from app.services.molizhishu_client import MolizhishuApiError, MolizhishuClient
 
+BALANCE_CACHE_KEY = "ops:balance:molizhishu:v1"
+BALANCE_CACHE_TTL = 120
+
 
 def _parse_balance(value: Any) -> float | None:
     if value is None:
@@ -18,8 +21,7 @@ def _parse_balance(value: Any) -> float | None:
         return None
 
 
-def fetch_molizhishu_balance() -> dict[str, Any]:
-    """Return balance snapshot; never raise to callers."""
+def _fetch_molizhishu_balance_uncached() -> dict[str, Any]:
     fetched_at = datetime.now().isoformat(timespec="seconds")
     try:
         response = MolizhishuClient().get_account_balance()
@@ -56,3 +58,14 @@ def fetch_molizhishu_balance() -> dict[str, Any]:
             "fetched_at": fetched_at,
             "error": "查询监测账户余额失败",
         }
+
+
+def fetch_molizhishu_balance() -> dict[str, Any]:
+    """Return balance snapshot; never raise to callers. 短缓存，避免总览被外呼拖死。"""
+    from app.core.read_cache import get_or_build_json_cache
+
+    return get_or_build_json_cache(
+        BALANCE_CACHE_KEY,
+        _fetch_molizhishu_balance_uncached,
+        ttl_seconds=BALANCE_CACHE_TTL,
+    )

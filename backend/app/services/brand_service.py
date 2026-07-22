@@ -357,7 +357,7 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     # 露出词/平台变更后清摘要与信源缓存，避免脏读至多 6h
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
-    invalidate_monitor_summary_cache(tenant_id)
+    invalidate_monitor_summary_cache(tenant_id, bust_overview=True)
     return asset
 
 
@@ -401,7 +401,7 @@ def save_competitor(db: Session, payload: CompetitorSaveRequest, current: Curren
     db.refresh(competitor)
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
-    invalidate_monitor_summary_cache(tenant_id)
+    invalidate_monitor_summary_cache(tenant_id, bust_overview=True)
     return competitor
 
 
@@ -422,7 +422,7 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
     db.commit()
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
-    invalidate_monitor_summary_cache(resolved_tenant_id)
+    invalidate_monitor_summary_cache(resolved_tenant_id, bust_overview=True)
 
 
 def asset_to_dict(

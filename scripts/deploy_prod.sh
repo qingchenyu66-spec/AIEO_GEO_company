@@ -61,6 +61,7 @@ npm run build
 
 echo "==> restart services"
 systemctl restart geo-api
+systemctl restart geo-celery-beat geo-celery-submit geo-celery-sync geo-celery-default || true
 systemctl reload nginx
 
 echo "==> health check"

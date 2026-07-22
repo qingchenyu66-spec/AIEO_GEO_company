@@ -114,6 +114,70 @@ export function workspaceTrendPeriodLabel(
   return formatCompactDateRange(startDate, endDate)
 }
 
+/** 与当前筛选等长的上一期：近7天→再往前7天；本月→上月同期；本季/本年同理；自定义→紧邻前一段。 */
+export function workspacePreviousPeriodRange(
+  preset: WorkspaceTrendPreset,
+  startDate: string,
+  endDate: string,
+): { startDate: string; endDate: string } | null {
+  const start = new Date(`${startDate}T00:00:00`)
+  const end = new Date(`${endDate}T00:00:00`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null
+
+  if (preset === '7d' || preset === 'custom') {
+    const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1
+    const prevEnd = new Date(start)
+    prevEnd.setDate(prevEnd.getDate() - 1)
+    const prevStart = new Date(prevEnd)
+    prevStart.setDate(prevStart.getDate() - (days - 1))
+    return { startDate: formatLocalDate(prevStart), endDate: formatLocalDate(prevEnd) }
+  }
+
+  if (preset === 'month') {
+    const prevMonthLast = new Date(start.getFullYear(), start.getMonth(), 0)
+    const prevEndDay = Math.min(end.getDate(), prevMonthLast.getDate())
+    const prevEnd = new Date(prevMonthLast.getFullYear(), prevMonthLast.getMonth(), prevEndDay)
+    const prevStart = new Date(prevEnd.getFullYear(), prevEnd.getMonth(), 1)
+    return { startDate: formatLocalDate(prevStart), endDate: formatLocalDate(prevEnd) }
+  }
+
+  if (preset === 'quarter') {
+    const qStartMonth = Math.floor(start.getMonth() / 3) * 3
+    const thisQStart = new Date(start.getFullYear(), qStartMonth, 1)
+    const prevQEnd = new Date(thisQStart)
+    prevQEnd.setDate(0)
+    const prevQStartMonth = Math.floor(prevQEnd.getMonth() / 3) * 3
+    const prevQStart = new Date(prevQEnd.getFullYear(), prevQStartMonth, 1)
+    // 与本期相同的「季初 → 相对截止日」对齐
+    const dayOffset = Math.round((end.getTime() - thisQStart.getTime()) / 86400000)
+    const alignedEnd = new Date(prevQStart)
+    alignedEnd.setDate(alignedEnd.getDate() + dayOffset)
+    const endClamped = alignedEnd > prevQEnd ? prevQEnd : alignedEnd
+    return { startDate: formatLocalDate(prevQStart), endDate: formatLocalDate(endClamped) }
+  }
+
+  if (preset === 'year') {
+    const y = start.getFullYear() - 1
+    const prevStart = new Date(y, 0, 1)
+    const prevEnd = new Date(y, end.getMonth(), end.getDate())
+    // 闰日等边界：若上一年没有该日，退到月末
+    if (prevEnd.getMonth() !== end.getMonth()) {
+      prevEnd.setDate(0)
+    }
+    return { startDate: formatLocalDate(prevStart), endDate: formatLocalDate(prevEnd) }
+  }
+
+  return null
+}
+
+export function workspacePeriodCompareLabel(preset: WorkspaceTrendPreset) {
+  if (preset === '7d') return '较上周'
+  if (preset === 'month') return '较上月'
+  if (preset === 'quarter') return '较上季'
+  if (preset === 'year') return '较上年'
+  return '较上期'
+}
+
 export function isBeforeCustomerCutoff(isoTime: string | null | undefined, date = new Date()) {
   if (!isoTime) return false
   const cutoffEnd = new Date(`${customerDisplayCutoffDate(date)}T23:59:59.999`)

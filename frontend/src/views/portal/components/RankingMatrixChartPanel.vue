@@ -96,6 +96,10 @@ const platformRailItems = computed(() => {
   })
 })
 
+const PLATFORM_RAIL_LIMIT = 5
+
+const platformRailScrollable = computed(() => platformRailItems.value.length > PLATFORM_RAIL_LIMIT)
+
 const effectivePlatform = computed(() => {
   const current = props.activePlatform.trim()
   if (current) return current
@@ -366,11 +370,12 @@ defineExpose({ resizeChart })
           </div>
           <div class="matrix-chart-wrap">
             <div ref="chartRef" class="matrix-chart-canvas" />
-            <p v-if="chartType === 'bar'" class="matrix-chart-legend">
+            <p class="matrix-chart-legend">
               <span class="legend-top3">1~3 靠前</span>
               <span class="legend-mid">4+ 待提升</span>
               <span class="legend-none">— 未提及</span>
-              <span class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推</span>
+              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推</span>
+              <span v-else class="legend-axis">词多时在图内向下滚动即可看全</span>
             </p>
           </div>
         </article>
@@ -420,39 +425,44 @@ defineExpose({ resizeChart })
             全平台对比
             <small>点击切换主图 · 仅展示已购平台</small>
           </div>
-          <button
-            v-for="item in platformRailItems"
-            :key="`rail-${item.code}`"
-            type="button"
-            class="matrix-rail-card"
-            :class="{
-              active: item.code === effectivePlatform,
-              disabled: !item.hasRows,
-            }"
-            :style="{ '--platform-color': item.color }"
-            :disabled="!item.hasRows"
-            @click="selectPlatform(item.code)"
+          <div
+            class="matrix-platform-rail-body"
+            :class="{ 'is-scrollable': platformRailScrollable }"
           >
-            <div class="matrix-rail-card-top">
-              <b><i class="matrix-rail-dot" />{{ item.name }}</b>
-              <span>{{ item.columnCount }} 词</span>
-            </div>
-            <div class="matrix-rail-kpis">
-              <div class="matrix-rail-kpi">
-                <label>进前三次数</label>
-                <strong>{{ item.kpi.top3 }}</strong>
+            <button
+              v-for="item in platformRailItems"
+              :key="`rail-${item.code}`"
+              type="button"
+              class="matrix-rail-card"
+              :class="{
+                active: item.code === effectivePlatform,
+                disabled: !item.hasRows,
+              }"
+              :style="{ '--platform-color': item.color }"
+              :disabled="!item.hasRows"
+              @click="selectPlatform(item.code)"
+            >
+              <div class="matrix-rail-card-top">
+                <b><i class="matrix-rail-dot" />{{ item.name }}</b>
+                <span>{{ item.columnCount }} 词</span>
               </div>
-              <div class="matrix-rail-kpi">
-                <label>均位</label>
-                <strong>{{ item.kpi.avg }}</strong>
+              <div class="matrix-rail-kpis">
+                <div class="matrix-rail-kpi">
+                  <label>进前三次数</label>
+                  <strong>{{ item.kpi.top3 }}</strong>
+                </div>
+                <div class="matrix-rail-kpi">
+                  <label>均位</label>
+                  <strong>{{ item.kpi.avg }}</strong>
+                </div>
+                <div class="matrix-rail-kpi">
+                  <label>未提及</label>
+                  <strong>{{ item.kpi.none }}</strong>
+                </div>
               </div>
-              <div class="matrix-rail-kpi">
-                <label>未提及</label>
-                <strong>{{ item.kpi.none }}</strong>
-              </div>
-            </div>
-            <div v-if="!item.hasRows" class="matrix-rail-empty">暂无数据</div>
-          </button>
+              <div v-if="!item.hasRows" class="matrix-rail-empty">暂无数据</div>
+            </button>
+          </div>
         </aside>
       </div>
     </div>

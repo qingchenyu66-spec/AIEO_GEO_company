@@ -9,9 +9,9 @@ import {
   type TenantSalesOwner,
 } from '../../../services/management'
 import {
-  createCompetitor, deleteCompetitor, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, updateCompetitor,
+  createCompetitor, deleteCompetitor, defaultBrandWordGroupName, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, saveBrandWordGroups, updateCompetitor,
   normalizePlatformSelections, platformSelectionCodes,
-  type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type PlatformSelection,
+  type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
 import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
@@ -20,12 +20,13 @@ import { getPlatformsForBrandConfig } from '../../../services/platforms'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
-export type EnterpriseTab = 'profile' | 'keywords' | 'schedule' | 'competitors' | 'files'
+export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files'
 
 export const enterprisePermissionCodeMap = {
   list: 'platform.audit.list',
   profile: 'platform.audit.profile',
   keywords: 'platform.audit.keywords',
+  brand_words: 'platform.audit.keywords',
   schedule: 'platform.audit.schedule',
   competitors: 'platform.audit.competitors',
   files: 'platform.audit.files',
@@ -95,6 +96,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const visibleEnterpriseTabs = computed(() => ([
     { code: 'profile', name: '企业资料' },
     { code: 'keywords', name: '监测词配置' },
+    { code: 'brand_words', name: '品牌词配置' },
     { code: 'schedule', name: '监控计划' },
     { code: 'competitors', name: '竞品监控' },
     { code: 'files', name: '上传文件' },
@@ -165,14 +167,16 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     saving?: boolean
   }>>([])
   const keywordGroupRows = ref<BrandKeywordGroup[]>([])
+  const brandWordGroupRows = ref<BrandWordGroup[]>([])
   const catalogPlatforms = ref<Awaited<ReturnType<typeof getPlatformsForBrandConfig>>['platforms']>([])
   const modeDialogVisible = ref(false)
-  const modeDialogTarget = ref<{ groupIndex: number; code: string } | null>(null)
+  const modeDialogTarget = ref<{ source: 'keywords' | 'brand_words'; groupIndex: number; code: string } | null>(null)
   const modeDialogForm = reactive({
     mode: 'standard' as PlatformSelection['mode'],
     screenshot: 1 as PlatformSelection['screenshot'],
   })
   const editingGroupIndex = ref<number | null>(null)
+  const editingBrandWordGroupIndex = ref<number | null>(null)
   const competitorNameInput = ref('')
   const loadingBrand = ref(false)
   const brandForm = reactive({
@@ -379,6 +383,78 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     keywordGroupRows.value.forEach((item, itemIndex) => { item.sort_order = itemIndex })
   }
 
+  function makeBrandWordGroup(monitorKeyword = ''): BrandWordGroup {
+    const keywords = monitorKeyword.trim() ? [monitorKeyword.trim()] : []
+    const index = brandWordGroupRows.value.length
+    const inheritedPlatforms = normalizePlatformSelections(
+      brandWordGroupRows.value.find(item => (item.platforms || []).length)?.platforms
+      || keywordGroupRows.value.find(item => (item.platforms || []).length)?.platforms
+      || (brandForm.monitored_platforms.length ? [...brandForm.monitored_platforms] : []),
+    )
+    return {
+      id: null,
+      name: defaultBrandWordGroupName(index),
+      monitor_keyword: keywords[0] || '',
+      monitor_keywords: keywords,
+      platforms: inheritedPlatforms,
+      run_mode: 'once',
+      sort_order: index,
+      status: true,
+    }
+  }
+
+  function normalizeBrandWordGroups(asset: BrandAsset | null) {
+    const groups = asset?.brand_word_groups?.length ? asset.brand_word_groups : []
+    brandWordGroupRows.value = groups.map((group, index) => {
+      const monitorKeywords = keywordGroupMonitorKeywords(group)
+      const runMode = group.run_mode === 'weekly' ? 'weekly' : 'once'
+      return {
+        id: group.id || null,
+        tenant_id: group.tenant_id,
+        name: (group.name || '').trim() || defaultBrandWordGroupName(index),
+        monitor_keyword: monitorKeywords[0] || '',
+        monitor_keywords: [...monitorKeywords],
+        platforms: normalizePlatformSelections(
+          group.platforms?.length ? group.platforms : (asset?.monitored_platforms || []),
+        ),
+        run_mode: runMode,
+        sort_order: group.sort_order ?? index,
+        status: group.status,
+      }
+    })
+  }
+
+  async function startEditBrandWordGroupName(index: number) {
+    if (!canEditEnterpriseTab('brand_words')) return
+    editingBrandWordGroupIndex.value = index
+    await nextTick()
+    const input = document.getElementById(`brand-word-group-name-${index}`) as HTMLInputElement | null
+    input?.focus()
+    input?.select()
+  }
+
+  function finishEditBrandWordGroupName(group: BrandWordGroup, index: number, value: string) {
+    group.name = value.trim() || defaultBrandWordGroupName(index)
+    editingBrandWordGroupIndex.value = null
+  }
+
+  function cancelEditBrandWordGroupName() {
+    editingBrandWordGroupIndex.value = null
+  }
+
+  function addBrandWordGroup() {
+    brandWordGroupRows.value.push(makeBrandWordGroup())
+  }
+
+  function removeBrandWordGroup(index: number) {
+    brandWordGroupRows.value.splice(index, 1)
+    brandWordGroupRows.value.forEach((item, itemIndex) => { item.sort_order = itemIndex })
+  }
+
+  function brandWordGroupDisplayName(group: BrandWordGroup, index = group.sort_order ?? 0) {
+    return (group.name || '').trim() || defaultBrandWordGroupName(index)
+  }
+
   function addExposureTerm(group: BrandKeywordGroup, term: string) {
     const text = term.trim()
     if (!text) return
@@ -411,7 +487,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     group.exposure_terms.splice(index, 1)
   }
 
-  function syncGroupPrimaryKeyword(group: BrandKeywordGroup) {
+  function syncGroupPrimaryKeyword(group: BrandKeywordGroup | BrandWordGroup) {
     const keywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
     group.monitor_keywords = keywords
     group.monitor_keyword = keywords[0] || ''
@@ -421,7 +497,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return text.split(/[\n\r、,，;；\t]+/).map(item => item.trim()).filter(Boolean)
   }
 
-  function addMonitorKeyword(group: BrandKeywordGroup, term: string) {
+  function addMonitorKeyword(group: BrandKeywordGroup | BrandWordGroup, term: string) {
     const text = term.trim()
     if (!text) return
     if (!group.monitor_keywords) group.monitor_keywords = []
@@ -431,17 +507,17 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     syncGroupPrimaryKeyword(group)
   }
 
-  function addMonitorKeywordsFromText(group: BrandKeywordGroup, text: string) {
+  function addMonitorKeywordsFromText(group: BrandKeywordGroup | BrandWordGroup, text: string) {
     splitKeywordInput(text).forEach(term => addMonitorKeyword(group, term))
   }
 
-  function commitMonitorKeywordInput(group: BrandKeywordGroup, event: Event) {
+  function commitMonitorKeywordInput(group: BrandKeywordGroup | BrandWordGroup, event: Event) {
     const input = event.target as HTMLInputElement
     addMonitorKeywordsFromText(group, input.value)
     input.value = ''
   }
 
-  function handleMonitorKeywordPaste(group: BrandKeywordGroup, event: ClipboardEvent) {
+  function handleMonitorKeywordPaste(group: BrandKeywordGroup | BrandWordGroup, event: ClipboardEvent) {
     const text = event.clipboardData?.getData('text') || ''
     const terms = splitKeywordInput(text)
     if (terms.length <= 1) return
@@ -451,7 +527,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     input.value = ''
   }
 
-  function removeMonitorKeyword(group: BrandKeywordGroup, index: number) {
+  function removeMonitorKeyword(group: BrandKeywordGroup | BrandWordGroup, index: number) {
     if (!group.monitor_keywords) return
     group.monitor_keywords.splice(index, 1)
     syncGroupPrimaryKeyword(group)
@@ -492,6 +568,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.aliases_text = (asset?.aliases || []).join('\n')
     brandForm.region_codes = [...(asset?.region_codes || [])]
     normalizeKeywordGroups(asset, tenant?.name || '')
+    normalizeBrandWordGroups(asset)
     brandForm.monitored_platforms = asset ? [...(asset.monitored_platforms || [])] : []
     brandForm.official_url = asset?.official_url || ''
     brandForm.description = asset?.description || ''
@@ -748,6 +825,61 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       ElMessage.success(successText)
     } catch (error: unknown) {
       notifyError(error, '品牌资产保存失败')
+    } finally {
+      loadingBrand.value = false
+    }
+  }
+
+  async function submitBrandWordGroups(successText = '品牌词配置已保存') {
+    if (!brandForm.tenant_id) {
+      ElMessage.warning('请先选择企业')
+      return
+    }
+    const groups = brandWordGroupRows.value
+      .map((group, index) => {
+        const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+        const platforms = normalizePlatformSelections(group.platforms)
+        return {
+          id: group.id || null,
+          name: (group.name || '').trim() || defaultBrandWordGroupName(index),
+          monitor_keyword: monitorKeywords[0] || '',
+          monitor_keywords: monitorKeywords,
+          platforms,
+          run_mode: group.run_mode === 'weekly' ? 'weekly' as const : 'once' as const,
+          sort_order: index,
+          status: group.status,
+        }
+      })
+      .filter(group => group.monitor_keywords.length)
+    const missingPlatforms = groups.find(group => group.status && !group.platforms.length)
+    if (missingPlatforms) {
+      ElMessage.warning('每个启用的品牌词组至少选择一个监测平台')
+      return
+    }
+    loadingBrand.value = true
+    try {
+      const saved = await saveBrandWordGroups({
+        tenant_id: brandForm.tenant_id,
+        groups,
+      })
+      if (isPendingApproval(saved)) {
+        const msg = pendingApprovalMessage(saved, '已提交审批，等待运营或管理员审核')
+        if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
+        else ElMessage.info(msg)
+        return
+      }
+      await loadBrandAssetData()
+      const onceCount = (saved.once_submitted || []).filter(item => item.status === 'submitted').length
+      const onceFailed = (saved.once_submitted || []).filter(item => item.status === 'failed')
+      if (onceFailed.length) {
+        ElMessage.warning(`${successText}；仅本次提交失败 ${onceFailed.length} 组`)
+      } else if (onceCount) {
+        ElMessage.success(`${successText}；已立即提交 ${onceCount} 组检测任务`)
+      } else {
+        ElMessage.success(successText)
+      }
+    } catch (error: unknown) {
+      notifyError(error, '品牌词配置保存失败')
     } finally {
       loadingBrand.value = false
     }
@@ -1027,19 +1159,23 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return 'standard'
   }
 
-  function groupHasPlatform(group: BrandKeywordGroup, code: string) {
+  function groupHasPlatform(group: BrandKeywordGroup | BrandWordGroup, code: string) {
     return platformSelectionCodes(group.platforms).includes(code)
   }
 
-  function onPlatformCheckClick(groupIndex: number, code: string) {
-    const group = keywordGroupRows.value[groupIndex]
+  function platformRows(source: 'keywords' | 'brand_words') {
+    return source === 'brand_words' ? brandWordGroupRows : keywordGroupRows
+  }
+
+  function onPlatformCheckClick(groupIndex: number, code: string, source: 'keywords' | 'brand_words' = 'keywords') {
+    const rows = platformRows(source)
+    const group = rows.value[groupIndex]
     if (!group) return
-    if (!canEditEnterpriseTab('keywords')) return
+    if (!canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
     if (groupHasPlatform(group, code)) {
-      // 已勾选：再次点击改为改模式（取消勾选用右侧 ×）
       const current = normalizePlatformSelections(group.platforms).find(item => item.code === code)
-      modeDialogTarget.value = { groupIndex, code }
+      modeDialogTarget.value = { source, groupIndex, code }
       modeDialogForm.mode = coerceSelectableMode(current?.mode || meta?.default_mode)
       modeDialogForm.screenshot = 1
       modeDialogVisible.value = true
@@ -1049,17 +1185,18 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       ElMessage.warning(meta.labels.includes('已下架') ? '该平台已下架，不可勾选' : '该平台暂无服务，不可勾选')
       return
     }
-    modeDialogTarget.value = { groupIndex, code }
+    modeDialogTarget.value = { source, groupIndex, code }
     modeDialogForm.mode = coerceSelectableMode(meta?.default_mode)
     modeDialogForm.screenshot = 1
     modeDialogVisible.value = true
   }
 
-  function removeGroupPlatform(groupIndex: number, code: string) {
-    const group = keywordGroupRows.value[groupIndex]
-    if (!group || !canEditEnterpriseTab('keywords')) return
+  function removeGroupPlatform(groupIndex: number, code: string, source: 'keywords' | 'brand_words' = 'keywords') {
+    const rows = platformRows(source)
+    const group = rows.value[groupIndex]
+    if (!group || !canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
-    keywordGroupRows.value[groupIndex] = { ...group, platforms: next }
+    rows.value[groupIndex] = { ...group, platforms: next }
   }
 
   function confirmModeDialog() {
@@ -1068,7 +1205,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       modeDialogVisible.value = false
       return
     }
-    const group = keywordGroupRows.value[target.groupIndex]
+    const rows = platformRows(target.source)
+    const group = rows.value[target.groupIndex]
     if (!group) {
       modeDialogVisible.value = false
       modeDialogTarget.value = null
@@ -1080,7 +1218,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       mode: modeDialogForm.mode,
       screenshot: 1,
     })
-    keywordGroupRows.value[target.groupIndex] = { ...group, platforms: next }
+    rows.value[target.groupIndex] = { ...group, platforms: next }
     modeDialogVisible.value = false
     modeDialogTarget.value = null
   }
@@ -1143,6 +1281,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandCompetitors,
     competitorRows,
     keywordGroupRows,
+    brandWordGroupRows,
     competitorNameInput,
     loadingBrand,
     brandForm,
@@ -1163,12 +1302,19 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     tenantServicePeriod,
     tenantOwnerLabel,
     editingGroupIndex,
+    editingBrandWordGroupIndex,
     keywordGroupDisplayName,
+    brandWordGroupDisplayName,
     startEditGroupName,
     finishEditGroupName,
     cancelEditGroupName,
+    startEditBrandWordGroupName,
+    finishEditBrandWordGroupName,
+    cancelEditBrandWordGroupName,
     addKeywordGroup,
     removeKeywordGroup,
+    addBrandWordGroup,
+    removeBrandWordGroup,
     addExposureTerm,
     removeExposureTerm,
     addMonitorKeyword,
@@ -1187,6 +1333,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     openEnterpriseInfo,
     backToEnterpriseList,
     submitBrandAsset,
+    submitBrandWordGroups,
     submitTenant,
     removeTenant,
     restoreTenantService,

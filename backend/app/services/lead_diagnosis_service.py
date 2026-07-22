@@ -110,6 +110,7 @@ def build_platform_cost_ranking(
     tenant_name_map: dict[int, str],
     tenant_ids: list[int] | None = None,
     limit: int = 8,
+    since: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """运营总览费用排行：正式企业按 tenant 汇总，售前诊断按线索品牌拆分展示。"""
     from sqlalchemy import func
@@ -119,6 +120,8 @@ def build_platform_cost_ranking(
         .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == GeoMonitorTask.task_id)
         .where(GeoMonitorTask.deleted.is_(False), GeoMonitorTask.tenant_id.isnot(None))
     )
+    if since is not None:
+        tenant_stmt = tenant_stmt.where(GeoMonitorTask.created_at >= since)
     if tenant_ids is not None:
         tenant_stmt = tenant_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
     tenant_rows = db.execute(tenant_stmt.group_by(GeoMonitorTask.tenant_id)).all()
@@ -135,6 +138,14 @@ def build_platform_cost_ranking(
     ]
 
     if tenant_ids is None:
+        lead_where = [
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.tenant_id.is_(None),
+            LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosisRun.task_id.isnot(None),
+        ]
+        if since is not None:
+            lead_where.append(GeoMonitorTask.created_at >= since)
         lead_rows = db.execute(
             select(
                 LeadDiagnosis.id,
@@ -144,12 +155,7 @@ def build_platform_cost_ranking(
             .join(LeadDiagnosisRun, LeadDiagnosisRun.lead_diagnosis_id == LeadDiagnosis.id)
             .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == LeadDiagnosisRun.task_id)
             .join(GeoMonitorTask, GeoMonitorTask.task_id == LeadDiagnosisRun.task_id)
-            .where(
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorTask.tenant_id.is_(None),
-                LeadDiagnosis.deleted.is_(False),
-                LeadDiagnosisRun.task_id.isnot(None),
-            )
+            .where(*lead_where)
             .group_by(LeadDiagnosis.id, LeadDiagnosis.brand_name)
         ).all()
         for lead_id, brand_name, amount in lead_rows:
@@ -164,14 +170,17 @@ def build_platform_cost_ranking(
             })
 
         lead_task_ids = select(LeadDiagnosisRun.task_id).where(LeadDiagnosisRun.task_id.isnot(None))
+        orphan_where = [
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.tenant_id.is_(None),
+            GeoMonitorTask.task_id.notin_(lead_task_ids),
+        ]
+        if since is not None:
+            orphan_where.append(GeoMonitorTask.created_at >= since)
         orphan_cost = float(db.scalar(
             select(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
             .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-            .where(
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorTask.tenant_id.is_(None),
-                GeoMonitorTask.task_id.notin_(lead_task_ids),
-            )
+            .where(*orphan_where)
         ) or 0)
         if orphan_cost > 0:
             ranking.append({
@@ -1672,10 +1681,10 @@ def build_lead_diagnosis_export(
             "competitors": detail.get("competitors") or [],
         },
     }
-    from app.services.report_export_service import ExportFormat, build_report_export
+    from app.services.report_export_service import build_report_export
 
     fmt = _resolve_export_format(export_format)
-    return build_report_export(report, fmt)  # type: ignore[arg-type]
+    return build_report_export(report, fmt, db=db)
 
 
 def _resolve_export_format(export_format: str) -> str:

@@ -12,6 +12,7 @@ export interface BrandAsset {
   product_keywords: string[]
   monitored_platforms: string[]
   keyword_groups: BrandKeywordGroup[]
+  brand_word_groups?: BrandWordGroup[]
   region_codes: string[]
   official_url: string | null
   description: string | null
@@ -39,6 +40,24 @@ export interface BrandKeywordGroup {
   platforms?: Array<string | PlatformSelection>
   sort_order: number
   status: boolean
+}
+
+/** 品牌词组：无露出词；匹配靠品牌词本身 + 企业资产别名。 */
+export interface BrandWordGroup {
+  id: number | null
+  tenant_id?: number
+  name?: string
+  display_name?: string
+  monitor_keyword: string
+  monitor_keywords?: string[]
+  platforms?: Array<string | PlatformSelection>
+  run_mode: 'once' | 'weekly'
+  sort_order: number
+  status: boolean
+}
+
+export function defaultBrandWordGroupName(index: number) {
+  return `品牌词组 ${index + 1}`
 }
 
 export function normalizePlatformSelection(raw: string | PlatformSelection | null | undefined): PlatformSelection | null {
@@ -104,7 +123,10 @@ export function keywordGroupFilterValue(group: BrandKeywordGroup, index = group.
   return formatKeywordGroupLabel(group, index)
 }
 
-export function keywordGroupMonitorKeywords(group: BrandKeywordGroup): string[] {
+export function keywordGroupMonitorKeywords(group: {
+  monitor_keyword?: string | null
+  monitor_keywords?: string[] | null
+}): string[] {
   const fromList = [...new Set((group.monitor_keywords || []).map(item => item.trim()).filter(Boolean))]
   if (fromList.length) return fromList
   const primary = (group.monitor_keyword || '').trim()
@@ -219,6 +241,21 @@ export async function getBrandAsset(tenantId?: number | null): Promise<BrandAsse
 
 export async function saveBrandAsset(payload: BrandAssetPayload): Promise<BrandAssetResponse> {
   const response = await http.put('/v1/brand/asset', payload)
+  invalidateCache('/v1/brand/asset')
+  return response.data.data
+}
+
+export interface BrandWordGroupsPayload {
+  tenant_id?: number | null
+  groups: BrandWordGroup[]
+}
+
+export interface BrandWordGroupsResponse extends BrandAssetResponse {
+  once_submitted?: Array<{ status?: string; message?: string; keyword?: string | null }>
+}
+
+export async function saveBrandWordGroups(payload: BrandWordGroupsPayload): Promise<BrandWordGroupsResponse> {
+  const response = await http.put('/v1/brand/brand-word-groups', payload)
   invalidateCache('/v1/brand/asset')
   return response.data.data
 }

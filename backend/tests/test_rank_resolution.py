@@ -11,26 +11,32 @@ from app.services.rank_llm_service import (
 )
 
 
-def test_resolve_brand_rank_detail_structured_source() -> None:
+def test_resolve_appearance_no_inflated_line_count() -> None:
+    """正文仅 2 家公司标题 + 字段 bullet；品牌出现在补充段 → 提及但无虚高名次。"""
+    answer = """
+### 一、广州伟源光电科技有限公司（全链路）
+- **成立时间**：2004年
+- **核心优势**：一站式服务
+### 二、广州普锐电子有限公司
+- **成立时间**：2007年
+### 补充推荐
+- 媒体资源型：艾迪亚传媒（全国资源）
+"""
     subtask = SimpleNamespace(
-        prompt="公交广告公司哪家好",
-        answer_content="""
-一、沧州本地推荐
-1. 沧州市都市传媒公交广告有限公司
-2. 艾迪亚控股集团
-""",
+        prompt="LED广告公司推荐",
+        answer_content=answer,
         mention_context=None,
         all_rankings_json=[
-            {"name": "沧州市都市传媒公交广告有限公司", "rank": 1, "category": "沧州本地推荐"},
-            {"name": "艾迪亚控股集团", "rank": 2, "category": "沧州本地推荐"},
+            {"name": "广州伟源光电科技有限公司", "rank": 1, "category": None},
+            {"name": "广州普锐电子有限公司", "rank": 2, "category": None},
         ],
-        mention_position=3,
+        mention_position=17,
         raw_result_json={},
     )
-    detail = _resolve_brand_rank_detail(subtask, "公交广告公司哪家好", ["艾迪亚"], asset=None)
-    assert detail.source == "structured"
-    assert detail.rank == 2
+    detail = _resolve_brand_rank_detail(subtask, "LED广告公司推荐", ["艾迪亚", "艾迪亚传媒"], asset=None)
     assert detail.mentioned is True
+    assert detail.rank is None
+    assert detail.source in {"none", "structured"}
 
 
 def test_resolve_brand_rank_detail_prefers_persisted_llm() -> None:

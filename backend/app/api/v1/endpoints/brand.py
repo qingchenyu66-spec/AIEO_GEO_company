@@ -7,20 +7,25 @@ from app.api.dependencies import CurrentSession, get_current_session, require_pl
 from app.api.http_errors import raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.models.permission import Menu, UserIdentityMenu
-from app.schemas.brand import BrandAssetSaveRequest, CompetitorSaveRequest
+from app.schemas.brand import BrandAssetSaveRequest, BrandWordGroupsSaveRequest, CompetitorSaveRequest
 from app.schemas.common import ApiResponse
 from app.services.brand_service import (
     asset_to_dict,
+    brand_word_group_to_dict,
     competitor_to_dict,
     delete_competitor,
     editable_keyword_groups,
     get_brand_asset,
+    list_brand_word_groups,
     list_competitors,
     save_brand_asset,
+    save_brand_word_groups,
     save_competitor,
 )
 from app.services.approval_service import queue_or_run
+from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
 from app.services.tenant_scope import resolve_and_guard_tenant_id
+from app.core.config import settings
 
 router = APIRouter(prefix="/brand")
 
@@ -52,12 +57,13 @@ def brand_asset(
         resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
         asset = get_brand_asset(db, resolved_tenant_id)
         keyword_groups = editable_keyword_groups(db, resolved_tenant_id) if asset else []
+        brand_word_groups = list_brand_word_groups(db, resolved_tenant_id) if asset else []
         competitors = list_competitors(db, resolved_tenant_id)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="brand.asset")
     return ApiResponse(data={
         "tenant_id": resolved_tenant_id,
-        "asset": asset_to_dict(asset, keyword_groups),
+        "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
         "competitors": [competitor_to_dict(item) for item in competitors],
     })
 
@@ -80,10 +86,11 @@ def upsert_brand_asset(
     def _execute():
         asset = save_brand_asset(db, payload, current)
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
+        brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
         competitors = list_competitors(db, asset.tenant_id)
         return {
             "tenant_id": asset.tenant_id,
-            "asset": asset_to_dict(asset, keyword_groups),
+            "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
             "competitors": [competitor_to_dict(item) for item in competitors],
         }
 
@@ -102,6 +109,58 @@ def upsert_brand_asset(
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="brand.upsert")
+    return ApiResponse(data=result)
+
+
+@router.put("/brand-word-groups", response_model=ApiResponse[dict])
+def upsert_brand_word_groups(
+    payload: BrandWordGroupsSaveRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """保存品牌词配置；run_mode=once 的启用词组保存后立刻提交一轮。"""
+    require_any_update_permission(current, db, [
+        "platform.audit",
+        "platform.audit.keywords",
+    ])
+    tenant_id = payload.tenant_id
+
+    def _execute():
+        asset, once_rows = save_brand_word_groups(db, payload, current)
+        once_dicts = [brand_word_group_to_dict(item) for item in once_rows]
+        submitted: list[dict] = []
+        for item in enumerate_brand_word_once_groups(
+            db,
+            tenant_id=asset.tenant_id,
+            groups=once_dicts,
+            max_prompts=settings.celery_scan_submit_max_prompts,
+        ):
+            submitted.append(submit_schedule_group(db, current, item))
+        keyword_groups = editable_keyword_groups(db, asset.tenant_id)
+        brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
+        competitors = list_competitors(db, asset.tenant_id)
+        return {
+            "tenant_id": asset.tenant_id,
+            "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
+            "competitors": [competitor_to_dict(item) for item in competitors],
+            "once_submitted": submitted,
+        }
+
+    try:
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="brand.brand_word_groups.upsert",
+            module="brand",
+            action="update",
+            summary="保存品牌词配置",
+            payload={"body": payload.model_dump(mode="json")},
+            tenant_id=tenant_id,
+            executor=_execute,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="brand.brand_word_groups")
     return ApiResponse(data=result)
 
 

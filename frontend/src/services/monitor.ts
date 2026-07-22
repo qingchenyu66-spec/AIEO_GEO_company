@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export interface MonitorPlatformConfig {
   platform: string
@@ -346,6 +346,10 @@ export interface WorkspaceSnapshot {
   platform: string
   prompt: string
   keyword_group: string | null
+  /** 监控主词（展示用，优先于分组名如「综合」） */
+  monitor_keyword?: string | null
+  /** 引用文章（收录明细点开跳原文，不是快照） */
+  source_articles?: Array<{ title: string; url: string; domain?: string }>
   schedule_label: string | null
   schedule_window_key: string | null
   prompt_intent: 'ranking' | 'exposure'
@@ -367,6 +371,19 @@ export interface WorkspaceTopSource {
 export interface WorkspaceAlert {
   level: 'warn' | 'info'
   message: string
+}
+
+export interface WorkspaceKeywordHeat {
+  name: string
+  heat: number | null
+}
+
+export interface WorkspaceKeywordPlatformHeatmap {
+  platforms: string[]
+  platform_labels: string[]
+  keywords: string[]
+  data: Array<[number, number, number]>
+  source?: string
 }
 
 export interface WorkspaceBrief {
@@ -392,6 +409,10 @@ export interface WorkspaceBrief {
   top_sources: WorkspaceTopSource[]
   recent_snapshots: WorkspaceSnapshot[]
   alerts: WorkspaceAlert[]
+  keyword_heats?: WorkspaceKeywordHeat[]
+  keyword_platform_heatmap?: WorkspaceKeywordPlatformHeatmap | null
+  service_start_date?: string | null
+  service_end_date?: string | null
   health_score?: number
   visibility_score?: number
   rank_score?: number | null
@@ -444,8 +465,11 @@ export async function getMonitorSummary(force = false, tenantId?: number | null)
   return monitorSummaryInflight
 }
 
-export async function getRankingMatrix(params?: RankingMatrixQuery): Promise<RankingMatrix> {
-  const response = await http.get('/v1/monitor/ranking-matrix', { params })
+export async function getRankingMatrix(
+  params?: RankingMatrixQuery,
+  config?: import('./http').GeoHttpRequestConfig,
+): Promise<RankingMatrix> {
+  const response = await http.get('/v1/monitor/ranking-matrix', { params, ...config })
   return response.data.data
 }
 
@@ -454,10 +478,177 @@ export interface WorkspaceBriefQuery {
   end_date?: string
   tenant_id?: number
   record_access?: boolean
+  scope?: 'full' | 'summary'
+  /** geo=日常 GEO 监测（默认）；brand_word=品牌分析专用 */
+  purpose?: 'geo' | 'brand_word'
 }
 
-export async function getWorkspaceBrief(params?: WorkspaceBriefQuery): Promise<WorkspaceBrief> {
-  const response = await http.get('/v1/monitor/workspace-brief', { params })
+const WORKSPACE_BRIEF_TTL_MS = 45_000
+const WORKSPACE_BRIEF_CACHE_MAX = 16
+const workspaceBriefCacheMap = new Map<string, { data: WorkspaceBrief; expiresAt: number }>()
+let workspaceBriefInflight: Promise<WorkspaceBrief> | null = null
+let workspaceBriefInflightKey: string | null = null
+
+function workspaceBriefCacheKey(params?: WorkspaceBriefQuery) {
+  return [
+    params?.tenant_id ?? 'self',
+    params?.start_date || '',
+    params?.end_date || '',
+    params?.scope || 'full',
+    params?.purpose || 'geo',
+    params?.record_access ? '1' : '0',
+  ].join('|')
+}
+
+export function invalidateWorkspaceBriefCache() {
+  workspaceBriefCacheMap.clear()
+}
+
+function readWorkspaceBriefCache(key: string, now: number) {
+  const hit = workspaceBriefCacheMap.get(key)
+  if (!hit || hit.expiresAt <= now) {
+    if (hit) workspaceBriefCacheMap.delete(key)
+    return null
+  }
+  return hit.data
+}
+
+function writeWorkspaceBriefCache(key: string, data: WorkspaceBrief, now: number) {
+  if (workspaceBriefCacheMap.size >= WORKSPACE_BRIEF_CACHE_MAX) {
+    const oldest = workspaceBriefCacheMap.keys().next().value
+    if (oldest) workspaceBriefCacheMap.delete(oldest)
+  }
+  workspaceBriefCacheMap.set(key, { data, expiresAt: now + WORKSPACE_BRIEF_TTL_MS })
+}
+
+export async function getWorkspaceBrief(
+  params?: WorkspaceBriefQuery,
+  options?: { force?: boolean; silentError?: boolean; timeout?: number },
+): Promise<WorkspaceBrief> {
+  const key = workspaceBriefCacheKey(params)
+  const now = Date.now()
+  if (!options?.force) {
+    const cached = readWorkspaceBriefCache(key, now)
+    if (cached) return cached
+    if (workspaceBriefInflight && workspaceBriefInflightKey === key) {
+      return workspaceBriefInflight
+    }
+  }
+  workspaceBriefInflightKey = key
+  workspaceBriefInflight = http.get('/v1/monitor/workspace-brief', {
+    params,
+    timeout: options?.timeout,
+    silentError: options?.silentError,
+  } as GeoHttpRequestConfig).then(response => {
+    const data = response.data.data as WorkspaceBrief
+    writeWorkspaceBriefCache(key, data, Date.now())
+    return data
+  }).finally(() => {
+    workspaceBriefInflight = null
+    workspaceBriefInflightKey = null
+  })
+  return workspaceBriefInflight
+}
+
+export interface BrandAnalysisAnswer {
+  subtask_id: string
+  task_id?: string
+  platform?: string
+  platform_name?: string
+  prompt?: string
+  excerpt: string
+  sentiment: string
+  updated_at?: string | null
+  page_screenshot?: string | null
+}
+
+export interface BrandAnalysisPlatformBlock {
+  code: string
+  name: string
+  sample_count: number
+  positive: BrandAnalysisAnswer[]
+  neutral: BrandAnalysisAnswer[]
+  negative: BrandAnalysisAnswer[]
+  unknown?: BrandAnalysisAnswer[]
+}
+
+export interface BrandAnalysisPieSlice {
+  name: string
+  value: number
+  code?: string
+}
+
+export interface BrandAnalysisAiDescription {
+  description: string
+  sentiment: string
+  sample_count: number
+  platforms: Array<{ code: string; name: string }>
+  answers: BrandAnalysisAnswer[]
+}
+
+export interface BrandAnalysisDashboard {
+  tenant_id: number
+  brand_name: string
+  company_name?: string
+  period_label: string
+  purchased_platforms: string[]
+  sample_count: number
+  sentiment_counts: Record<string, number>
+  sentiment_pie: BrandAnalysisPieSlice[]
+  platform_pie: BrandAnalysisPieSlice[]
+  platforms: BrandAnalysisPlatformBlock[]
+  ai_descriptions?: BrandAnalysisAiDescription[]
+  parse?: {
+    parsed?: number
+    pending_left?: number
+    errors?: string[]
+    error?: string
+    description_parsed?: number
+    description_pending_left?: number
+    description_errors?: string[]
+  }
+  generated_at?: string
+}
+
+export async function getBrandAnalysis(
+  params?: { tenant_id?: number; parse?: boolean },
+  options?: { timeout?: number },
+): Promise<BrandAnalysisDashboard> {
+  const response = await http.get('/v1/monitor/brand-analysis', {
+    params: {
+      tenant_id: params?.tenant_id,
+      parse: params?.parse ?? true,
+    },
+    timeout: options?.timeout ?? 120_000,
+  } as GeoHttpRequestConfig)
+  return response.data.data as BrandAnalysisDashboard
+}
+
+export interface InclusionSnapshotsQuery {
+  start_date?: string
+  end_date?: string
+  tenant_id?: number
+  platform?: string
+  limit?: number
+}
+
+export interface InclusionSnapshotsResult {
+  recent_snapshots: WorkspaceSnapshot[]
+  purchased_platforms: string[]
+}
+
+export async function getInclusionSnapshots(
+  params?: InclusionSnapshotsQuery,
+  options?: { silentError?: boolean; timeout?: number },
+): Promise<InclusionSnapshotsResult> {
+  const response = await http.get('/v1/monitor/inclusion-snapshots', {
+    params: {
+      ...params,
+      platform: params?.platform && params.platform !== 'all' ? params.platform : undefined,
+    },
+    timeout: options?.timeout,
+    silentError: options?.silentError,
+  } as GeoHttpRequestConfig)
   return response.data.data
 }
 

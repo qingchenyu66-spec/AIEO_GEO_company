@@ -11,6 +11,7 @@ import {
 
 const expected = [
   'customer.workspace',
+  'customer.brand_analysis',
   'customer.realtime',
   'customer.competitor',
   'customer.sources',
@@ -18,8 +19,8 @@ const expected = [
   'customer.knowledge',
 ]
 
-if (CUSTOMER_PREVIEW_MENU_CODES.length !== 6) {
-  throw new Error(`expected 6 preview menus, got ${CUSTOMER_PREVIEW_MENU_CODES.length}`)
+if (CUSTOMER_PREVIEW_MENU_CODES.length !== 7) {
+  throw new Error(`expected 7 preview menus, got ${CUSTOMER_PREVIEW_MENU_CODES.length}`)
 }
 for (const code of expected) {
   if (!isCustomerPreviewMenuCode(code)) throw new Error(`missing preview menu ${code}`)

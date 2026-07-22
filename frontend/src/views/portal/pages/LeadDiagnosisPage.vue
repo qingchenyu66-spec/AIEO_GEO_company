@@ -28,6 +28,8 @@ const {
   loading,
   saving,
   exporting,
+  exportingFormat,
+  exportProgress,
   detailLoading,
   loadError,
   selectedId,
@@ -410,10 +412,10 @@ onUnmounted(() => {
                 <Zap :size="16" /> 立即抓取下一档
               </button>
               <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-secondary-btn small" :disabled="exporting" @click="handleExport('html')">
-                <Download :size="16" /> {{ exporting ? '导出中...' : '下载 HTML' }}
+                <Download :size="16" /> {{ exportingFormat === 'html' ? (exportProgress || '导出中…') : '下载 HTML' }}
               </button>
               <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport('pdf')">
-                <Download :size="16" /> {{ exporting ? '导出中...' : '下载 PDF' }}
+                <Download :size="16" /> {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '下载 PDF' }}
               </button>
             </div>
           </header>

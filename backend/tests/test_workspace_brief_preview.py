@@ -76,9 +76,10 @@ def test_platform_workspace_brief_uses_guarded_tenant(monkeypatch: pytest.Monkey
         lambda _key, builder, ttl_seconds=0: builder(),
     )
 
-    def fake_brief(db, current, *, start_date=None, end_date=None, tenant_id=None):
+    def fake_brief(db, current, *, start_date=None, end_date=None, tenant_id=None, scope="full"):
         seen["tenant_id"] = tenant_id
-        return {"ok": True, "tenant_id": tenant_id}
+        seen["scope"] = scope
+        return {"ok": True, "tenant_id": tenant_id, "scope": scope}
 
     monkeypatch.setattr(monitor_ep, "workspace_brief", fake_brief)
 

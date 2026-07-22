@@ -8,6 +8,7 @@ from app.services.competitor_analytics_service import (
     _dedupe_preserve_order,
     _inclusive_day_keys,
     _include_in_sentiment_leaderboard,
+    _names_match,
     _tracked_entities,
 )
 
@@ -38,6 +39,17 @@ def test_tracked_entities_uses_brand_match_terms_without_extra_series():
     assert rows[0]["is_brand"] is True
     assert rows[0]["name"] == "艾迪亚控股集团有限公司"
     assert "艾迪亚" in rows[0]["match_terms"]
+
+
+def test_names_match_rejects_boyan_prefix_collision():
+    """推荐列表「保研机构」不得把所有「保研*」竞品都算提及。"""
+    assert not _names_match("保研岛", "保研机构")
+    assert not _names_match("保研人", "保研机构")
+    assert not _names_match("保研录", "保研机构")
+    assert not _names_match("保研岛", "保研人")
+    assert _names_match("保研岛", "保研岛机构")
+    assert _names_match("艾迪亚", "艾迪亚控股集团")
+    assert _names_match("儒思HR", "儒思")
 
 
 def test_competitor_aliases_preserves_empty_list_for_orm():

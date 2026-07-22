@@ -86,6 +86,7 @@ def load_subtasks_for_business_date_range(
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
+            GeoMonitorTask.purpose == "geo",
             or_(
                 and_(GeoMonitorTask.created_at >= start_dt, GeoMonitorTask.created_at <= end_dt),
                 and_(GeoMonitorSubtask.updated_at >= start_dt, GeoMonitorSubtask.updated_at <= end_dt),
@@ -179,6 +180,7 @@ def _rebuild_daily_stat_for_platform_day(
             GeoMonitorDailyStat.platform == platform,
         )
     )
+    db.flush()
     # ponytail: 同会话多次重建同一 key 时，先 flush 掉 DELETE，否则未落库的旧 INSERT 会撞唯一键
     db.flush()
     subtasks = list(
@@ -189,6 +191,7 @@ def _rebuild_daily_stat_for_platform_day(
             .where(
                 GeoMonitorTask.deleted.is_(False),
                 GeoMonitorTask.tenant_id == tenant_id,
+                GeoMonitorTask.purpose == "geo",
                 GeoMonitorSubtask.platform == platform,
                 GeoMonitorSubtask.status.in_(TERMINAL_STATUSES),
             )
@@ -239,6 +242,7 @@ def _rebuild_daily_stat_for_platform_day(
             citation_count=metrics["citation"],
         )
     )
+    db.flush()
 
 
 def refresh_stats_for_task(db: Session, task_id: str) -> None:
@@ -250,6 +254,9 @@ def refresh_stats_for_task(db: Session, task_id: str) -> None:
         )
     )
     if task is None or task.tenant_id is None:
+        return
+    # 品牌词不进 GEO 日预聚合
+    if str(getattr(task, "purpose", "geo") or "geo") == "brand_word":
         return
     subtasks = list(
         db.scalars(
@@ -294,6 +301,8 @@ def refresh_stats_after_subtask_backfill(
 ) -> None:
     """补录/覆盖后重建旧检测日与新检测日的日统计。"""
     if task.tenant_id is None:
+        return
+    if str(getattr(task, "purpose", "geo") or "geo") == "brand_word":
         return
     schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
     lead_run = lead_diagnosis_runs_for_tasks(db, [task.task_id]).get(task.task_id)

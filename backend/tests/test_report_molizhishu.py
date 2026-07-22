@@ -10,7 +10,7 @@ from app.services.report_molizhishu_fragments import (
     render_mention_table,
     render_prompt_platform_matrix,
 )
-from app.services.report_molizhishu_pdf_service import render_molizhishu_report_html
+from app.services.report_molizhishu_pdf_service import pdf_from_slide_pngs, render_molizhishu_report_html
 
 
 class _SubtaskStub:
@@ -191,27 +191,112 @@ def test_molizhishu_ranking_rows_labels_recent_best_worst() -> None:
 
 def test_molizhishu_html_matches_reference_markers() -> None:
     html = render_molizhishu_report_html(_demo_payload())
-    assert "品牌用户专属报表分析 - 专业版" in html
-    assert "诊断概览" in html
-    assert "kpi-grid" in html
+    assert "master-bg" in html
+    assert 'class="master-bg" src="data:image/jpeg;base64,' in html
+    assert 'class="master-bg" src="data:image/png;base64,' in html  # light master
+    assert "idea-cover.jpg" not in html  # masters must be embedded, not file paths
+    assert "idea-light.png" not in html
+    assert "核心指标与结论" in html
     assert "情感与口碑" in html
+    assert "sentiment-kpi" in html
+    assert "swot-stack" in html
+    assert "优势 / 待改善 / 建议" not in html
     assert "竞品格局对比" in html
-    assert "语义词 × 平台矩阵" in html
-    assert "信源优化建议" in html
     assert "分平台表现" in html
+    assert "语义词 × 平台矩阵" in html or "语义词平台矩阵" in html
     assert "语义词成绩单" in html
+    assert "品牌用户专属报表分析" in html
+    assert "竞品" in html
     assert "分析平台" in html
+    assert "分析周期" in html
+    assert "报告生成时间" in html
+    assert "采信网站" in html or "domain_map" in html or "信源" in html
     assert 'id="t_divBrandRecent"' in html
     assert 'id="t_divBrandCityRank"' in html
     assert "分享链接导入" not in html
     assert "13031099925" in html
-    assert "采集次数" in html
-    assert "当天排名前三企业引用网站概览" in html
-    assert "AI搜索平台品牌竞争力洞察" in html
+    assert "kpi-grid" in html
+    assert "slide-title" in html
     assert "progress-container" in html
     assert "report-theme-b" in html
     assert "#1677ff" in html
-    assert 'background-color: #000000' not in html
+    assert "background-color: #000000" not in html
+    assert 'data-pack="1"' in html
+    assert "pack-body" in html
+
+    ctx = build_molizhishu_report_context(_demo_payload())
+    assert "domain_map_slides" in ctx
+    assert "analysis_html" in ctx
+    assert isinstance(ctx["domain_map_slides"], list)
+
+
+def test_deck_pack_splits_overflow_and_merges_sparse() -> None:
+    """量高拆页 + 同类短页合并（Playwright DOM）。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    pack_js = _pack_js()
+    html = """<!DOCTYPE html><html><head><style>
+    .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
+    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:1100px;overflow:hidden}
+    .pack-item{margin:0 0 12px}
+    .slide-title{position:absolute;left:140px;top:118px}
+    .tall{height:700px;background:#ddd}
+    .short{height:120px;background:#eee}
+    .mid{height:780px;background:#ccc}
+    table{width:100%;border-collapse:collapse}
+    td,th{padding:10px;border:1px solid #ccc}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="analysis">
+      <h2 class="slide-title">数据分析与优化建议</h2>
+      <div class="pack-body">
+        <div class="pack-item tall">A1</div>
+        <div class="pack-item tall">A2</div>
+        <div class="pack-item short">A3</div>
+      </div>
+    </section>
+    <section class="slide" data-pack="1" data-merge-group="source">
+      <h2 class="slide-title">采信网站概览</h2>
+      <div class="pack-body"><div class="pack-item short">S1</div></div>
+    </section>
+    <section class="slide" data-pack="1" data-merge-group="source">
+      <h2 class="slide-title">信源优化建议</h2>
+      <div class="pack-body"><div class="pack-item short">S2</div></div>
+    </section>
+    <section class="slide" data-pack="1" data-merge-group="domain">
+      <h2 class="slide-title">品牌平均排名与引用网站映射关系 (1/2)</h2>
+      <div class="pack-body"><div class="pack-item mid"><table><thead><tr><th>域名</th></tr></thead>
+      <tbody><tr><td>a.com</td></tr><tr><td>b.com</td></tr></tbody></table></div></div>
+    </section>
+    <section class="slide" data-pack="1" data-merge-group="domain">
+      <h2 class="slide-title">品牌平均排名与引用网站映射关系 (2/2)</h2>
+      <div class="pack-body"><div class="pack-item short"><table><thead><tr><th>域名</th></tr></thead>
+      <tbody><tr><td>jobui.com</td></tr></tbody></table></div></div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(pack_js)
+            titles = page.locator(".slide-title").all_text_contents()
+            domain_titles = [t for t in titles if "映射关系" in t]
+            jobui_pages = page.locator(".slide:has-text('jobui.com')").count()
+        finally:
+            browser.close()
+
+    assert any("(1/" in t for t in titles)
+    assert any("(2/" in t for t in titles)
+    assert sum(1 for t in titles if "采信网站概览" in t) == 1
+    assert not any(t.strip() == "信源优化建议" for t in titles)
+    # 域名尾页并回上一页：只剩一页映射，且含 jobui
+    assert len(domain_titles) == 1
+    assert "(2/2)" not in domain_titles[0]
+    assert jobui_pages == 1
+    assert result["slides"] >= 3
 
 
 def test_matrix_and_mention_fragment_markup() -> None:
@@ -293,3 +378,16 @@ def test_report_adds_competitor_strategy_and_removes_answer_excerpts() -> None:
     assert "AI 回答摘录" not in html
     assert "不应出现在报告中" not in html
     assert "excerpt-card" not in html
+
+
+def test_pdf_from_slide_pngs_uses_flate_not_jpeg() -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (80, 45), (252, 253, 254)).save(buf, format="PNG")
+    pdf = pdf_from_slide_pngs([buf.getvalue()])
+    assert pdf.startswith(b"%PDF")
+    assert pdf.count(b"/DCTDecode") == 0
+    assert pdf.count(b"/FlateDecode") >= 1

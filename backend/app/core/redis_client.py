@@ -40,6 +40,32 @@ def get_redis_client() -> Redis | None:
             socket_connect_timeout=settings.redis_socket_timeout_seconds,
             health_check_interval=30,
         )
+        # ponytail: 配置了密码但本地 Redis 未设 requirepass → 每条命令 AUTH 失败；降级无密码重连
+        try:
+            _client.ping()
+        except RedisError as exc:
+            msg = str(exc).lower()
+            if "auth" in msg or "password" in msg:
+                logger.warning("Redis AUTH rejected, retry without password: %s", exc)
+                try:
+                    _client.close()
+                except Exception:
+                    pass
+                bare = settings.redis_url
+                if "@" in bare.split("://", 1)[-1]:
+                    # redis://:pass@host:6379/0 → redis://host:6379/0
+                    scheme, rest = bare.split("://", 1)
+                    rest = rest.split("@", 1)[-1]
+                    bare = f"{scheme}://{rest}"
+                _client = Redis.from_url(
+                    bare,
+                    decode_responses=True,
+                    socket_timeout=settings.redis_socket_timeout_seconds,
+                    socket_connect_timeout=settings.redis_socket_timeout_seconds,
+                    health_check_interval=30,
+                )
+            else:
+                logger.warning("Redis ping failed: %s", exc)
     return _client
 
 

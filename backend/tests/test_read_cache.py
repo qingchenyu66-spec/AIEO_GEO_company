@@ -56,6 +56,9 @@ def test_invalidate_dashboard_caches_deletes_summary_and_overview() -> None:
         invalidate_dashboard_caches(tenant_id=6)
 
     assert MANAGEMENT_OVERVIEW_CACHE_KEY in deleted
+    assert any(item.startswith("management:overview:rollup:v1:") or item == "management:overview:rollup:v1:*" for item in patterns) or (
+        "management:overview:rollup:v1:*" in patterns
+    )
     assert monitor_summary_cache_key("CUSTOMER", 6) in deleted
     assert workspace_brief_cache_key(6) in deleted
     assert monitor_summary_cache_key("PLATFORM", "platform") in deleted
@@ -65,6 +68,19 @@ def test_invalidate_dashboard_caches_deletes_summary_and_overview() -> None:
     assert "monitor:source-stats:v4:6:*" in patterns
     assert "monitor:source-stats:v5:6:*" in patterns
     assert "analytics:competitor-compare:v1:*:6:*" in patterns
+
+
+def test_invalidate_dashboard_caches_can_skip_overview() -> None:
+    deleted: list[str] = []
+
+    with (
+        patch("app.core.read_cache.delete_cache", side_effect=lambda key: deleted.append(key)),
+        patch("app.core.read_cache.delete_cache_pattern"),
+    ):
+        invalidate_dashboard_caches(tenant_id=6, bust_overview=False)
+
+    assert MANAGEMENT_OVERVIEW_CACHE_KEY not in deleted
+    assert monitor_summary_cache_key("CUSTOMER", 6) in deleted
 
 
 def test_source_stats_cache_key_includes_cutoff_day() -> None:

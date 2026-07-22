@@ -11,9 +11,11 @@ from app.core.read_cache import (
     MANAGEMENT_OVERVIEW_CACHE_KEY,
     MANAGEMENT_OVERVIEW_CACHE_TTL,
     MONITOR_SUMMARY_CACHE_TTL,
+    RANKING_MATRIX_CACHE_TTL,
     WORKSPACE_BRIEF_CACHE_TTL,
     get_or_build_json_cache,
     monitor_summary_cache_key,
+    ranking_matrix_cache_key,
     workspace_brief_cache_key,
 )
 from app.schemas.common import ApiResponse
@@ -30,6 +32,7 @@ from app.services.monitor_service import (
     monitor_summary,
     ranking_matrix,
     workspace_brief,
+    list_inclusion_snapshots,
     serialize_subtask_for_display,
     serialize_task,
     serialize_tasks_for_display,
@@ -199,20 +202,64 @@ def monitor_ranking_matrix(
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None
     try:
-        data = ranking_matrix(
-            db,
-            current,
-            platform=platform,
-            start_at=start_at,
-            end_at=end_at,
-            keyword=keyword,
-            monitor_group=monitor_group,
-            keyword_group=keyword_group,
-            monitor_keyword=monitor_keyword,
-            exposure_term=exposure_term,
-            limit_rows=limit_rows,
-            tenant_id=scoped_tenant_id,
+        cache_tenant = (
+            scoped_tenant_id
+            if scoped_tenant_id is not None
+            else (current.identity.tenant_id if current.identity.identity_type == "CUSTOMER" else None)
         )
+        if cache_tenant is None:
+            data = ranking_matrix(
+                db,
+                current,
+                platform=platform,
+                start_at=start_at,
+                end_at=end_at,
+                keyword=keyword,
+                monitor_group=monitor_group,
+                keyword_group=keyword_group,
+                monitor_keyword=monitor_keyword,
+                exposure_term=exposure_term,
+                limit_rows=limit_rows,
+                tenant_id=scoped_tenant_id,
+            )
+        else:
+            cache_key = ranking_matrix_cache_key(
+                current.identity.identity_type,
+                int(cache_tenant),
+                platform=platform,
+                start_date=start_date.isoformat() if start_date else None,
+                end_date=end_date.isoformat() if end_date else None,
+                keyword=keyword,
+                monitor_group=monitor_group,
+                keyword_group=keyword_group,
+                monitor_keyword=monitor_keyword,
+                exposure_term=exposure_term,
+                limit_rows=limit_rows,
+            )
+
+            def _build() -> dict:
+                return ranking_matrix(
+                    db,
+                    current,
+                    platform=platform,
+                    start_at=start_at,
+                    end_at=end_at,
+                    keyword=keyword,
+                    monitor_group=monitor_group,
+                    keyword_group=keyword_group,
+                    monitor_keyword=monitor_keyword,
+                    exposure_term=exposure_term,
+                    limit_rows=limit_rows,
+                    tenant_id=scoped_tenant_id,
+                )
+
+            data = get_or_build_json_cache(
+                cache_key,
+                _build,
+                ttl_seconds=RANKING_MATRIX_CACHE_TTL,
+                lock_ttl_seconds=60,
+                wait_seconds=2.0,
+            )
     except Exception as exc:
         raise_read_endpoint_error(exc, context="monitor.ranking_matrix")
     return ApiResponse(data=data)
@@ -224,10 +271,15 @@ def monitor_workspace_brief(
     end_date: date | None = Query(default=None, description="趋势截止日（含），客户侧不晚于昨日"),
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
     record_access: bool = Query(default=False, description="平台预览首次进入时记一条审计"),
+    scope: str = Query(default="full", pattern="^(full|summary)$", description="summary=仅 KPI/趋势，切换周期用"),
+    purpose: str = Query(default="geo", pattern="^(geo|brand_word)$", description="geo=日常监测；brand_word=品牌分析专用"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """客户工作台简报；平台端可带 tenant_id 只读预览（销售仅名下企业）。"""
+    """客户工作台简报；平台端可带 tenant_id 只读预览（销售仅名下企业）。
+
+    purpose=brand_word 仅供品牌分析页，与 GEO 监测数据隔离。
+    """
     from app.services.operation_log_service import write_operation_log
     from app.services.tenant_scope import resolve_customer_preview_tenant_id
 
@@ -263,7 +315,7 @@ def monitor_workspace_brief(
 
     start_key = start_date.isoformat() if start_date else None
     end_key = end_date.isoformat() if end_date else None
-    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key)
+    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key, scope, purpose)
     try:
         data = get_or_build_json_cache(
             cache_key,
@@ -273,12 +325,98 @@ def monitor_workspace_brief(
                 start_date=start_date,
                 end_date=end_date,
                 tenant_id=resolved_tenant_id,
+                scope=scope,
+                purpose=purpose,
             ),
             ttl_seconds=WORKSPACE_BRIEF_CACHE_TTL,
         )
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="monitor.workspace_brief")
+
+
+@router.get("/brand-analysis", response_model=ApiResponse[dict])
+def monitor_brand_analysis(
+    tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
+    parse: bool = Query(default=True, description="是否对未解析样本调用 DeepSeek 二次情感归类"),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """品牌分析专用看板：情感/平台饼图 + 分平台正中负回答（仅 brand_word 任务）。"""
+    from app.services.brand_analysis_service import build_brand_analysis_dashboard
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    resolved_tenant_id: int | None = tenant_id
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持客户企业账号")
+        resolved_tenant_id = current.identity.tenant_id
+    elif current.identity.identity_type == "PLATFORM":
+        try:
+            resolved_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问品牌分析")
+
+    try:
+        data = build_brand_analysis_dashboard(
+            db,
+            current,
+            tenant_id=resolved_tenant_id,
+            parse_sentiments=parse,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.brand_analysis")
+
+
+@router.get("/inclusion-snapshots", response_model=ApiResponse[dict])
+def monitor_inclusion_snapshots(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
+    platform: str | None = Query(default=None, description="平台 code；空或 all 表示全部已购平台"),
+    limit: int = Query(default=48, ge=1, le=100),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """信源分析「收录明细」：按周期/平台取监测快照行（与引用次数口径不同）。"""
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="起始日期不能晚于结束日期")
+
+    resolved_tenant_id: int | None = tenant_id
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持客户企业账号")
+        resolved_tenant_id = current.identity.tenant_id
+    elif current.identity.identity_type == "PLATFORM":
+        try:
+            resolved_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问收录明细")
+
+    try:
+        data = list_inclusion_snapshots(
+            db,
+            current,
+            start_date=start_date,
+            end_date=end_date,
+            tenant_id=resolved_tenant_id,
+            platform=platform,
+            limit=limit,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.inclusion_snapshots")
 
 
 @router.get("/snapshot-backfill/pending", response_model=ApiResponse[SnapshotBackfillListResponse])
@@ -296,6 +434,10 @@ def monitor_snapshot_backfill_pending(
     pending_only: bool = Query(default=False),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    include_summary: bool = Query(
+        default=True,
+        description="为 false 时缩小扫描窗口、尽快返回列表；汇总请再请求 include_summary=true",
+    ),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[SnapshotBackfillListResponse]:
@@ -329,6 +471,31 @@ def monitor_snapshot_backfill_pending(
             tenant_id = None
         else:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定 tenant_id")
+
+    cache_key = None
+    if include_summary:
+        from app.core.redis_client import get_json_cache, set_json_cache
+        import hashlib
+
+        raw = "|".join(
+            [
+                str(tenant_id or ""),
+                ",".join(str(x) for x in (scoped_tenant_ids or [])),
+                str(on_date or ""),
+                str(source or ""),
+                str(platform or ""),
+                str(keyword or ""),
+                str(keyword_group or ""),
+                str(pending_only),
+                str(offset),
+                str(limit),
+            ]
+        )
+        cache_key = f"snapshot_backfill:sum:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+        cached = get_json_cache(cache_key)
+        if isinstance(cached, dict) and "items" in cached and "summary" in cached:
+            return ApiResponse(data=SnapshotBackfillListResponse.model_validate(cached))
+
     payload = list_snapshot_backfill_page(
         db,
         tenant_id=tenant_id,
@@ -342,7 +509,12 @@ def monitor_snapshot_backfill_pending(
         pending_only=pending_only,
         offset=offset,
         limit=limit,
+        include_summary=include_summary,
     )
+    if cache_key and include_summary:
+        from app.core.redis_client import set_json_cache
+
+        set_json_cache(cache_key, payload, ttl_seconds=45)
     return ApiResponse(data=SnapshotBackfillListResponse.model_validate(payload))
 
 

@@ -165,10 +165,40 @@ function parseExportFilename(contentDisposition: string | undefined, fallback: s
   return plainMatch?.[1] || fallback
 }
 
-export async function downloadReportExport(reportId: number, format: ReportExportFormat) {
-  const response = await http.get(`/v1/reports/${reportId}/export/${format}`, {
+export async function downloadReportExport(
+  reportId: number,
+  format: ReportExportFormat,
+  onProgress?: (label: string, pct?: number | null) => void,
+) {
+  onProgress?.('内容写入中…', 0)
+  const created = await http.post(`/v1/reports/${reportId}/export-jobs/${format}`, null, {
+    timeout: 30000,
+  })
+  const job = created.data?.data || {}
+  const jobId = String(job.job_id || '')
+  if (!jobId) throw new Error('创建导出任务失败')
+
+  if (job.status === 'ready') {
+    onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
+  } else {
+    const started = Date.now()
+    const maxWaitMs = 10 * 60 * 1000
+    while (Date.now() - started < maxWaitMs) {
+      const statusResp = await http.get(`/v1/reports/export-jobs/${jobId}`, { timeout: 30000 })
+      const statusJob = statusResp.data?.data || {}
+      const label = String(statusJob.progress || (format === 'pdf' ? 'PDF渲染中…' : '内容写入中…'))
+      const pct = typeof statusJob.progress_pct === 'number' ? statusJob.progress_pct : undefined
+      onProgress?.(label, pct)
+      if (statusJob.status === 'ready') break
+      if (statusJob.status === 'failed') throw new Error(String(statusJob.error || '导出失败'))
+      await new Promise(resolve => setTimeout(resolve, statusJob.cached ? 200 : 800))
+    }
+  }
+
+  onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
+  const response = await http.get(`/v1/reports/export-jobs/${jobId}/download`, {
     responseType: 'blob',
-    timeout: 180000,
+    timeout: 120000,
   })
   const fallback = `report-${reportId}.${format}`
   const filename = parseExportFilename(response.headers['content-disposition'], fallback)

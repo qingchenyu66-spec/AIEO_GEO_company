@@ -590,6 +590,43 @@ def push_monitor_alert_notification(alert: dict[str, Any]) -> SystemNotification
         db.close()
 
 
+def _visible_notification_ids_stmt(
+    *,
+    user_id: int,
+    identity_type: str,
+    tenant_id: int | None,
+    can_review_approvals: bool = False,
+    can_view_ops_alerts: bool = False,
+    can_view_snapshot_backfill: bool = False,
+    can_view_customer_reports: bool = False,
+    snapshot_backfill_owner_only: bool = False,
+    can_view_platform_service: bool = False,
+) -> Select[tuple[int]]:
+    audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
+    visible_ids = select(SystemNotification.id).where(
+        SystemNotification.audience_type == audience,
+        SystemNotification.created_at >= _notification_retention_cutoff(),
+    )
+    if audience == "CUSTOMER":
+        visible_ids = visible_ids.where(SystemNotification.tenant_id == tenant_id)
+        visible_ids = _apply_customer_notification_visibility_filter(
+            visible_ids,
+            can_view_customer_reports=can_view_customer_reports,
+        )
+    else:
+        visible_ids = visible_ids.where(SystemNotification.tenant_id.is_(None))
+        visible_ids = _apply_notification_visibility_filter(
+            visible_ids,
+            user_id=user_id,
+            can_review_approvals=can_review_approvals,
+            can_view_ops_alerts=can_view_ops_alerts,
+            can_view_snapshot_backfill=can_view_snapshot_backfill,
+            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+            can_view_platform_service=can_view_platform_service,
+        )
+    return visible_ids
+
+
 def list_notifications_for_user(
     db: Session,
     *,
@@ -625,12 +662,26 @@ def list_notifications_for_user(
             stmt,
             can_view_customer_reports=can_view_customer_reports,
         )
-    stmt = stmt.order_by(SystemNotification.created_at.desc()).limit(max(1, min(limit, 100)))
     stmt = stmt.where(SystemNotification.created_at >= _notification_retention_cutoff())
+    if unread_only:
+        # 必须先筛未读再 limit；否则「最近 N 条里碰巧都已读」会漏掉更早的未读
+        read_exists = (
+            select(SystemNotificationRead.id)
+            .where(
+                SystemNotificationRead.notification_id == SystemNotification.id,
+                SystemNotificationRead.user_id == user_id,
+            )
+            .exists()
+        )
+        stmt = stmt.where(~read_exists)
+    stmt = stmt.order_by(SystemNotification.created_at.desc()).limit(max(1, min(limit, 100)))
 
     rows = list(db.scalars(stmt))
     if not rows:
         return []
+
+    if unread_only:
+        return [_serialize_notification(row, is_read=False) for row in rows]
 
     read_ids = set(
         db.scalars(
@@ -640,14 +691,10 @@ def list_notifications_for_user(
             )
         )
     )
-
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        is_read = row.id in read_ids
-        if unread_only and is_read:
-            continue
-        items.append(_serialize_notification(row, is_read=is_read))
-    return items
+    return [
+        _serialize_notification(row, is_read=row.id in read_ids)
+        for row in rows
+    ]
 
 
 def count_unread_notifications(
@@ -663,33 +710,20 @@ def count_unread_notifications(
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
 ) -> int:
-    audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
-    visible_ids = select(SystemNotification.id).where(
-        SystemNotification.audience_type == audience,
-        SystemNotification.created_at >= _notification_retention_cutoff(),
+    visible_ids = _visible_notification_ids_stmt(
+        user_id=user_id,
+        identity_type=identity_type,
+        tenant_id=tenant_id,
+        can_review_approvals=can_review_approvals,
+        can_view_ops_alerts=can_view_ops_alerts,
+        can_view_snapshot_backfill=can_view_snapshot_backfill,
+        can_view_customer_reports=can_view_customer_reports,
+        snapshot_backfill_owner_only=snapshot_backfill_owner_only,
+        can_view_platform_service=can_view_platform_service,
     )
-    if audience == "CUSTOMER":
-        visible_ids = visible_ids.where(SystemNotification.tenant_id == tenant_id)
-        visible_ids = _apply_customer_notification_visibility_filter(
-            visible_ids,
-            can_view_customer_reports=can_view_customer_reports,
-        )
-    else:
-        visible_ids = visible_ids.where(SystemNotification.tenant_id.is_(None))
-        visible_ids = _apply_notification_visibility_filter(
-            visible_ids,
-            user_id=user_id,
-            can_review_approvals=can_review_approvals,
-            can_view_ops_alerts=can_view_ops_alerts,
-            can_view_snapshot_backfill=can_view_snapshot_backfill,
-            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
-            can_view_platform_service=can_view_platform_service,
-        )
-
     read_subq = (
         select(SystemNotificationRead.notification_id)
         .where(SystemNotificationRead.user_id == user_id)
-        .scalar_subquery()
     )
     stmt = select(func.count()).select_from(SystemNotification).where(
         SystemNotification.id.in_(visible_ids),
@@ -754,13 +788,11 @@ def mark_all_notifications_read(
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
 ) -> int:
-    unread = list_notifications_for_user(
-        db,
+    """标记当前用户可见范围内的全部未读；禁止再走 list(limit=100) 后筛未读。"""
+    visible_ids = _visible_notification_ids_stmt(
         user_id=user_id,
         identity_type=identity_type,
         tenant_id=tenant_id,
-        unread_only=True,
-        limit=100,
         can_review_approvals=can_review_approvals,
         can_view_ops_alerts=can_view_ops_alerts,
         can_view_snapshot_backfill=can_view_snapshot_backfill,
@@ -768,23 +800,23 @@ def mark_all_notifications_read(
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         can_view_platform_service=can_view_platform_service,
     )
-    count = 0
-    for item in unread:
-        if mark_notification_read(
-            db,
-            user_id=user_id,
-            notification_id=int(item["id"]),
-            identity_type=identity_type,
-            tenant_id=tenant_id,
-            can_review_approvals=can_review_approvals,
-            can_view_ops_alerts=can_view_ops_alerts,
-            can_view_snapshot_backfill=can_view_snapshot_backfill,
-            can_view_customer_reports=can_view_customer_reports,
-            snapshot_backfill_owner_only=snapshot_backfill_owner_only,
-            can_view_platform_service=can_view_platform_service,
-        ):
-            count += 1
-    return count
+    read_ids = select(SystemNotificationRead.notification_id).where(
+        SystemNotificationRead.user_id == user_id,
+    )
+    unread_ids = list(
+        db.scalars(
+            select(SystemNotification.id).where(
+                SystemNotification.id.in_(visible_ids),
+                SystemNotification.id.not_in(read_ids),
+            )
+        )
+    )
+    if not unread_ids:
+        return 0
+    for notification_id in unread_ids:
+        db.add(SystemNotificationRead(user_id=user_id, notification_id=int(notification_id)))
+    db.commit()
+    return len(unread_ids)
 
 
 def _serialize_notification(row: SystemNotification, *, is_read: bool) -> dict[str, Any]:

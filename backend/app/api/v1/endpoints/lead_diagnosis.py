@@ -159,6 +159,86 @@ def refresh_record(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.post("/{lead_id}/export-jobs", response_model=ApiResponse[dict])
+def create_export_job(
+    lead_id: int,
+    export_format: str = Query(default="pdf", alias="format"),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """异步导出：立即返回 job_id，前端轮询后再下载。"""
+    from app.services.report_export_job_service import start_export_job
+
+    try:
+        require_lead_diagnosis_access(db, current, "can_export")
+        # 校验可读且已完成
+        detail = get_lead_diagnosis(db, lead_id, current=current)
+        if detail.get("status") != "ready":
+            raise ValueError("诊断尚未完成，暂无法导出")
+        fmt = (export_format or "pdf").lower()
+        if fmt not in {"pdf", "docx", "html"}:
+            raise ValueError(f"不支持的导出格式: {export_format}")
+        job = start_export_job(
+            kind="lead_diagnosis",
+            ref_id=lead_id,
+            export_format=fmt,  # type: ignore[arg-type]
+            owner_user_id=current.user.id,
+        )
+        return ApiResponse(data=job)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/export-jobs/{job_id}", response_model=ApiResponse[dict])
+def get_export_job_status(
+    job_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    from app.services.report_export_job_service import get_export_job
+
+    try:
+        require_lead_diagnosis_access(db, current, "can_export")
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    job = get_export_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
+    if job.get("kind") != "lead_diagnosis":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
+    return ApiResponse(data=job)
+
+
+@router.get("/export-jobs/{job_id}/download")
+def download_export_job(
+    job_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> Response:
+    from app.services.report_export_job_service import get_export_job, read_export_job_file
+
+    try:
+        require_lead_diagnosis_access(db, current, "can_export")
+        job = get_export_job(job_id)
+        if not job or job.get("kind") != "lead_diagnosis":
+            raise FileNotFoundError("导出任务不存在")
+        get_lead_diagnosis(db, int(job["ref_id"]), current=current)
+        content, filename, mime = read_export_job_file(job_id)
+        return Response(
+            content=content,
+            media_type=mime,
+            headers={"Content-Disposition": content_disposition(filename)},
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.get("/{lead_id}/export")
 def export_record(
     lead_id: int,

@@ -34,6 +34,33 @@ class BrandKeywordGroupSaveRequest(BaseModel):
         return normalize_platform_selections(value)
 
 
+class BrandWordGroupSaveRequest(BaseModel):
+    """保存企业品牌词组：品牌词 + 平台 + 运行时间（无露出词）。"""
+
+    id: int | None = None
+    name: str | None = Field(default=None, max_length=100)
+    monitor_keyword: str | None = Field(default=None, max_length=150)
+    monitor_keywords: list[str] = Field(default_factory=list)
+    platforms: list[str | PlatformSelectionRequest | dict] = Field(default_factory=list)
+    run_mode: str = Field(default="once", pattern="^(once|weekly)$")
+    sort_order: int = 0
+    status: bool = True
+
+    @field_validator("platforms", mode="before")
+    @classmethod
+    def coerce_platforms(cls, value: object) -> list:
+        if not isinstance(value, list):
+            return []
+        return normalize_platform_selections(value)
+
+
+class BrandWordGroupsSaveRequest(BaseModel):
+    """批量保存企业品牌词配置。"""
+
+    tenant_id: int | None = None
+    groups: list[BrandWordGroupSaveRequest] = Field(default_factory=list)
+
+
 class BrandAssetSaveRequest(BaseModel):
     """保存企业品牌资产配置。"""
 

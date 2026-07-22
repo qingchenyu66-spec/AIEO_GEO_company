@@ -25,6 +25,7 @@ celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "app.tasks.monitor.scan_due_schedules": {"queue": "submit"},
+        "app.tasks.monitor.scan_due_brand_word_weekly": {"queue": "submit"},
         "app.tasks.monitor.submit_lead_diagnosis_run": {"queue": "submit"},
         "app.tasks.monitor.finalize_lead_diagnoses": {"queue": "default"},
         "app.tasks.monitor.scan_pending_syncs": {"queue": "sync"},
@@ -42,6 +43,11 @@ celery_app.conf.update(
         "scan-due-schedules": {
             "task": "app.tasks.monitor.scan_due_schedules",
             "schedule": crontab(minute="*/5", hour="9-20"),
+            "kwargs": {"max_prompts": settings.celery_scan_submit_max_prompts},
+        },
+        "scan-due-brand-word-weekly": {
+            "task": "app.tasks.monitor.scan_due_brand_word_weekly",
+            "schedule": crontab(hour=9, minute=0, day_of_week="1"),
             "kwargs": {"max_prompts": settings.celery_scan_submit_max_prompts},
         },
         "scan-pending-syncs": {
@@ -86,6 +92,10 @@ celery_app.conf.update(
         },
         "fail-stale-knowledge-parses": {
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",
+            "schedule": crontab(minute="*/5"),
+        },
+        "refresh-ops-overview-rollup": {
+            "task": "app.tasks.monitor.refresh_ops_overview_rollup",
             "schedule": crontab(minute="*/5"),
         },
     },

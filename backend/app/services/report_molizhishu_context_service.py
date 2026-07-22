@@ -13,7 +13,6 @@ from app.services.report_competitor_visuals import build_competitor_analysis
 from app.services.report_chart_service import build_entity_rank_trend_chart, build_rank_trend_chart
 from app.services.report_molizhishu_fragments import (
     render_analysis_html,
-    render_chart_block,
     render_competitor_landscape_table,
     render_competitor_strategy,
     render_diagnosis_swot,
@@ -95,39 +94,78 @@ def _comment_map(enrichment: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _build_charts_html(
+_DECK_CHART_FIGSIZE = (16.5, 8.2)
+
+
+def _chart_entity_names(
+    *,
+    brand: str,
+    competitors: list[Any],
+    tracked_entities: list[str],
+) -> list[str]:
+    names: list[str] = []
+    for raw in [brand, *tracked_entities, *[str(item).strip() for item in competitors]]:
+        name = str(raw or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names[:8]
+
+
+def _build_chart_slides(
     *,
     rank_trend: list[dict[str, Any]],
     prompt_analytics: list[dict[str, Any]],
     brand: str,
+    competitors: list[Any],
     tracked_entities: list[str],
-) -> str:
-    blocks: list[str] = []
+) -> list[dict[str, str]]:
+    """一图一页：总趋势 + 各语义词趋势（含竞品折线）。"""
+    entities = _chart_entity_names(
+        brand=brand,
+        competitors=competitors,
+        tracked_entities=tracked_entities,
+    )
+    slides: list[dict[str, str]] = []
     overall = _b64_png(
         build_entity_rank_trend_chart(
             rank_trend,
             brand=brand,
-            tracked_entities=tracked_entities,
-            title="平均排名趋势图",
-            subtitle="品牌及竞品平均排名",
+            tracked_entities=entities,
+            title="",
+            subtitle=None,
+            figsize=_DECK_CHART_FIGSIZE,
         )
         or build_rank_trend_chart(rank_trend)
     )
     if overall:
-        blocks.append(render_chart_block("平均排名趋势图", overall))
+        slides.append(
+            {
+                "title": "平均排名趋势图",
+                "subtitle": "品牌及竞品平均排名",
+                "src": overall,
+            }
+        )
     for index, block in enumerate(prompt_analytics, start=1):
+        prompt = str(block.get("prompt") or "").strip()
         src = _b64_png(
             build_entity_rank_trend_chart(
                 block.get("round_trend") or [],
                 brand=brand,
-                tracked_entities=[brand],
-                title=f"问题{index}趋势图",
-                subtitle=str(block.get("prompt") or "")[:48],
+                tracked_entities=entities,
+                title="",
+                subtitle=None,
+                figsize=_DECK_CHART_FIGSIZE,
             )
         )
         if src:
-            blocks.append(render_chart_block(f"问题{index}趋势图", src))
-    return "\n".join(blocks)
+            slides.append(
+                {
+                    "title": f"问题{index}趋势图",
+                    "subtitle": prompt,
+                    "src": src,
+                }
+            )
+    return slides
 
 
 def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dict[str, str] | None = None) -> dict[str, Any]:
@@ -229,17 +267,40 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
             '<table class="report-table"><thead><tr><th>#</th><th>信源标题</th><th>引用次数</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
         )
-    domain_map_html = ""
-    domain_stats = source_analysis.get("domain_stats") or []
+    domain_stats = list(source_analysis.get("domain_stats") or [])
+    domain_map_slides: list[dict[str, Any]] = []
+    _DOMAIN_CHUNK = 14
     if domain_stats:
-        rows = "".join(
-            f"<tr><td>{row.get('domain') or '—'}</td><td>{row.get('count') or 0}</td><td>{row.get('brand_related_count') or 0}</td></tr>"
-            for row in domain_stats[:20]
-        )
-        domain_map_html = (
-            '<table class="report-table"><thead><tr><th>域名</th><th>引用次数</th><th>品牌相关引用</th></tr></thead>'
-            f"<tbody>{rows}</tbody></table>"
-        )
+        chunks: list[list[Any]] = [
+            domain_stats[start : start + _DOMAIN_CHUNK]
+            for start in range(0, len(domain_stats), _DOMAIN_CHUNK)
+        ]
+        # 尾页过短（≤3 行）并回上一页，避免单独占一页
+        if len(chunks) >= 2 and len(chunks[-1]) <= 3:
+            chunks[-2].extend(chunks[-1])
+            chunks.pop()
+        page_total = len(chunks)
+        for page_no, chunk in enumerate(chunks, start=1):
+            rows = "".join(
+                f"<tr><td>{row.get('domain') or '—'}</td>"
+                f"<td>{row.get('count') or 0}</td>"
+                f"<td>{row.get('brand_related_count') or 0}</td></tr>"
+                for row in chunk
+            )
+            domain_map_slides.append(
+                {
+                    "title": (
+                        "品牌平均排名与引用网站映射关系"
+                        if page_total == 1
+                        else f"品牌平均排名与引用网站映射关系 ({page_no}/{page_total})"
+                    ),
+                    "html": (
+                        '<table class="report-table RankTable domain-map-table">'
+                        "<thead><tr><th>域名</th><th>引用次数</th><th>品牌相关引用</th></tr></thead>"
+                        f"<tbody>{rows}</tbody></table>"
+                    ),
+                }
+            )
 
     highlights = payload.get("highlights") or []
     if not highlights:
@@ -303,12 +364,12 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
         "overview_matrix_html": render_prompt_platform_matrix(
             enrichment.get("prompt_platform_matrix") or {}
         ),
-        "source_action_tips_html": render_tip_list(enrichment.get("source_action_tips") or []),
-        "charts_html": _build_charts_html(
+        "chart_slides": _build_chart_slides(
             rank_trend=payload.get("rank_trend") or [],
             prompt_analytics=prompt_analytics,
             brand=brand,
-            tracked_entities=payload.get("tracked_entities") or [],
+            competitors=competitors if isinstance(competitors, list) else [],
+            tracked_entities=[str(item) for item in (payload.get("tracked_entities") or []) if str(item).strip()],
         ),
         "brand_recent_table_html": render_matrix_table(
             "t_divBrandRecent",
@@ -325,12 +386,14 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
         "show_city_table": bool(city_matrix.get("rows")),
         "ranking_blocks": ranking_blocks,
         "mention_blocks": mention_blocks,
-        "source_top_html": source_top_html or "数据加载中，请稍候...",
-        "domain_map_html": domain_map_html or "数据加载中，请稍候...",
+        "source_top_html": source_top_html,
+        "domain_map_slides": domain_map_slides,
+        "source_action_tips_html": render_tip_list(enrichment.get("source_action_tips") or []),
         "analysis_html": render_analysis_html(
             sections,
             analysis_html=payload.get("analysis_html"),
             priority_actions=enrichment.get("priority_actions") or [],
-            source_action_tips=enrichment.get("source_action_tips") or [],
+            # 信源建议单独成页，避免分析页重复
+            source_action_tips=None,
         ),
     }

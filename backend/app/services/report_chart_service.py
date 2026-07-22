@@ -149,6 +149,7 @@ def build_entity_rank_trend_chart(
     tracked_entities: list[str] | None = None,
     title: str = "品牌及竞品平均排名",
     subtitle: str | None = None,
+    figsize: tuple[float, float] | None = None,
 ) -> bytes | None:
     """品牌 + 竞品多线排名趋势图（Y 轴反向）。"""
     if not trend_rows:
@@ -166,7 +167,7 @@ def build_entity_rank_trend_chart(
         _short_schedule_label(row.get("schedule_label") or row.get("schedule_key"))
         for row in trend_rows
     ]
-    fig, ax = plt.subplots(figsize=_CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=figsize or _CHART_FIGSIZE)
     x = list(range(len(labels)))
     max_rank = 1.0
 
@@ -213,7 +214,9 @@ def build_entity_rank_trend_chart(
     ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
     ax.grid(axis="y", linestyle="--", alpha=0.25)
-    ax.set_title(title, fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
+    # 幻灯片页已有 slide-title 时传空 title，避免图内再叠一层同名标题
+    if title:
+        ax.set_title(title, fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
     if subtitle:
         ax.text(0.01, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=theme.gray)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=8)

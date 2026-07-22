@@ -50,6 +50,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const previewTenantId = computed(() => parsePreviewTenantId(route))
   const loading = ref(false)
   const exporting = ref(false)
+  const exportingFormat = ref<ReportExportFormat | null>(null)
+  const exportProgress = ref('')
   const detailLoading = ref(false)
   const previewHtmlLoading = ref(false)
   const reports = ref<ReportListItem[]>([])
@@ -243,14 +245,20 @@ export function useReportCenter(options: UseReportCenterOptions) {
       return
     }
     exporting.value = true
+    exportingFormat.value = format
+    exportProgress.value = '内容写入中…'
     try {
-      await downloadReportExport(selectedReportId.value!, format)
+      await downloadReportExport(selectedReportId.value!, format, (label) => {
+        exportProgress.value = label
+      })
       const label = format === 'pdf' ? 'PDF' : format === 'html' ? 'HTML' : 'Word'
       ElMessage.success(`${label} 已下载`)
     } catch (error: unknown) {
       ElMessage.error(`报告导出失败：${errorMessage(error)}`)
     } finally {
       exporting.value = false
+      exportingFormat.value = null
+      exportProgress.value = ''
     }
   }
 
@@ -296,6 +304,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
   return {
     loading,
     exporting,
+    exportingFormat,
+    exportProgress,
     detailLoading,
     previewHtmlLoading,
     reports,

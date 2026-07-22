@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, Sparkles, WalletCards, Zap } from '@lucide/vue'
 import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
-import { getDeepseekBalance, getMolizhishuBalance, type DeepseekBalance } from '../../services/platforms'
+import type { DeepseekBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
 import { initChart, type ECharts } from '../../utils/echartsLoader'
 import { sortPlatformRows } from './platformOrder'
@@ -129,14 +129,11 @@ async function loadOverview() {
   loading.value = true
   errorText.value = ''
   try {
-    const [overviewData, balanceData, deepseekData] = await Promise.all([
-      getPlatformOverview(),
-      getMolizhishuBalance().catch(() => null),
-      getDeepseekBalance().catch(() => null),
-    ])
+    // 方案 A：余额已在 overview 内返回，不再并行打两路外呼拖死「刷新中」
+    const overviewData = await getPlatformOverview()
     overview.value = overviewData
-    molizhishuBalance.value = balanceData ?? overviewData.molizhishu_balance ?? null
-    deepseekBalance.value = deepseekData ?? overviewData.deepseek_balance ?? null
+    molizhishuBalance.value = overviewData.molizhishu_balance ?? null
+    deepseekBalance.value = overviewData.deepseek_balance ?? null
   } catch (error: any) {
     errorText.value = extractErrorDetail(error)
   } finally {

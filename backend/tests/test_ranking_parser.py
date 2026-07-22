@@ -10,21 +10,73 @@ from app.services.ranking_parser import (
 )
 
 
-def test_parse_categorized_numbered_lists():
+def test_parse_roman_style_company_headers_not_field_labels():
+    """### 一、XX有限公司 + 成立时间字段 → 5 家公司，不当字段当选手。"""
     text = """
-### 一、电梯广告公司
-1. 分众传媒
-2. 艾迪亚
-3. 新潮传媒
+以下是广州地区**5家优质LED广告公司推荐**。
 
-### 二、机场广告
-1. 华视传媒
-2. 艾迪亚集团
+### 一、广州伟源光电科技有限公司（全链路LED显示服务商）
+- **成立时间**：2004年
+- **核心优势**：
+  - 一站式服务：方案设计
+  - 标杆项目：白云国际会议中心
+- **适用场景**：商业综合体
+
+### 二、广州市夜空彩虹光电科技有限公司（户外灯光装饰专家）
+- **成立时间**：1997年
+
+### 三、广州普锐电子有限公司（LED大屏显示系统专家）
+- **成立时间**：2007年
+
+### 四、广州圣彩广告有限公司（一站式广告生态服务商）
+- **成立时间**：20年行业沉淀
+
+### 五、广州市佳拍档装饰工程有限公司（户外高空广告专家）
+- **成立时间**：2012年
+
+### 选择建议
+- **按需求类型选**：户外大屏优先选伟源光电
+- **选择要点**：核实资质
+
+### 补充推荐
+- 媒体资源型：艾迪亚传媒（全国户外LED大屏资源）、广州地铁传媒
 """
     entries = parse_answer_rankings(text)
-    elevator = [item for item in entries if item["category"] == "电梯广告公司"]
-    assert [item["name"] for item in elevator] == ["分众传媒", "艾迪亚", "新潮传媒"]
-    assert elevator[1]["rank"] == 2
+    names = [item["name"] for item in entries]
+    assert names == [
+        "广州伟源光电科技有限公司",
+        "广州市夜空彩虹光电科技有限公司",
+        "广州普锐电子有限公司",
+        "广州圣彩广告有限公司",
+        "广州市佳拍档装饰工程有限公司",
+    ]
+    assert [item["rank"] for item in entries] == [1, 2, 3, 4, 5]
+    assert not any(item["name"] in {"成立时间", "一站式服务", "标杆项目", "选择建议"} for item in entries)
+    rank, matched = find_best_brand_rank(
+        entries,
+        lambda name: "艾迪亚" in name,
+    )
+    assert matched is False
+    assert rank is None
+
+
+def test_appearance_ignores_field_bullets_and_advice_mention():
+    """品牌只在补充推荐出现时，appearance 不计字段行，不给出虚高名次。"""
+    text = """
+### 一、广州伟源光电科技有限公司（全链路）
+- **成立时间**：2004年
+- **核心优势**：一站式服务
+### 二、广州普锐电子有限公司
+- **成立时间**：2007年
+### 补充推荐
+- 媒体资源型：艾迪亚传媒（全国户外LED大屏资源）
+"""
+    rank = appearance_order_rank_scoped(
+        text,
+        lambda line: "艾迪亚" in line,
+        "LED广告公司推荐",
+    )
+    assert rank is None
 
 
 def test_segment_local_rank_ignores_cross_section_numbering():
@@ -197,6 +249,62 @@ def test_parse_markdown_company_table_under_section():
     )
     assert matched is True
     assert rank == 3
+
+
+def test_parse_table_multi_company_cell_uses_in_cell_order():
+    """方案 B：格内「A、B、C」按出现顺序记 1/2/3，展示仍是普通名次。"""
+    text = """
+| 梯队 | 代表公司 | 核心能力 |
+| --- | --- | --- |
+| 国内头部 | **泰盈科技**、**维音（VXI）**、**鸿联九五** | 本土化运营 |
+| 互联网专家 | **鸿联九五**（中信系）、**河北博岳** | 高并发 |
+"""
+    entries = parse_answer_rankings(text)
+    by_name = {}
+    for item in entries:
+        name = item["name"]
+        rank = item["rank"]
+        if name not in by_name or rank < by_name[name]:
+            by_name[name] = rank
+    assert by_name["泰盈科技"] == 1
+    assert by_name["维音"] == 2
+    assert by_name["鸿联九五"] == 1
+    assert by_name["河北博岳"] == 2
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "鸿联九五" in name,
+        "呼叫中心外包公司选哪家",
+    )
+    assert matched is True
+    assert rank == 1
+
+
+def test_parse_table_vendor_column_header():
+    text = """
+| 梯队 | 代表厂商 | 核心标签 |
+| --- | --- | --- |
+| 互联网专家 | **鸿联九五**（中信系）、**河北博岳** | 高并发 |
+"""
+    entries = parse_answer_rankings(text)
+    by_name = {item["name"]: item["rank"] for item in entries}
+    assert by_name["鸿联九五"] == 1
+    assert by_name["河北博岳"] == 2
+
+
+def test_parse_table_supplier_column_with_like_examples():
+    text = """
+| 你的核心诉求 | 推荐关注的供应商梯队 | 选型红线 |
+| --- | --- | --- |
+| 性价比优先 | **国内头部人力型BPO**（如**泰盈科技**、**鸿联九五**）。它们人力储备极深。 | 弹性坐席 |
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "国内头部人力型BPO" not in names
+    assert "泰盈科技" in names
+    assert "鸿联九五" in names
+    by_name = {item["name"]: item["rank"] for item in entries}
+    assert by_name["泰盈科技"] == 1
+    assert by_name["鸿联九五"] == 2
 
 
 def test_parse_rank_company_table_uses_explicit_rank_column():

@@ -28,7 +28,12 @@ type ChartRefs = {
   platformRank: Ref<HTMLDivElement | null>
 }
 
+type ChartKey = keyof ChartRefs
+
 type EchartsRuntime = Awaited<ReturnType<typeof loadEchartsRuntime>>
+
+const VIEWPORT_ROOT_MARGIN = '200px 0px'
+const VIEWPORT_PREFETCH_PX = 200
 
 let echartsRuntime: EchartsRuntime | null = null
 
@@ -41,25 +46,36 @@ async function ensureEchartsRuntime(): Promise<EchartsRuntime> {
 
 function campusGaugeOption(
   value: number,
-  detailText: string,
+  _detailText: string,
   colors: [string, string],
   max = 100,
 ) {
+  const safe = Math.max(0, Math.min(max, value))
   return {
-    animationDuration: 1200,
-    animationEasing: 'cubicOut' as const,
+    animation: false,
     series: [{
       type: 'gauge',
       min: 0,
       max,
-      radius: '92%',
-      startAngle: 220,
-      endAngle: -40,
-      progress: { show: true, width: 10, roundCap: true },
+      // Align with workbench mock: arc sits low so progress is readable in short containers
+      radius: '100%',
+      center: ['50%', '72%'],
+      startAngle: 210,
+      endAngle: -30,
+      progress: {
+        show: true,
+        width: 11,
+        roundCap: true,
+        itemStyle: { color: colors[0] },
+      },
       axisLine: {
         lineStyle: {
-          width: 10,
-          color: [[1, '#e5e7eb']],
+          width: 11,
+          color: [
+            [0.4, '#fecaca'],
+            [0.7, '#fde68a'],
+            [1, '#bbf7d0'],
+          ],
         },
       },
       axisTick: { show: false },
@@ -67,36 +83,35 @@ function campusGaugeOption(
       axisLabel: { show: false },
       pointer: { show: false },
       anchor: { show: false },
-      itemStyle: {
-        color: {
-          type: 'linear',
-          x: 0,
-          y: 0,
-          x2: 1,
-          y2: 0,
-          colorStops: [
-            { offset: 0, color: colors[0] },
-            { offset: 1, color: colors[1] },
-          ],
-        },
-      },
-      detail: {
-        valueAnimation: true,
-        formatter: detailText,
-        fontSize: 20,
-        fontWeight: 800,
-        color: colors[0],
-        offsetCenter: [0, '8%'],
-      },
-      data: [{ value: Math.max(0, Math.min(max, value)) }],
+      detail: { show: false },
+      data: [{ value: safe }],
     }],
   }
+}
+
+function isInViewport(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect()
+  return rect.bottom >= -VIEWPORT_PREFETCH_PX && rect.top <= window.innerHeight + VIEWPORT_PREFETCH_PX
 }
 
 export function useWorkspaceCampusCharts(refs: ChartRefs) {
   const chartInstances: ECharts[] = []
   const chartsReady = ref(false)
   let resizeObserver: ResizeObserver | null = null
+  let viewportObserver: IntersectionObserver | null = null
+  let latestData: WorkspaceCampusChartData | null = null
+  const initializedCharts = new Set<ChartKey>()
+  const elToKey = new WeakMap<HTMLDivElement, ChartKey>()
+
+  const chartEntries: Array<{ key: ChartKey; ref: Ref<HTMLDivElement | null> }> = [
+    { key: 'trend', ref: refs.trend },
+    { key: 'intent', ref: refs.intent },
+    { key: 'mention', ref: refs.mention },
+    { key: 'healthGauge', ref: refs.healthGauge },
+    { key: 'rankGauge', ref: refs.rankGauge },
+    { key: 'top3Gauge', ref: refs.top3Gauge },
+    { key: 'platformRank', ref: refs.platformRank },
+  ]
 
   function getChart(el: HTMLDivElement | null) {
     if (!el || !echartsRuntime) return null
@@ -111,280 +126,319 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
     chartInstances.forEach(instance => instance.resize())
   }
 
-  async function renderCharts(data: WorkspaceCampusChartData) {
-    await ensureEchartsRuntime()
-    chartsReady.value = true
-    await nextTick()
+  function ensureViewportObserver() {
+    if (viewportObserver || typeof IntersectionObserver === 'undefined') return
+    viewportObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting || !latestData) return
+        const el = entry.target as HTMLDivElement
+        const key = elToKey.get(el)
+        if (!key) return
+        applyChartOption(key, latestData)
+        viewportObserver?.unobserve(el)
+      })
+    }, { rootMargin: VIEWPORT_ROOT_MARGIN })
+  }
 
+  function applyChartOption(key: ChartKey, data: WorkspaceCampusChartData) {
     const { graphic } = echartsRuntime!
     if (!graphic) return
 
-    const trendChart = getChart(refs.trend.value)
-    if (trendChart) {
-      if (data.trendLabels.length) {
-        trendChart.setOption({
-          animationDuration: 1000,
-          animationEasing: 'cubicOut' as const,
-          color: ['#2d6cdf'],
-          grid: { left: 38, right: 18, top: 18, bottom: 24 },
-          tooltip: {
-            trigger: 'axis',
-            valueFormatter: (value: number) => `${value}%`,
-            axisPointer: {
+    switch (key) {
+      case 'trend': {
+        const trendChart = getChart(refs.trend.value)
+        if (!trendChart) return
+        if (data.trendLabels.length) {
+          trendChart.setOption({
+            animation: false,
+            color: ['#2563eb'],
+            grid: { left: 48, right: 24, top: 24, bottom: 36, containLabel: false },
+            tooltip: {
+              trigger: 'axis',
+              valueFormatter: (value: number) => `${value}%`,
+              axisPointer: {
+                type: 'line',
+                lineStyle: { color: '#93c5fd', width: 1 },
+              },
+            },
+            xAxis: {
+              type: 'category',
+              data: data.trendLabels,
+              boundaryGap: true,
+              axisTick: { show: false },
+              axisLine: { lineStyle: { color: '#e2e8f0' } },
+              axisLabel: { color: '#64748b', fontSize: 11 },
+            },
+            yAxis: {
+              type: 'value',
+              max: 100,
+              axisLine: { show: false },
+              axisTick: { show: false },
+              axisLabel: { formatter: '{value}%', color: '#64748b', fontSize: 11 },
+              splitLine: { lineStyle: { color: '#f1f5f9' } },
+            },
+            series: [{
               type: 'line',
-              lineStyle: { color: '#7ca7f8', width: 1 },
-            },
-          },
-          xAxis: {
-            type: 'category',
-            data: data.trendLabels,
-            boundaryGap: false,
-            axisTick: { show: false },
-            axisLine: { lineStyle: { color: '#dce7f4' } },
-            axisLabel: { color: '#6f8198', fontSize: 11 },
-          },
-          yAxis: {
-            type: 'value',
-            max: 100,
-            axisLine: { show: false },
-            axisTick: { show: false },
-            axisLabel: { formatter: '{value}%', color: '#9aa9bc', fontSize: 11 },
-            splitLine: { lineStyle: { color: '#edf3f9' } },
-          },
-          series: [{
-            type: 'line',
-            data: data.trendValues,
-            smooth: true,
-            symbol: 'circle',
-            symbolSize: 7,
-            showSymbol: true,
-            lineStyle: {
-              width: 3,
-              color: new graphic.LinearGradient(0, 0, 1, 0, [
-                { offset: 0, color: '#2d6cdf' },
-                { offset: 1, color: '#14a7c7' },
-              ]),
-            },
-            itemStyle: {
-              color: '#2d6cdf',
-              borderWidth: 3,
-              borderColor: '#ffffff',
-            },
-            areaStyle: {
-              color: new graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: 'rgba(45, 108, 223, .26)' },
-                { offset: .62, color: 'rgba(20, 167, 199, .12)' },
-                { offset: 1, color: 'rgba(45, 108, 223, 0)' },
-              ]),
-            },
-            animationDelay: (idx: number) => idx * 60,
-          }],
-        }, true)
-      } else {
-        trendChart.clear()
-      }
-    }
-
-    const intentChart = getChart(refs.intent.value)
-    if (intentChart) {
-      if (data.intentTotal > 0) {
-        intentChart.setOption({
-          animationDuration: 1200,
-          animationEasing: 'elasticOut' as const,
-          color: ['#14b8a6', '#3b82f6'],
-          tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-          legend: {
-            bottom: 0,
-            itemWidth: 10,
-            itemHeight: 10,
-            textStyle: { color: '#6b7280', fontSize: 11 },
-          },
-          series: [{
-            type: 'pie',
-            radius: ['48%', '72%'],
-            center: ['50%', '44%'],
-            data: data.intentRows,
-            label: { show: false },
-            emphasis: {
-              scale: true,
-              scaleSize: 6,
-            },
-          }],
-          graphic: [{
-            type: 'text',
-            left: 'center',
-            top: '36%',
-            style: {
-              text: `${data.intentTotal}\n鏍锋湰`,
-              textAlign: 'center',
-              fill: '#1f2937',
-              fontSize: 14,
-              fontWeight: 700,
-              lineHeight: 20,
-            },
-          }],
-        }, true)
-      } else {
-        intentChart.clear()
-      }
-    }
-
-    const mentionChart = getChart(refs.mention.value)
-    if (mentionChart) {
-      if (data.mentionRows.some(row => row.value > 0)) {
-        mentionChart.setOption({
-          animationDuration: 1200,
-          animationEasing: 'elasticOut' as const,
-          color: ['#14b8a6', '#ef4444'],
-          tooltip: { trigger: 'item', formatter: '{b}: {d}%' },
-          legend: {
-            bottom: 0,
-            itemWidth: 10,
-            itemHeight: 10,
-            textStyle: { color: '#6b7280', fontSize: 11 },
-          },
-          series: [{
-            type: 'pie',
-            radius: ['52%', '76%'],
-            center: ['50%', '44%'],
-            data: data.mentionRows,
-            label: { show: false },
-            emphasis: { scale: true, scaleSize: 6 },
-          }],
-          graphic: [{
-            type: 'text',
-            left: 'center',
-            top: '36%',
-            style: {
-              text: `${data.mentionRate}%\n已提及`,
-              textAlign: 'center',
-              fill: '#14b8a6',
-              fontSize: 18,
-              fontWeight: 800,
-              lineHeight: 24,
-            },
-          }],
-        }, true)
-      } else {
-        mentionChart.clear()
-      }
-    }
-
-    const healthChart = getChart(refs.healthGauge.value)
-    if (healthChart) {
-      healthChart.setOption(
-        campusGaugeOption(
-          data.healthScore ?? 0,
-          data.healthScore != null ? `${data.healthScore}` : '-',
-          ['#67e8f9', '#38bdf8'],
-        ),
-        true,
-      )
-    }
-
-    const rankChart = getChart(refs.rankGauge.value)
-    if (rankChart) {
-      rankChart.setOption(
-        campusGaugeOption(
-          data.rankGaugeScore,
-          data.avgBrandRank != null ? `${data.avgBrandRank}` : '-',
-          ['#2563eb', '#60a5fa'],
-        ),
-        true,
-      )
-    }
-
-    const top3Chart = getChart(refs.top3Gauge.value)
-    if (top3Chart) {
-      top3Chart.setOption(
-        campusGaugeOption(
-          data.top3Rate,
-          `${data.top3Rate}%`,
-          ['#7c3aed', '#a78bfa'],
-        ),
-        true,
-      )
-    }
-
-    const platformChart = getChart(refs.platformRank.value)
-    if (platformChart) {
-      if (data.platformRankLabels.length) {
-        const rows = [...data.platformRankLabels].reverse()
-        const values = [...data.platformRankValues].reverse()
-        const samples = [...data.platformRankSamples].reverse()
-        const hasManyRows = rows.length > 6
-        const formatPlatformLabel = (value: number, sampleCount: number) => {
-          if (sampleCount <= 0) return '待返回'
-          return `${value}%`
+              data: data.trendValues,
+              smooth: true,
+              // White-bordered symbols punch holes in the stroke; keep continuous line
+              symbol: 'circle',
+              symbolSize: 8,
+              showSymbol: true,
+              lineStyle: { width: 3, color: '#2563eb' },
+              itemStyle: {
+                color: '#2563eb',
+                borderWidth: 2,
+                borderColor: '#2563eb',
+              },
+              areaStyle: {
+                color: new graphic.LinearGradient(0, 0, 0, 1, [
+                  { offset: 0, color: 'rgba(37, 99, 235, 0.25)' },
+                  { offset: 1, color: 'rgba(37, 99, 235, 0.02)' },
+                ]),
+              },
+            }],
+          }, true)
+        } else {
+          trendChart.clear()
         }
-        platformChart.setOption({
-          animationDuration: 1000,
-          animationEasing: 'cubicOut' as const,
-          grid: { left: 8, right: 58, top: 6, bottom: 6 },
-          tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'shadow' },
-            formatter: (params: unknown) => {
-              const item = (params as Array<{ name: string; value: number; dataIndex: number }>)?.[0]
-              if (!item) return ''
-              const sampleCount = samples[item.dataIndex] ?? 0
-              if (sampleCount <= 0) return `${item.name}<br/>暂无返回样本`
-              return `${item.name}<br/>品牌露出率：${item.value}%<br/>样本数：${sampleCount}`
-            },
-          },
-          xAxis: {
-            type: 'value',
-            max: 100,
-            show: false,
-          },
-          yAxis: {
-            type: 'category',
-            data: rows,
-            axisTick: { show: false },
-            axisLine: { show: false },
-            axisLabel: { color: '#52657d', fontSize: hasManyRows ? 11 : 12 },
-          },
-          series: [{
-            type: 'bar',
-            data: values,
-            barWidth: hasManyRows ? 9 : 12,
-            label: {
-              show: true,
-              position: 'right',
-              formatter: (params: { value: number; dataIndex: number }) => (
-                formatPlatformLabel(params.value, samples[params.dataIndex] ?? 0)
-              ),
-              color: (params: { value: number; dataIndex: number }) => {
-                const sampleCount = samples[params.dataIndex] ?? 0
-                if (sampleCount <= 0) return '#94a3b8'
-                return params.value > 0 ? '#0f8d7f' : '#c2410c'
-              },
-              fontWeight: 700,
-              fontSize: 11,
-            },
-            itemStyle: {
-              borderRadius: [0, 6, 6, 0],
-              color: (params: { value: number; dataIndex: number }) => {
-                const sampleCount = samples[params.dataIndex] ?? 0
-                if (sampleCount <= 0) return '#d9e2ef'
-                if (params.value <= 0) {
-                  return new graphic.LinearGradient(0, 0, 1, 0, [
-                    { offset: 0, color: '#f5d0c8' },
-                    { offset: 1, color: '#f0b6a8' },
-                  ])
-                }
-                return new graphic.LinearGradient(0, 0, 1, 0, [
-                  { offset: 0, color: '#2d6cdf' },
-                  { offset: 1, color: '#35d39b' },
-                ])
-              },
-            },
-            animationDelay: (idx: number) => idx * 80,
-          }],
-        }, true)
-      } else {
-        platformChart.clear()
+        break
       }
+      case 'intent': {
+        const intentChart = getChart(refs.intent.value)
+        if (!intentChart) return
+        if (data.intentTotal > 0) {
+          intentChart.setOption({
+            animation: false,
+            color: ['#14b8a6', '#3b82f6'],
+            tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+            legend: {
+              bottom: 0,
+              itemWidth: 10,
+              itemHeight: 10,
+              textStyle: { color: '#6b7280', fontSize: 11 },
+            },
+            series: [{
+              type: 'pie',
+              radius: ['48%', '72%'],
+              center: ['50%', '44%'],
+              data: data.intentRows,
+              label: { show: false },
+              emphasis: {
+                scale: true,
+                scaleSize: 6,
+              },
+            }],
+            graphic: [{
+              type: 'text',
+              left: 'center',
+              top: '36%',
+              style: {
+                text: `${data.intentTotal}\n鏍锋湰`,
+                textAlign: 'center',
+                fill: '#1f2937',
+                fontSize: 14,
+                fontWeight: 700,
+                lineHeight: 20,
+              },
+            }],
+          }, true)
+        } else {
+          intentChart.clear()
+        }
+        break
+      }
+      case 'mention': {
+        const mentionChart = getChart(refs.mention.value)
+        if (!mentionChart) return
+        if (data.mentionRows.some(row => row.value > 0)) {
+          mentionChart.setOption({
+            animation: false,
+            color: ['#14b8a6', '#ef4444'],
+            tooltip: { trigger: 'item', formatter: '{b}: {d}%' },
+            legend: {
+              bottom: 0,
+              itemWidth: 10,
+              itemHeight: 10,
+              textStyle: { color: '#6b7280', fontSize: 11 },
+            },
+            series: [{
+              type: 'pie',
+              radius: ['52%', '76%'],
+              center: ['50%', '44%'],
+              data: data.mentionRows,
+              label: { show: false },
+              emphasis: { scale: true, scaleSize: 6 },
+            }],
+            graphic: [{
+              type: 'text',
+              left: 'center',
+              top: '36%',
+              style: {
+                text: `${data.mentionRate}%\n已提及`,
+                textAlign: 'center',
+                fill: '#14b8a6',
+                fontSize: 18,
+                fontWeight: 800,
+                lineHeight: 24,
+              },
+            }],
+          }, true)
+        } else {
+          mentionChart.clear()
+        }
+        break
+      }
+      case 'healthGauge': {
+        const healthChart = getChart(refs.healthGauge.value)
+        if (!healthChart) return
+        healthChart.setOption(
+          campusGaugeOption(
+            data.healthScore ?? 0,
+            data.healthScore != null ? `${data.healthScore}` : '-',
+            ['#67e8f9', '#38bdf8'],
+          ),
+          true,
+        )
+        break
+      }
+      case 'rankGauge': {
+        const rankChart = getChart(refs.rankGauge.value)
+        if (!rankChart) return
+        rankChart.setOption(
+          campusGaugeOption(
+            data.rankGaugeScore,
+            data.avgBrandRank != null ? `${data.avgBrandRank}` : '-',
+            ['#2563eb', '#60a5fa'],
+          ),
+          true,
+        )
+        break
+      }
+      case 'top3Gauge': {
+        const top3Chart = getChart(refs.top3Gauge.value)
+        if (!top3Chart) return
+        top3Chart.setOption(
+          campusGaugeOption(
+            data.top3Rate,
+            `${data.top3Rate}%`,
+            ['#7c3aed', '#a78bfa'],
+          ),
+          true,
+        )
+        break
+      }
+      case 'platformRank': {
+        const platformChart = getChart(refs.platformRank.value)
+        if (!platformChart) return
+        if (data.platformRankLabels.length) {
+          const rows = [...data.platformRankLabels].reverse()
+          const values = [...data.platformRankValues].reverse()
+          const samples = [...data.platformRankSamples].reverse()
+          const hasManyRows = rows.length > 6
+          const formatPlatformLabel = (value: number, sampleCount: number) => {
+            if (sampleCount <= 0) return '待返回'
+            return `${value}%`
+          }
+          platformChart.setOption({
+            animation: false,
+            grid: { left: 8, right: 58, top: 6, bottom: 6 },
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: { type: 'shadow' },
+              formatter: (params: unknown) => {
+                const item = (params as Array<{ name: string; value: number; dataIndex: number }>)?.[0]
+                if (!item) return ''
+                const sampleCount = samples[item.dataIndex] ?? 0
+                if (sampleCount <= 0) return `${item.name}<br/>暂无返回样本`
+                return `${item.name}<br/>品牌露出率：${item.value}%<br/>样本数：${sampleCount}`
+              },
+            },
+            xAxis: {
+              type: 'value',
+              max: 100,
+              show: false,
+            },
+            yAxis: {
+              type: 'category',
+              data: rows,
+              axisTick: { show: false },
+              axisLine: { show: false },
+              axisLabel: { color: '#52657d', fontSize: hasManyRows ? 11 : 12 },
+            },
+            series: [{
+              type: 'bar',
+              data: values,
+              barWidth: hasManyRows ? 9 : 12,
+              label: {
+                show: true,
+                position: 'right',
+                formatter: (params: { value: number; dataIndex: number }) => (
+                  formatPlatformLabel(params.value, samples[params.dataIndex] ?? 0)
+                ),
+                color: (params: { value: number; dataIndex: number }) => {
+                  const sampleCount = samples[params.dataIndex] ?? 0
+                  if (sampleCount <= 0) return '#94a3b8'
+                  return params.value > 0 ? '#0f8d7f' : '#c2410c'
+                },
+                fontWeight: 700,
+                fontSize: 11,
+              },
+              itemStyle: {
+                borderRadius: [0, 6, 6, 0],
+                color: (params: { value: number; dataIndex: number }) => {
+                  const sampleCount = samples[params.dataIndex] ?? 0
+                  if (sampleCount <= 0) return '#d9e2ef'
+                  if (params.value <= 0) {
+                    return new graphic.LinearGradient(0, 0, 1, 0, [
+                      { offset: 0, color: '#f5d0c8' },
+                      { offset: 1, color: '#f0b6a8' },
+                    ])
+                  }
+                  return new graphic.LinearGradient(0, 0, 1, 0, [
+                    { offset: 0, color: '#2d6cdf' },
+                    { offset: 1, color: '#35d39b' },
+                  ])
+                },
+              },
+            }],
+          }, true)
+        } else {
+          platformChart.clear()
+        }
+        break
+      }
+    }
+
+    initializedCharts.add(key)
+  }
+
+  function scheduleChart(key: ChartKey, el: HTMLDivElement, data: WorkspaceCampusChartData) {
+    if (initializedCharts.has(key) || isInViewport(el)) {
+      applyChartOption(key, data)
+      return
+    }
+    ensureViewportObserver()
+    if (!viewportObserver) {
+      applyChartOption(key, data)
+      return
+    }
+    elToKey.set(el, key)
+    viewportObserver.observe(el)
+  }
+
+  async function renderCharts(data: WorkspaceCampusChartData) {
+    await ensureEchartsRuntime()
+    latestData = data
+    chartsReady.value = true
+    await nextTick()
+
+    if (!echartsRuntime?.graphic) return
+
+    for (const { key, ref: chartRef } of chartEntries) {
+      const el = chartRef.value
+      if (!el) continue
+      scheduleChart(key, el, data)
     }
 
     resizeCharts()
@@ -402,6 +456,10 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
   }
 
   function disposeCharts() {
+    viewportObserver?.disconnect()
+    viewportObserver = null
+    latestData = null
+    initializedCharts.clear()
     resizeObserver?.disconnect()
     resizeObserver = null
     resizeBound = false
@@ -410,6 +468,9 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
   }
 
   onUnmounted(disposeCharts)
+
+  // Self-check: node -e "console.assert('200px 0px'==='200px 0px'&&200===parseInt('200px'))"
+  // Lazy rule: init/setOption only when initialized || in viewport (±200px); updates skip off-screen never-init charts.
 
   return { chartsReady, renderCharts, disposeCharts, bindResize, resizeCharts }
 }

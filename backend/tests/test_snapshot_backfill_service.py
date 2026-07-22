@@ -117,8 +117,16 @@ def test_subtask_needs_snapshot_backfill_uses_effective_display_rank() -> None:
     )
     assert subtask_needs_snapshot_backfill(subtask) is True
     assert subtask_needs_snapshot_backfill(subtask, effective_rank=2, use_effective_rank=True) is False
+    assert subtask_needs_snapshot_backfill(subtask, effective_rank=3, use_effective_rank=True) is False
     assert subtask_needs_snapshot_backfill(subtask, effective_rank=4, use_effective_rank=True) is True
-    assert subtask_needs_snapshot_backfill(subtask, effective_rank=None, use_effective_rank=True) is False
+    # 无位次 / 未提及：一律待补录（仅前三放过）
+    assert subtask_needs_snapshot_backfill(subtask, effective_rank=None, use_effective_rank=True) is True
+    assert (
+        subtask_needs_snapshot_backfill(
+            subtask, effective_rank=None, use_effective_rank=True, brand_mentioned=False
+        )
+        is True
+    )
 
 
 def test_notify_failed_subtasks_for_task_creates_single_notification(db_session) -> None:
@@ -232,11 +240,29 @@ def test_subtask_backfill_eligible_includes_completed_with_answer() -> None:
         prompt="测试问题",
         status="completed",
         answer_content="已有回答",
+        mention_position=2,
         raw_result_json={},
     )
     assert subtask_needs_snapshot_backfill(subtask) is False
     assert subtask_backfill_eligible(subtask, pending_only=False) is True
     assert subtask_backfill_eligible(subtask, pending_only=True) is False
+
+
+def test_subtask_needs_backfill_when_answer_without_rank() -> None:
+    """有回答但无排名（库内位次空）应进待补录。"""
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-norank",
+        task_id="task-1",
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="测试问题",
+        status="completed",
+        answer_content="已有回答但未解析出位次",
+        mention_position=None,
+        raw_result_json={},
+    )
+    assert subtask_needs_snapshot_backfill(subtask) is True
+    assert subtask_backfill_eligible(subtask, pending_only=True) is True
 
 
 def test_apply_snapshot_backfill_overwrites_answer(db_session) -> None:
@@ -346,6 +372,7 @@ def test_list_snapshot_backfill_items_filters_by_tenant_and_date(db_session) -> 
         prompt="问题A",
         status="completed",
         answer_content="回答A",
+        mention_position=2,
         raw_result_json={},
         updated_at=datetime(2026, 7, 2, 10, 0, 0),
     )

@@ -6,179 +6,202 @@
     <title>{{ page_title }}</title>
     <style>
     {{ font_face_css | safe }}
-    {% include 'styles.css' %}
     {{ theme_css | safe }}
+    {% include 'styles.css' %}
     </style>
 </head>
 <body class="report-theme-{{ theme_id }}">
-    <div class="report-container">
-        <div class="report-header">
-            <h1 class="report-title">AI搜索平台品牌分析报告</h1>
-            <p class="report-subtitle">品牌用户专属报表分析 - 专业版</p>
-
-            <div class="report-meta">
-                {% if show_contact_meta %}
-                <div class="meta-item">
-                    <div class="meta-label">手机号/合同号</div>
-                    <div class="meta-value">{{ contact_label }}</div>
+    <main class="deck">
+        <section class="slide slide--cover">
+            <img class="master-bg" src="{{ idea_assets.cover }}" alt="">
+            <div class="overlay cover-note">
+                <div class="note-kicker">品牌用户专属报表分析 · 专业版</div>
+                <div class="note-brand">{{ brand_name }}</div>
+                <div class="note-meta">
+                    <div><span class="note-label">分析平台</span>{{ platform_label }}</div>
+                    <div><span class="note-label">分析周期</span>{{ period_range }}</div>
+                    <div><span class="note-label">报告生成时间</span>{{ generated_at }}</div>
+                    {% if show_contact_meta %}
+                    <div><span class="note-label">联系人/合同号</span>{{ contact_label }}</div>
+                    {% endif %}
                 </div>
-                {% endif %}
-                <div class="meta-item">
-                    <div class="meta-label">分析平台</div>
-                    <div class="meta-value">{{ platform_label }}</div>
-                </div>
-                <div class="meta-item">
-                    <div class="meta-label">分析周期</div>
-                    <div class="meta-value">{{ period_range }}</div>
-                </div>
-                <div class="meta-item">
-                    <div class="meta-label">报告生成时间</div>
-                    <div class="meta-value">{{ generated_at }}</div>
+                <div class="note-competitors">
+                    <span class="note-label">竞品</span>
+                    <span class="note-competitor-list">{{ competitor_text }}</span>
                 </div>
             </div>
+        </section>
 
-            <div class="brand-info" style="margin-top: 30px; padding: 15px; background: white; border-radius: 8px; display: inline-block;">
-                <span style="font-weight: 600; color: var(--dark); margin-right: 20px;">
-                    <span class="brand-highlight">{{ brand_name }}</span>
-                </span>
-                <span style="font-weight: 600; color: var(--dark);">
-                    竞品: <span class="competitor-highlight">{{ competitor_text }}</span>
-                </span>
-            </div>
-        </div>
+        <section class="slide slide--section">
+            <img class="master-bg" src="{{ idea_assets.section }}" alt="">
+        </section>
 
-        <div class="report-section overview-section">
-            <h2 class="section-title">诊断概览</h2>
-            {{ overview_kpi_html | safe }}
-            {% if overview_executive_html %}
-            <h3 class="overview-subtitle">核心结论</h3>
-            {{ overview_executive_html | safe }}
-            {% endif %}
-            {% if overview_sentiment_html %}
-            <h3 class="overview-subtitle">情感与口碑</h3>
-            {{ overview_sentiment_html | safe }}
-            {% endif %}
-            {% if overview_swot_html %}
-            <h3 class="overview-subtitle">优势 / 待改善 / 建议</h3>
-            {{ overview_swot_html | safe }}
-            {% endif %}
-            {% if overview_competitor_html %}
-            <h3 class="overview-subtitle">竞品格局对比</h3>
-            {{ overview_competitor_html | safe }}
-            {% if overview_competitor_strategy_html %}
-            {{ overview_competitor_strategy_html | safe }}
-            {% endif %}
-            {% endif %}
-            {% if overview_platform_html %}
-            <h3 class="overview-subtitle">分平台表现</h3>
-            {{ overview_platform_html | safe }}
-            {% if overview_platform_insight_html %}{{ overview_platform_insight_html | safe }}{% endif %}
-            {% endif %}
-            {% if overview_matrix_html %}
-            <h3 class="overview-subtitle">语义词 × 平台矩阵</h3>
-            <p class="matrix-hint">单元格格式：提及率 / 平均排名</p>
-            {{ overview_matrix_html | safe }}
-            {% endif %}
-            {% if overview_prompt_html %}
-            <h3 class="overview-subtitle">语义词成绩单</h3>
-            {{ overview_prompt_html | safe }}
-            {% endif %}
-        </div>
-
-        <div class="report-section chart-section">
-            <h2 class="section-title">品牌排名趋势分析</h2>
-            <div class="chart-grid">
-                {{ charts_html | safe }}
-            </div>
-        </div>
-
-        <div class="report-section">
-            <h2 class="section-title">详细排名数据</h2>
-
-            {% if brand_recent_table_html %}
-            <div class="table-section">
-                <h3 class="overview-subtitle">品牌排名变化趋势</h3>
-                {{ brand_recent_table_html | safe }}
-            </div>
-            {% endif %}
-
-            {% if show_city_table and brand_city_table_html %}
-            <div class="table-section">
-                <h3 class="overview-subtitle">品牌城市排名</h3>
-                {{ brand_city_table_html | safe }}
-            </div>
-            {% endif %}
-
-            {% if ranking_blocks %}
-            <div class="table-section">
-                <h3 class="overview-subtitle">品牌及竞品排名列表</h3>
-                {% for block in ranking_blocks %}
-                <div class="report-list-item">
-                    <div class="report-header report-list-header">
-                        <div>{{ block.index }}. 语义词: <span class="prompt-accent">{{ block.prompt }}</span></div>
-                    </div>
-                    {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
-                    {{ block.table_html | safe }}
+        <section class="slide slide--dark">
+            <img class="master-bg" src="{{ idea_assets.dark }}" alt="">
+            <h2 class="slide-title">核心指标与结论</h2>
+            <div class="overlay dark-content">
+                <div class="dark-panel dark-panel--kpi">
+                    {{ overview_kpi_html | safe }}
                 </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            {% if mention_blocks %}
-            <div class="table-section">
-                <h3 class="overview-subtitle">品牌提及率分析</h3>
-                {% for block in mention_blocks %}
-                <div class="report-list-item">
-                    <div class="report-header">
-                        <div>{{ block.index }}: 语义词: <span class="prompt-accent">{{ block.prompt }}</span></div>
-                    </div>
-                    {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
-                    {{ block.table_html | safe }}
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            <div class="report-section">
-                <h2 class="section-title">采信网站概览</h2>
-                <div class="table-section">
-                    <h3 class="overview-subtitle">当天排名前三企业引用网站概览</h3>
-                    {{ source_top_html | safe }}
-                </div>
-                <div class="table-section">
-                    <h3 class="overview-subtitle">品牌平均排名与引用网站映射关系</h3>
-                    {{ domain_map_html | safe }}
-                </div>
-                {% if source_action_tips_html %}
-                <div class="table-section">
-                    <h3 class="overview-subtitle">信源优化建议</h3>
-                    {{ source_action_tips_html | safe }}
+                {% if overview_executive_html %}
+                <div class="dark-panel dark-block">
+                    <h3>核心结论</h3>
+                    {{ overview_executive_html | safe }}
                 </div>
                 {% endif %}
             </div>
-        </div>
+        </section>
 
-        {% if analysis_html %}
-        <div class="report-section analysis-section">
-            <div class="analysis-header">
-                <h2 class="section-title" style="border-bottom: none; margin: 0; padding: 0;">数据分析与优化建议</h2>
-                <div class="analysis-time">生成时间: {{ generated_at }}</div>
+        {% if overview_sentiment_html or overview_swot_html %}
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">情感与优劣势</h2>
+            <div class="overlay light-content">
+                {% if overview_sentiment_html %}
+                <h3>情感与口碑</h3>
+                {{ overview_sentiment_html | safe }}
+                {% endif %}
+                {% if overview_swot_html %}
+                {{ overview_swot_html | safe }}
+                {% endif %}
             </div>
-            <div class="analysis-content">
-                {{ analysis_html | safe }}
-            </div>
-        </div>
+        </section>
         {% endif %}
 
-        <div class="report-footer">
-            <div class="footer-logo">
-                <div class="logo-text">AI搜索平台品牌竞争力洞察</div>
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">竞品格局对比</h2>
+            <div class="overlay light-content">
+                {% if overview_competitor_html %}{{ overview_competitor_html | safe }}{% endif %}
+                {% if overview_competitor_strategy_html %}
+                <div class="text-block">{{ overview_competitor_strategy_html | safe }}</div>
+                {% endif %}
             </div>
-            <p>本报告由AI引擎自动生成，数据仅供参考。报告生成时间: {{ footer_generated_at }}</p>
-            <p style="margin-top: 5px; font-size: 11px; color: #94a3b8;">
-                © 2026 AI引擎品牌分析系统 | 专业数据分析报告
-            </p>
-        </div>
-    </div>
+        </section>
+
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">分平台表现</h2>
+            <div class="overlay light-content">
+                {% if overview_platform_html %}{{ overview_platform_html | safe }}{% endif %}
+            </div>
+        </section>
+
+        {% for chart in chart_slides %}
+        <section class="slide slide--dark" data-pack="1" data-merge-group="chart">
+            <img class="master-bg" src="{{ idea_assets.dark }}" alt="">
+            <h2 class="slide-title">{{ chart.title }}</h2>
+            <div class="overlay dark-content pack-body chart-slide-body">
+                {% if chart.subtitle %}<div class="pack-item"><p class="hint hint--on-dark">{{ chart.subtitle }}</p></div>{% endif %}
+                <div class="pack-item chart-card">
+                    <img class="chart-image chart-image--full" src="{{ chart.src }}" alt="{{ chart.title }}">
+                </div>
+            </div>
+        </section>
+        {% endfor %}
+
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">品牌排名趋势</h2>
+            <div class="overlay light-content">
+                {% if brand_recent_table_html %}{{ brand_recent_table_html | safe }}{% endif %}
+                {% if show_city_table and brand_city_table_html %}
+                <h3>品牌城市排名</h3>
+                {{ brand_city_table_html | safe }}
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="slide slide--light" data-pack="1" data-merge-group="matrix">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">语义词 × 平台矩阵</h2>
+            <div class="overlay light-content pack-body slide-body--dense">
+                {% if overview_platform_insight_html %}
+                <div class="pack-item insight-box">{{ overview_platform_insight_html | safe }}</div>
+                {% endif %}
+                <div class="pack-item"><p class="hint">单元格格式: 提及率 / 平均排名</p></div>
+                {% if overview_matrix_html %}
+                <div class="pack-item">{{ overview_matrix_html | safe }}</div>
+                {% endif %}
+                {% if overview_prompt_html %}
+                <div class="pack-item">
+                    <h3>语义词成绩单</h3>
+                    {{ overview_prompt_html | safe }}
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        {% for block in ranking_blocks %}
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">排名明细{% if ranking_blocks|length > 1 %} ({{ loop.index }}/{{ ranking_blocks|length }}){% endif %}</h2>
+            <div class="overlay light-content">
+                <div class="block-title">{{ block.index }}. 语义词: {{ block.prompt }}</div>
+                {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
+                {{ block.table_html | safe }}
+            </div>
+        </section>
+        {% endfor %}
+
+        {% for block in mention_blocks %}
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">品牌提及率分析{% if mention_blocks|length > 1 %} ({{ loop.index }}/{{ mention_blocks|length }}){% endif %}</h2>
+            <div class="overlay light-content">
+                <div class="block-title">{{ block.index }}. 语义词: {{ block.prompt }}</div>
+                {% if block.comment_html %}{{ block.comment_html | safe }}{% endif %}
+                {{ block.table_html | safe }}
+            </div>
+        </section>
+        {% endfor %}
+
+        {% if source_top_html %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="source">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">采信网站概览</h2>
+            <div class="overlay light-content pack-body slide-body--dense">
+                <div class="pack-item">{{ source_top_html | safe }}</div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% for domain_slide in domain_map_slides %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="domain">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">{{ domain_slide.title }}</h2>
+            <div class="overlay light-content pack-body slide-body--dense">
+                <div class="pack-item">{{ domain_slide.html | safe }}</div>
+            </div>
+        </section>
+        {% endfor %}
+
+        {% if source_action_tips_html %}
+        <section class="slide slide--dark" data-pack="1" data-merge-group="source-tips">
+            <img class="master-bg" src="{{ idea_assets.dark }}" alt="">
+            <h2 class="slide-title">信源优化建议</h2>
+            <div class="overlay dark-content pack-body">
+                <div class="pack-item dark-panel">
+                    {{ source_action_tips_html | safe }}
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if analysis_html %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="analysis">
+            <img class="master-bg" src="{{ idea_assets.light }}" alt="">
+            <h2 class="slide-title">数据分析与优化建议</h2>
+            <div class="overlay analysis-time-pill">生成时间：{{ generated_at }}</div>
+            <div class="overlay light-content pack-body analysis-slide-body">
+                {{ analysis_html | safe }}
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="slide slide--thanks">
+            <img class="master-bg" src="{{ idea_assets.thanks }}" alt="">
+        </section>
+    </main>
 </body>
 </html>

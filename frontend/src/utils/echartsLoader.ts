@@ -22,10 +22,18 @@ async function loadDashboardRuntime(): Promise<EchartsRuntime> {
   ])
   core.use([
     charts.PieChart,
+    charts.BarChart,
     components.TooltipComponent,
+    components.LegendComponent,
+    components.GridComponent,
+    components.GraphicComponent,
     renderers.CanvasRenderer,
   ])
-  return { init: core.init, getInstanceByDom: core.getInstanceByDom }
+  return {
+    init: core.init,
+    getInstanceByDom: core.getInstanceByDom,
+    graphic: core.graphic,
+  }
 }
 
 async function loadDiagnosisRuntime(): Promise<EchartsRuntime> {

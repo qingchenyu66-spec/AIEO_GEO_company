@@ -13,7 +13,13 @@ from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
 from app.models.tenant import Tenant
 from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
-from app.services.brand_service import active_keyword_groups, keyword_group_monitor_keywords, keyword_group_platforms, molizhishu_monitor_terms
+from app.services.brand_service import (
+    active_brand_word_groups,
+    active_keyword_groups,
+    keyword_group_monitor_keywords,
+    keyword_group_platforms,
+    molizhishu_monitor_terms,
+)
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
@@ -40,6 +46,23 @@ class DueScheduleGroup:
 
 def _keyword_group_suffix(group: dict[str, Any]) -> str:
     return str(group.get("id") or group.get("sort_order", 0))
+
+
+def is_brand_word_schedule_key(group_key: str) -> bool:
+    """品牌词调度 key：bw* / bwonce*。"""
+    return str(group_key or "").startswith("bw")
+
+
+def brand_word_weekly_schedule_key(now: datetime | None = None) -> str:
+    """每周一固定窗口 key（约 09:00）。"""
+    now = now or datetime.now()
+    return f"bw{now:%Y%m%d}-0900"
+
+
+def brand_word_once_schedule_key(now: datetime | None = None) -> str:
+    """仅本次：按保存时刻生成唯一窗口，避免与周调度撞车。"""
+    now = now or datetime.now()
+    return f"bwonce-{now:%Y%m%d%H%M%S}"
 
 
 def get_schedule_run(db: Session, tenant_id: int, group_key: str) -> GeoMonitorScheduleRun | None:
@@ -145,6 +168,92 @@ def enumerate_due_schedule_groups(
                 )
 
 
+def enumerate_due_brand_word_weekly_groups(
+    db: Session,
+    *,
+    tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
+    max_prompts: int = 50,
+    now: datetime | None = None,
+    force: bool = False,
+) -> Iterator[DueScheduleGroup]:
+    """每周一提交启用中的品牌词（run_mode=weekly）。"""
+    now = now or datetime.now()
+    if not force and now.isoweekday() != 1:
+        return
+    # 08:55–09:00+tolerance；beat 定在周一 09:00
+    if not force:
+        current_minutes = now.hour * 60 + now.minute
+        target = 9 * 60
+        if current_minutes < target - 5 or current_minutes > target + settings.schedule_tolerance_minutes:
+            return
+    schedule_key = brand_word_weekly_schedule_key(now)
+    stmt = _active_asset_stmt()
+    if tenant_ids is not None:
+        if not tenant_ids:
+            return
+        stmt = stmt.where(BrandAsset.tenant_id.in_(tenant_ids))
+    elif tenant_id:
+        stmt = stmt.where(BrandAsset.tenant_id == tenant_id)
+    assets = list(db.scalars(stmt))
+    for asset in assets:
+        keyword_groups = active_brand_word_groups(db, asset.tenant_id, run_mode="weekly")
+        if not keyword_groups:
+            continue
+        per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
+        for group in keyword_groups:
+            for region_code in region_submission_targets(asset.region_codes_json):
+                region_suffix = f"-rg{region_code}" if region_code else ""
+                group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
+                if schedule_run_blocks_due(get_schedule_run(db, asset.tenant_id, group_key), now=now):
+                    continue
+                yield DueScheduleGroup(
+                    tenant_id=asset.tenant_id,
+                    schedule_key=schedule_key,
+                    group_key=group_key,
+                    max_prompts=per_group_max_prompts,
+                    keyword=group.get("monitor_keyword"),
+                    region_code=region_code,
+                )
+
+
+def enumerate_brand_word_once_groups(
+    db: Session,
+    *,
+    tenant_id: int,
+    groups: list[dict[str, Any]],
+    max_prompts: int = 50,
+    now: datetime | None = None,
+) -> Iterator[DueScheduleGroup]:
+    """保存「仅本次」后立刻提交一轮。"""
+    now = now or datetime.now()
+    asset = db.scalar(
+        select(BrandAsset).where(
+            BrandAsset.tenant_id == tenant_id,
+            BrandAsset.deleted.is_(False),
+            BrandAsset.status.is_(True),
+        )
+    )
+    if asset is None or not groups:
+        return
+    schedule_key = brand_word_once_schedule_key(now)
+    per_group_max_prompts = max(1, max_prompts // max(1, len(groups)))
+    for group in groups:
+        for region_code in region_submission_targets(asset.region_codes_json):
+            region_suffix = f"-rg{region_code}" if region_code else ""
+            group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
+            if schedule_run_blocks_due(get_schedule_run(db, tenant_id, group_key), now=now):
+                continue
+            yield DueScheduleGroup(
+                tenant_id=tenant_id,
+                schedule_key=schedule_key,
+                group_key=group_key,
+                max_prompts=per_group_max_prompts,
+                keyword=group.get("monitor_keyword"),
+                region_code=region_code,
+            )
+
+
 def submit_schedule_group(
     db: Session,
     current: CurrentSession,
@@ -182,7 +291,12 @@ def submit_schedule_group(
             )
         )
     )
-    keyword_groups = active_keyword_groups(db, item.tenant_id)
+    if is_brand_word_schedule_key(item.group_key):
+        keyword_groups = active_brand_word_groups(db, item.tenant_id)
+        missing_message = "品牌词组不存在或已变更"
+    else:
+        keyword_groups = active_keyword_groups(db, item.tenant_id)
+        missing_message = "监测词组不存在或已变更"
     group_part = item.group_key.split("-kw", 1)[-1]
     group_suffix = group_part.split("-rg", 1)[0]
     keyword_group = next(
@@ -195,7 +309,7 @@ def submit_schedule_group(
             "schedule_key": item.group_key,
             "status": "failed",
             "keyword": item.keyword,
-            "message": "监测词组不存在或已变更",
+            "message": missing_message,
         }
 
     payload = build_scheduled_payload(
@@ -205,6 +319,7 @@ def submit_schedule_group(
         max_prompts=item.max_prompts,
         keyword_group=keyword_group,
         region_code=item.region_code,
+        purpose="brand_word" if is_brand_word_schedule_key(item.group_key) else "geo",
     )
     existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
     if existing_run is not None and existing_run.task_id:
@@ -399,13 +514,21 @@ def build_scheduled_payload(
     max_prompts: int = 50,
     keyword_group: dict[str, Any] | None = None,
     region_code: str | None = None,
+    *,
+    purpose: str = "geo",
 ) -> MonitorTaskCreateRequest:
-    from app.services.brand_service import keyword_group_platform_configs
+    from app.core.monitor_purpose import PURPOSE_BRAND_WORD, normalize_task_purpose
+    from app.services.brand_service import keyword_group_platform_configs, tenant_purchased_platforms
     from app.services.platform_catalog_lifecycle_service import submittable_platform_codes
 
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
     configs = keyword_group_platform_configs(keyword_group, asset)
     allowed = set(submittable_platform_codes(db, [item["code"] for item in configs]))
+    purpose_norm = normalize_task_purpose(purpose)
+    if purpose_norm == PURPOSE_BRAND_WORD:
+        purchased = set(tenant_purchased_platforms(db, asset.tenant_id, asset))
+        if purchased:
+            allowed &= purchased
     platforms = [
         PlatformConfig(platform=item["code"], mode=item["mode"], screenshot=item["screenshot"])
         for item in configs
@@ -419,6 +542,7 @@ def build_scheduled_payload(
         monitor_keywords=monitor_keyword,
         monitor_keyword_aliases=aliases,
         region_code=[region_code] if region_code else None,
+        purpose=purpose_norm,  # type: ignore[arg-type]
     )
 
 

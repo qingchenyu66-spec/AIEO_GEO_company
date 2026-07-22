@@ -1,9 +1,8 @@
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PortalNavigateKey } from '../injectionKeys'
-import { withRetry } from '../../../composables/useRetry'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
-import { customerDisplayPeriodLabel, customerDisplayCutoffDate, workspaceTrendDateRange, workspaceTrendPeriodLabel, type WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { customerDisplayPeriodLabel, customerDisplayCutoffDate, workspacePeriodCompareLabel, workspacePreviousPeriodRange, workspaceTrendDateRange, workspaceTrendPeriodLabel, type WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -34,25 +33,95 @@ function formatKpiDelta(
   unit: string,
   betterWhenLower = false,
   deltaKind: 'default' | 'rank' | 'count' = 'default',
+  compareLabel = '较上一轮',
 ) {
   if (value === null || value === undefined) return null
-  if (Math.abs(value) < 0.05) return '较上一轮 持平'
+  if (Math.abs(value) < 0.05) return `${compareLabel} 持平`
   const steps = Math.abs(value)
   const label = Number.isInteger(steps) ? String(steps) : steps.toFixed(1)
   if (betterWhenLower && deltaKind === 'rank') {
-    return value < 0 ? `前移 ${label}${unit} · 较上一轮` : `后移 ${label}${unit} · 较上一轮`
+    return value < 0 ? `前移 ${label}${unit} · ${compareLabel}` : `后移 ${label}${unit} · ${compareLabel}`
   }
   if (betterWhenLower && deltaKind === 'count') {
-    return value < 0 ? `减少 ${label}${unit} · 较上一轮` : `增加 ${label}${unit} · 较上一轮`
+    return value < 0 ? `减少 ${label}${unit} · ${compareLabel}` : `增加 ${label}${unit} · ${compareLabel}`
   }
   const sign = value > 0 ? '+' : ''
-  return `${sign}${value}${unit} · 较上一轮`
+  return `${sign}${value}${unit} · ${compareLabel}`
 }
 
 function kpiDeltaClass(value: number | null | undefined, betterWhenLower = false) {
   if (value === null || value === undefined || Math.abs(value) < 0.05) return ''
   const improved = betterWhenLower ? value < 0 : value > 0
-  return improved ? 'delta-up' : 'delta-down'
+  return improved ? 'up' : 'down'
+}
+
+type PeriodKpiAvg = {
+  mention: number
+  rank: number | null
+  top3: number
+}
+
+function averageBriefKpis(data: WorkspaceBrief): PeriodKpiAvg {
+  const points = data.kpi_trends || []
+  // 多日：优先用后端区间样本加权 KPI（近7天/本月差值更明显）
+  if (points.length > 1 && data.kpis) {
+    return {
+      mention: data.kpis.brand_mention_rate,
+      rank: data.kpis.avg_brand_rank,
+      top3: data.kpis.top3_rate ?? 0,
+    }
+  }
+  if (points.length > 1) {
+    const mention = points.reduce((sum, p) => sum + (p.mention_rate || 0), 0) / points.length
+    const ranks = points
+      .map(p => p.avg_brand_rank)
+      .filter((value): value is number => value != null)
+    const rank = ranks.length
+      ? ranks.reduce((sum, value) => sum + value, 0) / ranks.length
+      : null
+    const top3 = points.reduce((sum, p) => sum + (p.top3_rate || 0), 0) / points.length
+    return {
+      mention: Math.round(mention * 10) / 10,
+      rank: rank == null ? null : Math.round(rank * 10) / 10,
+      top3: Math.round(top3 * 10) / 10,
+    }
+  }
+  return {
+    mention: data.kpis.brand_mention_rate,
+    rank: data.kpis.avg_brand_rank,
+    top3: data.kpis.top3_rate ?? 0,
+  }
+}
+
+function mergeWorkspaceBriefSummary(base: WorkspaceBrief, patch: WorkspaceBrief): WorkspaceBrief {
+  return {
+    ...base,
+    ...patch,
+    kpis: { ...base.kpis, ...patch.kpis },
+    recent_snapshots: base.recent_snapshots?.length ? base.recent_snapshots : patch.recent_snapshots,
+    top_sources: base.top_sources?.length ? base.top_sources : patch.top_sources,
+    alerts: patch.alerts?.length ? patch.alerts : base.alerts,
+    // 切周期后 summary/full 都必须覆盖热力，禁止「patch 空数组时留住旧区间」
+    keyword_heats: patch.keyword_heats ?? base.keyword_heats,
+    keyword_platform_heatmap: patch.keyword_platform_heatmap ?? base.keyword_platform_heatmap,
+  }
+}
+
+/** 切周期：分析字段必须以新 summary 为准，禁止留住旧区间热度/明细造成「点了没反应」。 */
+function applyWorkspacePeriodSummary(base: WorkspaceBrief, patch: WorkspaceBrief): WorkspaceBrief {
+  return {
+    ...base,
+    ...patch,
+    kpis: patch.kpis,
+    kpi_trends: patch.kpi_trends || [],
+    platform_highlights: patch.platform_highlights || [],
+    round_comparison: patch.round_comparison,
+    keyword_heats: patch.keyword_heats ?? [],
+    keyword_platform_heatmap: patch.keyword_platform_heatmap ?? null,
+    recent_snapshots: patch.recent_snapshots?.length ? patch.recent_snapshots : [],
+    top_sources: patch.top_sources?.length ? patch.top_sources : [],
+    alerts: patch.alerts ?? base.alerts ?? [],
+  }
 }
 
 function snapshotMetric(snapshot: WorkspaceSnapshot) {
@@ -275,7 +344,9 @@ export function useCustomerWorkspace() {
   const auth = useAuthStore()
   const portalNavigate = inject(PortalNavigateKey, null)
   const brief = ref<WorkspaceBrief | null>(null)
+  const previousPeriodAvg = ref<PeriodKpiAvg | null>(null)
   const loading = ref(false)
+  const periodSwitching = ref(false)
   const loadError = ref('')
   const alertsExpanded = ref(false)
   const alertsSectionRef = ref<HTMLElement | null>(null)
@@ -492,9 +563,66 @@ export function useCustomerWorkspace() {
     return bars
   })
 
+  const periodCompareLabel = computed(() => workspacePeriodCompareLabel(trendPreset.value))
+
   const miniKpis = computed(() => {
     const data = brief.value
     if (!data) return []
+    const points = data.kpi_trends || []
+    const prev = previousPeriodAvg.value
+    const compareLabel = periodCompareLabel.value
+
+    // 有多日趋势：展示区间日均，对比上一期日均（周/月/季/年/自定义）
+    if (points.length > 1) {
+      const current = averageBriefKpis(data)
+      const mentionDelta = prev
+        ? Math.round((current.mention - prev.mention) * 10) / 10
+        : null
+      const rankDelta = prev && current.rank != null && prev.rank != null
+        ? Math.round((current.rank - prev.rank) * 10) / 10
+        : null
+      const top3Delta = prev
+        ? Math.round((current.top3 - prev.top3) * 10) / 10
+        : null
+      return [
+        {
+          key: 'mention',
+          label: '品牌提及率',
+          value: current.mention,
+          unit: '%',
+          decimals: 1,
+          delta: mentionDelta,
+          lowerIsBetter: false,
+          deltaKind: 'default' as const,
+          periodMode: true,
+          compareLabel,
+        },
+        {
+          key: 'rank',
+          label: '平均推荐排名',
+          value: current.rank,
+          unit: '',
+          decimals: 1,
+          delta: rankDelta,
+          lowerIsBetter: true,
+          deltaKind: 'rank' as const,
+          periodMode: true,
+          compareLabel,
+        },
+        {
+          key: 'top3',
+          label: 'Top3 占比',
+          value: current.top3,
+          unit: '%',
+          decimals: 1,
+          delta: top3Delta,
+          lowerIsBetter: false,
+          deltaKind: 'default' as const,
+          periodMode: true,
+          compareLabel,
+        },
+      ]
+    }
     const rc = data.round_comparison
     return [
       {
@@ -505,6 +633,8 @@ export function useCustomerWorkspace() {
         decimals: 1,
         delta: rc?.has_previous ? rc.mention_rate_delta : null,
         lowerIsBetter: false,
+        periodMode: false,
+        compareLabel: '较上一轮',
       },
       {
         key: 'rank',
@@ -515,6 +645,8 @@ export function useCustomerWorkspace() {
         delta: rc?.has_previous ? rc.avg_brand_rank_delta : null,
         lowerIsBetter: true,
         deltaKind: 'rank' as const,
+        periodMode: false,
+        compareLabel: '较上一轮',
       },
       {
         key: 'top3',
@@ -524,6 +656,8 @@ export function useCustomerWorkspace() {
         decimals: 1,
         delta: rc?.has_previous ? rc.top3_rate_delta : null,
         lowerIsBetter: false,
+        periodMode: false,
+        compareLabel: '较上一轮',
       },
     ]
   })
@@ -663,10 +797,19 @@ export function useCustomerWorkspace() {
   }
 
   function applyTrendPreset(preset: WorkspaceTrendPreset) {
+    if (preset === trendPreset.value && preset !== 'custom') {
+      // 同选项再点也强制刷新，避免「点了没反应」的体感
+      void loadBrief({ periodSwitch: true, force: true })
+      return
+    }
     trendPreset.value = preset
-    if (preset === 'custom') return
+    periodSwitching.value = true
+    if (preset === 'custom') {
+      periodSwitching.value = false
+      return
+    }
     syncTrendRange(preset)
-    void loadBrief()
+    void loadBrief({ periodSwitch: true, force: true })
   }
 
   function onCustomTrendDateChange() {
@@ -680,31 +823,177 @@ export function useCustomerWorkspace() {
       trendStartDate.value = trendMaxDate
     }
     trendPreset.value = 'custom'
-    void loadBrief()
+    void loadBrief({ periodSwitch: true, force: true })
   }
 
-  async function loadBrief() {
+  let briefLoadSeq = 0
+
+  function loadPreviousPeriodSummary(
+    seq: number,
+    prevRange: { startDate: string; endDate: string },
+    tenantId: number | undefined,
+    force?: boolean,
+  ) {
+    void getWorkspaceBrief({
+      start_date: prevRange.startDate,
+      end_date: prevRange.endDate,
+      tenant_id: tenantId,
+      scope: 'summary',
+    }, { force, silentError: true })
+      .then((previous) => {
+        if (seq !== briefLoadSeq) return
+        previousPeriodAvg.value = averageBriefKpis(previous)
+      })
+      .catch(() => {
+        if (seq !== briefLoadSeq) return
+        previousPeriodAvg.value = null
+      })
+  }
+
+  /** 首屏/刷新：summary 先上屏，full 后台补快照与信源。 */
+  async function loadBriefStaged(
+    seq: number,
+    params: {
+      startDate: string
+      endDate: string
+      tenantId: number | undefined
+      recordAccess: boolean
+      prevRange: ReturnType<typeof workspacePreviousPeriodRange>
+      force?: boolean
+    },
+  ) {
+    const summary = await getWorkspaceBrief({
+      start_date: params.startDate,
+      end_date: params.endDate,
+      tenant_id: params.tenantId,
+      scope: 'summary',
+      record_access: params.recordAccess || undefined,
+    }, { force: params.force })
+    if (seq !== briefLoadSeq) return
+    brief.value = summary
+    previousPeriodAvg.value = null
+    if (params.recordAccess) previewAccessRecorded.value = true
+    if (params.prevRange) {
+      loadPreviousPeriodSummary(seq, params.prevRange, params.tenantId, params.force)
+    }
+
+    void getWorkspaceBrief({
+      start_date: params.startDate,
+      end_date: params.endDate,
+      tenant_id: params.tenantId,
+      scope: 'full',
+    }, { force: params.force, silentError: true, timeout: 45000 })
+      .then((full) => {
+        if (seq !== briefLoadSeq || !brief.value) return
+        // summary 已带 KPI/热力；full 只补快照/信源，避免数字/热力二次跳动
+        brief.value = {
+          ...brief.value,
+          recent_snapshots: full.recent_snapshots?.length
+            ? full.recent_snapshots
+            : brief.value.recent_snapshots,
+          top_sources: full.top_sources?.length ? full.top_sources : brief.value.top_sources,
+          alerts: full.alerts?.length ? full.alerts : brief.value.alerts,
+          health_score: full.health_score ?? brief.value.health_score,
+          visibility_score: full.visibility_score ?? brief.value.visibility_score,
+          rank_score: full.rank_score ?? brief.value.rank_score,
+          competitor_score: full.competitor_score ?? brief.value.competitor_score,
+          kpis: {
+            ...brief.value.kpis,
+            // full 才有的口碑/信源计数
+            exposure_sample_count: full.kpis?.exposure_sample_count ?? brief.value.kpis.exposure_sample_count,
+            negative_count: full.kpis?.negative_count ?? brief.value.kpis.negative_count,
+            negative_rate: full.kpis?.negative_rate ?? brief.value.kpis.negative_rate,
+            source_count: full.kpis?.source_count ?? brief.value.kpis.source_count,
+          },
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  async function loadBrief(options?: { force?: boolean; periodSwitch?: boolean }) {
     const isPlatform = auth.session?.identity?.identity_type === 'PLATFORM'
     // 平台预览：query 未带齐企业 id 时不请求，等路由就绪后 watch 再拉
     if (isPlatform && isPreviewMode.value && previewTenantId.value == null) {
       return
     }
-    loading.value = true
+    const seq = ++briefLoadSeq
+    const hadBrief = Boolean(brief.value)
+    const force = Boolean(options?.force)
+    const periodSwitch = Boolean(options?.periodSwitch) && hadBrief
+    // 切周期：summary 快路径上屏（不要走 staged 的整页 loading）；force 仅打穿缓存
+    const stagedLoad = !hadBrief || (force && !periodSwitch)
+    if (!hadBrief) loading.value = true
+    if (periodSwitch) periodSwitching.value = true
     loadError.value = ''
     try {
       const recordAccess = isPreviewMode.value && !previewAccessRecorded.value
-      brief.value = await withRetry(() => getWorkspaceBrief({
-        start_date: trendStartDate.value,
-        end_date: trendEndDate.value,
-        tenant_id: previewTenantId.value ?? undefined,
+      const tenantId = previewTenantId.value ?? undefined
+      const startDate = trendStartDate.value
+      const endDate = trendEndDate.value
+      const prevRange = workspacePreviousPeriodRange(trendPreset.value, startDate, endDate)
+
+      if (stagedLoad) {
+        await loadBriefStaged(seq, {
+          startDate,
+          endDate,
+          tenantId,
+          recordAccess,
+          prevRange,
+          force,
+        })
+        return
+      }
+
+      const current = await getWorkspaceBrief({
+        start_date: startDate,
+        end_date: endDate,
+        tenant_id: tenantId,
+        scope: 'summary',
         record_access: recordAccess || undefined,
-      }))
+      }, { force })
+      if (seq !== briefLoadSeq) return
+      brief.value = periodSwitch
+        ? applyWorkspacePeriodSummary(brief.value!, current)
+        : mergeWorkspaceBriefSummary(brief.value!, current)
+      previousPeriodAvg.value = null
       if (recordAccess) previewAccessRecorded.value = true
+      if (prevRange) {
+        loadPreviousPeriodSummary(seq, prevRange, tenantId, force)
+      }
+
+      // 切周期后后台补 full：只补收录/信源，避免再次覆盖 KPI 导致数字连跳
+      if (periodSwitch) {
+        void getWorkspaceBrief({
+          start_date: startDate,
+          end_date: endDate,
+          tenant_id: tenantId,
+          scope: 'full',
+        }, { force, silentError: true, timeout: 45000 })
+          .then((full) => {
+            if (seq !== briefLoadSeq || !brief.value) return
+            brief.value = {
+              ...brief.value,
+              recent_snapshots: full.recent_snapshots || [],
+              top_sources: full.top_sources || [],
+              alerts: full.alerts?.length ? full.alerts : brief.value.alerts,
+              health_score: full.health_score ?? brief.value.health_score,
+              visibility_score: full.visibility_score ?? brief.value.visibility_score,
+              rank_score: full.rank_score ?? brief.value.rank_score,
+              competitor_score: full.competitor_score ?? brief.value.competitor_score,
+            }
+          })
+          .catch(() => undefined)
+      }
     } catch (error: unknown) {
+      if (seq !== briefLoadSeq) return
       notifyOperationError(error, '工作台数据加载失败')
       loadError.value = extractErrorDetail(error)
+      previousPeriodAvg.value = null
     } finally {
-      loading.value = false
+      if (seq === briefLoadSeq) {
+        loading.value = false
+        periodSwitching.value = false
+      }
     }
   }
 
@@ -797,6 +1086,7 @@ export function useCustomerWorkspace() {
   return {
     brief,
     loading,
+    periodSwitching,
     loadError,
     alertsExpanded,
     alertsSectionRef,
@@ -847,6 +1137,7 @@ export function useCustomerWorkspace() {
     trendEndDate,
     trendMaxDate,
     trendPeriodLabel,
+    periodCompareLabel,
     applyTrendPreset,
     onCustomTrendDateChange,
     platformPeriodLabel,
