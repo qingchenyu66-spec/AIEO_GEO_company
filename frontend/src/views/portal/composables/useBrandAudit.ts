@@ -1,4 +1,4 @@
-import { computed, nextTick, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
@@ -223,6 +223,33 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       return keywordMatched && statusMatched && ownerMatched
     })
   })
+
+  const ENTERPRISE_PAGE_SIZE = 10
+  const enterprisePage = ref(1)
+  const enterpriseTotalPages = computed(() =>
+    Math.max(1, Math.ceil(filteredTenants.value.length / ENTERPRISE_PAGE_SIZE)),
+  )
+  const pagedTenants = computed(() => {
+    const page = Math.min(Math.max(1, enterprisePage.value), enterpriseTotalPages.value)
+    const start = (page - 1) * ENTERPRISE_PAGE_SIZE
+    return filteredTenants.value.slice(start, start + ENTERPRISE_PAGE_SIZE)
+  })
+
+  watch(
+    () => [enterpriseFilters.keyword, enterpriseFilters.expiry, enterpriseFilters.owner_user_id] as const,
+    () => {
+      enterprisePage.value = 1
+    },
+  )
+  watch(filteredTenants, () => {
+    if (enterprisePage.value > enterpriseTotalPages.value) {
+      enterprisePage.value = enterpriseTotalPages.value
+    }
+  })
+
+  function changeEnterprisePage(page: number) {
+    enterprisePage.value = Math.min(Math.max(1, page), enterpriseTotalPages.value)
+  }
 
   const enterpriseFormServiceState = computed(() => {
     if (!brandForm.tenant_status && brandForm.tenant_stop_reason === 'manual') return 'manual'
@@ -1286,6 +1313,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     loadingBrand,
     brandForm,
     filteredTenants,
+    pagedTenants,
+    enterprisePage,
+    enterpriseTotalPages,
+    changeEnterprisePage,
     enterpriseFormServiceActive,
     enterpriseFormServiceLabel,
     visibleEnterpriseTabs,

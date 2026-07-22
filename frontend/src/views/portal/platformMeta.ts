@@ -85,6 +85,12 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     accent: '#2b6de5',
     icon: '/platform-icons/baiduai.svg',
   },
+  chatgpt: {
+    code: 'chatgpt',
+    name: 'ChatGPT',
+    accent: '#10a37f',
+    icon: '/platform-icons/chatgpt.svg',
+  },
 }
 
 export const platformLabelMap: Record<string, string> = Object.fromEntries(
@@ -127,6 +133,7 @@ export const supportedPlatforms = [
   'quark',
   'kimi',
   'antafu',
+  'chatgpt',
 ].map(code => getPlatformMeta(code))
 
 export function platformAccentColor(code: string) {

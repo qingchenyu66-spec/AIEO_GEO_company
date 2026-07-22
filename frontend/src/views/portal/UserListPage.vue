@@ -8,6 +8,10 @@ import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 const {
   loadingUsers,
   managementUsers,
+  pagedUsers,
+  userPage,
+  userTotalPages,
+  changeUserPage,
   userFilters,
   tenants,
   loadUserManagement,
@@ -31,7 +35,11 @@ const {
           <p>集中管理平台账号、客户账号、双身份账号和账号状态</p>
         </div>
         <div class="user-list-actions">
-          <span>{{ loadingUsers ? '加载中' : `共 ${managementUsers.length} 人` }}</span>
+          <span v-if="loadingUsers">加载中</span>
+          <template v-else>
+            <span>共 {{ managementUsers.length }} 人</span>
+            <span v-if="managementUsers.length">第 {{ userPage }} / {{ userTotalPages }} 页</span>
+          </template>
           <button class="primary-btn small-btn" @click="goToUserCreate">新增用户</button>
         </div>
       </div>
@@ -97,7 +105,7 @@ const {
             <button class="filter-search-btn" @click="goToUserCreate">新增用户</button>
           </div>
         </div>
-        <div v-for="user in managementUsers" :key="user.id" class="managed-user-card" :class="{ deleted: user.deleted }">
+        <div v-for="user in pagedUsers" :key="user.id" class="managed-user-card" :class="{ deleted: user.deleted }">
           <div><b>{{ user.display_name }}</b><small>{{ user.username }}</small></div>
           <span :class="{ disabled: !user.status || user.deleted, deleted: user.deleted }">{{ user.deleted ? '已删除' : user.status ? '启用' : '停用' }}</span>
           <p v-for="identity in user.identities" :key="identity.id">{{ identityDisplayName(identity) }}<em v-if="identity.tenant_name"> · {{ identity.tenant_name }}</em></p>
@@ -109,6 +117,27 @@ const {
               <button class="danger" @click="deleteUser(user)">删除</button>
             </template>
             <button v-else @click="restoreUser(user)">恢复账号</button>
+          </div>
+        </div>
+        <div v-if="userTotalPages > 1" class="log-pagination">
+          <span class="log-pagination-meta">每页 10 条</span>
+          <div class="log-pagination-actions">
+            <button
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="userPage <= 1"
+              @click="changeUserPage(userPage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="userPage >= userTotalPages"
+              @click="changeUserPage(userPage + 1)"
+            >
+              下一页
+            </button>
           </div>
         </div>
       </div>

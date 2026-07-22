@@ -1,4 +1,4 @@
-import { reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { notifyOperationError } from '../../../utils/requestError'
 import { withRetry } from '../../../composables/useRetry'
@@ -93,7 +93,41 @@ export function useUserManagement(options: UserManagementOptions) {
     userFilters.identity_type = ''
     userFilters.enabled = ''
     userFilters.deleted = false
+    userPage.value = 1
     loadUserManagement()
+  }
+
+  const USER_PAGE_SIZE = 10
+  const userPage = ref(1)
+  const userTotalPages = computed(() =>
+    Math.max(1, Math.ceil(managementUsers.value.length / USER_PAGE_SIZE)),
+  )
+  const pagedUsers = computed(() => {
+    const page = Math.min(Math.max(1, userPage.value), userTotalPages.value)
+    const start = (page - 1) * USER_PAGE_SIZE
+    return managementUsers.value.slice(start, start + USER_PAGE_SIZE)
+  })
+
+  watch(
+    () => [
+      userFilters.keyword,
+      userFilters.tenant_id,
+      userFilters.identity_type,
+      userFilters.enabled,
+      userFilters.deleted,
+    ] as const,
+    () => {
+      userPage.value = 1
+    },
+  )
+  watch(managementUsers, () => {
+    if (userPage.value > userTotalPages.value) {
+      userPage.value = userTotalPages.value
+    }
+  })
+
+  function changeUserPage(page: number) {
+    userPage.value = Math.min(Math.max(1, page), userTotalPages.value)
   }
 
   function canSelectEditIdentity(type: IdentityType) {
@@ -326,6 +360,10 @@ export function useUserManagement(options: UserManagementOptions) {
   return {
     tenants,
     managementUsers,
+    pagedUsers,
+    userPage,
+    userTotalPages,
+    changeUserPage,
     loadingUsers,
     creatingUser,
     editingUser,

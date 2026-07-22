@@ -102,6 +102,10 @@ const {
   loadingBrand,
   brandForm,
   filteredTenants,
+  pagedTenants,
+  enterprisePage,
+  enterpriseTotalPages,
+  changeEnterprisePage,
   enterpriseFormServiceActive,
   enterpriseFormServiceLabel,
   visibleEnterpriseTabs,
@@ -251,11 +255,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </div>
       <div class="enterprise-list-summary">
         <span>共 {{ filteredTenants.length }} 家企业</span>
+        <span v-if="filteredTenants.length">第 {{ enterprisePage }} / {{ enterpriseTotalPages }} 页</span>
         <span v-if="loadingBrand">列表刷新中…</span>
       </div>
       <div class="enterprise-table">
         <div
-          v-for="tenant in filteredTenants"
+          v-for="tenant in pagedTenants"
           :key="tenant.id"
           class="enterprise-row"
           :class="{ stopped: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }"
@@ -286,6 +291,27 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           </div>
         </div>
         <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty enterprise-empty">暂无符合筛选条件的企业。</div>
+        <div v-if="enterpriseTotalPages > 1" class="log-pagination">
+          <span class="log-pagination-meta">每页 10 条</span>
+          <div class="log-pagination-actions">
+            <button
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="enterprisePage <= 1"
+              @click="changeEnterprisePage(enterprisePage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="enterprisePage >= enterpriseTotalPages"
+              @click="changeEnterprisePage(enterprisePage + 1)"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
       </div>
     </article>
 
