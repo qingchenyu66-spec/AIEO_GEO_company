@@ -1,4 +1,4 @@
-"""快照补录：失败子任务粘贴分享链接 + 回答正文，重算排名并触发聚合。"""
+"""快照补录：失败子任务粘贴分享链接，自动解析正文与信源，重算排名并触发聚合。"""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from app.services.monitor_service import (
 )
 from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import parse_answer_rankings
+from app.services.share_page_fetch_service import fetch_share_page
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
     resolve_monitor_task_source,
@@ -237,7 +238,7 @@ def apply_snapshot_backfill(
     *,
     subtask_id: str,
     snapshot_url: str,
-    answer_content: str,
+    answer_content: str | None = None,
     current: CurrentSession,
     mention_position: int | None = None,
     sentiment: str | None = None,
@@ -266,9 +267,25 @@ def apply_snapshot_backfill(
         )
 
     url = validate_snapshot_url(snapshot_url, platform=subtask.platform)
+    # 只要补录就从分享页抓取并覆盖正文；可选手工正文仅作抓取失败时的兼容兜底
+    fetched_refs: list[dict[str, Any]] = []
+    fetch_meta: dict[str, Any] = {}
     content = (answer_content or "").strip()
+    try:
+        fetched = fetch_share_page(url)
+        content = (fetched.answer_content or "").strip()
+        fetched_refs = list(fetched.references or [])
+        fetch_meta = {
+            "fetch_host": fetched.source_host,
+            "fetch_title": fetched.title,
+            "fetch_reference_count": len(fetched_refs),
+        }
+    except ValueError:
+        if not content:
+            raise
+        fetch_meta = {"fetch_skipped": True, "fetch_fallback": "manual_answer"}
     if not content:
-        raise ValueError("请粘贴 AI 回答正文")
+        raise ValueError("未能解析分享页正文")
 
     previous_answer = subtask.answer_content
     previous_raw = dict(subtask.raw_result_json or {})
@@ -282,10 +299,13 @@ def apply_snapshot_backfill(
     subtask.mention_context = None
 
     refs: list[dict[str, Any]] = []
-    for index, item in enumerate(reference_urls or [], start=1):
-        text = str(item or "").strip()
-        if text:
-            refs.append({"index": index, "url": text, "title": text})
+    if reference_urls:
+        for index, item in enumerate(reference_urls, start=1):
+            text = str(item or "").strip()
+            if text:
+                refs.append({"index": index, "url": text, "title": text})
+    if not refs and fetched_refs:
+        refs = fetched_refs
     subtask.reference_list_json = refs or None
     subtask.citation_list_json = None
 
@@ -308,6 +328,9 @@ def apply_snapshot_backfill(
         "snapshot_url": url,
         "operator_user_id": current.user.id,
         "replaced": bool(previous_answer),
+        # 手填名次才锁定；空着走解析结果，后续规则升级可重算
+        "manual_rank_locked": mention_position is not None,
+        **fetch_meta,
     }
     if previous_answer:
         manual_meta["replaced_previous_source"] = previous_source

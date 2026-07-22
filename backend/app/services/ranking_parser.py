@@ -90,9 +90,10 @@ _SUBCATEGORY_HINTS = (
 
 _REGION_LABEL_RE = re.compile(
     r"^(?:"
-    r"华东|华南|华西|华北|华中|西南|西北|东北|其他|其他强市|"
+    r"华东|华南|华西|华北|华中|西南|西北|东北|东南|其他|其他强市|本地|全国|"
     r"北京|上海|广州|深圳|杭州|成都|重庆|武汉|西安|南京|天津|苏州|济南|合肥|"
-    r"[\u4e00-\u9fff]{1,3}(?:省|市|区)?"
+    # 须带省/市/区；不可选后缀，否则「利亚德」「艾比森」会被当成地区
+    r"[\u4e00-\u9fff]{1,3}(?:省|市|区)"
     r")$"
 )
 _NON_RANK_CATEGORY_HINTS = (
@@ -118,6 +119,13 @@ def _normalize_answer_layout(text: str) -> str:
     """Split inline bullets / headers crushed onto one line (yuanbao/doubao HTML export)."""
     normalized = re.sub(r"<[^>]+>", "\n", text or "")
     normalized = re.sub(r"\r", "\n", normalized)
+    # 元宝分享页：孤立「•」行后接「公司名：说明」——合成可解析 bullet
+    # ponytail: 只合并空子弹行；编号清单 1.\\n1.\\n 另案，避免把「点位权属」抬成选手
+    normalized = re.sub(
+        r"(?m)^(?:[•·▪]\s*\n)+\s*(?=\S)",
+        "- ",
+        normalized,
+    )
     # [citation:5]## 下一节 — 勿拆行内正常的 ### 标题（### 会被拆成 #\n##）
     normalized = re.sub(r"(?<=[^\s#])(#{2,4}\s+)", r"\n\1", normalized)
     normalized = re.sub(r"(\[[^\]]*\])\s*-\s*", r"\1\n- ", normalized)
@@ -147,6 +155,13 @@ def _looks_like_company_list_name(name: str) -> bool:
     if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
         return False
     if cleaned in _NON_COMPANY_TOKENS:
+        return False
+    # A 类 / B类 / 区域强者 — 分类标签，不是选手
+    if re.fullmatch(r"[A-Za-zＡ-Ｚａ-ｚ]?\s*类", cleaned) or cleaned.endswith("类") and len(cleaned) <= 4:
+        return False
+    if cleaned in {"区域强者", "全国强者", "本地强者", "行业强者"}:
+        return False
+    if "→" in cleaned or "->" in cleaned:
         return False
     if any(hint in cleaned for hint in _SENTENCE_NAME_HINTS):
         return False

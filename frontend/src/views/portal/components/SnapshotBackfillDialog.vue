@@ -20,7 +20,6 @@ const emit = defineEmits<{
 const submitting = ref(false)
 const form = reactive({
   snapshot_url: '',
-  answer_content: '',
   mention_position: '' as string | number,
 })
 
@@ -42,9 +41,8 @@ watch(
   (open) => {
     if (!open) return
     const shot = props.subtask?.page_screenshot || ''
-    // 代理 URL 不能当作模力分享链接回填
+    // 代理 URL 不能当作模力/平台分享链接回填
     form.snapshot_url = isProxiedScreenshotUrl(shot) ? '' : shot
-    form.answer_content = props.subtask?.answer_content || ''
     form.mention_position = props.subtask?.mention_position != null ? String(props.subtask.mention_position) : ''
   },
 )
@@ -55,7 +53,6 @@ async function handleSubmit() {
   try {
     const result = await submitSnapshotBackfill(props.subtask.subtask_id, {
       snapshot_url: form.snapshot_url.trim(),
-      answer_content: form.answer_content.trim(),
       mention_position: parseSnapshotBackfillMentionPosition(form.mention_position),
     })
     emit('success', result.subtask)
@@ -77,9 +74,9 @@ async function handleSubmit() {
     destroy-on-close
   >
     <p v-if="subtask" class="snapshot-backfill-intro">
-      请粘贴该平台会话分享链接，并填写 AI 回答正文。提交后将<strong>覆盖</strong>该条原有抓取结果，并重新参与排名与健康分计算。
+      请粘贴该平台会话<strong>分享链接</strong>（如豆包 thread）。提交后将自动解析回答正文与信源并<strong>覆盖</strong>原有抓取结果；排名可选手填，留空则按正文自动解析。
     </p>
-    <p v-if="hasExistingAnswer" class="snapshot-backfill-warn">当前子任务已有抓取内容，提交后将用本次补录完全替换。</p>
+    <p v-if="hasExistingAnswer" class="snapshot-backfill-warn">当前子任务已有抓取内容，提交后将用本次解析结果完全替换。</p>
     <p v-if="subtask" class="snapshot-backfill-prompt">监测问题：{{ subtask.prompt }}</p>
 
     <form class="form-grid password-grid snapshot-backfill-form" @submit.prevent="handleSubmit">
@@ -88,19 +85,11 @@ async function handleSubmit() {
         <input
           v-model="form.snapshot_url"
           type="url"
-          placeholder="https://www.doubao.com/thread/... 或 Kimi 分享页链接"
+          placeholder="https://www.doubao.com/thread/... 或其它平台分享页链接"
         >
       </label>
-      <label class="form-field-full">
-        <span>回答正文 <em class="required-mark">*</em></span>
-        <textarea
-          v-model="form.answer_content"
-          rows="10"
-          placeholder="从 AI 页面复制完整回答内容，粘贴到这里"
-        />
-      </label>
       <label>
-        <span>品牌排名（可选，不填则自动解析）</span>
+        <span>品牌排名（可选，清空则自动解析）</span>
         <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
       </label>
     </form>
@@ -110,10 +99,10 @@ async function handleSubmit() {
       <button
         type="button"
         class="primary-btn"
-        :disabled="submitting || !form.snapshot_url.trim() || !form.answer_content.trim()"
+        :disabled="submitting || !form.snapshot_url.trim()"
         @click="handleSubmit"
       >
-        {{ submitting ? '提交中…' : hasExistingAnswer ? '提交并覆盖' : '提交补录' }}
+        {{ submitting ? '解析提交中…' : hasExistingAnswer ? '提交并覆盖' : '提交补录' }}
       </button>
     </template>
   </el-dialog>
@@ -121,51 +110,32 @@ async function handleSubmit() {
 
 <style scoped>
 .snapshot-backfill-intro {
-  margin: 0 0 8px;
-  color: var(--portal-muted, #64748b);
+  margin: 0 0 10px;
+  color: #475569;
+  line-height: 1.5;
   font-size: 13px;
-  line-height: 1.6;
 }
 .snapshot-backfill-prompt {
-  margin: 0 0 16px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.04);
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
   font-size: 13px;
-  line-height: 1.5;
-  color: #153052;
 }
 .snapshot-backfill-warn {
-  margin: 0 0 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(194, 65, 12, 0.08);
-  color: #c2410c;
+  margin: 0 0 10px;
+  color: #b45309;
   font-size: 13px;
 }
 .snapshot-backfill-form {
-  margin-top: 4px;
+  margin-top: 8px;
 }
 .snapshot-backfill-form textarea {
-  width: 100%;
-  min-height: 220px;
-  padding: 12px;
-  border: 1px solid #d8e3f0;
-  border-radius: 10px;
-  background: #fff;
-  color: #153052;
-  font-size: 14px;
-  line-height: 1.6;
-  resize: vertical;
-  box-sizing: border-box;
-}
-.snapshot-backfill-form textarea:focus {
-  outline: none;
-  border-color: #4288e8;
-  box-shadow: 0 0 0 3px rgba(66, 136, 232, 0.1);
+  min-height: 180px;
 }
 .required-mark {
-  color: #c2410c;
+  color: #dc2626;
   font-style: normal;
 }
 </style>

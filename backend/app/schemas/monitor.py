@@ -62,10 +62,10 @@ class MonitorTaskDetail(BaseModel):
 
 
 class SnapshotBackfillRequest(BaseModel):
-    """快照补录：分享链接 + 回答正文（可覆盖原有抓取结果）。"""
+    """快照补录：分享链接必填；正文由服务端从链接解析并覆盖；排名可选。"""
 
     snapshot_url: str = Field(min_length=8, max_length=1000)
-    answer_content: str = Field(min_length=1)
+    answer_content: str | None = Field(default=None, max_length=200000)
     mention_position: int | None = Field(default=None, ge=1, le=100)
     sentiment: str | None = Field(default=None, max_length=32)
     reference_urls: list[str] = Field(default_factory=list, max_length=20)

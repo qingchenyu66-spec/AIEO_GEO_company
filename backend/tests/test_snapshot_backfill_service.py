@@ -265,7 +265,7 @@ def test_subtask_needs_backfill_when_answer_without_rank() -> None:
     assert subtask_backfill_eligible(subtask, pending_only=True) is True
 
 
-def test_apply_snapshot_backfill_overwrites_answer(db_session) -> None:
+def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> None:
     from types import SimpleNamespace
 
     from sqlalchemy import select
@@ -309,16 +309,40 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session) -> None:
         ),
         user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
     )
+
+    from app.services.share_page_fetch_service import SharePageFetchResult
+
+    def _fake_fetch(url: str, **kwargs):
+        return SharePageFetchResult(
+            answer_content="1. 分众传媒\n2. 艾迪亚\n3. 新潮传媒",
+            references=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/a",
+                    "title": "示例信源",
+                    "site": "example.com",
+                }
+            ],
+            title="fake",
+            source_host="doubao.com",
+        )
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.fetch_share_page",
+        _fake_fetch,
+    )
     result = apply_snapshot_backfill(
         db_session,
         subtask_id="st-backfill",
         snapshot_url="https://www.doubao.com/thread/abc1234567890",
-        answer_content="1. 分众传媒\n2. 艾迪亚\n3. 新潮传媒",
         current=current,
     )
     assert result["subtask"]["subtask_id"] == "st-backfill"
     assert subtask.answer_content.startswith("1.")
+    assert subtask.reference_list_json and subtask.reference_list_json[0]["url"].startswith("https://example.com")
     assert subtask.raw_result_json.get("source") == "manual_snapshot"
+    assert subtask.raw_result_json.get("manual_rank_locked") is False
+    assert subtask.raw_result_json.get("fetch_reference_count") == 1
 
     log = db_session.scalar(
         select(OperationLog).where(OperationLog.action_type == "快照覆盖").order_by(OperationLog.id.desc())

@@ -229,7 +229,7 @@ const pageSubtitle = computed(() => {
   if (isUserListPage.value) return '按公司、姓名、身份和状态筛选账号，支持编辑、禁用、重置密码和恢复'
   if (isPositionManagementPage.value) return '维护运营、销售、交付等职位模板，新增人员时从职位库选择'
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后导出 PDF 发给客户'
-  if (isSnapshotBackfillPage.value) return '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分'
+  if (isSnapshotBackfillPage.value) return '粘贴 AI 分享链接，自动解析正文与信源并重算排名'
   if (isApprovalPage.value) {
     return '审核销售提交的用户、企业、报告与诊断操作；通过后才会真正生效'
   }

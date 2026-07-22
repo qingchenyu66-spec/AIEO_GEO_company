@@ -90,7 +90,7 @@ export function buildFunctionalPage(
       kpis: [],
     },
     'platform.alerts': { title: '预警阈值', subtitle: '查看任务队列运行状态，并配置业务监测指标预警规则。', mode: 'alerts', actions: ['刷新监控', '查看规则'], ...common },
-    'platform.snapshot_backfill': { title: '快照补录', subtitle: '抓取失败时粘贴 AI 分享链接与回答正文，自动重算排名并更新健康分。', mode: 'backfill', actions: ['提交补录'], ...common },
+    'platform.snapshot_backfill': { title: '快照补录', subtitle: '粘贴 AI 分享链接，自动解析正文与信源并重算排名。', mode: 'backfill', actions: ['提交补录'], ...common },
     'platform.reports': { title: '报告中心', subtitle: '预览与导出周期/诊断报告；诊断仅运营内部使用，客户端仅展示已发布周期报告。', mode: 'report', actions: ['导出 PDF', '导出 HTML', '导出 Word'], ...common },
     'platform.logs': {
       title: '操作日志',

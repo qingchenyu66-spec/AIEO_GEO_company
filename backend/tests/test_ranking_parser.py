@@ -609,3 +609,57 @@ def test_metro_howto_section_does_not_steal_rank():
     )
     assert matched is True
     assert rank == 2
+
+
+def test_parse_yuanbao_share_lone_bullet_colon_lines():
+    """元宝分享页：孤立 • 行 +「公司名：说明」应能出场序计位。"""
+    text = """
+商圈/地标/户外大屏（A 类头部）
+•
+•
+A 类：媒体运营商（买屏上曝光）
+•
+•
+凤凰都市传媒：全国性户外 LED 大屏网络。
+•
+•
+郁金香传媒：华东核心商圈老牌玩家。
+•
+•
+分众传媒（含晶视）：写字楼集群联播网。
+•
+•
+华视传媒：华南及大湾区屏深。
+•
+•
+艾迪亚控股：户外+线上全媒一站。
+•
+•
+区域强者：西南看博瑞眼界。
+•
+•
+利亚德：指挥/演艺/小间距强。
+•
+•
+艾比森：海外渠道广。
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "凤凰都市传媒" in names
+    assert "艾迪亚控股" in names
+    assert "利亚德" in names
+    assert "艾比森" in names
+    assert "A 类" not in names and "A类" not in names
+    assert "区域强者" not in names
+    assert "指挥" not in names
+    assert "海外渠道广" not in names
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["rank"] == 5
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "LED广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 5

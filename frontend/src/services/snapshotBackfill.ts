@@ -122,7 +122,7 @@ export async function submitSnapshotBackfill(
   subtaskId: string,
   payload: {
     snapshot_url: string
-    answer_content: string
+    answer_content?: string | null
     mention_position?: number | null
     sentiment?: string | null
     reference_urls?: string[]

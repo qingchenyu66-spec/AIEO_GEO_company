@@ -2778,12 +2778,15 @@ def _resolve_brand_rank_detail(
     raw = getattr(subtask, "raw_result_json", None)
     raw = raw if isinstance(raw, dict) else {}
     if raw.get("source") == "manual_snapshot" and subtask.mention_position is not None:
-        return BrandRankResolution(
-            rank=subtask.mention_position,
-            mentioned=True,
-            source="manual",
-            confidence=1.0,
-        )
+        # 仅用户手填名次才锁定；自动解析的名次允许规则/重算覆盖
+        # 旧补录无 flag 时默认锁定，避免已手填名次被重算冲掉
+        if raw.get("manual_rank_locked", True):
+            return BrandRankResolution(
+                rank=subtask.mention_position,
+                mentioned=True,
+                source="manual",
+                confidence=1.0,
+            )
 
     stored_resolution = raw.get("rank_resolution")
     if isinstance(stored_resolution, dict) and stored_resolution.get("source") == "llm":
