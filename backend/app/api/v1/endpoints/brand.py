@@ -118,7 +118,7 @@ def upsert_brand_word_groups(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """保存品牌词配置；run_mode=once 的启用词组保存后立刻提交一轮。"""
+    """保存品牌词配置；启用词组（once/weekly）保存后立刻提交一轮；weekly 仍保留周一调度。"""
     require_any_update_permission(current, db, [
         "platform.audit",
         "platform.audit.keywords",
@@ -126,13 +126,13 @@ def upsert_brand_word_groups(
     tenant_id = payload.tenant_id
 
     def _execute():
-        asset, once_rows = save_brand_word_groups(db, payload, current)
-        once_dicts = [brand_word_group_to_dict(item) for item in once_rows]
+        asset, submit_rows = save_brand_word_groups(db, payload, current)
+        submit_dicts = [brand_word_group_to_dict(item) for item in submit_rows]
         submitted: list[dict] = []
         for item in enumerate_brand_word_once_groups(
             db,
             tenant_id=asset.tenant_id,
-            groups=once_dicts,
+            groups=submit_dicts,
             max_prompts=settings.celery_scan_submit_max_prompts,
         ):
             submitted.append(submit_schedule_group(db, current, item))

@@ -48,3 +48,35 @@ def test_brand_word_match_terms_fallback_logic():
     ]
     assert match_terms == ["鸿联九五", "鸿联"]
     assert _is_industry_monitor_keyword("电梯广告投放", asset)
+
+
+def test_save_brand_word_submit_filter_includes_weekly():
+    """保存后立即提交候选：启用且有监测词即可，不限 run_mode=once。"""
+    from app.services.brand_service import keyword_group_monitor_keywords
+
+    class _G:
+        def __init__(self, status: bool, run_mode: str, keywords: list[str]):
+            self.status = status
+            self.run_mode = run_mode
+            self.monitor_keyword = keywords[0] if keywords else ""
+            self.monitor_keywords_json = keywords
+
+    rows = [
+        _G(True, "weekly", ["艾迪亚"]),
+        _G(True, "once", ["品牌B"]),
+        _G(False, "weekly", ["停用"]),
+        _G(True, "weekly", []),
+    ]
+    submit = [
+        item
+        for item in rows
+        if item.status
+        and keyword_group_monitor_keywords(
+            {
+                "monitor_keyword": item.monitor_keyword,
+                "monitor_keywords": item.monitor_keywords_json or [],
+            }
+        )
+    ]
+    assert [g.run_mode for g in submit] == ["weekly", "once"]
+    assert [g.monitor_keyword for g in submit] == ["艾迪亚", "品牌B"]

@@ -225,7 +225,7 @@ def enumerate_brand_word_once_groups(
     max_prompts: int = 50,
     now: datetime | None = None,
 ) -> Iterator[DueScheduleGroup]:
-    """保存「仅本次」后立刻提交一轮。"""
+    """保存后立刻提交一轮（once/weekly 均可用；key 为 bwonce-*，不占用周一 weekly key）。"""
     now = now or datetime.now()
     asset = db.scalar(
         select(BrandAsset).where(

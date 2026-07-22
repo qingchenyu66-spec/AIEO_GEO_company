@@ -373,7 +373,11 @@ def save_brand_word_groups(
     payload: BrandWordGroupsSaveRequest,
     current: CurrentSession,
 ) -> tuple[BrandAsset, list[BrandWordGroup]]:
-    """覆盖保存品牌词组；不触碰监测词组。返回资产与保存后的启用「仅本次」词组（供立即提交）。"""
+    """覆盖保存品牌词组；不触碰监测词组。
+
+    返回资产与保存后全部启用词组（once/weekly 均供保存后立即提交一轮；
+    weekly 仍由周一 Beat 按周调度）。
+    """
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
     _guard_tenant_write(db, current, tenant_id)
     asset = get_brand_asset(db, tenant_id)
@@ -427,11 +431,11 @@ def save_brand_word_groups(
 
     db.commit()
     db.refresh(asset)
-    once_groups = [
+    # 保存后立即提交：once / weekly 一视同仁（提交走 bwonce-*，不占用周一 weekly key）
+    submit_groups = [
         item
         for item in list_brand_word_groups(db, tenant_id)
         if item.status
-        and str(item.run_mode or "").lower() == "once"
         and keyword_group_monitor_keywords(
             {
                 "monitor_keyword": item.monitor_keyword,
@@ -442,7 +446,7 @@ def save_brand_word_groups(
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
     invalidate_monitor_summary_cache(tenant_id, bust_overview=True)
-    return asset, once_groups
+    return asset, submit_groups
 
 
 def active_brand_word_groups(

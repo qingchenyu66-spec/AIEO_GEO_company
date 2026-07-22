@@ -872,7 +872,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       const onceCount = (saved.once_submitted || []).filter(item => item.status === 'submitted').length
       const onceFailed = (saved.once_submitted || []).filter(item => item.status === 'failed')
       if (onceFailed.length) {
-        ElMessage.warning(`${successText}；仅本次提交失败 ${onceFailed.length} 组`)
+        ElMessage.warning(`${successText}；立即提交失败 ${onceFailed.length} 组`)
       } else if (onceCount) {
         ElMessage.success(`${successText}；已立即提交 ${onceCount} 组检测任务`)
       } else {
