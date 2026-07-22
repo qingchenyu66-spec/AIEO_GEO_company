@@ -42,7 +42,8 @@ celery_app.conf.update(
     beat_schedule={
         "scan-due-schedules": {
             "task": "app.tasks.monitor.scan_due_schedules",
-            "schedule": crontab(minute="*/5", hour="9-20"),
+            # 7×24：按企业配置的任意 schedule_times 触发（含周末/凌晨）
+            "schedule": crontab(minute="*/5"),
             "kwargs": {"max_prompts": settings.celery_scan_submit_max_prompts},
         },
         "scan-due-brand-word-weekly": {
