@@ -152,7 +152,7 @@ const answerPreview = computed(() => {
           <dt>快照链接</dt>
           <dd v-if="snapshotLink">
             <a :href="snapshotLink" target="_blank" rel="noopener noreferrer" class="snapshot-detail-link">
-              {{ snapshotLink }}
+              查看快照
               <ExternalLink :size="14" />
             </a>
           </dd>
