@@ -91,15 +91,20 @@ def _save_meta(meta: dict[str, Any]) -> None:
 
 
 def _load_meta(job_id: str) -> dict[str, Any] | None:
-    with _lock:
-        cached = _jobs.get(job_id)
-        if cached:
-            return dict(cached)
+    """读取任务 meta。
+
+    多 uvicorn worker 时进程内 `_jobs` 会脏：A 写 ready、B 仍持有 running。
+    因此优先 Redis（跨进程），再落本地缓存，最后读盘。
+    """
     redis_meta = get_json_cache(f"export_job:{job_id}")
     if isinstance(redis_meta, dict) and redis_meta.get("job_id"):
         with _lock:
             _jobs[job_id] = dict(redis_meta)
         return dict(redis_meta)
+    with _lock:
+        cached = _jobs.get(job_id)
+        if cached:
+            return dict(cached)
     path = _meta_path(job_id)
     if not path.is_file():
         return None
@@ -366,7 +371,19 @@ def read_export_job_file(job_id: str) -> tuple[bytes, str, str]:
     if not meta:
         raise FileNotFoundError("导出任务不存在")
     if meta.get("status") != "ready":
-        raise ValueError(f"导出尚未完成：{meta.get('status')}")
+        # 再读一次盘：Redis 偶发滞后时盘上可能已是 ready
+        path_meta = _meta_path(job_id)
+        if path_meta.is_file():
+            try:
+                disk = json.loads(path_meta.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                disk = None
+            if isinstance(disk, dict) and disk.get("status") == "ready":
+                with _lock:
+                    _jobs[job_id] = dict(disk)
+                meta = disk
+        if meta.get("status") != "ready":
+            raise ValueError(f"导出尚未完成：{meta.get('status')}")
     path = _bin_path(job_id)
     if not path.is_file():
         raise FileNotFoundError("导出文件已过期或不存在")

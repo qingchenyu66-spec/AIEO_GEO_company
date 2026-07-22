@@ -154,10 +154,30 @@ export async function downloadLeadDiagnosisExport(
   }
 
   onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
-  const response = await http.get(`/v1/lead-diagnosis/export-jobs/${jobId}/download`, {
-    responseType: 'blob',
-    timeout: 120000,
-  })
+  // 模力风格 PDF 可达数十 MB；nginx/前端需 ≥ 数分钟，409 多为多 worker 瞬时态再试
+  const EXPORT_DOWNLOAD_TIMEOUT_MS = 600_000
+  let response
+  let lastError: unknown
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      response = await http.get(`/v1/lead-diagnosis/export-jobs/${jobId}/download`, {
+        responseType: 'blob',
+        timeout: EXPORT_DOWNLOAD_TIMEOUT_MS,
+        silentError: attempt < 3,
+      })
+      lastError = undefined
+      break
+    } catch (error: unknown) {
+      lastError = error
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 409 && attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
+        continue
+      }
+      throw error
+    }
+  }
+  if (!response) throw lastError instanceof Error ? lastError : new Error('导出下载失败')
   const fallback = `lead-diagnosis-${leadId}.${format}`
   const filename = parseExportFilename(response.headers['content-disposition'], fallback)
   const contentType = String(response.headers['content-type'] || 'application/octet-stream')

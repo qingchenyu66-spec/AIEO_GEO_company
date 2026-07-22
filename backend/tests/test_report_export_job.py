@@ -56,3 +56,27 @@ def test_export_job_ready_and_fingerprint_cache(monkeypatch, tmp_path) -> None:
     )
     assert reused["status"] == "ready"
     assert reused.get("cached") is True
+
+
+def test_load_meta_prefers_redis_over_stale_local(monkeypatch, tmp_path) -> None:
+    """多 worker：本地仍是 running 时，应以 Redis ready 为准。"""
+    from app.services import report_export_job_service as svc
+
+    monkeypatch.setattr(svc, "_JOB_DIR", tmp_path)
+    job_id = "job-stale-local"
+    monkeypatch.setattr(
+        svc,
+        "_jobs",
+        {job_id: {"job_id": job_id, "status": "running", "progress": "PDF渲染中…"}},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_json_cache",
+        lambda key: {"job_id": job_id, "status": "ready", "filename": "a.pdf", "mime": "application/pdf"}
+        if key == f"export_job:{job_id}"
+        else None,
+    )
+    meta = svc._load_meta(job_id)
+    assert meta is not None
+    assert meta["status"] == "ready"
+    assert svc._jobs[job_id]["status"] == "ready"
