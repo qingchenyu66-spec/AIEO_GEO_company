@@ -237,7 +237,7 @@ def apply_snapshot_backfill(
     db: Session,
     *,
     subtask_id: str,
-    snapshot_url: str,
+    snapshot_url: str | None = None,
     answer_content: str | None = None,
     current: CurrentSession,
     mention_position: int | None = None,
@@ -266,7 +266,94 @@ def apply_snapshot_backfill(
             asset=asset,
         )
 
-    url = validate_snapshot_url(snapshot_url, platform=subtask.platform)
+    url_raw = str(snapshot_url or "").strip()
+    # 无链接：只改排名，快照 URL / 正文 / 信源沿用原值
+    if not url_raw:
+        if mention_position is None:
+            raise ValueError("未填写分享链接时，请填写品牌排名")
+        if not (subtask.answer_content or subtask.page_screenshot):
+            raise ValueError("当前无可用快照，请粘贴分享链接补录")
+        previous_raw = dict(subtask.raw_result_json or {})
+        clear_subtask_backfill_dismiss(subtask)
+        subtask.error_message = None
+        subtask.status = "completed"
+        recompute_subtask_rank_from_answer(
+            db, subtask, task, override_mention_position=mention_position
+        )
+        manual_meta = {
+            "source": "manual_snapshot",
+            "snapshot_url": previous_raw.get("snapshot_url") or subtask.page_screenshot,
+            "operator_user_id": current.user.id,
+            "rank_only": True,
+            "manual_rank_locked": True,
+            "replaced": False,
+        }
+        if previous_raw.get("source"):
+            manual_meta["replaced_previous_source"] = previous_raw.get("source")
+        raw = dict(subtask.raw_result_json or previous_raw or {})
+        raw.update(manual_meta)
+        subtask.raw_result_json = raw
+
+        write_operation_log(
+            db,
+            current,
+            "排名补录",
+            _snapshot_backfill_log_description(db, subtask, task, action_type="排名补录"),
+            target_module="快照补录",
+            tenant_id=task.tenant_id,
+            risk_level="正常",
+        )
+        db.flush()
+        db.commit()
+
+        from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
+        from app.services.monitor_service import invalidate_monitor_summary_cache
+
+        if task.tenant_id:
+            refresh_stats_after_subtask_backfill(
+                db,
+                task=task,
+                subtask=subtask,
+                previous_stat_date=previous_stat_date,
+            )
+            db.commit()
+            invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+        else:
+            invalidate_monitor_summary_cache(bust_overview=True)
+        resolve_subtask_backfill_notification(db, subtask.subtask_id)
+
+        from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
+
+        refresh_lead_diagnosis_after_backfill(db, task.task_id)
+
+        db.refresh(subtask)
+        db.refresh(task)
+        asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+        groups = (
+            [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+            if task.tenant_id
+            else []
+        )
+        display = serialize_subtask_for_display(
+            subtask,
+            monitor_keywords=task.monitor_keywords,
+            asset=asset,
+            keyword_groups=groups,
+        )
+        return {
+            "subtask": display,
+            "task": {
+                "task_id": task.task_id,
+                "status": task.status,
+                "completed_items": task.completed_items,
+                "failed_items": task.failed_items,
+            },
+            "brand_terms": _brand_terms_for_task(db, task, asset),
+            "lead_context": _lead_context_for_task(db, task.task_id),
+            "rank_only": True,
+        }
+
+    url = validate_snapshot_url(url_raw, platform=subtask.platform)
     # 只要补录就从分享页抓取并覆盖正文；可选手工正文仅作抓取失败时的兼容兜底
     fetched_refs: list[dict[str, Any]] = []
     fetch_meta: dict[str, Any] = {}
@@ -320,7 +407,6 @@ def apply_snapshot_backfill(
     ] if parsed else None
     subtask.competitor_rankings_json = None
 
-    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     recompute_subtask_rank_from_answer(db, subtask, task, override_mention_position=mention_position)
 
     manual_meta = {

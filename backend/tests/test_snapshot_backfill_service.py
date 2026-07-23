@@ -354,6 +354,81 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert log.operator_name == "运营测试"
 
 
+def test_apply_snapshot_backfill_rank_only_keeps_snapshot(db_session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app.models.ops import OperationLog
+    from app.services.snapshot_backfill_service import apply_snapshot_backfill
+
+    task = GeoMonitorTask(
+        task_id="task-rank-only",
+        monitor_keywords="品牌A",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["问题B"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank-only",
+        task_id="task-rank-only",
+        platform="doubao",
+        mode="standard",
+        prompt="问题B",
+        status="completed",
+        answer_content="旧回答保留",
+        page_screenshot="https://www.doubao.com/thread/keep-me",
+        mention_position=8,
+        raw_result_json={"source": "remote", "snapshot_url": "https://www.doubao.com/thread/keep-me"},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+
+    def _should_not_fetch(*_args, **_kwargs):
+        raise AssertionError("rank-only path must not fetch share page")
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.fetch_share_page",
+        _should_not_fetch,
+    )
+    result = apply_snapshot_backfill(
+        db_session,
+        subtask_id="st-rank-only",
+        snapshot_url=None,
+        mention_position=2,
+        current=current,
+    )
+    assert result.get("rank_only") is True
+    assert subtask.answer_content == "旧回答保留"
+    assert subtask.page_screenshot == "https://www.doubao.com/thread/keep-me"
+    assert subtask.mention_position == 2
+    assert subtask.raw_result_json.get("rank_only") is True
+    assert subtask.raw_result_json.get("manual_rank_locked") is True
+
+    log = db_session.scalar(
+        select(OperationLog).where(OperationLog.action_type == "排名补录").order_by(OperationLog.id.desc())
+    )
+    assert log is not None
+    assert log.target_module == "快照补录"
+
+
 def test_list_snapshot_backfill_items_filters_by_tenant_and_date(db_session) -> None:
     tenant_a = Tenant(name="企业A", code="tenant-a", deleted=False)
     tenant_b = Tenant(name="企业B", code="tenant-b", deleted=False)

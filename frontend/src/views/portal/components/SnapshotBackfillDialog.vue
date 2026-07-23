@@ -35,25 +35,33 @@ const headline = computed(() => {
 })
 
 const hasExistingAnswer = computed(() => Boolean(props.subtask?.answer_content))
+const parsedRank = computed(() => parseSnapshotBackfillMentionPosition(form.mention_position))
+const hasShareUrl = computed(() => Boolean(form.snapshot_url.trim()))
+const canSubmit = computed(() => hasShareUrl.value || parsedRank.value != null)
 
 watch(
   () => props.visible,
   (open) => {
     if (!open) return
     const shot = props.subtask?.page_screenshot || ''
-    // 代理 URL 不能当作模力/平台分享链接回填
-    form.snapshot_url = isProxiedScreenshotUrl(shot) ? '' : shot
+    // 已有正文时链接默认留空，便于只改排名；失败补录才预填非代理分享链接
+    if (props.subtask?.answer_content) {
+      form.snapshot_url = ''
+    } else {
+      form.snapshot_url = isProxiedScreenshotUrl(shot) ? '' : shot
+    }
     form.mention_position = props.subtask?.mention_position != null ? String(props.subtask.mention_position) : ''
   },
 )
 
 async function handleSubmit() {
-  if (!props.subtask?.subtask_id) return
+  if (!props.subtask?.subtask_id || !canSubmit.value) return
   submitting.value = true
   try {
+    const url = form.snapshot_url.trim()
     const result = await submitSnapshotBackfill(props.subtask.subtask_id, {
-      snapshot_url: form.snapshot_url.trim(),
-      mention_position: parseSnapshotBackfillMentionPosition(form.mention_position),
+      snapshot_url: url || null,
+      mention_position: parsedRank.value,
     })
     emit('success', result.subtask)
     dialogVisible.value = false
@@ -74,14 +82,14 @@ async function handleSubmit() {
     destroy-on-close
   >
     <p v-if="subtask" class="snapshot-backfill-intro">
-      请粘贴该平台会话<strong>分享链接</strong>（如豆包 thread）。提交后将自动解析回答正文与信源并<strong>覆盖</strong>原有抓取结果；排名可选手填，留空则按正文自动解析。
+      可粘贴分享链接解析并<strong>覆盖</strong>正文与信源；不填链接时仅改排名，快照沿用原值。有链接时排名可选手填，留空则按正文自动解析。
     </p>
-    <p v-if="hasExistingAnswer" class="snapshot-backfill-warn">当前子任务已有抓取内容，提交后将用本次解析结果完全替换。</p>
+    <p v-if="hasExistingAnswer && hasShareUrl" class="snapshot-backfill-warn">当前子任务已有抓取内容，填写链接提交后将用本次解析结果完全替换。</p>
     <p v-if="subtask" class="snapshot-backfill-prompt">监测问题：{{ subtask.prompt }}</p>
 
     <form class="form-grid password-grid snapshot-backfill-form" @submit.prevent="handleSubmit">
       <label class="form-field-full">
-        <span>分享链接 <em class="required-mark">*</em></span>
+        <span>分享链接（可选）</span>
         <input
           v-model="form.snapshot_url"
           type="url"
@@ -89,7 +97,7 @@ async function handleSubmit() {
         >
       </label>
       <label>
-        <span>品牌排名（可选，清空则自动解析）</span>
+        <span>{{ hasShareUrl ? '品牌排名（可选，清空则自动解析）' : '品牌排名（不填链接时必填）' }}</span>
         <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
       </label>
     </form>
@@ -99,10 +107,10 @@ async function handleSubmit() {
       <button
         type="button"
         class="primary-btn"
-        :disabled="submitting || !form.snapshot_url.trim()"
+        :disabled="submitting || !canSubmit"
         @click="handleSubmit"
       >
-        {{ submitting ? '解析提交中…' : hasExistingAnswer ? '提交并覆盖' : '提交补录' }}
+        {{ submitting ? '提交中…' : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录' }}
       </button>
     </template>
   </el-dialog>

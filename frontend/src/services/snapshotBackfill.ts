@@ -121,7 +121,7 @@ export async function getPendingSnapshotBackfills(
 export async function submitSnapshotBackfill(
   subtaskId: string,
   payload: {
-    snapshot_url: string
+    snapshot_url?: string | null
     answer_content?: string | null
     mention_position?: number | null
     sentiment?: string | null

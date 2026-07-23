@@ -525,7 +525,7 @@ def monitor_subtask_snapshot_backfill(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """运营对子任务粘贴分享链接；服务端解析正文与信源并覆盖，可选手工排名。"""
+    """运营补录：有分享链接则解析覆盖；无链接时可只改排名（沿用原快照）。"""
     require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     try:
         require_snapshot_backfill_permission(db, current, "can_update")
