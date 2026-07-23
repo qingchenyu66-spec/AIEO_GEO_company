@@ -108,6 +108,46 @@ def test_segment_local_rank_ignores_cross_section_numbering():
     assert rank == 3
 
 
+def test_glued_markdown_headers_reset_category_rank():
+    """元宝导出常见：上一 bullet 末尾直接粘 ##二、 / ##户外…，必须拆行后段内重计。"""
+    subway = """
+##一、 北京地区主要运营商（核心资源方）
+- **北京地下铁道通成广告股份有限公司**：覆盖约80%。
+- **北青传媒股份有限公司**：独家运营4号线。
+- **北京三木国际文化传播有限公司**：独家运营14号线。
+- **亚瑞科尔国际广告传媒(北京)有限公司**：扶梯面板。[citation:8]##二、 全国性/跨区域知名地铁广告公司
+- **德高中国 (JCDecaux)**：全球户外广告巨头。
+- **雅仕维传媒 (Asiaray)**：大中华区交通媒体。
+- **华铁传媒**：高铁+地铁联动。
+- **艾迪亚控股集团**：覆盖全国30+核心城市。
+- **博视得 (Posterscope)**：第三方策划购买。
+## 三、 其他重点城市官方运营代表
+- **上海**：上海地铁通成广告。
+"""
+    entries = parse_answer_rankings(subway)
+    brand = next(item for item in entries if "艾迪亚" in item["name"])
+    assert brand["rank"] == 4
+    assert "全国" in str(brand["category"] or "")
+
+    led = """
+## 硬件制作与工程安装（买屏/门店/楼体）
+- **北京飓风伟业广告制作有限公司**：灯箱招牌。
+- **北京天一联创广告**：发光字。
+- **文彩新艺广告**：牌匾。
+- **北京中康鼎辉智能科技**：LED集成。[citation:10]##户外大屏广告投放（租媒体位）
+- **天雅飞腾**：楼体全彩LED。
+- **励唐永智**：全国网络。
+- **艾迪亚传媒**：一站式策略定制。
+- **寰球博瑞林特**：本土全场景。
+- **北京北斗丽天广告**：候车亭地铁。[citation:14]##高端显示与知名厂商（大型项目/上市级）
+- **利亚德光电股份有限公司**：上市公司。
+"""
+    led_entries = parse_answer_rankings(led)
+    led_brand = next(item for item in led_entries if "艾迪亚" in item["name"])
+    assert led_brand["rank"] == 3
+    assert "户外" in str(led_brand["category"] or "") or "投放" in str(led_brand["category"] or "")
+
+
 def test_structured_rankings_rerank_within_category():
     raw = [
         {"name": "城市纵横", "rank": 3, "category": "中腰部"},
