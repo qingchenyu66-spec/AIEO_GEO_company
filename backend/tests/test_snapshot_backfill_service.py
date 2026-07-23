@@ -68,6 +68,12 @@ def test_subtask_needs_snapshot_backfill_when_failed() -> None:
         raw_result_json={},
         error_message="timeout",
     )
+    # 尚未自动重试：不进补录
+    assert subtask_needs_snapshot_backfill(subtask) is False
+    subtask.auto_retry_count = 1
+    subtask.auto_retry_status = "pending"
+    assert subtask_needs_snapshot_backfill(subtask) is False
+    subtask.auto_retry_status = "failed"
     assert subtask_needs_snapshot_backfill(subtask) is True
 
 
@@ -155,6 +161,8 @@ def test_notify_failed_subtasks_for_task_creates_single_notification(db_session)
         status="failed",
         raw_result_json={},
         error_message="抓取失败",
+        auto_retry_count=1,
+        auto_retry_status="failed",
     )
     task.subtasks = [subtask]
     db_session.add(task)
@@ -485,6 +493,8 @@ def test_list_snapshot_backfill_items_filters_by_tenant_and_date(db_session) -> 
         raw_result_json={},
         error_message="抓取失败",
         updated_at=datetime(2026, 7, 3, 10, 0, 0),
+        auto_retry_count=1,
+        auto_retry_status="failed",
     )
     task_a.subtasks = [done]
     task_b.subtasks = [failed]
@@ -786,6 +796,8 @@ def test_dismiss_and_undismiss_snapshot_backfill(db_session, monkeypatch) -> Non
         status="failed",
         error_message="timeout",
         raw_result_json={},
+        auto_retry_count=1,
+        auto_retry_status="failed",
     )
     task.subtasks = [subtask]
     db_session.add(task)

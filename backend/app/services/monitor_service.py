@@ -506,7 +506,8 @@ def _reconcile_task_progress(task: GeoMonitorTask) -> None:
     success_count = sum(1 for item in subtasks if item.status in {"completed", "partial_completed"} or item.answer_content)
     task.total_items = task.total_items or len(subtasks)
     task.completed_items = max(task.completed_items or 0, terminal_count)
-    task.failed_items = max(task.failed_items or 0, abnormal_count)
+    # 以本地子任务终态为准（自动重试成功回写后需能下降）
+    task.failed_items = abnormal_count
     awaiting_rank = any(_subtask_awaiting_upstream_rank(item) for item in subtasks)
     if awaiting_rank:
         # 正文已到但上游榜单未落定：保持可同步，避免过早 completed 后不再拉结果
@@ -1603,8 +1604,15 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
             db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id == task_id))
         )
         _reconcile_task_progress(task)
+        from app.services.monitor_auto_retry_service import apply_auto_retry_results, launch_auto_retries_for_task
         from app.services.snapshot_backfill_service import notify_failed_subtasks_for_task
 
+        apply_auto_retry_results(db, task)
+        # 回写可能改了 origin；当前若是普通任务则继续对本单发起重试
+        task.subtasks = list(
+            db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id == task_id))
+        )
+        launch_auto_retries_for_task(db, task)
         notify_failed_subtasks_for_task(db, task)
     except Exception as exc:
         if not isinstance(exc, _TRANSIENT_SYNC_ERRORS):
@@ -5109,11 +5117,18 @@ def subtask_needs_snapshot_backfill(
     use_effective_rank: bool = False,
     brand_mentioned: bool | None = None,
 ) -> bool:
-    """失败/无回答，或已有回答但展示位次不在前 N，需要快照补录。"""
+    """失败/无回答，或已有回答但展示位次不在前 N，需要快照补录。
+
+    硬失败（无正文）须先完成自动重试 1 次；重试中或尚未发起时不进补录。
+    """
     if not (subtask.answer_content or "").strip():
-        if subtask.status in {"failed", "stopped"}:
-            return True
-        if subtask.error_message and subtask.status in TERMINAL_STATUSES:
+        if subtask.status in {"failed", "stopped"} or (
+            subtask.error_message and subtask.status in TERMINAL_STATUSES
+        ):
+            from app.services.monitor_auto_retry_service import subtask_failure_awaits_or_in_auto_retry
+
+            if subtask_failure_awaits_or_in_auto_retry(subtask):
+                return False
             return True
         return False
     return subtask_weak_rank_needs_backfill(

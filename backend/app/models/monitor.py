@@ -76,6 +76,16 @@ class GeoMonitorSubtask(Base):
     competitor_rankings_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="竞品排名JSON")
     all_rankings_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="全部品牌排名JSON")
     raw_result_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="子任务原始结果JSON")
+    # 失败自动重试：最多 1 次；仍失败才进快照补录
+    auto_retry_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False, comment="自动重试已发起次数"
+    )
+    auto_retry_task_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, comment="自动重试产生的模力主任务ID"
+    )
+    auto_retry_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="自动重试状态 pending/succeeded/failed"
+    )
     # 运营主动忽略待补录：保留答案/排名，仅退出待补池与提醒
     backfill_dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="快照补录忽略时间")
     backfill_dismissed_by: Mapped[int | None] = mapped_column(
