@@ -11,32 +11,52 @@ from app.services.rank_llm_service import (
 )
 
 
-def test_resolve_appearance_no_inflated_line_count() -> None:
-    """正文仅 2 家公司标题 + 字段 bullet；品牌出现在补充段 → 提及但无虚高名次。"""
-    answer = """
-### 一、广州伟源光电科技有限公司（全链路）
-- **成立时间**：2004年
-- **核心优势**：一站式服务
-### 二、广州普锐电子有限公司
-- **成立时间**：2007年
-### 补充推荐
-- 媒体资源型：艾迪亚传媒（全国资源）
-"""
+def test_resolve_appearance_beyond_top3_becomes_mention_only(monkeypatch) -> None:
+    """点名序第4名及以后不展示虚高位次，只记提及。"""
+    monkeypatch.setattr(
+        "app.services.monitor_service._find_brand_in_rankings",
+        lambda *args, **kwargs: (None, False, None),
+    )
+    monkeypatch.setattr("app.services.monitor_service._collect_ranking_entries", lambda _s: [])
+    monkeypatch.setattr("app.services.monitor_service._appearance_order_rank", lambda *args, **kwargs: 5)
+    monkeypatch.setattr("app.services.monitor_service._brand_appears_in_text", lambda *args, **kwargs: True)
+
     subtask = SimpleNamespace(
         prompt="LED广告公司推荐",
-        answer_content=answer,
+        answer_content="艾迪亚出现在长名单深处",
         mention_context=None,
-        all_rankings_json=[
-            {"name": "广州伟源光电科技有限公司", "rank": 1, "category": None},
-            {"name": "广州普锐电子有限公司", "rank": 2, "category": None},
-        ],
-        mention_position=17,
+        all_rankings_json=[],
+        mention_position=5,
         raw_result_json={},
     )
-    detail = _resolve_brand_rank_detail(subtask, "LED广告公司推荐", ["艾迪亚", "艾迪亚传媒"], asset=None)
+    detail = _resolve_brand_rank_detail(subtask, "LED广告公司推荐", ["艾迪亚"], asset=None)
     assert detail.mentioned is True
     assert detail.rank is None
-    assert detail.source in {"none", "structured"}
+    assert detail.source == "appearance"
+    assert detail.rank_basis == "appearance_beyond_top3"
+
+
+def test_resolve_appearance_top3_still_kept(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.monitor_service._find_brand_in_rankings",
+        lambda *args, **kwargs: (None, False, None),
+    )
+    monkeypatch.setattr("app.services.monitor_service._collect_ranking_entries", lambda _s: [])
+    monkeypatch.setattr("app.services.monitor_service._appearance_order_rank", lambda *args, **kwargs: 2)
+    monkeypatch.setattr("app.services.monitor_service._brand_appears_in_text", lambda *args, **kwargs: True)
+
+    subtask = SimpleNamespace(
+        prompt="LED广告公司推荐",
+        answer_content="艾迪亚在前三",
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(subtask, "LED广告公司推荐", ["艾迪亚"], asset=None)
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.source == "appearance"
 
 
 def test_resolve_brand_rank_detail_prefers_persisted_llm() -> None:

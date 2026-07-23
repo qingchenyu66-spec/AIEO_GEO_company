@@ -2861,11 +2861,20 @@ def _resolve_brand_rank_detail(
             allow_global=not has_parsed_entries,
         )
         if appearance_rank is not None:
+            # 点名序只采信 Top3；更深位次易被字段行/补充段虚高，宁记「提及无位次」
+            if int(appearance_rank) <= 3:
+                return BrandRankResolution(
+                    rank=appearance_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.55,
+                )
             return BrandRankResolution(
-                rank=appearance_rank,
+                rank=None,
                 mentioned=True,
                 source="appearance",
-                confidence=0.55,
+                confidence=0.45,
+                rank_basis="appearance_beyond_top3",
             )
 
     if is_industry_task:
