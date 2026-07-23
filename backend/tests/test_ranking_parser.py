@@ -703,3 +703,46 @@ A 类：媒体运营商（买屏上曝光）
     )
     assert matched is True
     assert rank == 5
+
+
+def test_parse_yuanbao_medal_tier_h3_section_local_rank():
+    """元宝「按梯队」：### 🥇/🥈 是段标题，不能吞掉后续 - **公司** bullet。"""
+    text = """
+## 一、先分清三类供应商，别找错人
+- **地铁集团自营/官方子公司**：资源最稳。
+- **国际/港澳系巨头**：一线核心线路。
+- **本土全国代理**：覆盖广、能打包。
+
+## 二、主流玩家按梯队拎一下
+
+### 🥇 一线核心资源持有方（自营+国际系）
+- **德高中国（JCDecaux）**：全球户外老大。
+- **雅仕维（Asiaray）**：港资，地铁+机场。
+- **各城市地铁集团自营公司**：背靠业主。
+
+### 🥈 本土全国代理（覆盖广、能打包）
+- **永达传媒**：高铁+地铁联动。
+- **华语传媒**：社区+交通场景。
+- **分众（地铁场景）**：封闭空间+高频触达。
+- **艾迪亚控股**：1998 年起家，全场景都能做——不过这类榜单常客建议再核合同。
+
+### 🥉 策略购买型（不直接持资源，帮你挑点位）
+- **博视得（Posterscope，阳狮旗下）**：中立视角做采购。
+
+## 三、怎么选，给你三个判断锚点
+- **按城市**：一线看德高/雅仕维。
+"""
+    entries = parse_answer_rankings(text)
+    assert not any("一线核心" in str(e.get("name") or "") for e in entries)
+    assert not any(str(e.get("name") or "").startswith("🥇") for e in entries)
+    aidiya = [item for item in entries if "艾迪亚" in item["name"]]
+    assert len(aidiya) == 1
+    assert aidiya[0]["rank"] == 4
+    assert "本土" in str(aidiya[0]["category"]) or "代理" in str(aidiya[0]["category"])
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "地铁广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 4

@@ -85,7 +85,10 @@ _NON_COMPANY_TOKENS = frozenset({
 _SUBCATEGORY_HINTS = (
     "大厂", "工程商", "运营商", "代理商", "服务商", "制造商", "厂家", "媒体",
     "头部", "区域", "性价比", "上市", "量产", "工程", "本地",
+    # 元宝「按梯队」：🥇一线 / 🥈本土全国代理 / 🥉策略购买型
+    "一线", "二线", "三线", "梯队", "持有方", "全国代理", "购买型", "自营",
 )
+_TIER_MEDAL_RE = re.compile(r"^[🥇🥈🥉🏅]\s*")
 
 
 _REGION_LABEL_RE = re.compile(
@@ -508,11 +511,14 @@ def _is_subsection_label(content: str) -> bool:
 
 
 def _looks_like_subcategory_header(content: str) -> bool:
-    """### 区域优质工程商 / 头部上市大厂 → 子分类标题，不是公司名。"""
+    """### 区域优质工程商 / 🥇 一线… → 子分类标题，不是公司名。"""
     cleaned = re.sub(r"^[#\s\d\.、]+", "", (content or "").strip())
     cleaned = re.sub(r"[（(].*[)）]$", "", cleaned).strip()
     if not cleaned or NUMBERED_TITLE_RE.match(cleaned):
         return False
+    if _TIER_MEDAL_RE.match(cleaned):
+        return True
+    cleaned = _TIER_MEDAL_RE.sub("", cleaned).strip()
     if SECTION_TITLE_RE.match(cleaned):
         return True
     return any(hint in cleaned for hint in _SUBCATEGORY_HINTS)
@@ -733,6 +739,16 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 if _is_non_rank_category(content) or content in SUBSECTION_LABELS:
                     current_section = _extract_category_name(line)
                     current_category = current_section
+                continue
+            # H3 不像公司名（梯队/描述标题）→ 当段重置，避免吞掉后续 bullet
+            # ponytail: 旧逻辑一律 append_item，🥇一线 会被当成选手且 in_company_block 丢掉公司列表
+            if level >= 3 and not _looks_like_company_list_name(
+                _clean_item_name(_TIER_MEDAL_RE.sub("", content))
+            ):
+                current_section = _extract_category_name(line)
+                current_category = current_section
+                appearance_counters.setdefault(current_section, 0)
+                in_company_block = False
                 continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True
