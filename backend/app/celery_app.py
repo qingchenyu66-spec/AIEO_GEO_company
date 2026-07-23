@@ -36,6 +36,8 @@ celery_app.conf.update(
         "app.tasks.monitor.sync_platform_catalog_daily": {"queue": "default"},
         "app.tasks.monitor.check_platform_availability_weekly": {"queue": "submit"},
         "app.tasks.monitor.finalize_platform_probes": {"queue": "sync"},
+        "app.tasks.monitor.refresh_ops_overview_rollup": {"queue": "default"},
+        "app.tasks.monitor.sync_announcement_lifecycle": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
     },
@@ -98,6 +100,10 @@ celery_app.conf.update(
         "refresh-ops-overview-rollup": {
             "task": "app.tasks.monitor.refresh_ops_overview_rollup",
             "schedule": crontab(minute="*/5"),
+        },
+        "sync-announcement-lifecycle": {
+            "task": "app.tasks.monitor.sync_announcement_lifecycle",
+            "schedule": crontab(minute="*/1"),
         },
     },
 )

@@ -63,7 +63,9 @@ const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/Know
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
 const BrandAnalysisPage = defineAsyncComponent(() => import('./portal/pages/BrandAnalysisPage.vue'))
 const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/ApprovalCenterPage.vue'))
+const AnnouncementManagePage = defineAsyncComponent(() => import('./portal/pages/AnnouncementManagePage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
+const AnnouncementModal = defineAsyncComponent(() => import('./portal/components/AnnouncementModal.vue'))
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -154,6 +156,7 @@ const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.
 const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
 const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approvals')
+const isAnnouncementPage = computed(() => activeMenuCode.value === 'platform.announcements')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
 const isBrandAnalysisPage = computed(() => activeMenuCode.value === 'customer.brand_analysis')
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
@@ -422,6 +425,7 @@ onMounted(() => {
     <KnowledgeBasePage v-else-if="isKnowledgePage" />
     <BrandAnalysisPage v-else-if="isBrandAnalysisPage" />
     <ApprovalCenterPage v-else-if="isApprovalPage" />
+    <AnnouncementManagePage v-else-if="isAnnouncementPage" />
 
     <template v-else>
       <template v-if="isDashboardPage">
@@ -438,5 +442,6 @@ onMounted(() => {
     </template>
   </PortalLayout>
 
+  <AnnouncementModal />
   <PlatformAdminDialogs />
 </template>

@@ -664,3 +664,24 @@ def refresh_ops_overview_rollup(self) -> dict[str, Any]:
         return {"status": "error", "error": str(exc)}
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.monitor.sync_announcement_lifecycle", ignore_result=True)
+def sync_announcement_lifecycle() -> dict[str, Any]:
+    """定时上线 scheduled 公告，并将已过 expire_at 的 published 下线。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    from app.services.announcement_service import expire_published_announcements, promote_scheduled_announcements
+
+    db = SessionLocal()
+    try:
+        promoted = promote_scheduled_announcements(db)
+        expired = expire_published_announcements(db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    return {"status": "ok", "promoted": promoted, "expired": expired}

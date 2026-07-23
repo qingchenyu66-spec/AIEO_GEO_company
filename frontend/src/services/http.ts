@@ -22,6 +22,15 @@ http.interceptors.request.use(
   (config) => {
     useLoadingStore().start()
 
+    // FormData 必须由浏览器自带 multipart boundary；默认 json Content-Type 会导致上传无响应
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      if (config.headers && typeof (config.headers as { delete?: (k: string) => void }).delete === 'function') {
+        ;(config.headers as { delete: (k: string) => void }).delete('Content-Type')
+      } else if (config.headers) {
+        delete (config.headers as Record<string, unknown>)['Content-Type']
+      }
+    }
+
     const method = (config.method || 'get').toLowerCase()
     if (!['get', 'head', 'options'].includes(method)) {
       const csrf = readCsrfToken()

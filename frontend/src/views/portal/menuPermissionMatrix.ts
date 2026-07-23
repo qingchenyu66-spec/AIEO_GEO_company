@@ -55,6 +55,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   [USER_CREATE_CUSTOMER_MENU]: ['can_create'],
   [POSITION_MENU]: ['can_export', 'can_update', 'can_delete'],
   'platform.approvals': ['can_export', 'can_update'],
+  'platform.announcements': ['can_export', 'can_create', 'can_update', 'can_delete'],
 
   'customer.workspace': ['can_export'],
   'customer.brand_analysis': ['can_export'],
@@ -88,6 +89,7 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   [USER_CREATE_CUSTOMER_MENU]: { can_create: '创建客户账号' },
   [POSITION_MENU]: { can_export: '查看', can_update: '编辑', can_delete: '停用' },
   'platform.approvals': { can_export: '查看申请', can_update: '审批通过/驳回' },
+  'platform.announcements': { can_export: '查看', can_create: '新建', can_update: '编辑/下线', can_delete: '删除' },
   'customer.knowledge': { can_export: '查看', can_create: '上传文件', can_update: '编辑资料' },
   'customer.reports': { can_export: '查看/导出' },
 }

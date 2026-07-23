@@ -101,6 +101,7 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.users.create.customer": frozenset({"can_create"}),
     "platform.positions": frozenset({"can_export", "can_update", "can_delete"}),
     "platform.approvals": frozenset({"can_export", "can_update"}),
+    "platform.announcements": frozenset({"can_export", "can_create", "can_update", "can_delete"}),
     "customer.workspace": frozenset({"can_export"}),
     "customer.brand_analysis": frozenset({"can_export"}),
     "customer.realtime": frozenset({"can_export"}),

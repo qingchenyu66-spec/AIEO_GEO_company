@@ -12,6 +12,7 @@ from app.models.diagnosis import BrandDiagnosis
 from app.models.report import GeoReport
 from app.models.platform import GeoPlatform, AlertThreshold
 from app.models.notification import SystemNotification, SystemNotificationRead
+from app.models.announcement import Announcement, AnnouncementAck, AnnouncementMedia
 
 __all__ = [
     "GeoMonitorCallbackEvent",
@@ -38,4 +39,7 @@ __all__ = [
     "AlertThreshold",
     "SystemNotification",
     "SystemNotificationRead",
+    "Announcement",
+    "AnnouncementAck",
+    "AnnouncementMedia",
 ]
