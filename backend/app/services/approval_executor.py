@@ -14,7 +14,7 @@ from app.models.diagnosis import BrandDiagnosis
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_identity import UserIdentity
-from app.schemas.brand import BrandAssetSaveRequest
+from app.schemas.brand import BrandAssetSaveRequest, BrandWordGroupsSaveRequest
 from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
 from app.schemas.permission import (
     TenantCreateRequest,
@@ -22,7 +22,16 @@ from app.schemas.permission import (
     UserCreateRequest,
     UserUpdateRequest,
 )
-from app.services.brand_service import save_brand_asset
+from app.services.brand_service import (
+    asset_to_dict,
+    brand_word_group_to_dict,
+    competitor_to_dict,
+    editable_keyword_groups,
+    list_brand_word_groups,
+    list_competitors,
+    save_brand_asset,
+    save_brand_word_groups,
+)
 from app.services.lead_diagnosis_service import create_lead_diagnosis, submit_due_lead_run, update_lead_diagnosis
 from app.services.management_service import (
     _tenant_code_from_name,
@@ -70,6 +79,7 @@ def execute_approval(db: Session, current: CurrentSession, record: OperationAppr
         "management.tenant.delete": _exec_tenant_delete,
         "management.tenant.restore": _exec_tenant_restore,
         "brand.asset.upsert": _exec_brand_asset,
+        "brand.brand_word_groups.upsert": _exec_brand_word_groups,
         "reports.generate": _exec_report_generate,
         "reports.update": _exec_report_update,
         "reports.publish": _exec_report_publish,
@@ -216,6 +226,38 @@ def _exec_brand_asset(db: Session, current: CurrentSession, record: OperationApp
     payload = BrandAssetSaveRequest.model_validate(data.get("body") or data)
     asset = save_brand_asset(db, payload, current)
     return {"tenant_id": asset.tenant_id, "brand_name": asset.brand_name}
+
+
+def _exec_brand_word_groups(
+    db: Session,
+    current: CurrentSession,
+    record: OperationApproval,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """回放销售提交的品牌词保存；与 PUT /brand-word-groups 直执口径一致。"""
+    from app.core.config import settings
+    from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
+
+    payload = BrandWordGroupsSaveRequest.model_validate(data.get("body") or data)
+    asset, submit_rows = save_brand_word_groups(db, payload, current)
+    submit_dicts = [brand_word_group_to_dict(item) for item in submit_rows]
+    submitted: list[dict[str, Any]] = []
+    for item in enumerate_brand_word_once_groups(
+        db,
+        tenant_id=asset.tenant_id,
+        groups=submit_dicts,
+        max_prompts=settings.celery_scan_submit_max_prompts,
+    ):
+        submitted.append(submit_schedule_group(db, current, item))
+    keyword_groups = editable_keyword_groups(db, asset.tenant_id)
+    brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
+    competitors = list_competitors(db, asset.tenant_id)
+    return {
+        "tenant_id": asset.tenant_id,
+        "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
+        "competitors": [competitor_to_dict(item) for item in competitors],
+        "once_submitted": submitted,
+    }
 
 
 def _exec_report_generate(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:

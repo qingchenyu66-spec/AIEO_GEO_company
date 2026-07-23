@@ -29,7 +29,7 @@ const props = defineProps<{
 const loading = ref(false)
 const snapshots = ref<WorkspaceSnapshot[]>([])
 const page = ref(1)
-/** 本格局部筛选：默认只看有位次；「全部」含未提及。 */
+/** 本格局部筛选：默认只看有位次；「全部」含未提及。切换会重新请求，避免后端 prefer_ranked 把未提及挤掉。 */
 const rankScope = ref<'ranked' | 'all'>('ranked')
 
 const snapshotVisible = ref(false)
@@ -68,18 +68,11 @@ function articleDomain(row: WorkspaceSnapshot) {
   }
 }
 
-const scopedSnapshots = computed(() => {
-  if (rankScope.value === 'ranked') {
-    return snapshots.value.filter(row => row.brand_rank != null)
-  }
-  return snapshots.value
-})
-
 const filteredSnapshots = computed(() => {
-  // 平台已在接口侧按 props.platformFilter 拉取，这里只做关键词本地筛
+  // 平台 / 排名口径已在接口侧按 props + rankScope 拉取，这里只做关键词本地筛
   const query = (props.keywordFilter || '').trim().toLowerCase()
-  if (!query) return scopedSnapshots.value
-  return scopedSnapshots.value.filter(row => {
+  if (!query) return snapshots.value
+  return snapshots.value.filter(row => {
     const haystack = [
       snapshotKeyword(row),
       row.prompt,
@@ -167,6 +160,7 @@ async function loadSnapshots() {
       end_date: props.endDate || undefined,
       platform: props.platformFilter || undefined,
       limit: 48,
+      rank_scope: rankScope.value,
     }, { silentError: true }))
     snapshots.value = data?.recent_snapshots || []
   } catch (error: unknown) {
@@ -182,7 +176,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.tenantId, props.startDate, props.endDate, props.platformFilter] as const,
+  () => [props.tenantId, props.startDate, props.endDate, props.platformFilter, rankScope.value] as const,
   () => { void loadSnapshots() },
 )
 </script>
@@ -262,7 +256,7 @@ watch(
         <ChevronLeft :size="14" />
         上一页
       </button>
-      <span>{{ page }} / {{ totalPages }}</span>
+      <span>共 {{ filteredSnapshots.length }} 条 · {{ page }} / {{ totalPages }}</span>
       <button type="button" class="source-soft-btn" :disabled="page >= totalPages" @click="page += 1">
         下一页
         <ChevronRight :size="14" />

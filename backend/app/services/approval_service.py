@@ -114,6 +114,7 @@ def find_pending_duplicate(
             return record
         if tenant_id is not None and record.tenant_id == tenant_id and operation_key in {
             "brand.asset.upsert",
+            "brand.brand_word_groups.upsert",
             "reports.generate",
             "diagnosis.record.create",
         }:

@@ -48,6 +48,39 @@ def test_workspace_period_snapshots_prefers_ranked_then_recent() -> None:
     assert [row["subtask_id"] for row in rows] == ["ranked_y", "ranked_old"]
 
 
+def test_workspace_period_snapshots_ranked_excludes_unranked() -> None:
+    candidates = [
+        {"detect_day": "2026-07-19", "subtask_id": "unranked_y", "brand_rank": None, "updated_at": "2026-07-19T18:00:00"},
+        {"detect_day": "2026-07-19", "subtask_id": "ranked_y", "brand_rank": 2, "updated_at": "2026-07-19T16:00:00"},
+    ]
+    rows = _workspace_period_snapshots(
+        candidates,
+        trend_start=datetime(2026, 7, 1),
+        trend_end=datetime(2026, 7, 19, 23, 59, 59),
+        range_end=datetime(2026, 7, 19, 23, 59, 59),
+        limit=10,
+        rank_scope="ranked",
+    )
+    assert [row["subtask_id"] for row in rows] == ["ranked_y"]
+
+
+def test_workspace_period_snapshots_all_keeps_unranked_by_recency() -> None:
+    candidates = [
+        {"detect_day": "2026-07-19", "subtask_id": "unranked_y", "brand_rank": None, "updated_at": "2026-07-19T18:00:00"},
+        {"detect_day": "2026-07-18", "subtask_id": "ranked_old", "brand_rank": 1, "updated_at": "2026-07-18T10:00:00"},
+        {"detect_day": "2026-07-19", "subtask_id": "ranked_y", "brand_rank": 2, "updated_at": "2026-07-19T16:00:00"},
+    ]
+    rows = _workspace_period_snapshots(
+        candidates,
+        trend_start=datetime(2026, 7, 1),
+        trend_end=datetime(2026, 7, 19, 23, 59, 59),
+        range_end=datetime(2026, 7, 19, 23, 59, 59),
+        limit=2,
+        rank_scope="all",
+    )
+    assert [row["subtask_id"] for row in rows] == ["unranked_y", "ranked_y"]
+
+
 def test_workspace_schedule_key_bounds_align_business_days() -> None:
     start_key, end_excl = _workspace_schedule_key_bounds(date(2026, 7, 13), date(2026, 7, 19))
     assert start_key == "20260713"

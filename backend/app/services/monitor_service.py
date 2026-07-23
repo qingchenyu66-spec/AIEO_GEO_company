@@ -3924,11 +3924,14 @@ def _workspace_period_snapshots(
     trend_end: datetime,
     range_end: datetime,
     limit: int = 24,
+    rank_scope: str = "prefer_ranked",
 ) -> list[dict[str, Any]]:
     """收录明细按数据周期取样本，禁止只钉死 latest_day（否则切周期列表不变）。
 
-    优先有 brand_rank 的行，再按检测日/更新时间倒序；避免「按日轮询」在长周期里
-    把昨天稀释成 1 条、首屏全是未提及旧样本。
+    rank_scope:
+    - prefer_ranked：有位次优先再补未提及（工作台样本默认）
+    - ranked：只要有位次
+    - all：有无位次都按时间倒序，供「全部」切换真正能看到未提及
     """
     period_start, period_end = _workspace_period_day_bounds(trend_start, trend_end, range_end)
     in_period: list[dict[str, Any]] = []
@@ -3952,6 +3955,17 @@ def _workspace_period_snapshots(
             str(item.get("subtask_id") or ""),
         )
 
+    scope = str(rank_scope or "prefer_ranked").strip().lower()
+    if scope == "ranked":
+        pool = [row for row in in_period if row.get("brand_rank") is not None]
+        pool.sort(key=_recency_key, reverse=True)
+        return pool[:limit]
+    if scope == "all":
+        pool = list(in_period)
+        pool.sort(key=_recency_key, reverse=True)
+        return pool[:limit]
+
+    # prefer_ranked（默认）
     ranked = [row for row in in_period if row.get("brand_rank") is not None]
     unranked = [row for row in in_period if row.get("brand_rank") is None]
     ranked.sort(key=_recency_key, reverse=True)
@@ -3971,10 +3985,12 @@ def list_inclusion_snapshots(
     tenant_id: int | None = None,
     platform: str | None = None,
     limit: int = 48,
+    rank_scope: str = "ranked",
 ) -> dict[str, Any]:
     """信源页「收录明细」专用：按周期/平台直查子任务，避免吃 workspace-brief 全局 24 条样本。
 
-    「8 次引用」是信源引用次数；本列表是监测子任务行，条数通常更少，但选中平台后不应再空。
+    「8 次引用」是信源引用次数；本列表是监测子任务行。
+    rank_scope=ranked|all 与前端「有排名/全部」对齐；勿用 prefer_ranked，否则有排名装满 limit 后切换无差别。
     """
     tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
     range_end = customer_display_cutoff()
@@ -4102,16 +4118,21 @@ def list_inclusion_snapshots(
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         })
 
+    scope = str(rank_scope or "ranked").strip().lower()
+    if scope not in {"ranked", "all"}:
+        scope = "ranked"
     recent_snapshots = _workspace_period_snapshots(
         snapshot_candidates,
         trend_start=trend_start,
         trend_end=trend_end,
         range_end=range_end,
         limit=limit,
+        rank_scope=scope,
     )
     return {
         "recent_snapshots": recent_snapshots,
         "purchased_platforms": purchased_platforms,
+        "rank_scope": scope,
     }
 
 

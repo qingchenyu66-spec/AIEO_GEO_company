@@ -278,6 +278,35 @@ def _lead_changes(body: dict[str, Any], *, is_create: bool) -> list[dict[str, st
     ]
 
 
+def _brand_word_group_changes(body: dict[str, Any]) -> list[dict[str, str]]:
+    groups = [item for item in (body.get("groups") or []) if isinstance(item, dict)]
+    rows = [
+        _change("操作类型", after="保存品牌词配置", kind="info"),
+        _change("词组数量", after=str(len(groups)), kind="update"),
+    ]
+    for index, group in enumerate(groups[:8]):
+        name = str(group.get("name") or f"词组{index + 1}").strip() or f"词组{index + 1}"
+        keywords = group.get("monitor_keywords") or []
+        if not keywords and group.get("monitor_keyword"):
+            keywords = [group.get("monitor_keyword")]
+        run_mode = str(group.get("run_mode") or "once").strip().lower()
+        mode_label = "每周" if run_mode == "weekly" else "仅本次"
+        status_label = "启用" if group.get("status", True) else "停用"
+        plat_n = len(group.get("platforms") or [])
+        rows.append(
+            _change(
+                f"词组「{name}」",
+                after=f"{status_label} · {mode_label} · {plat_n} 平台 · {_join_list(keywords, limit=6)}",
+                kind="update",
+            )
+        )
+    if len(groups) > 8:
+        rows.append(_change("其余词组", after=f"另有 {len(groups) - 8} 组未展开", kind="info"))
+    if not groups:
+        rows.append(_change("变更说明", after="提交了空品牌词列表（将清空启用配置）", kind="info"))
+    return rows
+
+
 def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, Any]:
     payload = record.payload_json if isinstance(record.payload_json, dict) else {}
     body = _body(payload)
@@ -285,6 +314,8 @@ def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, 
 
     if key == "brand.asset.upsert":
         changes = _brand_changes(db, record.tenant_id, body)
+    elif key == "brand.brand_word_groups.upsert":
+        changes = _brand_word_group_changes(body)
     elif key == "management.user.create":
         changes = _user_create_changes(db, body)
     elif key == "management.user.update":

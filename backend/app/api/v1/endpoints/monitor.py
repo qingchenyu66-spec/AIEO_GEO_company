@@ -380,6 +380,7 @@ def monitor_inclusion_snapshots(
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
     platform: str | None = Query(default=None, description="平台 code；空或 all 表示全部已购平台"),
     limit: int = Query(default=48, ge=1, le=100),
+    rank_scope: str = Query(default="ranked", description="ranked=有排名；all=全部（含未提及）"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -388,6 +389,9 @@ def monitor_inclusion_snapshots(
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="起始日期不能晚于结束日期")
+    scope = str(rank_scope or "ranked").strip().lower()
+    if scope not in {"ranked", "all"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="rank_scope 仅支持 ranked 或 all")
 
     resolved_tenant_id: int | None = tenant_id
     if current.identity.identity_type == "CUSTOMER":
@@ -413,6 +417,7 @@ def monitor_inclusion_snapshots(
             tenant_id=resolved_tenant_id,
             platform=platform,
             limit=limit,
+            rank_scope=scope,
         )
         return ApiResponse(data=data)
     except Exception as exc:

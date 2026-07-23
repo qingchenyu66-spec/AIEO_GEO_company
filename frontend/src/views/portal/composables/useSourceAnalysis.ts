@@ -300,8 +300,8 @@ export function useSourceAnalysis(options?: {
 
   const loading = ref(false)
   const monitorSummary = analytics.monitorSummary
-  // 客户/运营共用周期；运营默认近 30 天，客户默认全部（截至昨日）
-  const datePreset = ref<SourceDatePreset>('all')
+  // 客户/运营共用周期；运营默认近 30 天，客户默认近 7 天
+  const datePreset = ref<SourceDatePreset>('7')
   if (!isCustomerView.value) datePreset.value = '30'
 
   const inclusionDateRange = computed(() => {
@@ -665,7 +665,7 @@ export function useSourceAnalysis(options?: {
     categoryFilter.value = 'all'
     keywordFilter.value = ''
     domainFilter.value = ''
-    datePreset.value = isCustomerView.value ? 'all' : '30'
+    datePreset.value = isCustomerView.value ? '7' : '30'
     rankPage.value = 1
     articlePage.value = 1
   }
