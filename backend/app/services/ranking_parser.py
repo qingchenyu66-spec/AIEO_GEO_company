@@ -126,10 +126,9 @@ def _normalize_answer_layout(text: str) -> str:
         "- ",
         normalized,
     )
-    # 粘连标题：`...公司。[citation:5]##二、全国…` / `...科技。##户外大屏…`
-    # 旧正则要求 ## 后必须有空白，遇 `##二、` / `##户外` 拆不开 → 跨段连号虚高
-    # ponytail: 只拆行中粘连的 ##～######；行首正常标题不动
-    normalized = re.sub(r"(?<=[^\s#\n])(#{2,6})(?=\S)", r"\n\1", normalized)
+    # 粘连标题：`...[citation:5]## 下一节` 与 `...科技。##户外大屏` / `##二、全国`
+    # ponytail: 行首正常标题不动；只拆「非空白后紧跟的 ##～######」
+    normalized = re.sub(r"(?<=[^\s#\n])(#{2,6})(?=\s*\S)", r"\n\1", normalized)
     normalized = re.sub(r"(\[[^\]]*\])\s*-\s*", r"\1\n- ", normalized)
     normalized = re.sub(r"(?<=[。；！？])-\s*", "\n- ", normalized)
     # ponytail: `-**Name**` / `...- **Name**` without newline
