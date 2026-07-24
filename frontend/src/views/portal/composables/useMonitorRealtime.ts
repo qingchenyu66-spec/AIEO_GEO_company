@@ -1055,10 +1055,15 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   function switchViewMode(mode: MonitorViewMode) {
     viewMode.value = mode
-    if (mode === 'matrix' && !rankingMatrix.value && !loadingMatrix.value) {
-      void loadRankingMatrix()
+  }
+
+  /** 逐条列表懒加载：默认矩阵首屏不拉 tasks。 */
+  async function ensureListViewData() {
+    if (!monitorTasks.value.length) {
+      await loadMonitorTasks({ loadTaskDetail: true })
+      return
     }
-    if (mode === 'list' && !monitorDetail.value && monitorTasks.value[0]?.task_id) {
+    if (!monitorDetail.value && monitorTasks.value[0]?.task_id) {
       void selectMonitorTask(monitorTasks.value[0].task_id)
     }
   }
@@ -1229,10 +1234,11 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   }
 
   function refreshCurrentView() {
-    void loadMonitorTasks({ loadTaskDetail: viewMode.value === 'list' })
     if (viewMode.value === 'matrix') {
       void loadRankingMatrix()
+      return
     }
+    void loadMonitorTasks({ loadTaskDetail: true })
   }
 
   function exportMatrixCsv() {
@@ -1266,6 +1272,9 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   watch(viewMode, mode => {
     if (mode === 'matrix' && !rankingMatrix.value && !loadingMatrix.value) {
       void loadRankingMatrix()
+    }
+    if (mode === 'list') {
+      void ensureListViewData()
     }
   })
 
@@ -1322,20 +1331,26 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   onMounted(async () => {
     applyInsightsQuery()
     const subtaskDeepLink = String(route.query.subtask_id || '').trim()
+    const taskDeepLink = String(route.query.task_id || '').trim()
 
     void loadEchartsRuntime('matrix')
 
-    if (subtaskDeepLink) {
+    // 深链打开单条/任务：必须拉 tasks；矩阵可后台补
+    if (subtaskDeepLink || taskDeepLink) {
       await loadMonitorTasks()
       return
     }
 
     if (viewMode.value === 'matrix') {
       loadingMatrix.value = true
+      // ponytail: 矩阵首屏不拉 tasks；点「逐条」再 ensureListViewData。summary 后台补平台芯片。
       await Promise.all([
         loadRankingMatrix(),
-        loadMonitorTasks({ loadTaskDetail: false }),
+        loadBrandAssetData(),
       ])
+      void withRetry(() => getMonitorSummary(false, tenantId.value))
+        .then(summary => { if (summary) monitorSummary.value = summary })
+        .catch(() => null)
       return
     }
 
@@ -1346,9 +1361,10 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   })
 
   const stopMonitorRefresh = onMonitorRefresh(() => {
-    void loadMonitorTasks({ loadTaskDetail: viewMode.value === 'list' })
-    // Top3 占比依赖矩阵按日聚合，列表态也要刷新
     void loadRankingMatrix()
+    if (viewMode.value === 'list') {
+      void loadMonitorTasks({ loadTaskDetail: true })
+    }
   })
   onUnmounted(stopMonitorRefresh)
 

@@ -482,7 +482,8 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
             <small>{{ monitorStatusLabelMap[task.status] || task.status }} · {{ task.completed_items }}/{{ task.total_items }}{{ scheduleSourceLabel(task.schedule_source) }} · {{ taskPromptCount(task) }} 问 × {{ taskPlatformCount(task) }} 平台</small>
           </button>
         </div>
-        <div v-if="!loadingMonitor && !filteredGroupedMonitorTasks.length" class="mini-empty">暂无检测批次，等待定时任务返回。</div>
+        <div v-if="loadingMonitor && !filteredGroupedMonitorTasks.length" class="mini-empty">检测记录加载中…</div>
+        <div v-else-if="!loadingMonitor && !filteredGroupedMonitorTasks.length" class="mini-empty">暂无检测批次，等待定时任务返回。</div>
       </article>
 
       <article class="realtime-result-panel">
