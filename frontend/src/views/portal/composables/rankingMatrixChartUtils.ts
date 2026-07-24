@@ -16,6 +16,9 @@ export type MatrixRankScope = {
   dayKey: string
   dayCount: number
   label: string
+  /** 闭区间 YYYY-MM-DD；period 模式按此裁行，避免宽窗/脏缓存把区间外日子算进 KPI */
+  startDate: string
+  endDate: string
 }
 
 export type MatrixPlatformSlice = {
@@ -84,7 +87,10 @@ export function buildMatrixRankScope(
   const start = (startDate || '').trim()
   const end = (endDate || start).trim()
   const dayKeys = matrixDayKeys(rows)
-  const inRange = dayKeys.filter(key => (!start || key >= start) && (!end || key <= end))
+  const inRange = dayKeys.filter(key => {
+    const day = key.slice(0, 10)
+    return (!start || day >= start) && (!end || day <= end)
+  })
   const scopedDays = inRange.length ? inRange : dayKeys
 
   if (start && start === end) {
@@ -96,6 +102,8 @@ export function buildMatrixRankScope(
       dayKey,
       dayCount: dayKey ? 1 : 0,
       label: dayKey || start,
+      startDate: start,
+      endDate: end,
     }
   }
 
@@ -107,15 +115,26 @@ export function buildMatrixRankScope(
     dayKey: '',
     dayCount: scopedDays.length,
     label,
+    startDate: start,
+    endDate: end,
   }
 }
 
 function rowsInRankScope(rows: RankingMatrixRow[], scope: MatrixRankScope) {
   const sorted = sortMatrixRowsAsc(rows)
   if (scope.mode === 'day' && scope.dayKey) {
-    return sorted.filter(row => rowDayKey(row) === scope.dayKey)
+    return sorted.filter(row => rowDayKey(row).slice(0, 10) === scope.dayKey.slice(0, 10))
   }
-  return sorted
+  const start = (scope.startDate || '').trim()
+  const end = (scope.endDate || '').trim()
+  if (!start && !end) return sorted
+  return sorted.filter(row => {
+    const day = rowDayKey(row).slice(0, 10)
+    if (!day) return false
+    if (start && day < start) return false
+    if (end && day > end) return false
+    return true
+  })
 }
 
 function ranksForColumnInScope(
@@ -410,6 +429,25 @@ export function selfCheckMatrixRankScope() {
   console.assert(periodKpis.avgRank === 3.7)
   console.assert(periodKpis.sampleCount === 3)
   console.assert(periodKpis.latestDay === '2026-06-01')
+  // period 必须按 start/end 裁行：宽窗矩阵里多一天不得计入近 1 日 KPI
+  const wideRows: RankingMatrixRow[] = [
+    ...kpiSlice.rows,
+    {
+      task_id: 't2',
+      platform: 'doubao',
+      day_key: '2026-06-10',
+      schedule_window_key: '2026-06-10',
+      schedule_label: '06-10',
+      snapshot_at: '2026-06-10',
+      cells: { p1: snapCell([1, 1, 1]) },
+    },
+  ]
+  const clipped = matrixScopedPeriodKpis(
+    { columns: kpiSlice.columns, rows: wideRows },
+    buildMatrixRankScope(wideRows, '2026-06-01', '2026-06-01'),
+  )
+  console.assert(clipped.sampleCount === 3)
+  console.assert(clipped.latestDay === '2026-06-01')
 }
 
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {

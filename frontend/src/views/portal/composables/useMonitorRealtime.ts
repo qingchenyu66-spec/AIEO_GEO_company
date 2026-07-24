@@ -304,6 +304,9 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const viewMode = ref<MonitorViewMode>('matrix')
   const rankingMatrix = ref<RankingMatrix | null>(null)
   const loadingMatrix = ref(false)
+  let matrixSeq = 0
+  let matrixAbort: AbortController | null = null
+  let matrixRangeKey = ''
   const matrixChartType = ref<MatrixChartType>('bar')
 
   watch(matrixChartType, (type) => {
@@ -992,25 +995,49 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   }
 
   async function loadRankingMatrix() {
+    const seq = ++matrixSeq
+    matrixAbort?.abort()
+    matrixAbort = new AbortController()
+    const signal = matrixAbort.signal
+    const startDate = filters.startDate
+    const endDate = filters.endDate
+    const rangeKey = `${startDate}|${endDate}`
+    const startMs = Date.parse(`${startDate}T00:00:00`)
+    const endMs = Date.parse(`${endDate}T00:00:00`)
+    const spanDays = Number.isFinite(startMs) && Number.isFinite(endMs)
+      ? Math.max(1, Math.round((endMs - startMs) / 86400000) + 1)
+      : 7
     loadingMatrix.value = true
     if (!detailVisible.value) {
       selectedMatrixCell.value = null
     }
+    // 切时间后立刻丢掉旧矩阵，避免副文案已是「月」数字仍是近 7 日
+    if (matrixRangeKey && matrixRangeKey !== rangeKey) {
+      rankingMatrix.value = null
+    }
     try {
-      rankingMatrix.value = await withRetry(() => getRankingMatrix({
+      // 抓请求瞬间的日期，避免快速切预设时 withRetry 读到后一次筛选
+      const data = await withRetry(() => getRankingMatrix({
         platform: filters.platform.trim() || undefined,
-        start_date: filters.startDate || undefined,
-        end_date: filters.endDate || undefined,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
         keyword_group: filters.keywordGroup.trim() || undefined,
         monitor_keyword: filters.monitorKeyword.trim() || undefined,
         exposure_term: filters.exposureTerm.trim() || undefined,
+        // 默认 120 在「月×多平台×多词组」会被砍行，KPI 假成跟近 7 日一样
+        limit_rows: Math.min(8000, Math.max(500, spanDays * 40)),
         tenant_id: tenantId.value ?? undefined,
-      }))
+      }, { signal }))
+      if (seq !== matrixSeq) return
+      rankingMatrix.value = data
+      matrixRangeKey = rangeKey
       ensureActiveMatrixPlatform()
     } catch (error: unknown) {
+      if (seq !== matrixSeq) return
+      if (signal.aborted) return
       notifyOperationError(error, '排名矩阵加载失败')
     } finally {
-      loadingMatrix.value = false
+      if (seq === matrixSeq) loadingMatrix.value = false
     }
   }
 
