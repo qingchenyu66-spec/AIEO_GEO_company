@@ -311,6 +311,12 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return `${start} 至 ${end}`
   }
 
+  function tenantMonitorLabel(tenant: TenantInfo) {
+    const n = Number(tenant.schedule_frequency)
+    if (!Number.isFinite(n) || n <= 0) return '未配置'
+    return `每日 ${n} 次`
+  }
+
   function tenantOwnerLabel(tenant: TenantInfo) {
     return tenant.owner_display_name || tenant.owner_username || '未指定'
   }
@@ -823,6 +829,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         const tenantIndex = tenants.value.findIndex(item => item.id === tenant.id)
         if (tenantIndex >= 0) tenants.value.splice(tenantIndex, 1, tenant)
       }
+      const scheduleFrequency = Math.max(1, scheduleTimeList().length || brandForm.schedule_frequency)
       const saved = await saveBrandAsset({
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
@@ -838,7 +845,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         description: brandForm.description.trim() || null,
         schedule_type: 'daily_times',
         schedule_times: scheduleTimeList(),
-        schedule_frequency: Math.max(1, scheduleTimeList().length || brandForm.schedule_frequency),
+        schedule_frequency: scheduleFrequency,
         schedule_weekdays: [],
         schedule_month_days: [],
       })
@@ -847,6 +854,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
         else ElMessage.info(msg)
         return
+      }
+      const listIndex = tenants.value.findIndex(item => item.id === brandForm.tenant_id)
+      if (listIndex >= 0) {
+        tenants.value.splice(listIndex, 1, {
+          ...tenants.value[listIndex],
+          schedule_frequency: scheduleFrequency,
+        })
       }
       await loadBrandAssetData()
       ElMessage.success(successText)
@@ -1331,6 +1345,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     canRestoreTenantService,
     stopTenantActionLabel,
     tenantServicePeriod,
+    tenantMonitorLabel,
     tenantOwnerLabel,
     editingGroupIndex,
     editingBrandWordGroupIndex,

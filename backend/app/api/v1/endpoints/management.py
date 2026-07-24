@@ -23,6 +23,7 @@ from app.services.system_config_service import (
 from app.models.ops import OperationLog, SystemConfig
 from app.models.permission import Menu, Position, PositionMenu, Role, UserIdentityMenu
 from app.models.tenant import Tenant
+from app.models.brand import BrandAsset
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.menu_config import MenuConfig
 from app.models.user import User
@@ -210,7 +211,37 @@ def validate_service_period(service_start_date: date | None, service_end_date: d
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="服务结束日期不能早于服务开始日期")
 
 
-def tenant_to_dict(tenant: Tenant, *, owner_lookup: dict[int, User] | None = None, db: Session | None = None) -> dict:
+def _brand_asset_lookup(db: Session, tenant_ids: list[int]) -> dict[int, BrandAsset]:
+    ids = [int(item) for item in tenant_ids if item]
+    if not ids:
+        return {}
+    rows = list(
+        db.scalars(
+            select(BrandAsset).where(
+                BrandAsset.tenant_id.in_(ids),
+                BrandAsset.deleted.is_(False),
+            )
+        )
+    )
+    return {asset.tenant_id: asset for asset in rows}
+
+
+def _schedule_daily_count(asset: BrandAsset | None) -> int | None:
+    """与监测计划一致：按实际会触发的时段数，而非写死 3。"""
+    if asset is None:
+        return None
+    from app.services.schedule_service import schedule_times_for_asset
+
+    return len(schedule_times_for_asset(asset))
+
+
+def tenant_to_dict(
+    tenant: Tenant,
+    *,
+    owner_lookup: dict[int, User] | None = None,
+    db: Session | None = None,
+    asset: BrandAsset | None = None,
+) -> dict:
     owner_display_name = None
     owner_username = None
     if tenant.owner_user_id:
@@ -220,6 +251,9 @@ def tenant_to_dict(tenant: Tenant, *, owner_lookup: dict[int, User] | None = Non
         if owner is not None:
             owner_display_name = owner.display_name
             owner_username = owner.username
+    resolved_asset = asset
+    if resolved_asset is None and db is not None:
+        resolved_asset = _brand_asset_lookup(db, [tenant.id]).get(tenant.id)
     return {
         "id": tenant.id,
         "name": tenant.name,
@@ -233,6 +267,7 @@ def tenant_to_dict(tenant: Tenant, *, owner_lookup: dict[int, User] | None = Non
         "stopped_by": tenant.stopped_by,
         "service_start_date": tenant.service_start_date.isoformat() if tenant.service_start_date else None,
         "service_end_date": tenant.service_end_date.isoformat() if tenant.service_end_date else None,
+        "schedule_frequency": _schedule_daily_count(resolved_asset),
     }
 
 
@@ -566,7 +601,13 @@ def management_tenants(
         stmt = stmt.where(Tenant.owner_user_id == current.user.id)
     tenant_rows = list(db.scalars(stmt))
     owner_lookup = _tenant_owner_lookup(db, tenant_rows)
-    return ApiResponse(data=[tenant_to_dict(item, owner_lookup=owner_lookup) for item in tenant_rows])
+    asset_lookup = _brand_asset_lookup(db, [item.id for item in tenant_rows])
+    return ApiResponse(
+        data=[
+            tenant_to_dict(item, owner_lookup=owner_lookup, asset=asset_lookup.get(item.id))
+            for item in tenant_rows
+        ]
+    )
 
 
 @router.get("/operation-logs", response_model=ApiResponse[list[dict]])

@@ -119,6 +119,7 @@ const {
   canRestoreTenantService,
   stopTenantActionLabel,
   tenantServicePeriod,
+  tenantMonitorLabel,
   tenantOwnerLabel,
   editingGroupIndex,
   editingBrandWordGroupIndex,
@@ -277,7 +278,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             </span>
             <span>
               <small>自动监测</small>
-              <b>每日 3 次</b>
+              <b>{{ tenantMonitorLabel(tenant) }}</b>
             </span>
           </div>
           <div class="enterprise-actions">

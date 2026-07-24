@@ -43,6 +43,8 @@ export interface TenantInfo {
   stopped_by: number | null
   service_start_date: string | null
   service_end_date: string | null
+  /** 与监测计划联动的每日执行次数；无品牌资产时为 null */
+  schedule_frequency?: number | null
 }
 
 export interface TenantSalesOwner {
