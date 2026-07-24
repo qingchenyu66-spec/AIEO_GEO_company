@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -245,3 +246,73 @@ def test_backfill_when_no_candidate_days(db_session) -> None:
 
     assert len(bundle["source_stats"]) == 1
     assert db_session.query(GeoMonitorSourceDaily).count() == 1
+
+
+def test_stale_many_days_uses_single_backfill(db_session) -> None:
+    """多日缺物化不得逐日 rebuild（会比改前更慢）。"""
+    tenant_id = 8
+    db_session.add(_brand_asset(tenant_id))
+    for day in (date(2026, 7, 10), date(2026, 7, 11), date(2026, 7, 12)):
+        db_session.add(
+            GeoMonitorDailyStat(
+                tenant_id=tenant_id,
+                stat_date=day,
+                platform="kimi",
+                completed_count=1,
+                mentioned_count=0,
+                top3_count=0,
+                rank_sum=0,
+                rank_count=0,
+                citation_count=1,
+            )
+        )
+    db_session.commit()
+
+    calls = {"backfill": 0, "rebuild": 0}
+
+    def _fake_backfill(*args, **kwargs):
+        calls["backfill"] += 1
+        return []
+
+    def _fake_rebuild(*args, **kwargs):
+        calls["rebuild"] += 1
+        return SimpleNamespace(
+            stat_date=kwargs["stat_date"],
+            branded_json={},
+            all_json={},
+            daily_branded_count=0,
+            daily_by_platform_json={},
+        )
+
+    with (
+        patch(
+            "app.services.monitor_service.customer_display_cutoff",
+            return_value=datetime(2026, 7, 13, 0, 0, 0),
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service._backfill_source_daily_from_history",
+            side_effect=_fake_backfill,
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service.rebuild_source_daily_for_day",
+            side_effect=_fake_rebuild,
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service._bundle_from_day_rows",
+            return_value={
+                "source_stats": [],
+                "source_stats_all": [],
+                "source_citation_trend": {"points": []},
+                "source_citation_trend_by_platform": {},
+            },
+        ),
+    ):
+        build_customer_source_stats_from_daily(
+            db_session,
+            tenant_id,
+            purchased_platforms={"kimi"},
+            exposure_terms=["艾迪亚"],
+        )
+
+    assert calls["backfill"] == 1
+    assert calls["rebuild"] == 0

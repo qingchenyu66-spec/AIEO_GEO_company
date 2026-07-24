@@ -387,23 +387,16 @@ def build_customer_source_stats_from_daily(
     purchased_platforms: set[str],
     exposure_terms: list[str],
 ) -> dict[str, Any]:
-    """读路径：确保截止日前各监测日物化可用，再合并。"""
+    """读路径：确保截止日前各监测日物化可用，再合并。
+
+    缺日/指纹失效超过 1 天时走一次全历史回填（避免按日 N 次扫库更慢）；
+    写完显式 commit（GET 会话默认不 commit，否则物化会被回滚）。
+    """
     from app.services.monitor_service import customer_display_cutoff
 
     cutoff_day = customer_display_cutoff().date()
     config_fp = source_stats_config_fingerprint(exposure_terms, purchased_platforms)
     candidate_days = _candidate_source_days(db, tenant_id, cutoff_day)
-
-    if not candidate_days:
-        day_rows = _backfill_source_daily_from_history(
-            db,
-            tenant_id,
-            cutoff_day=cutoff_day,
-            purchased_platforms=purchased_platforms,
-            exposure_terms=exposure_terms,
-            config_fp=config_fp,
-        )
-        return _bundle_from_day_rows(day_rows, cutoff_day=cutoff_day)
 
     existing = {
         row.stat_date: row
@@ -414,17 +407,56 @@ def build_customer_source_stats_from_daily(
             )
         )
     }
-    day_rows: list[GeoMonitorSourceDaily] = []
-    for day in candidate_days:
-        row = existing.get(day)
-        if row is None or str(row.config_fp or "") != config_fp:
-            row = rebuild_source_daily_for_day(
-                db,
-                tenant_id=tenant_id,
-                stat_date=day,
-                purchased_platforms=purchased_platforms,
-                exposure_terms=exposure_terms,
-                config_fp=config_fp,
-            )
-        day_rows.append(row)
+    stale_days = [
+        day
+        for day in candidate_days
+        if day not in existing or str(existing[day].config_fp or "") != config_fp
+    ]
+
+    wrote = False
+    if not candidate_days:
+        day_rows = _backfill_source_daily_from_history(
+            db,
+            tenant_id,
+            cutoff_day=cutoff_day,
+            purchased_platforms=purchased_platforms,
+            exposure_terms=exposure_terms,
+            config_fp=config_fp,
+        )
+        wrote = True
+    elif len(stale_days) > 1:
+        # ponytail: 多日缺物化时一次扫历史；逐日 rebuild 会把冷路径拖得比改前更慢
+        day_rows = _backfill_source_daily_from_history(
+            db,
+            tenant_id,
+            cutoff_day=cutoff_day,
+            purchased_platforms=purchased_platforms,
+            exposure_terms=exposure_terms,
+            config_fp=config_fp,
+        )
+        wrote = True
+    else:
+        day_rows = []
+        for day in candidate_days:
+            row = existing.get(day)
+            if row is None or str(row.config_fp or "") != config_fp:
+                row = rebuild_source_daily_for_day(
+                    db,
+                    tenant_id=tenant_id,
+                    stat_date=day,
+                    purchased_platforms=purchased_platforms,
+                    exposure_terms=exposure_terms,
+                    config_fp=config_fp,
+                )
+                wrote = True
+            day_rows.append(row)
+
+    if wrote:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("commit source daily rollup failed tenant_id=%s", tenant_id)
+            raise
+
     return _bundle_from_day_rows(day_rows, cutoff_day=cutoff_day)
