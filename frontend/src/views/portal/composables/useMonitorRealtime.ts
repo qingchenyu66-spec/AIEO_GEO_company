@@ -306,7 +306,6 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const loadingMatrix = ref(false)
   let matrixSeq = 0
   let matrixAbort: AbortController | null = null
-  let matrixRangeKey = ''
   const matrixChartType = ref<MatrixChartType>('bar')
 
   watch(matrixChartType, (type) => {
@@ -1001,7 +1000,6 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     const signal = matrixAbort.signal
     const startDate = filters.startDate
     const endDate = filters.endDate
-    const rangeKey = `${startDate}|${endDate}`
     const startMs = Date.parse(`${startDate}T00:00:00`)
     const endMs = Date.parse(`${endDate}T00:00:00`)
     const spanDays = Number.isFinite(startMs) && Number.isFinite(endMs)
@@ -1027,7 +1025,6 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       }, { signal }))
       if (seq !== matrixSeq) return
       rankingMatrix.value = data
-      matrixRangeKey = rangeKey
       ensureActiveMatrixPlatform()
     } catch (error: unknown) {
       if (seq !== matrixSeq) return
