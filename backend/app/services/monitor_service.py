@@ -2987,23 +2987,46 @@ def _read_display_brand_rank(
 
     if subtask.mention_position is not None:
         source, raw = _stored_display_rank_source(subtask)
-        stored = raw.get("rank_resolution") if isinstance(raw.get("rank_resolution"), dict) else {}
-        confidence = 1.0 if source == "manual" else 0.9
-        if source == "llm":
-            try:
-                confidence = float(stored.get("confidence", 0.9))
-            except (TypeError, ValueError):
-                confidence = 0.9
-            confidence = max(0.0, min(1.0, confidence))
-        return BrandRankResolution(
-            rank=subtask.mention_position,
-            mentioned=True,
-            source=source,
-            confidence=confidence,
-            category=str(stored.get("category") or "").strip() or None,
-            rank_basis=str(stored.get("rank_basis") or "").strip() or None,
-            evidence=str(stored.get("evidence") or "").strip() or None,
-        )
+        # 人工/LLM 锁定；自动写入的 mention_position 可能来自模力「全员第1」脏榜，详情允许重算
+        if source in {"manual", "llm"} or not allow_full_parse:
+            stored = raw.get("rank_resolution") if isinstance(raw.get("rank_resolution"), dict) else {}
+            confidence = 1.0 if source == "manual" else 0.9
+            if source == "llm":
+                try:
+                    confidence = float(stored.get("confidence", 0.9))
+                except (TypeError, ValueError):
+                    confidence = 0.9
+                confidence = max(0.0, min(1.0, confidence))
+            # 轻量路径：结构化榜已按出场序纠正时，与脏 mention_position 冲突则采信榜单
+            if source == "stored" and not allow_full_parse:
+                rank_from_list, _, list_category = _find_brand_in_structured_rankings(
+                    subtask,
+                    brand_terms,
+                    asset,
+                    monitor_keywords=str(monitor_keywords or "").strip(),
+                )
+                if rank_from_list is not None:
+                    try:
+                        if float(rank_from_list) != float(subtask.mention_position):
+                            return BrandRankResolution(
+                                rank=rank_from_list,
+                                mentioned=True,
+                                source="structured",
+                                confidence=0.95,
+                                category=list_category,
+                                rank_basis="table",
+                            )
+                    except (TypeError, ValueError):
+                        pass
+            return BrandRankResolution(
+                rank=subtask.mention_position,
+                mentioned=True,
+                source=source,
+                confidence=confidence,
+                category=str(stored.get("category") or "").strip() or None,
+                rank_basis=str(stored.get("rank_basis") or "").strip() or None,
+                evidence=str(stored.get("evidence") or "").strip() or None,
+            )
 
     monitor_keyword = str(monitor_keywords or "").strip()
     rank_from_list, in_ranking_list, list_category = _find_brand_in_structured_rankings(

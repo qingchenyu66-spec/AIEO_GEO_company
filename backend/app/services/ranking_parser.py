@@ -69,8 +69,9 @@ _FIELD_LABEL_RE = re.compile(
     r")$"
 )
 # 「一、广州伟源光电科技有限公司」= 选手；「一、电梯广告公司」= 分类
+# 「艾迪亚控股集团」等无「有限公司」后缀的简称也要认成选手
 _COMPANY_ENTITY_HINT_RE = re.compile(
-    r"(有限公司|股份有限公司|有限责任公司|集团有限|股份公司|（集团）|株式会社|"
+    r"(有限公司|股份有限公司|有限责任公司|集团有限|控股集团|集团$|股份公司|（集团）|株式会社|"
     r"Co\.,?\s*Ltd\.?|Inc\.?)"
 )
 # 学科/学习项误入榜（教育类正文），不当作公司
@@ -634,6 +635,18 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
                 if numeric is not None:
                     appearance_counters[None] = max(appearance_counters.get(None, 0), int(numeric))
         results.append({"name": name, "rank": rank_value, "category": category})
+
+    # ponytail: 模力 allRankings 常整表 rank=1；无分段且同位次扎堆时按出场序重排
+    unscoped = [row for row in results if not row.get("category")]
+    if len(unscoped) >= 2:
+        numeric_ranks: list[float] = []
+        for row in unscoped:
+            coerced = _coerce_rank_number(row.get("rank"))
+            if coerced is not None:
+                numeric_ranks.append(float(coerced))
+        if len(numeric_ranks) == len(unscoped) and len(set(numeric_ranks)) == 1:
+            for index, row in enumerate(unscoped, start=1):
+                row["rank"] = index
     return results
 
 

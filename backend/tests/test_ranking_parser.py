@@ -10,6 +10,47 @@ from app.services.ranking_parser import (
 )
 
 
+def test_parse_holding_group_short_name_in_numbered_headers():
+    """### 四、艾迪亚控股集团 — 无「有限公司」后缀也要进榜，不能当分类。"""
+    text = """
+结合2026年最新行业信息，为你推荐国内综合实力突出的优质LED广告相关企业：
+### 一、深圳市布兰登光电科技有限公司
+- **核心优势**：源头工厂
+### 二、利亚德光电股份有限公司
+- **核心优势**：上市
+### 三、洲明科技集团股份有限公司
+- **核心优势**：节能
+### 四、艾迪亚控股集团
+- **核心优势**：全链路LED大屏广告服务商
+- **业务覆盖**：全场景
+### 五、艾比森光电股份有限公司
+- **核心优势**：户外
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "艾迪亚控股集团" in names
+    assert "业务覆盖" not in names
+    assert names.index("艾迪亚控股集团") == 3
+    assert [item["rank"] for item in entries] == [1, 2, 3, 4, 5]
+    rank, matched = find_best_brand_rank(entries, lambda name: "艾迪亚" in name)
+    assert matched is True
+    assert rank == 4
+
+
+def test_normalize_collapses_all_rank_one_api_payload():
+    """模力 allRankings 全员 rank=1 时按出场序重排。"""
+    raw = [
+        {"name": "深圳市布兰登光电科技有限公司", "rank": 1},
+        {"name": "利亚德光电股份有限公司", "rank": 1},
+        {"name": "洲明科技集团股份有限公司", "rank": 1},
+        {"name": "艾迪亚控股集团有限公司", "rank": 1},
+        {"name": "艾比森光电股份有限公司", "rank": 1},
+    ]
+    entries = normalize_structured_rankings(raw)
+    assert [item["rank"] for item in entries] == [1, 2, 3, 4, 5]
+    assert entries[3]["name"] == "艾迪亚控股集团有限公司"
+
+
 def test_parse_roman_style_company_headers_not_field_labels():
     """### 一、XX有限公司 + 成立时间字段 → 5 家公司，不当字段当选手。"""
     text = """
