@@ -290,6 +290,12 @@ def refresh_stats_for_task(db: Session, task_id: str) -> None:
             stat_date=day,
             platform=platform,
         )
+    try:
+        from app.services.monitor_source_rollup_service import refresh_source_daily_for_task
+
+        refresh_source_daily_for_task(db, task_id)
+    except Exception as exc:
+        logger.warning("refresh_source_daily_for_task failed task_id=%s error=%s", task_id, exc)
 
 
 def refresh_stats_after_subtask_backfill(
@@ -325,6 +331,21 @@ def refresh_stats_after_subtask_backfill(
             tenant_id=task.tenant_id,
             stat_date=day,
             platform=platform,
+        )
+    try:
+        from app.services.monitor_source_rollup_service import refresh_source_daily_after_subtask_backfill
+
+        refresh_source_daily_after_subtask_backfill(
+            db,
+            task=task,
+            previous_stat_date=previous_stat_date,
+            new_stat_date=new_day,
+        )
+    except Exception as exc:
+        logger.warning(
+            "refresh_source_daily_after_subtask_backfill failed task_id=%s error=%s",
+            task.task_id,
+            exc,
         )
 
 

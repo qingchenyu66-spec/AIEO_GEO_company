@@ -682,15 +682,15 @@ def _finalize_source_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return ranked
 
 
-def _aggregate_source_stats_pair(
+def _aggregate_source_stats_pair_maps(
     completed_items: list[GeoMonitorSubtask],
     *,
     business_day_by_id: dict[int, date],
     subtask_tenant_map: dict[int, int],
     purchased_platforms_by_tenant: dict[int, set[str]],
     exposure_terms_by_tenant: dict[int, list[str]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], dict[str, dict[str, int]]]:
-    """一次遍历产出：含露出词榜 + 全量引用榜；日趋势仍按含露出词计数。"""
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, int], dict[str, dict[str, int]]]:
+    """一次遍历产出未截断的 url→行 map（供日级物化合并）+ 日趋势计数。"""
     branded_map: dict[str, dict[str, Any]] = {}
     all_map: dict[str, dict[str, Any]] = {}
     source_daily_counts: dict[str, int] = {}
@@ -779,6 +779,25 @@ def _aggregate_source_stats_pair(
                     plat_bucket = source_daily_counts_by_platform.setdefault(item.platform, {})
                     plat_bucket[day_key] = plat_bucket.get(day_key, 0) + 1
 
+    return branded_map, all_map, source_daily_counts, source_daily_counts_by_platform
+
+
+def _aggregate_source_stats_pair(
+    completed_items: list[GeoMonitorSubtask],
+    *,
+    business_day_by_id: dict[int, date],
+    subtask_tenant_map: dict[int, int],
+    purchased_platforms_by_tenant: dict[int, set[str]],
+    exposure_terms_by_tenant: dict[int, list[str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], dict[str, dict[str, int]]]:
+    """一次遍历产出：含露出词榜 + 全量引用榜；日趋势仍按含露出词计数。"""
+    branded_map, all_map, source_daily_counts, source_daily_counts_by_platform = _aggregate_source_stats_pair_maps(
+        completed_items,
+        business_day_by_id=business_day_by_id,
+        subtask_tenant_map=subtask_tenant_map,
+        purchased_platforms_by_tenant=purchased_platforms_by_tenant,
+        exposure_terms_by_tenant=exposure_terms_by_tenant,
+    )
     return (
         _finalize_source_stat_rows(list(branded_map.values())),
         _finalize_source_stat_rows(list(all_map.values())),
@@ -1095,66 +1114,18 @@ def _compute_customer_source_stats_bundle(
     purchased_platforms: set[str],
     exposure_terms: list[str],
 ) -> dict[str, Any]:
-    """客户信源：监测日≤昨日全历史 + 露出词门槛；供 Redis 冷构建。"""
-    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+    """客户信源：监测日≤昨日全历史 + 露出词门槛；供 Redis 冷构建。
 
-    cutoff_day = customer_display_cutoff().date()
-    hist_rows, hist_tasks, hist_days = load_subtasks_for_business_date_range(
+    方案 C：优先读 geo_monitor_source_daily 按日合并；缺日/配置变更时按日重建。
+    """
+    from app.services.monitor_source_rollup_service import build_customer_source_stats_from_daily
+
+    return build_customer_source_stats_from_daily(
         db,
         tenant_id,
-        start_date=date(2020, 1, 1),
-        end_date=datetime.now().date(),
-        only_with_refs=True,
+        purchased_platforms=purchased_platforms,
+        exposure_terms=exposure_terms,
     )
-    source_items: list[GeoMonitorSubtask] = []
-    source_day_by_id: dict[int, date] = {}
-    source_tenant_map: dict[int, int] = {}
-    task_tenant = {t.task_id: t.tenant_id for t in hist_tasks if t.task_id}
-    for item in hist_rows:
-        biz = hist_days.get(item.id)
-        if biz is None or biz > cutoff_day:
-            continue
-        source_items.append(item)
-        source_day_by_id[item.id] = biz
-        tid = task_tenant.get(item.task_id) or tenant_id
-        if tid:
-            source_tenant_map[item.id] = int(tid)
-
-    source_stats, source_stats_all, source_daily_counts, source_daily_by_platform = _aggregate_source_stats_pair(
-        source_items,
-        business_day_by_id=source_day_by_id,
-        subtask_tenant_map=source_tenant_map,
-        purchased_platforms_by_tenant={tenant_id: purchased_platforms},
-        exposure_terms_by_tenant={tenant_id: exposure_terms},
-    )
-    citation_range_end = customer_display_cutoff()
-    positive_days = [
-        date.fromisoformat(k)
-        for k, v in source_daily_counts.items()
-        if int(v or 0) > 0
-    ]
-    citation_range_start = datetime.combine(
-        min(positive_days) if positive_days else citation_range_end.date(),
-        time.min,
-    )
-    source_citation_trend = _build_source_citation_trend(
-        source_daily_counts,
-        range_start=citation_range_start,
-        range_end=citation_range_end,
-        only_with_data=True,
-    )
-    source_citation_trend_by_platform = _build_source_citation_trends_by_platform(
-        source_daily_by_platform,
-        range_start=citation_range_start,
-        range_end=citation_range_end,
-        only_with_data=True,
-    )
-    return {
-        "source_stats": source_stats,
-        "source_stats_all": source_stats_all,
-        "source_citation_trend": source_citation_trend,
-        "source_citation_trend_by_platform": source_citation_trend_by_platform,
-    }
 
 
 def get_customer_source_stats_bundle(

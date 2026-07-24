@@ -5,7 +5,14 @@ from app.models.user_identity import UserIdentity
 from app.models.permission import Menu, Position, PositionMenu, Role, RoleMenu, UserIdentityMenu
 from app.models.system import OperationLog, SystemConfig
 from app.models.menu_config import MenuConfig
-from app.models.monitor import GeoMonitorCallbackEvent, GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import (
+    GeoMonitorCallbackEvent,
+    GeoMonitorDailyStat,
+    GeoMonitorScheduleRun,
+    GeoMonitorSourceDaily,
+    GeoMonitorSubtask,
+    GeoMonitorTask,
+)
 from app.models.knowledge import KnowledgeFile
 from app.models.ops import OperationLog, SystemConfig, OpsOverviewRollup
 from app.models.diagnosis import BrandDiagnosis
@@ -16,7 +23,9 @@ from app.models.announcement import Announcement, AnnouncementAck, AnnouncementM
 
 __all__ = [
     "GeoMonitorCallbackEvent",
+    "GeoMonitorDailyStat",
     "GeoMonitorScheduleRun",
+    "GeoMonitorSourceDaily",
     "GeoMonitorSubtask",
     "GeoMonitorTask",
     "KnowledgeFile",

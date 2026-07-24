@@ -120,6 +120,25 @@ class GeoMonitorDailyStat(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class GeoMonitorSourceDaily(Base):
+    """企业 × 监测日的信源引用预聚合（方案 C：读路径按日合并，避免全历史扫 reference_list）。"""
+
+    __tablename__ = "geo_monitor_source_daily"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "stat_date", name="uk_geo_monitor_source_daily"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False)
+    stat_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    config_fp: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    branded_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    all_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    daily_branded_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    daily_by_platform_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class GeoMonitorCallbackEvent(Base):
     """模力指数回调事件，做幂等和问题追踪。"""
 
