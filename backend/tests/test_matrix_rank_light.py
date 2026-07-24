@@ -61,6 +61,51 @@ def test_kpi_rank_prefers_normalized_structured_over_dirty_auto_mention():
     assert rank == 4.0
 
 
+def test_light_path_trusts_non_suspicious_mention_without_reconcile():
+    """位次≠1 且榜单未扎堆时，轻量路径不强制结构化对账。"""
+    item = _subtask(
+        all_rankings_json=[
+            {"name": "甲", "rank": 1},
+            {"name": "艾迪亚控股集团", "rank": 2},
+            {"name": "丙", "rank": 3},
+        ],
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _read_display_brand_rank(
+        item,
+        "电梯广告",
+        ["艾迪亚", "艾迪亚控股集团"],
+        None,
+        allow_full_parse=False,
+    )
+    assert detail.rank == 2
+    assert detail.source == "stored"
+
+
+def test_normalize_cache_reuses_same_rankings_payload():
+    from app.services.monitor_service import _normalize_structured_rankings_cached
+
+    raw = [
+        {"name": "甲", "rank": 1},
+        {"name": "乙", "rank": 1},
+        {"name": "艾迪亚", "rank": 1},
+    ]
+    cache: dict = {}
+    first = _normalize_structured_rankings_cached(raw, cache)
+    second = _normalize_structured_rankings_cached(
+        [
+            {"name": "甲", "rank": 1},
+            {"name": "乙", "rank": 1},
+            {"name": "艾迪亚", "rank": 1},
+        ],
+        cache,
+    )
+    assert first is second
+    assert len(cache) == 1
+    assert [row["rank"] for row in first] == [1, 2, 3]
+
+
 def test_display_rank_falls_back_to_structured_when_mention_missing():
     item = _subtask(
         all_rankings_json=[{"name": "艾迪亚控股集团", "rank": 2}],

@@ -46,6 +46,7 @@ from app.services.ranking_parser import (
     appearance_order_rank_scoped,
     find_best_brand_rank,
     find_best_brand_entry_scoped,
+    find_best_brand_hit_scoped,
     find_best_brand_rank_scoped,
     normalize_structured_rankings,
     parse_answer_rankings,
@@ -2711,9 +2712,8 @@ def _find_brand_in_rankings(
     ]
     if not merged:
         return None, False, None
-    entry = find_best_brand_entry_scoped(merged, match_name, scope, skip_name=skip_name)
+    rank, matched, entry = find_best_brand_hit_scoped(merged, match_name, scope, skip_name=skip_name)
     if entry is None:
-        rank, matched = find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
         return rank, matched, None
     category = str(entry.get("category") or "").strip() or None
     try:
@@ -2964,6 +2964,7 @@ def _find_brand_in_structured_rankings(
     asset: BrandAsset | None,
     *,
     monitor_keywords: str | None = None,
+    normalize_cache: dict[Any, list[dict[str, Any]]] | None = None,
 ) -> tuple[int | float | None, bool, str | None]:
     """仅用 all_rankings_json 匹配品牌位次（不读 answer_content）。"""
 
@@ -2982,19 +2983,87 @@ def _find_brand_in_structured_rankings(
             return False
         return _is_industry_monitor_keyword(text, asset)
 
-    merged = normalize_structured_rankings(subtask.all_rankings_json or [])
+    raw = subtask.all_rankings_json or []
+    merged = _normalize_structured_rankings_cached(raw, normalize_cache)
     if not merged:
         return None, False, None
     scope = _ranking_scope_text(monitor_keywords, subtask.prompt)
-    entry = find_best_brand_entry_scoped(merged, match_name, scope, skip_name=skip_name)
+    rank, matched, entry = find_best_brand_hit_scoped(merged, match_name, scope, skip_name=skip_name)
     if entry is None:
-        rank, matched = find_best_brand_rank_scoped(merged, match_name, scope, skip_name=skip_name)
         return rank, matched, None
     category = str(entry.get("category") or "").strip() or None
     try:
         return float(entry["rank"]), True, category
     except (TypeError, ValueError):
         return None, True, category
+
+
+def _structured_rankings_cache_key(raw_entries: list[Any] | None) -> tuple[Any, ...]:
+    """榜单内容指纹：同请求内相同 JSON 只 normalize 一次。"""
+    parts: list[tuple[str, Any, Any]] = []
+    for item in raw_entries or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(
+            item.get("name")
+            or item.get("brandName")
+            or item.get("brand_name")
+            or item.get("title")
+            or ""
+        ).strip()
+        parts.append((name, item.get("rank"), item.get("category") or item.get("type")))
+    return tuple(parts)
+
+
+def _raw_structured_ranks_collapsed(raw_entries: list[Any] | None) -> bool:
+    """模力脏榜特征：多条显式位次且全部相同（常见全员第1）。"""
+    ranks: list[float] = []
+    for item in raw_entries or []:
+        if not isinstance(item, dict):
+            continue
+        raw_rank = item.get("rank")
+        if raw_rank is None:
+            continue
+        try:
+            ranks.append(float(raw_rank))
+        except (TypeError, ValueError):
+            continue
+    return len(ranks) >= 2 and len(set(ranks)) == 1
+
+
+def _normalize_structured_rankings_cached(
+    raw_entries: list[Any] | None,
+    cache: dict[Any, list[dict[str, Any]]] | None,
+) -> list[dict[str, Any]]:
+    if not raw_entries:
+        return []
+    if cache is None:
+        return normalize_structured_rankings(raw_entries)
+    key = _structured_rankings_cache_key(raw_entries)
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    merged = normalize_structured_rankings(raw_entries)
+    cache[key] = merged
+    return merged
+
+
+def _should_reconcile_structured_rank(subtask: GeoMonitorSubtask) -> bool:
+    """轻量路径是否必须扫结构化榜。
+
+    - 无 mention_position：必须从榜单取位
+    - 榜单同位次扎堆 / 位次=1：脏榜高发区，必须与出场序对账
+    - 其余：信任已写入的 mention_position（日统计重建后应已纠正）
+    """
+    raw = subtask.all_rankings_json or []
+    if subtask.mention_position is None:
+        return True
+    if _raw_structured_ranks_collapsed(raw):
+        return True
+    try:
+        return abs(float(subtask.mention_position) - 1.0) < 1e-9
+    except (TypeError, ValueError):
+        return True
 
 
 def _orm_attr_loaded(obj: Any, key: str) -> bool:
@@ -3032,6 +3101,7 @@ def _read_display_brand_rank(
     asset: BrandAsset | None = None,
     *,
     allow_full_parse: bool = False,
+    normalize_cache: dict[Any, list[dict[str, Any]]] | None = None,
 ) -> BrandRankResolution:
     """读路径展示位次：mention_position 为权威；缺失再 JSON；详情可再全文解析。
 
@@ -3064,13 +3134,18 @@ def _read_display_brand_rank(
                 except (TypeError, ValueError):
                     confidence = 0.9
                 confidence = max(0.0, min(1.0, confidence))
-            # 轻量路径：结构化榜已按出场序纠正时，与脏 mention_position 冲突则采信榜单
-            if source == "stored" and not allow_full_parse:
+            # 轻量路径：仅在脏榜高发区与结构化榜对账，其余信任 mention_position
+            if (
+                source == "stored"
+                and not allow_full_parse
+                and _should_reconcile_structured_rank(subtask)
+            ):
                 rank_from_list, _, list_category = _find_brand_in_structured_rankings(
                     subtask,
                     brand_terms,
                     asset,
                     monitor_keywords=str(monitor_keywords or "").strip(),
+                    normalize_cache=normalize_cache,
                 )
                 if rank_from_list is not None:
                     try:
@@ -3101,6 +3176,7 @@ def _read_display_brand_rank(
         brand_terms,
         asset,
         monitor_keywords=monitor_keyword,
+        normalize_cache=normalize_cache,
     )
     if rank_from_list is not None:
         return BrandRankResolution(
@@ -3178,6 +3254,7 @@ def _matrix_cell_rank(
     keyword_groups: list[dict[str, Any]] | None = None,
     *,
     ranking_terms: list[str] | None = None,
+    normalize_cache: dict[Any, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     terms = ranking_terms if ranking_terms is not None else _ranking_match_terms(asset, keyword_groups)
     detail = _read_display_brand_rank(
@@ -3186,6 +3263,7 @@ def _matrix_cell_rank(
         terms,
         asset,
         allow_full_parse=False,
+        normalize_cache=normalize_cache,
     )
     return {
         "mention_position": detail.rank,
@@ -3359,8 +3437,9 @@ def ranking_matrix(
 
     prompt_set: dict[str, str | None] = {}
     task_rows: dict[str, dict[str, Any]] = {}
-    # ponytail: 词表每格不变，提到循环外；避免 3k× 重建
+    # ponytail: 词表每格不变，提到循环外；normalize 结果按榜单指纹缓存
     ranking_terms = _ranking_match_terms(asset, keyword_groups)
+    normalize_cache: dict[Any, list[dict[str, Any]]] = {}
 
     for item in subtasks:
         prompt = (item.prompt or "").strip()
@@ -3419,6 +3498,7 @@ def ranking_matrix(
             asset,
             keyword_groups,
             ranking_terms=ranking_terms,
+            normalize_cache=normalize_cache,
         )
         cell = {
             "subtask_id": item.subtask_id,

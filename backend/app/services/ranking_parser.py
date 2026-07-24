@@ -960,14 +960,14 @@ def _pick_best_rank_entry(entries: list[dict[str, Any]]) -> dict[str, Any] | Non
     return best
 
 
-def find_best_brand_rank_scoped(
+def find_best_brand_hit_scoped(
     entries: list[dict[str, Any]],
     match_name: Callable[[str], bool],
     scope: str,
     *,
     skip_name: Callable[[str], bool] | None = None,
-) -> tuple[int | float | None, bool]:
-    """分段名次：多命中取最靠前；scope 用于同分时偏爱相关段，不用来抬高差名次。"""
+) -> tuple[int | float | None, bool, dict[str, Any] | None]:
+    """一次扫描：返回 (rank, matched, winning_entry)。"""
     matched_entries: list[dict[str, Any]] = []
     for entry in entries:
         name = str(entry.get("name") or "").strip()
@@ -979,17 +979,52 @@ def find_best_brand_rank_scoped(
             continue
         matched_entries.append(entry)
     if not matched_entries:
-        return None, False
+        return None, False, None
 
     categorized = [
         entry for entry in matched_entries
         if str(entry.get("category") or "").strip()
     ]
-    # 产品口径：有效命中取最靠前；scope 仅影响展示段名（见 find_best_brand_entry_scoped）
     winner = _pick_best_rank_entry(categorized or matched_entries)
-    if winner is not None:
-        return float(winner["rank"]), True
-    return None, True
+    if winner is None:
+        return None, True, None
+    try:
+        target = float(winner["rank"])
+    except (TypeError, ValueError):
+        return None, True, winner
+
+    hits = [
+        entry for entry in matched_entries
+        if (numeric := _numeric_rank(entry)) is not None and float(numeric) == target
+    ]
+    if not hits:
+        return target, True, winner
+    scope_text = str(scope or "").strip()
+    if scope_text and len(hits) > 1:
+        hits_sorted = sorted(
+            hits,
+            key=lambda item: ranking_category_scope_score(
+                str(item.get("category") or "").strip(),
+                scope_text,
+            ),
+            reverse=True,
+        )
+        return target, True, hits_sorted[0]
+    return target, True, hits[0]
+
+
+def find_best_brand_rank_scoped(
+    entries: list[dict[str, Any]],
+    match_name: Callable[[str], bool],
+    scope: str,
+    *,
+    skip_name: Callable[[str], bool] | None = None,
+) -> tuple[int | float | None, bool]:
+    """分段名次：多命中取最靠前；scope 用于同分时偏爱相关段，不用来抬高差名次。"""
+    rank, matched, _entry = find_best_brand_hit_scoped(
+        entries, match_name, scope, skip_name=skip_name,
+    )
+    return rank, matched
 
 
 def _is_major_section_line(line: str) -> bool:
@@ -1136,37 +1171,10 @@ def find_best_brand_entry_scoped(
     skip_name: Callable[[str], bool] | None = None,
 ) -> dict[str, Any] | None:
     """同 find_best_brand_rank_scoped，返回取胜的那条（含 category）。"""
-    rank, matched = find_best_brand_rank_scoped(entries, match_name, scope, skip_name=skip_name)
-    if not matched or rank is None:
-        return None
-    target = float(rank)
-    hits = []
-    for entry in entries:
-        name = str(entry.get("name") or "").strip()
-        if not name or not match_name(name):
-            continue
-        if skip_name and skip_name(name):
-            continue
-        if _is_non_rank_category(entry.get("category")):
-            continue
-        numeric = _numeric_rank(entry)
-        if numeric is None or numeric != target:
-            continue
-        hits.append(entry)
-    if not hits:
-        return None
-    scope_text = str(scope or "").strip()
-    if scope_text and len(hits) > 1:
-        hits_sorted = sorted(
-            hits,
-            key=lambda item: ranking_category_scope_score(
-                str(item.get("category") or "").strip(),
-                scope_text,
-            ),
-            reverse=True,
-        )
-        return hits_sorted[0]
-    return hits[0]
+    _rank, _matched, entry = find_best_brand_hit_scoped(
+        entries, match_name, scope, skip_name=skip_name,
+    )
+    return entry
 
 
 
