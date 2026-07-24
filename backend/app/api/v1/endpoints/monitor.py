@@ -338,7 +338,7 @@ def monitor_workspace_brief(
 @router.get("/brand-analysis", response_model=ApiResponse[dict])
 def monitor_brand_analysis(
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
-    parse: bool = Query(default=True, description="是否对未解析样本调用 DeepSeek 二次情感归类"),
+    parse: bool = Query(default=False, description="是否对未解析样本调用 DeepSeek；默认否，避免读路径堵接口"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -744,15 +744,23 @@ def monitor_task_sync(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """手动同步远端任务状态和已完成结果；只有这个接口会主动请求 status/result。"""
-    try:
-        task = sync_monitor_task(db, task_id, current)
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except MolizhishuApiError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=molizhishu_upstream_error_detail(exc),
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task, current)})
+    from app.core.redis_client import redis_lock
+
+    with redis_lock(f"sync-task:{task_id}", ttl_seconds=600) as acquired:
+        if not acquired:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该任务正在同步中，请稍后重试",
+            )
+        try:
+            task = sync_monitor_task(db, task_id, current)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except MolizhishuApiError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=molizhishu_upstream_error_detail(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return ApiResponse(data={"task": serialize_task(task), "subtasks": _serialize_task_subtasks(db, task, current)})

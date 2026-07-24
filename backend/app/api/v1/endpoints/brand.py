@@ -24,7 +24,7 @@ from app.services.brand_service import (
 )
 from app.services.approval_service import queue_or_run
 from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
-from app.services.tenant_scope import resolve_and_guard_tenant_id
+from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
 from app.core.config import settings
 
 router = APIRouter(prefix="/brand")
@@ -54,7 +54,10 @@ def brand_asset(
 ) -> ApiResponse[dict]:
     """读取企业品牌资产和竞品库；客户只能读取自身企业。"""
     try:
-        resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
+        if current.identity.identity_type == "PLATFORM" and tenant_id is not None:
+            resolved_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        else:
+            resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
         asset = get_brand_asset(db, resolved_tenant_id)
         keyword_groups = editable_keyword_groups(db, resolved_tenant_id) if asset else []
         brand_word_groups = list_brand_word_groups(db, resolved_tenant_id) if asset else []

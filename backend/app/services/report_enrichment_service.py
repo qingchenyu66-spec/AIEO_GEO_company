@@ -127,27 +127,15 @@ def build_rule_source_tips(
     return deduped[:10]
 
 
-def _strict_entity_match(left: str | None, right: str | None) -> bool:
-    a = re.sub(r"\s+", "", str(left or "").strip().lower())
-    b = re.sub(r"\s+", "", str(right or "").strip().lower())
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    return len(shorter) >= 3 and shorter in longer
-
-
 def _names_match(left: str | None, right: str | None) -> bool:
-    a = re.sub(r"\s+", "", str(left or "").strip().lower())
-    b = re.sub(r"\s+", "", str(right or "").strip().lower())
-    if not a or not b:
-        return False
-    if a == b or a in b or b in a:
-        return True
-    if len(a) >= 2 and len(b) >= 2 and (a[:2] in b or b[:2] in a):
-        return True
-    return False
+    """与售前诊断同一套严格实体匹配，禁止两字前缀互撞。"""
+    from app.services.lead_diagnosis_analytics import names_match
+
+    return names_match(left, right)
+
+
+def _strict_entity_match(left: str | None, right: str | None) -> bool:
+    return _names_match(left, right)
 
 
 def canonical_ranking_name(name: str, brand: str, competitors: list[str]) -> str:

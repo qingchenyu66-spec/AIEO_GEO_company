@@ -25,27 +25,32 @@ def success_subtasks(rows: Iterable[Any]) -> list[Any]:
     return [item for item in rows if is_success_status(getattr(item, "status", None))]
 
 
-def compute_brand_rank_rates(rows: Iterable[Any]) -> dict[str, Any]:
+def compute_brand_rank_rates(
+    rows: Iterable[Any],
+    *,
+    rank_of: Any | None = None,
+) -> dict[str, Any]:
     """统一提及率 / Top3 率 / 平均排名。
 
-    mention_rate = 有 mention_position 的成功样本 / 成功样本
+    mention_rate = 有位次的成功样本 / 成功样本
     top3_rate    = rank<=3 的成功样本 / 成功样本
     avg_rank     = 有名次样本的均值；无名次则 None（不用 0 冒充）
+
+    rank_of: 可选 (item) -> rank；默认读 mention_position。
     """
+    def _rank(item: Any) -> Any:
+        if rank_of is not None:
+            return rank_of(item)
+        return getattr(item, "mention_position", None)
+
     success = success_subtasks(rows)
-    mentioned = [
-        item for item in success
-        if getattr(item, "mention_position", None) is not None
-    ]
-    top3 = [
-        item for item in mentioned
-        if float(item.mention_position) <= 3  # type: ignore[arg-type]
-    ]
+    mentioned = [item for item in success if _rank(item) is not None]
+    top3 = [item for item in mentioned if float(_rank(item)) <= 3]
     success_n = len(success)
     mentioned_n = len(mentioned)
     top3_n = len(top3)
     avg_rank = (
-        round(sum(float(item.mention_position) for item in mentioned) / mentioned_n, 1)
+        round(sum(float(_rank(item)) for item in mentioned) / mentioned_n, 1)
         if mentioned_n
         else None
     )

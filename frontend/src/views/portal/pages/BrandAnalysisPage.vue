@@ -315,13 +315,27 @@ async function loadPageData() {
   loadError.value = ''
   try {
     const tenantId = resolveTenantId()
-    dashboard.value = await withRetry(() => getBrandAnalysis({ tenant_id: tenantId, parse: true }))
+    // 先快读（不调 DeepSeek），有待解析再后台补一轮
+    dashboard.value = await withRetry(() => getBrandAnalysis({ tenant_id: tenantId, parse: false }))
     if (selfLoaded.value) {
       const assetTenantId = dashboard.value?.tenant_id ?? tenantId ?? null
       const response = await withRetry(() => getBrandAsset(assetTenantId))
       localBrandAsset.value = response.asset
     }
     await renderCharts()
+    const pending =
+      Number(dashboard.value?.parse?.pending_left || 0) +
+      Number(dashboard.value?.parse?.description_pending_left || 0)
+    if (pending > 0) {
+      void getBrandAnalysis({ tenant_id: tenantId, parse: true })
+        .then(async (data) => {
+          dashboard.value = data
+          await renderCharts()
+        })
+        .catch(() => {
+          /* 后台补解析失败不影响已展示数据 */
+        })
+    }
   } catch (error: unknown) {
     notifyOperationError(error, '品牌分析数据加载失败')
     loadError.value = extractErrorDetail(error)

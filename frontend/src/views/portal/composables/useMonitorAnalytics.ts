@@ -47,6 +47,8 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   const syncingMonitorResults = ref(false)
   let monitorSummaryTimer: number | null = null
   let lastSummaryErrorAt = 0
+  let summarySeq = 0
+  let summaryAbort: AbortController | null = null
 
   const selectedSourcePlatform = ref('all')
   const sourceKeywordFilter = ref('')
@@ -329,18 +331,28 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
 
   async function loadMonitorSummary(syncRemote = false) {
     if (!shouldLoadMonitorSummary.value && !syncRemote && monitorSummary.value) return
+    summaryAbort?.abort()
+    summaryAbort = new AbortController()
+    const seq = ++summarySeq
+    const signal = summaryAbort.signal
     loadingSummary.value = true
     try {
       const summaryTenantId = previewTenantId.value
-      const summary = await withRetry(() => getMonitorSummary(syncRemote, summaryTenantId))
+      const summary = await withRetry(() => getMonitorSummary(syncRemote, summaryTenantId, { signal }))
+      if (seq !== summarySeq) return
       monitorSummary.value = summary
       if (syncRemote) {
         const synced = await syncPendingTasksFromSummary(summary)
+        if (seq !== summarySeq) return
         if (synced) {
-          monitorSummary.value = await withRetry(() => getMonitorSummary(true, summaryTenantId))
+          monitorSummary.value = await withRetry(() => getMonitorSummary(true, summaryTenantId, { signal }))
         }
       }
     } catch (error: unknown) {
+      if (seq !== summarySeq) return
+      const canceled = (error as { code?: string; name?: string })?.code === 'ERR_CANCELED'
+        || (error as { name?: string })?.name === 'CanceledError'
+      if (canceled) return
       const now = Date.now()
       if (!monitorSummary.value) {
         notifyError(error, '监测汇总加载失败')
@@ -350,7 +362,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
         lastSummaryErrorAt = now
       }
     } finally {
-      loadingSummary.value = false
+      if (seq === summarySeq) loadingSummary.value = false
     }
   }
 
@@ -388,6 +400,11 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
     if (!shouldLoadMonitorSummary.value) return
     void loadMonitorSummary(false)
   })
+  watch(previewTenantId, (tenantId, prev) => {
+    if (tenantId === prev) return
+    monitorSummary.value = null
+    if (shouldLoadMonitorSummary.value) void loadMonitorSummary(true)
+  })
   watch(activeMenuCode, loadPlatformSystemData)
   watch(activeMenuCode, () => loadPlatformMatrix())
   watch(sourcePlatformTabs, tabs => {
@@ -414,6 +431,7 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
   })
 
   onUnmounted(() => {
+    summaryAbort?.abort()
     if (monitorSummaryTimer) window.clearInterval(monitorSummaryTimer)
     if (platformMatrixTimer) window.clearInterval(platformMatrixTimer)
   })

@@ -233,9 +233,15 @@ def test_backfill_when_no_candidate_days(db_session) -> None:
     )
     db_session.commit()
 
-    with patch(
-        "app.services.monitor_service.customer_display_cutoff",
-        return_value=datetime(2026, 7, 13, 0, 0, 0),
+    with (
+        patch(
+            "app.services.monitor_service.customer_display_cutoff",
+            return_value=datetime(2026, 7, 13, 0, 0, 0),
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service._try_enqueue_source_daily_warm",
+            return_value=False,
+        ),
     ):
         bundle = build_customer_source_stats_from_daily(
             db_session,
@@ -290,6 +296,10 @@ def test_stale_many_days_uses_single_backfill(db_session) -> None:
             return_value=datetime(2026, 7, 13, 0, 0, 0),
         ),
         patch(
+            "app.services.monitor_source_rollup_service._try_enqueue_source_daily_warm",
+            return_value=False,
+        ),
+        patch(
             "app.services.monitor_source_rollup_service._backfill_source_daily_from_history",
             side_effect=_fake_backfill,
         ),
@@ -316,3 +326,49 @@ def test_stale_many_days_uses_single_backfill(db_session) -> None:
 
     assert calls["backfill"] == 1
     assert calls["rebuild"] == 0
+
+
+def test_stale_many_days_prefers_async_enqueue(db_session) -> None:
+    """Celery 可用时多日 stale 走异步，不堵 GET。"""
+    tenant_id = 9
+    for day in (date(2026, 7, 10), date(2026, 7, 11)):
+        db_session.add(
+            GeoMonitorDailyStat(
+                tenant_id=tenant_id,
+                stat_date=day,
+                platform="kimi",
+                completed_count=1,
+                mentioned_count=0,
+                top3_count=0,
+                rank_sum=0,
+                rank_count=0,
+                citation_count=1,
+            )
+        )
+    db_session.commit()
+    calls = {"enqueue": 0, "backfill": 0}
+
+    with (
+        patch(
+            "app.services.monitor_service.customer_display_cutoff",
+            return_value=datetime(2026, 7, 13, 0, 0, 0),
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service._try_enqueue_source_daily_warm",
+            side_effect=lambda *_a, **_k: calls.__setitem__("enqueue", calls["enqueue"] + 1) or True,
+        ),
+        patch(
+            "app.services.monitor_source_rollup_service._backfill_source_daily_from_history",
+            side_effect=lambda *_a, **_k: calls.__setitem__("backfill", calls["backfill"] + 1) or [],
+        ),
+    ):
+        bundle = build_customer_source_stats_from_daily(
+            db_session,
+            tenant_id,
+            purchased_platforms={"kimi"},
+            exposure_terms=["艾迪亚"],
+        )
+
+    assert calls["enqueue"] == 1
+    assert calls["backfill"] == 0
+    assert bundle["source_stats"] == []

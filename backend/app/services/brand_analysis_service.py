@@ -427,9 +427,12 @@ def build_brand_analysis_dashboard(
     current: CurrentSession,
     *,
     tenant_id: int | None = None,
-    parse_sentiments: bool = True,
+    parse_sentiments: bool = False,
 ) -> dict[str, Any]:
-    """品牌分析专用：情感饼图 + 平台情感柱 + AI 描述归并。"""
+    """品牌分析专用：情感饼图 + 平台情感柱 + AI 描述归并。
+
+    默认不在读路径调 DeepSeek；同步写路径 / 显式 parse=true 再补齐。
+    """
     resolved = _resolve_workspace_brief_tenant_id(current, tenant_id)
     asset = get_brand_asset(db, resolved)
     brand_name = (
@@ -501,6 +504,12 @@ def build_brand_analysis_dashboard(
         )
         if purchased_set:
             subtasks = [item for item in subtasks if item.platform in purchased_set]
+    elif subtasks:
+        # 读路径默认不调 LLM，仍回报待解析量供前端决定是否二次请求
+        parse_meta["pending_left"] = sum(1 for item in subtasks if not _has_deepseek_sentiment(item))
+        parse_meta["description_pending_left"] = sum(
+            1 for item in subtasks if not _has_deepseek_description(item)
+        )
 
     sentiment_counts = {"正面": 0, "中性": 0, "负面": 0, "未知": 0}
     platform_counts: dict[str, int] = {code: 0 for code in purchased}

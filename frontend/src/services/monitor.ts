@@ -442,27 +442,36 @@ export function invalidateMonitorSummaryCache() {
   monitorSummaryCache = null
 }
 
-export async function getMonitorSummary(force = false, tenantId?: number | null): Promise<MonitorSummary> {
+export async function getMonitorSummary(
+  force = false,
+  tenantId?: number | null,
+  config?: GeoHttpRequestConfig,
+): Promise<MonitorSummary> {
   const now = Date.now()
   const cacheKey = tenantId ? `t:${tenantId}` : 'default'
   if (!force && monitorSummaryCache && monitorSummaryCache.key === cacheKey && monitorSummaryCache.expiresAt > now) {
     return monitorSummaryCache.data
   }
-  if (!force && monitorSummaryInflight && monitorSummaryInflightKey === cacheKey) {
+  if (!force && !config?.signal && monitorSummaryInflight && monitorSummaryInflightKey === cacheKey) {
     return monitorSummaryInflight
   }
-  monitorSummaryInflightKey = cacheKey
-  monitorSummaryInflight = http.get('/v1/monitor/summary', {
+  const request = http.get('/v1/monitor/summary', {
     params: tenantId ? { tenant_id: tenantId } : {},
+    ...config,
   }).then(response => {
     const data = response.data.data as MonitorSummary
     monitorSummaryCache = { data, expiresAt: Date.now() + MONITOR_SUMMARY_TTL_MS, key: cacheKey }
     return data
-  }).finally(() => {
-    monitorSummaryInflight = null
-    monitorSummaryInflightKey = null
   })
-  return monitorSummaryInflight
+  if (!config?.signal) {
+    monitorSummaryInflightKey = cacheKey
+    monitorSummaryInflight = request.finally(() => {
+      monitorSummaryInflight = null
+      monitorSummaryInflightKey = null
+    })
+    return monitorSummaryInflight
+  }
+  return request
 }
 
 export async function getRankingMatrix(
@@ -523,31 +532,36 @@ function writeWorkspaceBriefCache(key: string, data: WorkspaceBrief, now: number
 
 export async function getWorkspaceBrief(
   params?: WorkspaceBriefQuery,
-  options?: { force?: boolean; silentError?: boolean; timeout?: number },
+  options?: { force?: boolean; silentError?: boolean; timeout?: number; signal?: AbortSignal },
 ): Promise<WorkspaceBrief> {
   const key = workspaceBriefCacheKey(params)
   const now = Date.now()
   if (!options?.force) {
     const cached = readWorkspaceBriefCache(key, now)
     if (cached) return cached
-    if (workspaceBriefInflight && workspaceBriefInflightKey === key) {
+    if (!options?.signal && workspaceBriefInflight && workspaceBriefInflightKey === key) {
       return workspaceBriefInflight
     }
   }
-  workspaceBriefInflightKey = key
-  workspaceBriefInflight = http.get('/v1/monitor/workspace-brief', {
+  const request = http.get('/v1/monitor/workspace-brief', {
     params,
     timeout: options?.timeout,
     silentError: options?.silentError,
+    signal: options?.signal,
   } as GeoHttpRequestConfig).then(response => {
     const data = response.data.data as WorkspaceBrief
     writeWorkspaceBriefCache(key, data, Date.now())
     return data
-  }).finally(() => {
-    workspaceBriefInflight = null
-    workspaceBriefInflightKey = null
   })
-  return workspaceBriefInflight
+  if (!options?.signal) {
+    workspaceBriefInflightKey = key
+    workspaceBriefInflight = request.finally(() => {
+      workspaceBriefInflight = null
+      workspaceBriefInflightKey = null
+    })
+    return workspaceBriefInflight
+  }
+  return request
 }
 
 export interface BrandAnalysisAnswer {
@@ -617,7 +631,7 @@ export async function getBrandAnalysis(
   const response = await http.get('/v1/monitor/brand-analysis', {
     params: {
       tenant_id: params?.tenant_id,
-      parse: params?.parse ?? true,
+      parse: params?.parse ?? false,
     },
     timeout: options?.timeout ?? 120_000,
   } as GeoHttpRequestConfig)

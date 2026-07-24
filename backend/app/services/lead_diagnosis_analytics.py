@@ -48,16 +48,15 @@ def _strict_entity_match(left: str | None, right: str | None) -> bool:
             return True
         if len(shorter) == 2 and shorter not in _ADMIN_OR_GENERIC_PREFIXES:
             return True
-    # 「艾迪亚传媒」↔「艾迪亚控股…」：共享 ≥3 字词干，且非行政区开头
+    # 「艾迪亚传媒」↔「艾迪亚控股…」：共享前缀词干（须同为名称开头，禁止中缀误撞）
     if len(a) >= 3 and len(b) >= 3:
         for n in (4, 3):
             if len(a) < n or len(b) < n:
                 continue
-            for stem in (a[:n], b[:n]):
-                if stem[:2] in _ADMIN_OR_GENERIC_PREFIXES:
-                    continue
-                if stem in a and stem in b:
-                    return True
+            if a[:2] in _ADMIN_OR_GENERIC_PREFIXES:
+                continue
+            if a[:n] == b[:n]:
+                return True
     return False
 
 

@@ -586,13 +586,32 @@ def _citation_site_label(source: dict[str, Any]) -> str | None:
 
 
 def _is_valid_citation_source(source: dict[str, Any]) -> bool:
-    """判断是否为可纳入统计的 AI 引用来源（排除搜索热榜等噪音）。"""
+    """判断是否为可纳入统计的 AI 引用来源（排除搜索热榜、静态资源/CDN 等噪音）。"""
     title_site = " ".join(str(source.get(key) or "") for key in ("title", "site")).lower()
     url = str(source.get("url") or source.get("site") or "").lower()
-    noisy_tokens = ("window._", "search.quark.cn", "by2=news")
     if not title_site.strip() and not url.strip():
         return False
-    return not any(token in title_site or token in url for token in noisy_tokens)
+    noisy_tokens = ("window._", "search.quark.cn", "by2=news")
+    if any(token in title_site or token in url for token in noisy_tokens):
+        return False
+    # 路径后缀像静态资源则丢弃（避免 ?v=1.css 误伤，只看 path）
+    path = url.split("?", 1)[0]
+    if any(path.endswith(ext) for ext in (".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".woff", ".woff2", ".ttf")):
+        return False
+    asset_hosts = (
+        "byteimg.com",
+        "lf3-static",
+        "lf-flow",
+        "ibytedapm",
+        "cdn.jsdelivr",
+        "unpkg.com",
+        "googleapis.com",
+        "gstatic.com",
+        "cloudflare.com/ajax",
+    )
+    if any(bit in url for bit in asset_hosts):
+        return False
+    return True
 
 
 def _snapshot_source_articles(item: GeoMonitorSubtask, *, limit: int = 2) -> list[dict[str, str]]:
@@ -1198,6 +1217,29 @@ def monitor_summary(
         or (current.identity.identity_type == "PLATFORM" and tenant_id is not None)
     )
     summary_task_limit = 200
+    # 客户路径信源走日物化，无需拉 reference_list / 截图大字段
+    subtask_cols = [
+        GeoMonitorSubtask.id,
+        GeoMonitorSubtask.subtask_id,
+        GeoMonitorSubtask.task_id,
+        GeoMonitorSubtask.platform,
+        GeoMonitorSubtask.mode,
+        GeoMonitorSubtask.prompt,
+        GeoMonitorSubtask.status,
+        GeoMonitorSubtask.error_message,
+        GeoMonitorSubtask.amount,
+        GeoMonitorSubtask.mention_position,
+        GeoMonitorSubtask.mention_context,
+        GeoMonitorSubtask.sentiment,
+        GeoMonitorSubtask.updated_at,
+    ]
+    if not customer_like:
+        subtask_cols.extend(
+            [
+                GeoMonitorSubtask.page_screenshot,
+                GeoMonitorSubtask.reference_list_json,
+            ]
+        )
     stmt = (
         select(GeoMonitorTask)
         .options(
@@ -1218,23 +1260,7 @@ def monitor_summary(
                 GeoMonitorTask.created_at,
                 GeoMonitorTask.updated_at,
             ),
-            joinedload(GeoMonitorTask.subtasks).load_only(
-                GeoMonitorSubtask.id,
-                GeoMonitorSubtask.subtask_id,
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.mode,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.status,
-                GeoMonitorSubtask.page_screenshot,
-                GeoMonitorSubtask.reference_list_json,
-                GeoMonitorSubtask.error_message,
-                GeoMonitorSubtask.amount,
-                GeoMonitorSubtask.mention_position,
-                GeoMonitorSubtask.mention_context,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.updated_at,
-            ),
+            joinedload(GeoMonitorTask.subtasks).load_only(*subtask_cols),
         )
         .where(GeoMonitorTask.deleted.is_(False))
         .order_by(GeoMonitorTask.id.desc())
@@ -1277,12 +1303,24 @@ def monitor_summary(
         tasks = [task for task in tasks if task.task_id in visible_task_ids]
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES]
     completed_ids = {item.id for item in completed}
-    mentioned = [item for item in completed if item.mention_position is not None]
     task_by_id = {task.task_id: task for task in tasks if task.task_id}
     completed_task_ids = list({item.task_id for item in completed if item.task_id})
     summary_schedule_runs = schedule_runs_for_tasks(db, completed_task_ids) if completed_task_ids else {}
     summary_lead_runs = lead_diagnosis_runs_for_tasks(db, completed_task_ids) if completed_task_ids else {}
     asset_by_tenant = {asset.tenant_id: asset for asset in asset_rows}
+
+    def _summary_kpi_rank(item: GeoMonitorSubtask) -> float | int | None:
+        tenant_id_for_item = subtask_tenant_map.get(item.id)
+        task = task_by_id.get(item.task_id or "")
+        return kpi_rank_for_subtask(
+            item,
+            task.monitor_keywords if task is not None else None,
+            exposure_terms_by_tenant.get(tenant_id_for_item) or [],
+            asset_by_tenant.get(tenant_id_for_item) if tenant_id_for_item else None,
+        )
+
+    kpi_rank_by_id = {item.id: _summary_kpi_rank(item) for item in subtasks}
+    mentioned = [item for item in completed if kpi_rank_by_id.get(item.id) is not None]
 
     def _summary_business_day(item: GeoMonitorSubtask) -> date | None:
         task = task_by_id.get(item.task_id or "")
@@ -1310,7 +1348,7 @@ def monitor_summary(
     total_cost = sum(float(item.amount or 0) for item in subtasks)
     mention_rate = round(len(mentioned) / len(completed) * 100, 1) if completed else 0.0
     avg_rank = (
-        round(sum(item.mention_position for item in mentioned) / len(mentioned), 1)
+        round(sum(float(kpi_rank_by_id[item.id]) for item in mentioned) / len(mentioned), 1)
         if mentioned
         else None
     )
@@ -1342,9 +1380,10 @@ def monitor_summary(
         bucket["total"] += 1
         if item.id in completed_ids:
             bucket["completed"] += 1
-        if item.mention_position is not None:
+        rank = kpi_rank_by_id.get(item.id)
+        if rank is not None:
             bucket["mentioned"] += 1
-            bucket["rank_total"] += item.mention_position
+            bucket["rank_total"] += float(rank)
             bucket["rank_count"] += 1
     platform_stats = []
     for bucket in platform_bucket.values():
@@ -1591,7 +1630,6 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
             db.commit()
         raise
     db.commit()
-    invalidate_monitor_summary_cache(task.tenant_id)
     try:
         from app.services.monitor_stats_service import refresh_stats_for_task
 
@@ -1599,6 +1637,8 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
         db.commit()
     except Exception as exc:
         logger.warning("refresh_stats_for_task failed task_id=%s error=%s", task_id, exc)
+    # ponytail: 日统计落库后再清缓存，避免冷读打到旧 daily_stat
+    invalidate_monitor_summary_cache(task.tenant_id)
     try:
         from app.services.brand_analysis_service import parse_sentiments_after_brand_word_sync
 
@@ -2280,12 +2320,19 @@ def _ranking_matrix_row_limit(
 
 
 def matrix_platform_visible(platform: str | None, purchased_platforms: list[str]) -> bool:
-    """排名矩阵仅展示企业当前配置的监测平台；无配置时保留全部（兼容旧数据）。"""
+    """排名矩阵仅展示企业当前配置的监测平台；无配置时保留全部（兼容旧数据）。
+
+    购买 deepseek 或 deepseek_mobile 任一端时，两端子任务都可见，避免漏数。
+    """
+    from app.core.platform_order import expand_platform_codes
+
     purchased = {code for code in purchased_platforms if code}
     if not purchased:
         return True
     text = str(platform or "").strip()
-    return bool(text and text in purchased)
+    if not text:
+        return False
+    return text in expand_platform_codes(purchased)
 
 
 def _matrix_day_key(value: datetime | None) -> str | None:
@@ -3080,6 +3127,30 @@ def _resolve_brand_rank_detail_matrix_light(
     )
 
 
+def kpi_rank_for_subtask(
+    subtask: GeoMonitorSubtask,
+    monitor_keywords: str | None,
+    brand_terms: list[str],
+    asset: BrandAsset | None = None,
+) -> float | int | None:
+    """日统计/摘要 KPI 用位次：与矩阵轻量读路径一致，纠正脏 mention_position。
+
+    不走全文解析/LLM，避免聚合扫库时放大成本。
+    """
+    if prompt_monitor_intent(subtask.prompt) != "ranking":
+        return subtask.mention_position
+    detail = _read_display_brand_rank(
+        subtask,
+        monitor_keywords,
+        brand_terms,
+        asset,
+        allow_full_parse=False,
+    )
+    if detail.rank is not None:
+        return detail.rank
+    return None
+
+
 def _matrix_cell_rank(
     subtask: GeoMonitorSubtask,
     monitor_keywords: str | None,
@@ -3237,10 +3308,10 @@ def ranking_matrix(
     if selected_platform:
         stmt = stmt.where(GeoMonitorSubtask.platform == selected_platform)
 
-    # ponytail: 全平台×多词×多日轻松超 2000；截断会把冷门词变成「—」。有 schedule 范围时放宽。
-    fetch_limit = 5000 if schedule_task_ids else 2000
+    # ponytail: 全平台×多词×多日轻松超 2000；截断会把冷门词变成「—」。有 schedule 范围时略放宽。
+    fetch_limit = 3500 if schedule_task_ids else 2000
     if selected_platform:
-        fetch_limit = min(fetch_limit, 3000)
+        fetch_limit = min(fetch_limit, 2500)
     subtasks = list(db.scalars(stmt.limit(fetch_limit)).unique())
     legacy_group_filter = str(monitor_group or keyword or "").strip()
     scoped_group = str(keyword_group or "").strip()
@@ -4054,12 +4125,15 @@ def list_inclusion_snapshots(
     platform_key = str(platform or "").strip()
     if platform_key in ("", "all"):
         platform_key = ""
-    if platform_key and purchased_set and platform_key not in purchased_set:
-        return {"recent_snapshots": [], "purchased_platforms": purchased_platforms}
+    if platform_key and purchased_set:
+        from app.core.platform_order import expand_platform_codes
 
-    lookback_start = trend_start - timedelta(days=1)
-    # 平台已筛时多取一些；全平台仍限量，避免拖垮接口
-    fetch_cap = min(240, max(limit * 4, 80 if platform_key else 120))
+        if platform_key not in expand_platform_codes(purchased_set):
+            return {"recent_snapshots": [], "purchased_platforms": purchased_platforms}
+
+    lookback_start = trend_start - timedelta(days=14)
+    # 平台已筛时多取一些；补录会刷新 updated_at，窄窗+硬截断会挤掉同周期旧样本
+    fetch_cap = min(600, max(limit * 8, 160 if platform_key else 240))
     conditions = [
         GeoMonitorTask.deleted.is_(False),
         GeoMonitorTask.tenant_id == tenant_id,
@@ -4072,9 +4146,14 @@ def list_inclusion_snapshots(
         GeoMonitorSubtask.updated_at <= range_end,
     ]
     if platform_key:
-        conditions.append(GeoMonitorSubtask.platform == platform_key)
+        from app.core.platform_order import platform_code_family
+
+        family = platform_code_family(platform_key)
+        conditions.append(GeoMonitorSubtask.platform.in_(family) if len(family) > 1 else GeoMonitorSubtask.platform == platform_key)
     elif purchased_set:
-        conditions.append(GeoMonitorSubtask.platform.in_(purchased_set))
+        from app.core.platform_order import expand_platform_codes
+
+        conditions.append(GeoMonitorSubtask.platform.in_(expand_platform_codes(purchased_set)))
 
     stmt = (
         select(GeoMonitorSubtask)
@@ -4213,8 +4292,11 @@ def _workspace_pick_snapshot_subtask_ids(
     )
     by_day: dict[str, list[str]] = {}
     latest_ids: list[str] = []
+    from app.core.platform_order import expand_platform_codes
+
+    purchased_family = expand_platform_codes(purchased_set) if purchased_set else set()
     for subtask_id, platform, updated_at in db.execute(scan_stmt):
-        if purchased_set and platform not in purchased_set:
+        if purchased_family and platform not in purchased_family:
             continue
         if updated_at is None:
             continue
@@ -4326,14 +4408,25 @@ def _workspace_keyword_platform_light(
             ).all()
         )
         for platform, prompt, total, mentioned in rows:
-            if platform not in purchased_set:
+            # 购买 deepseek 时把 deepseek_mobile 计入 deepseek 列，避免漏数
+            from app.core.platform_order import platforms_compatible
+
+            canon = None
+            if platform in purchased_set:
+                canon = platform
+            else:
+                for code in purchased_set:
+                    if platforms_compatible(platform, code):
+                        canon = code
+                        break
+            if canon is None:
                 continue
             if prompt_monitor_intent(prompt) != "ranking":
                 continue
             keyword = _workspace_match_monitor_keyword(prompt or "", keyword_group_rows, keywords)
             if not keyword:
                 continue
-            key = (keyword, platform)
+            key = (keyword, canon)
             stats = bucket.setdefault(key, {"mentioned": 0, "total": 0})
             stats["total"] += int(total or 0)
             stats["mentioned"] += int(mentioned or 0)

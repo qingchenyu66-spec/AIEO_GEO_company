@@ -389,7 +389,7 @@ def build_customer_source_stats_from_daily(
 ) -> dict[str, Any]:
     """读路径：确保截止日前各监测日物化可用，再合并。
 
-    缺日/指纹失效超过 1 天时走一次全历史回填（避免按日 N 次扫库更慢）；
+    缺日/指纹失效超过 1 天时优先异步全历史回填（避免 GET 堵死）；
     写完显式 commit（GET 会话默认不 commit，否则物化会被回滚）。
     """
     from app.services.monitor_service import customer_display_cutoff
@@ -414,18 +414,15 @@ def build_customer_source_stats_from_daily(
     ]
 
     wrote = False
-    if not candidate_days:
-        day_rows = _backfill_source_daily_from_history(
-            db,
-            tenant_id,
-            cutoff_day=cutoff_day,
-            purchased_platforms=purchased_platforms,
-            exposure_terms=exposure_terms,
-            config_fp=config_fp,
-        )
-        wrote = True
-    elif len(stale_days) > 1:
-        # ponytail: 多日缺物化时一次扫历史；逐日 rebuild 会把冷路径拖得比改前更慢
+    if not candidate_days or len(stale_days) > 1:
+        # ponytail: 多日冷填改异步，GET 先回已有物化；Celery 不可用时仍同步回填
+        if _try_enqueue_source_daily_warm(tenant_id):
+            day_rows = [
+                existing[day]
+                for day in candidate_days
+                if day in existing and str(existing[day].config_fp or "") == config_fp
+            ]
+            return _bundle_from_day_rows(day_rows, cutoff_day=cutoff_day)
         day_rows = _backfill_source_daily_from_history(
             db,
             tenant_id,
@@ -460,3 +457,59 @@ def build_customer_source_stats_from_daily(
             raise
 
     return _bundle_from_day_rows(day_rows, cutoff_day=cutoff_day)
+
+
+def _try_enqueue_source_daily_warm(tenant_id: int) -> bool:
+    """投递信源日物化预热；成功或已在队列中返回 True。"""
+    from app.core.config import settings
+    from app.core.redis_client import delete_cache, get_redis_client, prefixed_key
+    from redis.exceptions import RedisError
+
+    if not settings.celery_enabled:
+        return False
+    client = get_redis_client()
+    dedupe_key = f"celery:enqueued:source-daily-warm:{tenant_id}"
+    if client is not None:
+        try:
+            if not client.set(prefixed_key(dedupe_key), "1", ex=900, nx=True):
+                return True
+        except RedisError as exc:
+            logger.warning("source daily warm dedupe failed tenant_id=%s error=%s", tenant_id, exc)
+            return False
+    try:
+        from app.tasks.monitor import warm_customer_source_daily
+
+        warm_customer_source_daily.delay(int(tenant_id))
+        return True
+    except Exception as exc:
+        logger.warning("enqueue source daily warm failed tenant_id=%s error=%s", tenant_id, exc)
+        delete_cache(dedupe_key)
+        return False
+
+
+def warm_source_daily_for_tenant(db: Session, tenant_id: int) -> int:
+    """同步执行全历史信源日物化，返回写入天数。供 Celery 预热调用。"""
+    from app.services.brand_service import (
+        active_keyword_groups,
+        brand_exposure_terms,
+        get_brand_asset,
+        tenant_purchased_platforms,
+    )
+    from app.services.monitor_service import customer_display_cutoff, invalidate_monitor_summary_cache
+
+    asset = get_brand_asset(db, tenant_id)
+    purchased = set(tenant_purchased_platforms(db, tenant_id, asset))
+    exposure = brand_exposure_terms(asset, active_keyword_groups(db, tenant_id)) if asset else []
+    cutoff_day = customer_display_cutoff().date()
+    config_fp = source_stats_config_fingerprint(exposure, purchased)
+    rows = _backfill_source_daily_from_history(
+        db,
+        tenant_id,
+        cutoff_day=cutoff_day,
+        purchased_platforms=purchased,
+        exposure_terms=exposure,
+        config_fp=config_fp,
+    )
+    db.commit()
+    invalidate_monitor_summary_cache(tenant_id)
+    return len(rows)

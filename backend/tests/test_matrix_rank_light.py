@@ -38,6 +38,29 @@ def test_display_rank_prefers_mention_position_over_structured():
     assert detail.source == "manual"
 
 
+def test_kpi_rank_prefers_normalized_structured_over_dirty_auto_mention():
+    from app.services.monitor_service import kpi_rank_for_subtask
+
+    # 模力脏榜：全员 rank=1；规范化后按出场序重编号，品牌应在第 4
+    item = _subtask(
+        all_rankings_json=[
+            {"name": "甲", "rank": 1},
+            {"name": "乙", "rank": 1},
+            {"name": "丙", "rank": 1},
+            {"name": "艾迪亚控股集团有限公司", "rank": 1},
+        ],
+        mention_position=1,
+        raw_result_json={},
+    )
+    rank = kpi_rank_for_subtask(
+        item,
+        "电梯广告",
+        ["艾迪亚", "艾迪亚控股集团", "艾迪亚控股集团有限公司"],
+        None,
+    )
+    assert rank == 4.0
+
+
 def test_display_rank_falls_back_to_structured_when_mention_missing():
     item = _subtask(
         all_rankings_json=[{"name": "艾迪亚控股集团", "rank": 2}],

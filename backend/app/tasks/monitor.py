@@ -685,3 +685,31 @@ def sync_announcement_lifecycle() -> dict[str, Any]:
     finally:
         db.close()
     return {"status": "ok", "promoted": promoted, "expired": expired}
+
+
+@celery_app.task(
+    name="app.tasks.monitor.warm_customer_source_daily",
+    ignore_result=True,
+    queue="sync",
+)
+def warm_customer_source_daily(tenant_id: int) -> dict[str, Any]:
+    """异步预热客户信源日物化，避免 GET 冷路径全历史扫描。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled", "tenant_id": tenant_id}
+
+    with redis_lock(f"source-daily-warm:{tenant_id}", ttl_seconds=1800) as acquired:
+        if not acquired:
+            return {"status": "locked", "tenant_id": tenant_id}
+        db = SessionLocal()
+        try:
+            from app.services.monitor_source_rollup_service import warm_source_daily_for_tenant
+
+            days = warm_source_daily_for_tenant(db, int(tenant_id))
+            return {"status": "ok", "tenant_id": tenant_id, "days": days}
+        except Exception as exc:
+            logger.exception("warm_customer_source_daily failed tenant_id=%s", tenant_id)
+            db.rollback()
+            return {"status": "error", "tenant_id": tenant_id, "error": str(exc)}
+        finally:
+            _clear_enqueued_mark(f"source-daily-warm:{tenant_id}")
+            db.close()

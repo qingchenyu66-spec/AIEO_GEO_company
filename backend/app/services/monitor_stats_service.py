@@ -183,6 +183,9 @@ def _rebuild_daily_stat_for_platform_day(
     db.flush()
     # ponytail: 同会话多次重建同一 key 时，先 flush 掉 DELETE，否则未落库的旧 INSERT 会撞唯一键
     db.flush()
+    # 预筛 created_at/updated_at 邻近窗口，避免整表终态子任务进内存再滤业务日
+    pad_start = datetime.combine(stat_date - timedelta(days=3), time.min)
+    pad_end = datetime.combine(stat_date + timedelta(days=14), time.max)
     subtasks = list(
         db.scalars(
             select(GeoMonitorSubtask)
@@ -194,6 +197,10 @@ def _rebuild_daily_stat_for_platform_day(
                 GeoMonitorTask.purpose == "geo",
                 GeoMonitorSubtask.platform == platform,
                 GeoMonitorSubtask.status.in_(TERMINAL_STATUSES),
+                or_(
+                    and_(GeoMonitorTask.created_at >= pad_start, GeoMonitorTask.created_at <= pad_end),
+                    and_(GeoMonitorSubtask.updated_at >= pad_start, GeoMonitorSubtask.updated_at <= pad_end),
+                ),
             )
         )
     )
@@ -205,6 +212,19 @@ def _rebuild_daily_stat_for_platform_day(
     asset = get_brand_asset(db, tenant_id)
 
     metrics = {"completed": 0, "mentioned": 0, "top3": 0, "rank_sum": 0, "rank_count": 0, "citation": 0}
+    from app.services.brand_service import active_keyword_groups
+    from app.services.monitor_service import (
+        _is_valid_citation_source,
+        _ranking_match_terms,
+        kpi_rank_for_subtask,
+    )
+
+    try:
+        groups = active_keyword_groups(db, tenant_id) if asset is not None else []
+    except Exception:
+        # ponytail: 单测/残缺库无词组表时退回资产别名，勿拖垮日统计重建
+        groups = []
+    tenant_terms = _ranking_match_terms(asset, groups) if asset is not None else []
     for item in subtasks:
         task = item.task
         if task is None:
@@ -219,14 +239,22 @@ def _rebuild_daily_stat_for_platform_day(
         if detect_day != stat_date:
             continue
         metrics["completed"] += 1
-        if item.mention_position is not None:
+        terms = list(tenant_terms)
+        kw = str(task.monitor_keywords or "").strip()
+        if kw and kw not in terms:
+            terms.append(kw)
+        rank = kpi_rank_for_subtask(item, task.monitor_keywords, terms, asset)
+        if rank is not None:
             metrics["mentioned"] += 1
-            metrics["rank_sum"] += int(item.mention_position)
+            metrics["rank_sum"] += int(rank)
             metrics["rank_count"] += 1
-            if float(item.mention_position) <= 3:
+            if float(rank) <= 3:
                 metrics["top3"] += 1
         refs = item.reference_list_json or []
-        metrics["citation"] += len(refs) if isinstance(refs, list) else 0
+        if isinstance(refs, list):
+            metrics["citation"] += sum(
+                1 for src in refs if isinstance(src, dict) and _is_valid_citation_source(src)
+            )
     if metrics["completed"] == 0:
         return
     db.add(

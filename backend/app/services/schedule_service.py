@@ -260,6 +260,8 @@ def submit_schedule_group(
     item: DueScheduleGroup,
 ) -> dict[str, Any]:
     """Submit one scheduled keyword group to Molizhishu."""
+    from app.core.redis_client import redis_lock
+
     asset = db.scalar(
         select(BrandAsset).where(
             BrandAsset.tenant_id == item.tenant_id,
@@ -283,6 +285,33 @@ def submit_schedule_group(
             "message": "该调度窗口已执行",
         }
 
+    lock_key = f"schedule-submit:{item.tenant_id}:{item.group_key}"
+    with redis_lock(lock_key, ttl_seconds=600) as acquired:
+        if not acquired:
+            return {
+                "tenant_id": item.tenant_id,
+                "schedule_key": item.group_key,
+                "status": "skipped",
+                "message": "该调度窗口正在提交",
+            }
+        # 持锁后再读一次，堵住 enumerate→submit 之间的双过门
+        if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
+            return {
+                "tenant_id": item.tenant_id,
+                "schedule_key": item.group_key,
+                "status": "skipped",
+                "message": "该调度窗口已执行",
+            }
+        return _submit_schedule_group_locked(db, current, item, asset)
+
+
+def _submit_schedule_group_locked(
+    db: Session,
+    current: CurrentSession,
+    item: DueScheduleGroup,
+    asset: BrandAsset,
+) -> dict[str, Any]:
+    """持锁后的提交主体：先落 running 再打模力，降低 TOCTOU 双投。"""
     competitors = list(
         db.scalars(
             select(BrandCompetitor).where(
@@ -370,7 +399,18 @@ def submit_schedule_group(
         )
         db.add(run)
     try:
-        db.flush()
+        # ponytail: 先 commit running，其它 Worker 的 blocks_due 才能看见；再打模力
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return {
+            "tenant_id": item.tenant_id,
+            "schedule_key": item.group_key,
+            "status": "skipped",
+            "message": "该调度窗口已执行",
+        }
+    try:
+        db.refresh(run)
         if not payload.prompts:
             raise ValueError("企业未配置可生成检测问题的监测词或竞品")
         if not payload.platforms:

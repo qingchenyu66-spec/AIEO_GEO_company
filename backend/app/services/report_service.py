@@ -154,8 +154,22 @@ def build_tenant_monitor_snapshot(
 
     completed = [item for item in subtasks if is_success_status(item.status)]
     completed_ids = {item.id for item in completed}
-    rates = compute_brand_rank_rates(subtasks)
-    mentioned = [item for item in completed if item.mention_position is not None]
+    task_by_id = {task.task_id: task for task in task_rows if task.task_id}
+    from app.services.monitor_service import kpi_rank_for_subtask
+
+    brand_terms = brand_exposure_terms(asset, active_keyword_groups(db, tenant_id)) if asset else []
+
+    def _report_rank(item: GeoMonitorSubtask):
+        task = task_by_id.get(item.task_id or "")
+        return kpi_rank_for_subtask(
+            item,
+            task.monitor_keywords if task is not None else None,
+            brand_terms,
+            asset,
+        )
+
+    rates = compute_brand_rank_rates(subtasks, rank_of=_report_rank)
+    mentioned = [item for item in completed if _report_rank(item) is not None]
 
     mention_rate = rates["mention_rate"]
     avg_rank = rates["avg_rank"]

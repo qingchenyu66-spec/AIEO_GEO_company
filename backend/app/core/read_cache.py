@@ -30,7 +30,7 @@ WORKSPACE_BRIEF_CACHE_TTL = 45
 CELERY_MONITOR_CACHE_TTL = 20
 SENTIMENT_KEYWORDS_CACHE_TTL = 120
 COMPETITOR_COMPARE_CACHE_TTL = 300
-RANKING_MATRIX_CACHE_TTL = 120
+RANKING_MATRIX_CACHE_TTL = 300
 # 客户信源全历史聚合贵；按截止日独立缓存，补录时 invalidate
 SOURCE_STATS_CACHE_TTL = 6 * 3600
 CACHE_BUILD_LOCK_TTL = 45
@@ -57,7 +57,9 @@ def _memory_get(key: str) -> Any | None:
 
 
 def _memory_set(key: str, value: Any, ttl_seconds: int) -> None:
-    ttl = max(5, min(int(ttl_seconds), 300))
+    # ponytail: Redis 作主存时 L1 短缓存即可；Redis 未启用/宕机时 L1 是主存，按请求 TTL（上限 6h）
+    cap = 300 if redis_enabled() else min(max(int(ttl_seconds), 300), 6 * 3600)
+    ttl = max(5, min(int(ttl_seconds), cap))
     expires_at = time.monotonic() + ttl
     with _MEMORY_LOCK:
         if len(_MEMORY_CACHE) >= _MEMORY_CACHE_MAX and key not in _MEMORY_CACHE:
@@ -204,8 +206,8 @@ def get_or_build_json_cache(
     lock_key = f"cache-build:{key}"
     with redis_lock(lock_key, ttl_seconds=lock_ttl_seconds) as acquired:
         if not acquired:
-            # 锁被占用：短等 Redis；若 Redis 读一直空（AUTH/宕机），立刻回源，禁止空等满 wait
-            cached = _wait_for_cache(key, wait_seconds=min(wait_seconds, 1.5), poll_interval=poll_interval)
+            # 锁被占用：等待持锁方写完；禁止全员直接 rebuild（惊群）
+            cached = _wait_for_cache(key, wait_seconds=wait_seconds, poll_interval=poll_interval)
             if cached is not None:
                 _memory_set(key, cached, ttl_seconds)
                 return cached
@@ -222,8 +224,20 @@ def get_or_build_json_cache(
                     return mem
                 if retry_acquired:
                     return _build_and_store(key, builder, ttl_seconds=ttl_seconds)
-                logger.warning("Cache rebuild lock contention, fallback to direct build, key=%s", key)
-                return _build_and_store(key, builder, ttl_seconds=ttl_seconds)
+                # 仍无锁：再短等一轮；实在没有才单次兜底 rebuild（带短 TTL）
+                cached = _wait_for_cache(
+                    key,
+                    wait_seconds=min(wait_seconds, 1.5),
+                    poll_interval=poll_interval,
+                )
+                if cached is not None:
+                    _memory_set(key, cached, ttl_seconds)
+                    return cached
+                logger.warning(
+                    "Cache rebuild lock contention, single fallback build, key=%s",
+                    key,
+                )
+                return _build_and_store(key, builder, ttl_seconds=min(int(ttl_seconds), 60))
 
         cached = get_json_cache(key)
         if cached is not None:

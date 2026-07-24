@@ -56,9 +56,12 @@ from app.services.system_notification_service import (
 _SNAPSHOT_HOST_HINTS: dict[str, set[str]] = {
     "doubao.com": {"doubao", "doubao_mobile"},
     "deepseek.com": {"deepseek", "deepseek_mobile"},
+    "deepseek.cn": {"deepseek", "deepseek_mobile"},
     "yuanbao.tencent.com": {"yuanbao"},
-    "qianwen.com": {"qianwen"},
+    "qianwen.com": {"qianwen", "qianwen_mobile"},
+    "tongyi.aliyun.com": {"qianwen", "qianwen_mobile"},
     "kimi.com": {"kimi", "kimi_mobile"},
+    "moonshot.cn": {"kimi", "kimi_mobile"},
     "quark.cn": {"quark"},
 }
 
@@ -1012,7 +1015,8 @@ def list_snapshot_backfill_page(
         or source_filter
     )
     if tenant_id is None and not tenant_ids:
-        scan_cap = min(max(limit * 20, 1000), 2500) if not has_scope_filter else min(max(limit * 40, 2000), 4000)
+        # ponytail: 无筛选时收紧扫描上限，避免 2500~4000 行全进内存再 slice
+        scan_cap = min(max(limit * 12, 400), 800) if not has_scope_filter else min(max(limit * 20, 800), 1500)
     else:
         scan_cap = None
     # 首屏轻量：缩小扫描窗口，稍后再拉全量汇总

@@ -145,6 +145,9 @@ def redis_lock(key: str, ttl_seconds: int | None = None) -> Iterator[bool]:
 
     yield True 表示拿到锁；yield False 表示已有其他进程执行同一任务。
     释放时校验 token，避免误删其他进程续期后的锁。
+
+    Redis 未启用（本地）：fail-open（yield True），避免开发机无 Redis 卡死。
+    Redis 已启用但命令失败：fail-closed（yield False），避免多 Worker 重叠扫任务。
     """
     client = get_redis_client()
     if client is None:
@@ -159,8 +162,9 @@ def redis_lock(key: str, ttl_seconds: int | None = None) -> Iterator[bool]:
         acquired = bool(client.set(lock_key, token, ex=ttl, nx=True))
         yield acquired
     except RedisError as exc:
-        logger.warning("Redis lock failed, key=%s, error=%s", key, exc)
-        yield True
+        # ponytail: 以前 fail-open 会在 Redis 抖动时双投模力；升级为进程内互斥可再收紧
+        logger.warning("Redis lock failed (fail-closed), key=%s, error=%s", key, exc)
+        yield False
     finally:
         if acquired:
             try:

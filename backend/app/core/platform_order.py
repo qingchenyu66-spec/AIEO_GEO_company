@@ -30,6 +30,29 @@ def platform_market_rank(code: str | None) -> int:
     return PLATFORM_MARKET_RANK.get(base, 999)
 
 
+def platform_code_family(code: str | None) -> set[str]:
+    """桌面/移动端成对映射：deepseek ↔ deepseek_mobile。"""
+    text = str(code or "").strip()
+    if not text:
+        return set()
+    base = text.removesuffix("_mobile") or text
+    return {base, f"{base}_mobile"}
+
+
+def expand_platform_codes(codes: list[str] | set[str] | None) -> set[str]:
+    """购买/筛选码扩展为含移动端家族，避免一端漏数。"""
+    out: set[str] = set()
+    for code in codes or []:
+        out |= platform_code_family(code)
+    return out
+
+
+def platforms_compatible(left: str | None, right: str | None) -> bool:
+    a = platform_code_family(left)
+    b = platform_code_family(right)
+    return bool(a and b and (a & b))
+
+
 def sort_platform_codes(codes: list[str] | None) -> list[str]:
     return sorted([str(code).strip() for code in (codes or []) if str(code or "").strip()], key=lambda code: (platform_market_rank(code), code))
 
