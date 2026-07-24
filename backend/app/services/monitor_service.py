@@ -4110,7 +4110,8 @@ def list_inclusion_snapshots(
         )
         keyword_group = _prompt_group_name(item.prompt or "", keyword_group_rows) or monitor_keywords
         display_keyword = (
-            _prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            _resolve_prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            or str(item.prompt or "").strip()
             or str(monitor_keywords or "").strip()
             or keyword_group
         )
@@ -4461,7 +4462,8 @@ def _workspace_brief_full_from_daily_stats(
         sentiment_label = _normalize_sentiment_label(item.sentiment)
         day_key = detect_dt.date().isoformat()
         display_keyword = (
-            _prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            _resolve_prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            or str(item.prompt or "").strip()
             or str(monitor_keywords or "").strip()
             or keyword_group
         )
@@ -4783,7 +4785,8 @@ def workspace_brief(
         sentiment_label = _normalize_sentiment_label(item.sentiment)
         day_key = detect_dt.date().isoformat()
         display_keyword = (
-            _prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            _resolve_prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
+            or str(item.prompt or "").strip()
             or str(monitor_keywords or "").strip()
             or keyword_group
         )

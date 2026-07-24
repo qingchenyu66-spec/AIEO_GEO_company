@@ -93,8 +93,9 @@ const pagedSnapshots = computed(() => {
 })
 
 const dialogRankLabel = computed(() => {
+  // 与列表行一致：优先用点开时带入的列表名次，避免详情重算与列表不一致
   const subtask = snapshotSubtask.value
-  const rank = subtask?.brand_rank ?? subtask?.mention_position ?? snapshotListRank.value
+  const rank = snapshotListRank.value ?? subtask?.brand_rank ?? subtask?.mention_position
   if (rank != null) return `第 ${formatRank(rank)} 位`
   if (subtask?.brand_mentioned) return '已提及'
   return '未提及'
