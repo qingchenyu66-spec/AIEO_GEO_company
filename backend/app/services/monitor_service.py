@@ -2289,6 +2289,25 @@ def _matrix_row_key(
     return "|".join(part for part in parts if part)
 
 
+def _ranking_matrix_row_limit(
+    *,
+    requested_limit: int,
+    range_start_day: date,
+    range_end_day: date,
+    all_platforms: bool,
+    purchased_platforms: list[str],
+    keyword_group_count: int,
+) -> int:
+    """全平台×多日时默认 120 行会砍掉月初；按区间抬高保留下限。"""
+    base = max(1, int(requested_limit or 0))
+    span_days = max(1, (range_end_day - range_start_day).days + 1)
+    platform_factor = max(1, len(purchased_platforms) if all_platforms else 1)
+    group_factor = max(1, int(keyword_group_count or 1))
+    needed = span_days * platform_factor * group_factor
+    # ponytail: 年×多平台×多词组可上千行；8000 够月/季，超了再谈分页
+    return min(max(base, needed), 8000)
+
+
 def matrix_platform_visible(platform: str | None, purchased_platforms: list[str]) -> bool:
     """排名矩阵仅展示企业当前配置的监测平台；无配置时保留全部（兼容旧数据）。"""
     purchased = {code for code in purchased_platforms if code}
@@ -3330,7 +3349,16 @@ def ranking_matrix(
             platform=row.get("platform"),
         ),
         reverse=True,
-    )[:limit_rows]
+    )
+    row_limit = _ranking_matrix_row_limit(
+        requested_limit=limit_rows,
+        range_start_day=range_start_day,
+        range_end_day=range_end_day,
+        all_platforms=all_platforms,
+        purchased_platforms=purchased_platforms,
+        keyword_group_count=len(keyword_groups),
+    )
+    sorted_tasks = sorted_tasks[:row_limit]
     rows = []
     for bucket in sorted_tasks:
         day_key = bucket.get("day_key") or ""
