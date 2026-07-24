@@ -256,7 +256,18 @@ def _draw_entity_lines(
     if title:
         ax.set_title(title, fontsize=11 if compact else 13, fontweight="bold", color=theme.chart_title, pad=6)
     if show_legend and not compact:
-        ax.legend(loc="upper right", framealpha=0.92, fontsize=12, ncol=1)
+        # 图例放到坐标轴下方，避免放大后遮挡右侧折线
+        n = max(1, len(handles))
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.14),
+            ncol=min(3, n),
+            framealpha=0.92,
+            fontsize=12,
+            columnspacing=1.4,
+            handlelength=2.4,
+            borderaxespad=0.2,
+        )
     if not compact:
         ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis, fontsize=15)
     return handles
@@ -304,6 +315,8 @@ def build_entity_rank_trend_chart(
     if subtitle:
         ax.text(0.0, 1.05, subtitle, transform=ax.transAxes, fontsize=10, color=theme.gray)
     fig.tight_layout()
+    # 给下方图例留空，防止被裁切
+    fig.subplots_adjust(bottom=0.20)
     return _figure_to_png(fig)
 
 
