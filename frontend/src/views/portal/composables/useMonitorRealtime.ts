@@ -52,6 +52,8 @@ import {
 import { sortPlatformCodes } from '../platformOrder'
 import { formatExposureLabel, formatRank, sanitizeCustomerScheduleLabel } from '../portalUtils'
 import {
+  buildMatrixRankScope,
+  matrixScopedPeriodKpis,
   sliceMatrixByPlatform,
   type MatrixChartType,
   type MatrixLayoutMode,
@@ -633,28 +635,31 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   })
 
   const heroMetrics = computed(() => {
-    const latestGroup = groupedMonitorTasks.value[0]
-    const latestTask = latestGroup?.tasks[0]
-    const latestMatrixRow = rankingMatrix.value?.rows[0]
-    const completed = latestTask?.completed_items ?? monitorSummary.value?.completed_count ?? 0
-    const total = latestTask?.total_items ?? monitorSummary.value?.subtask_count ?? 0
-    const pendingPlatforms = platformCoverage.value.filter(item => item.status !== '已返回').length
+    const matrix = rankingMatrixView.value
+    const rankScope = matrix
+      ? buildMatrixRankScope(matrix.rows, filters.startDate, filters.endDate)
+      : null
+    const periodKpis = matrix && rankScope ? matrixScopedPeriodKpis(matrix, rankScope) : null
+    const scopeLabel = periodKpis?.scopeLabel
+      || rankScope?.label
+      || `${filters.startDate.slice(5)} ~ ${filters.endDate.slice(5)}`
+    const fallbackLatest = rankingMatrix.value?.rows[0]
+    const latestSchedule = periodKpis?.latestDay
+      || displayScheduleLabel(
+        fallbackLatest?.schedule_label || fallbackLatest?.snapshot_at,
+        isCustomerView.value ? '暂无批次' : '暂无轮次',
+      )
     return {
       brandName: brandAsset.value?.brand_name || rankingMatrix.value?.brand_name || '未配置品牌',
       companyName: brandAsset.value?.company_full_name || '',
-      latestSchedule: displayScheduleLabel(
-        latestGroup?.schedule_label
-        || latestMatrixRow?.schedule_label
-        || latestMatrixRow?.snapshot_at,
-        isCustomerView.value ? '暂无批次' : '暂无轮次',
-      ),
-      completed,
-      total,
-      avgRank: monitorSummary.value?.avg_rank ?? null,
-      mentionRate: monitorSummary.value?.mention_rate ?? null,
-      pendingPlatforms,
-      taskCount: monitorTasks.value.length,
-      scheduleRoundCount: rankingMatrix.value?.schedule_round_count ?? groupedMonitorTasks.value.length,
+      latestSchedule,
+      dayCount: periodKpis?.dayCount ?? 0,
+      sampleCount: periodKpis?.sampleCount ?? null,
+      columnCount: matrix?.columns.length ?? 0,
+      avgRank: periodKpis?.avgRank ?? null,
+      mentionRate: periodKpis?.mentionRate ?? null,
+      top3Rate: periodKpis?.top3Rate ?? null,
+      scopeLabel,
     }
   })
 
@@ -1321,9 +1326,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   const stopMonitorRefresh = onMonitorRefresh(() => {
     void loadMonitorTasks({ loadTaskDetail: viewMode.value === 'list' })
-    if (viewMode.value === 'matrix') {
-      void loadRankingMatrix()
-    }
+    // Top3 占比依赖矩阵按日聚合，列表态也要刷新
+    void loadRankingMatrix()
   })
   onUnmounted(stopMonitorRefresh)
 

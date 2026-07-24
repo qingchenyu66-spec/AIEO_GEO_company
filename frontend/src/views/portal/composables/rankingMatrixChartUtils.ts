@@ -401,6 +401,15 @@ export function selfCheckMatrixRankScope() {
     }],
   }
   console.assert(matrixPlatformKpi(kpiSlice, buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01')).top3 === 2)
+  const periodKpis = matrixScopedPeriodKpis(
+    kpiSlice,
+    buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01'),
+  )
+  console.assert(periodKpis.top3Rate === 66.7)
+  console.assert(periodKpis.mentionRate === 100)
+  console.assert(periodKpis.avgRank === 3.7)
+  console.assert(periodKpis.sampleCount === 3)
+  console.assert(periodKpis.latestDay === '2026-06-01')
 }
 
 export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): MatrixPlatformSlice {
@@ -433,6 +442,78 @@ export function matrixPlatformKpi(slice: MatrixPlatformSlice, scope: MatrixRankS
       ? (valid.reduce((sum, rank) => sum + rank, 0) / valid.length).toFixed(1)
       : '—',
   }
+}
+
+/** 区间 KPI：成功样本分母；提及/Top3/均排与日表、monitor_sample_metrics 同向。 */
+export type MatrixScopedPeriodKpis = {
+  latestDay: string
+  dayCount: number
+  sampleCount: number
+  mentionedCount: number
+  avgRank: number | null
+  mentionRate: number | null
+  top3Rate: number | null
+  scopeLabel: string
+}
+
+export function matrixScopedPeriodKpis(
+  matrix: Pick<RankingMatrix, 'columns' | 'rows'>,
+  scope: MatrixRankScope,
+): MatrixScopedPeriodKpis {
+  let sampleCount = 0
+  let mentionedCount = 0
+  let top3Count = 0
+  let rankSum = 0
+  const days = new Set<string>()
+
+  for (const row of rowsInRankScope(matrix.rows, scope)) {
+    const day = rowDayKey(row)
+    if (day) days.add(day.slice(0, 10))
+    for (const column of matrix.columns) {
+      const cell = resolveColumnCell(row, column)
+      if (!cell) continue
+      if (cell.snapshots?.length) {
+        for (const snap of cell.snapshots) {
+          sampleCount += 1
+          const rank = snap.mention_position
+          if (rank == null || !Number.isFinite(Number(rank))) continue
+          mentionedCount += 1
+          rankSum += Number(rank)
+          if (rankCountsAsTopThree(rank)) top3Count += 1
+        }
+        continue
+      }
+      const n = Math.max(0, Number(cell.sample_count) || 0)
+      if (n <= 0) continue
+      sampleCount += n
+      // ponytail: 无 snapshots 仅单样本格按聚合位次计；多样本不臆造拆分
+      if (n === 1 && cell.mention_position != null && Number.isFinite(Number(cell.mention_position))) {
+        mentionedCount += 1
+        rankSum += Number(cell.mention_position)
+        if (rankCountsAsTopThree(cell.mention_position)) top3Count += 1
+      }
+    }
+  }
+
+  const dayKeys = [...days].sort()
+  return {
+    latestDay: dayKeys.at(-1) || '',
+    dayCount: dayKeys.length,
+    sampleCount,
+    mentionedCount,
+    avgRank: mentionedCount ? Math.round((rankSum / mentionedCount) * 10) / 10 : null,
+    mentionRate: sampleCount ? Math.round((mentionedCount / sampleCount) * 1000) / 10 : null,
+    top3Rate: sampleCount ? Math.round((top3Count / sampleCount) * 1000) / 10 : null,
+    scopeLabel: scope.label,
+  }
+}
+
+/** Top3 露出率：位次∈[1,3] 的监测次数 / 成功样本次数（与日表 top3_count/completed 同向）。 */
+export function matrixScopedTop3Rate(
+  matrix: Pick<RankingMatrix, 'columns' | 'rows'>,
+  scope: MatrixRankScope,
+): number | null {
+  return matrixScopedPeriodKpis(matrix, scope).top3Rate
 }
 
 function rankPillClass(rank: number | null) {

@@ -277,9 +277,9 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
     </header>
 
     <div v-if="viewMode === 'matrix'" class="realtime-matrix-legend-strip">
-      <span><i class="legend-top-1" />#1</span>
-      <span><i class="legend-top-3" />#2–3</span>
-      <span><i class="legend-mid" />#4–6</span>
+      <span><i class="legend-top-1" />1</span>
+      <span><i class="legend-top-3" />2–3</span>
+      <span><i class="legend-mid" />4–6</span>
       <span><i class="legend-none" />未提及</span>
     </div>
 
@@ -289,25 +289,25 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
       </div>
       <div v-else class="realtime-hero-metrics">
         <div class="realtime-hero-metric">
-          <span>{{ viewMode === 'matrix' ? '最近日期' : (isCustomerView ? '最近监测' : '最新轮次') }}</span>
-          <b>{{ heroMetrics.latestSchedule }}</b>
-          <em v-if="viewMode === 'matrix'">{{ heroMetrics.scheduleRoundCount }} 天有均值</em>
-          <em v-else>{{ heroMetrics.scheduleRoundCount }} 个{{ isCustomerView ? '监测批次' : '调度轮次' }}</em>
+          <span>最近日期</span>
+          <b>{{ heroMetrics.latestSchedule || '—' }}</b>
+          <em>{{ heroMetrics.dayCount }} 天有数据 · {{ heroMetrics.scopeLabel }}</em>
         </div>
         <div class="realtime-hero-metric">
-          <span>子任务完成</span>
-          <b>{{ heroMetrics.completed }}/{{ heroMetrics.total || '—' }}</b>
-          <em>{{ heroMetrics.taskCount }} 个词组任务</em>
+          <span>成功样本</span>
+          <b>{{ heroMetrics.sampleCount != null ? heroMetrics.sampleCount : '—' }}</b>
+          <em>{{ heroMetrics.columnCount }} 个监测词 · {{ heroMetrics.scopeLabel }}</em>
         </div>
         <div class="realtime-hero-metric">
           <span>平均排名</span>
           <b>{{ heroMetrics.avgRank != null ? formatRank(heroMetrics.avgRank) : '—' }}</b>
           <em v-if="heroMetrics.mentionRate != null">提及率 {{ heroMetrics.mentionRate }}%</em>
+          <em v-else>{{ heroMetrics.scopeLabel }}</em>
         </div>
-        <div class="realtime-hero-metric" :class="{ 'is-warn': heroMetrics.pendingPlatforms > 0 }">
-          <span>待返回平台</span>
-          <b>{{ heroMetrics.pendingPlatforms }}</b>
-          <em>已购 {{ platformCoverage.length }} 个</em>
+        <div class="realtime-hero-metric">
+          <span>Top3 占比</span>
+          <b>{{ heroMetrics.top3Rate != null ? `${heroMetrics.top3Rate}%` : '—' }}</b>
+          <em>{{ heroMetrics.scopeLabel }}</em>
         </div>
       </div>
     </article>
