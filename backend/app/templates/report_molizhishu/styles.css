@@ -474,13 +474,13 @@ body {
 }
 
 .chart-kpi-label {
-    font-size: 18px;
+    font-size: 28px;
     line-height: 1.3;
     color: #4a6b88;
 }
 
 .chart-kpi-value {
-    font-size: 26px;
+    font-size: 34px;
     font-weight: 700;
     line-height: 1.25;
     color: #0f2744;

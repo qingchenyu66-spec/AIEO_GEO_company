@@ -256,9 +256,9 @@ def _draw_entity_lines(
     if title:
         ax.set_title(title, fontsize=11 if compact else 13, fontweight="bold", color=theme.chart_title, pad=6)
     if show_legend and not compact:
-        ax.legend(loc="upper right", framealpha=0.92, fontsize=7, ncol=1)
+        ax.legend(loc="upper right", framealpha=0.92, fontsize=12, ncol=1)
     if not compact:
-        ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis, fontsize=10)
+        ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis, fontsize=15)
     return handles
 
 
