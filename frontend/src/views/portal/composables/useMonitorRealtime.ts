@@ -1011,10 +1011,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     if (!detailVisible.value) {
       selectedMatrixCell.value = null
     }
-    // 切时间后立刻丢掉旧矩阵，避免副文案已是「月」数字仍是近 7 日
-    if (matrixRangeKey && matrixRangeKey !== rangeKey) {
-      rankingMatrix.value = null
-    }
+    // ponytail: 保留上一份矩阵作骨架，靠 seq 防脏写；清空会让四卡闪「—」体感更慢
     try {
       // 抓请求瞬间的日期，避免快速切预设时 withRetry 读到后一次筛选
       const data = await withRetry(() => getRankingMatrix({

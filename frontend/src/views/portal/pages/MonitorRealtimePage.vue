@@ -291,7 +291,10 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         <div class="realtime-hero-metric">
           <span>最近日期</span>
           <b>{{ heroMetrics.latestSchedule || '—' }}</b>
-          <em>{{ heroMetrics.dayCount }} 天有数据 · {{ heroMetrics.scopeLabel }}</em>
+          <em>
+            {{ heroMetrics.dayCount }} 天有数据 · {{ heroMetrics.scopeLabel }}
+            <template v-if="loadingMatrix"> · 更新中</template>
+          </em>
         </div>
         <div class="realtime-hero-metric">
           <span>成功样本</span>

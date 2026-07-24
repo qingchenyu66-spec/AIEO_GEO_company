@@ -2997,8 +2997,24 @@ def _find_brand_in_structured_rankings(
         return None, True, category
 
 
+def _orm_attr_loaded(obj: Any, key: str) -> bool:
+    """True if attribute is already in identity map; False means would lazy-load."""
+    try:
+        from sqlalchemy import inspect as sa_inspect
+
+        insp = sa_inspect(obj)
+        return key not in insp.unloaded
+    except Exception:
+        return True
+
+
 def _stored_display_rank_source(subtask: GeoMonitorSubtask) -> tuple[str, dict[str, Any]]:
-    """从 raw_result_json 推断 mention_position 的写入来源（读路径 provenance）。"""
+    """从 raw_result_json 推断 mention_position 的写入来源（读路径 provenance）。
+
+    矩阵等轻量扫描未 load raw_result_json 时禁止触发懒加载（否则 N+1 可达数秒）。
+    """
+    if not _orm_attr_loaded(subtask, "raw_result_json"):
+        return "stored", {}
     raw = getattr(subtask, "raw_result_json", None)
     raw = raw if isinstance(raw, dict) else {}
     if raw.get("source") == "manual_snapshot":
@@ -3022,8 +3038,12 @@ def _read_display_brand_rank(
     写路径（recompute_subtask_rank_from_answer）仍走 _resolve_brand_rank_detail，
     算完后写回 mention_position，不经过本函数。
     """
-    mention_text = _strip_html_for_match(getattr(subtask, "mention_context", None))
-    has_brand_in_mention = _brand_appears_in_text(mention_text, brand_terms)
+    # ponytail: 轻量扫描常不带 mention_context；未加载则跳过，勿 N+1
+    if _orm_attr_loaded(subtask, "mention_context"):
+        mention_text = _strip_html_for_match(getattr(subtask, "mention_context", None))
+        has_brand_in_mention = _brand_appears_in_text(mention_text, brand_terms)
+    else:
+        has_brand_in_mention = False
     if prompt_monitor_intent(subtask.prompt) != "ranking":
         return BrandRankResolution(
             rank=None,
@@ -3156,12 +3176,14 @@ def _matrix_cell_rank(
     monitor_keywords: str | None,
     asset: BrandAsset | None,
     keyword_groups: list[dict[str, Any]] | None = None,
+    *,
+    ranking_terms: list[str] | None = None,
 ) -> dict[str, Any]:
-    ranking_terms = _ranking_match_terms(asset, keyword_groups)
+    terms = ranking_terms if ranking_terms is not None else _ranking_match_terms(asset, keyword_groups)
     detail = _read_display_brand_rank(
         subtask,
         monitor_keywords,
-        ranking_terms,
+        terms,
         asset,
         allow_full_parse=False,
     )
@@ -3170,7 +3192,6 @@ def _matrix_cell_rank(
         "raw_mention_position": subtask.mention_position,
         "brand_mentioned": detail.mentioned,
         "monitor_keyword": monitor_keywords,
-        "ranking_terms": ranking_terms,
         "prompt_intent": prompt_monitor_intent(subtask.prompt),
         "rank_source": detail.source,
         "rank_confidence": detail.confidence,
@@ -3338,6 +3359,8 @@ def ranking_matrix(
 
     prompt_set: dict[str, str | None] = {}
     task_rows: dict[str, dict[str, Any]] = {}
+    # ponytail: 词表每格不变，提到循环外；避免 3k× 重建
+    ranking_terms = _ranking_match_terms(asset, keyword_groups)
 
     for item in subtasks:
         prompt = (item.prompt or "").strip()
@@ -3390,7 +3413,13 @@ def ranking_matrix(
             bucket["latest_at"] = item.updated_at
             bucket["task_id"] = task_id
         monitor_keywords = item.task.monitor_keywords if item.task else None
-        rank_payload = _matrix_cell_rank(item, monitor_keywords, asset, keyword_groups)
+        rank_payload = _matrix_cell_rank(
+            item,
+            monitor_keywords,
+            asset,
+            keyword_groups,
+            ranking_terms=ranking_terms,
+        )
         cell = {
             "subtask_id": item.subtask_id,
             "task_id": task_id,
