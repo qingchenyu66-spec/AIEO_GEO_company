@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 _FONT_REGULAR_CANDIDATES = (
+    Path("C:/Windows/Fonts/simkai.ttf"),
+    Path("C:/Windows/Fonts/STKAITI.TTF"),
     Path("C:/Windows/Fonts/msyh.ttc"),
     Path("C:/Windows/Fonts/msyhbd.ttc"),
     Path("C:/Windows/Fonts/simhei.ttf"),
@@ -16,6 +18,8 @@ _FONT_REGULAR_CANDIDATES = (
 )
 
 _FONT_BOLD_CANDIDATES = (
+    Path("C:/Windows/Fonts/simkai.ttf"),
+    Path("C:/Windows/Fonts/STKAITI.TTF"),
     Path("C:/Windows/Fonts/msyhbd.ttc"),
     Path("C:/Windows/Fonts/msyh.ttc"),
     Path("C:/Windows/Fonts/simhei.ttf"),

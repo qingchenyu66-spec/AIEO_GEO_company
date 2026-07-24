@@ -6,12 +6,65 @@ import html
 import re
 from typing import Any
 
-from app.services.report_competitor_visuals import classify_rank_risk, entity_visual_style
+from app.services.report_competitor_visuals import entity_visual_style
 from app.services.report_molizhishu_theme import get_theme
 
 
 def _esc(text: Any) -> str:
     return html.escape(str(text or ""), quote=False)
+
+
+def _paragraph_html(text: str, *, short: bool | None = None) -> str:
+    """短句/单行不缩进；较长段落才首行缩进。"""
+    content = str(text or "").strip()
+    if not content:
+        return ""
+    if content.startswith("<"):
+        return content
+    # 短句/单行不缩进；多句且较长才首行缩进
+    if short is not None:
+        is_short = short
+    else:
+        sentence_breaks = content.count("。") + content.count("！") + content.count("？")
+        is_short = len(content) <= 48 or sentence_breaks <= 1
+    cls = "para--short" if is_short else "para--indent"
+    return f'<p class="{cls}">{_esc(content)}</p>'
+
+
+def _split_sentence_paragraphs(text: str) -> str:
+    """按句号/分号拆成多行，便于摘要与 SWOT 逐条阅读。"""
+    content = str(text or "").strip()
+    if not content:
+        return ""
+    if content.startswith("<"):
+        return content
+    parts = [p.strip() for p in re.split(r"(?<=[。！？；;])", content) if p and p.strip()]
+    # 去掉仅剩标点的残段
+    parts = [p for p in parts if p.strip("。！？；;，,、 ")]
+    if len(parts) <= 1:
+        return _paragraph_html(content, short=True)
+    return "".join(_paragraph_html(part, short=True) for part in parts)
+
+
+def _numbered_list_html(text: str) -> str | None:
+    """把「1. xxx 2. xxx」收成 ol；识别不到则返回 None。"""
+    content = str(text or "").strip()
+    if not content or content.startswith("<"):
+        return None
+    parts = re.split(r"(?:(?<=^)|(?<=\s)|(?<=[。；;]))\d+[\.、．]\s*", content)
+    items = [p.strip(" ；;，,") for p in parts if p and p.strip(" ；;，,")]
+    # split 可能留下无编号前缀的首段；要求至少 2 条编号项
+    numbered = re.findall(r"\d+[\.、．]\s*", content)
+    if len(numbered) < 2 or len(items) < 2:
+        return None
+    # 若首段不是编号项（split 产生空前缀），丢掉空段后取后段
+    if not re.match(r"^\d+[\.、．]", content.strip()):
+        # parts[0] 可能是空或前导废话
+        items = [p for p in items if p]
+    if len(items) < 2:
+        return None
+    lis = "".join(f"<li>{_esc(item)}</li>" for item in items[:12])
+    return f'<ol class="action-tip-list tip-list--dense">{lis}</ol>'
 
 
 def rank_cell_bg(rank: Any) -> str | None:
@@ -67,39 +120,66 @@ def _font_type(text: str, *, muted: bool) -> str:
     return f'<span class="muted-cell-text">{_esc(text)}</span>'
 
 
+def _short_monitor_date(raw: str | None) -> str:
+    """B：监测日期短格式 MM-DD（保留可解析的年月日）。"""
+    text = str(raw or "").strip()
+    if not text or text == "—":
+        return "—"
+    # 2026-07-02 / 2026-07-02 13:40 / 26-07-09 13:40
+    m = re.search(r"(?:\d{2,4}-)?(\d{1,2})-(\d{1,2})", text)
+    if m:
+        return f"{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return text
+
+
+def _rank_type_tag(label: str, *, muted: bool = False) -> str:
+    """A：最近/最优/最差 → 小标签。"""
+    text = str(label or "最近").strip() or "最近"
+    if "最优" in text:
+        kind = "best"
+    elif "最差" in text:
+        kind = "worst"
+    else:
+        kind = "recent"
+    muted_cls = " rank-type-tag--muted" if muted else ""
+    return f'<span class="rank-type-tag rank-type-tag--{kind}{muted_cls}">{_esc(text)}</span>'
+
+
 def render_ranking_table(table_id: str, rows: list[dict[str, Any]]) -> str:
+    """排名明细：A+B 去分类列 / 类型标签 / 本品牌高亮 / 日期短格式。"""
     if not rows:
         return ""
     body = []
     for row in rows:
         brand = bool(row.get("is_brand"))
         muted = bool(row.get("type_muted"))
+        type_html = _rank_type_tag(str(row.get("type_label") or "最近"), muted=muted)
+        name_html = _font_brand(str(row.get("name") or ""), brand=True) if brand else _esc(str(row.get("name") or ""))
+        rank_html = (
+            _font_brand(str(row.get("rank_display") or "—"), brand=True)
+            if brand
+            else _esc(str(row.get("rank_display") or "—"))
+        )
+        date_html = _esc(_short_monitor_date(row.get("collected_at")))
         if brand:
-            body.append(
-                "<tr>"
-                f"<td>{_font_brand(str(row.get('name') or ''), brand=True)}</td>"
-                f"<td>{_font_brand(str(row.get('type_label') or '最近'), brand=True)}</td>"
-                f"<td>{_font_brand(str(row.get('category') or '默认分类'), brand=True)}</td>"
-                f"<td>{_font_brand(str(row.get('rank_display') or '—'), brand=True)}</td>"
-                f"<td>{_font_brand(str(row.get('collected_at') or '—'), brand=True)}</td>"
-                "</tr>"
-            )
-        else:
-            body.append(
-                "<tr>"
-                f"<td>{_esc(str(row.get('name') or ''))}</td>"
-                f"<td>{_font_type(str(row.get('type_label') or '最近'), muted=muted)}</td>"
-                f"<td>{_esc(str(row.get('category') or '默认分类'))}</td>"
-                f"<td>{_esc(str(row.get('rank_display') or '—'))}</td>"
-                f"<td>{_esc(str(row.get('collected_at') or '—'))}</td>"
-                "</tr>"
-            )
+            date_html = f'<span class="brand-cell-text">{date_html}</span>'
+        row_cls = ' class="rank-row--brand"' if brand else ""
+        body.append(
+            f"<tr{row_cls}>"
+            f"<td>{name_html}</td>"
+            f"<td>{type_html}</td>"
+            f'<td class="rank-col">{rank_html}</td>'
+            f'<td class="date-col">{date_html}</td>'
+            "</tr>"
+        )
     return (
-        f'<div id="{_esc(table_id)}"><tr"></tr">'
-        f'<table id="{_esc(table_id)}" class="RankTable">'
-        '<thead><tr>'
-        '<th width="25%">品牌名称</th><th>类型</th><th width="30%">分类</th>'
-        '<th width="10%">排名</th><th width="18%">采集时间</th>'
+        f'<div id="{_esc(table_id)}" class="ranking-detail-wrap">'
+        f'<table id="{_esc(table_id)}" class="RankTable ranking-detail-table">'
+        "<thead><tr>"
+        '<th class="name-col">品牌名称</th>'
+        '<th class="type-col">类型</th>'
+        '<th class="rank-col">排名</th>'
+        '<th class="date-col">监测日期</th>'
         "</tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table></div>"
     )
@@ -134,8 +214,9 @@ def render_mention_table(table_id: str, rows: list[dict[str, Any]]) -> str:
         brand = bool(row.get("is_brand"))
         entity_name = str(row.get("name") or "")
         rate = float(row.get("mention_rate") or 0)
+        row_cls = ' class="rank-row--brand"' if brand else ""
         body.append(
-            "<tr>"
+            f"<tr{row_cls}>"
             f"<td>{_font_brand(str(row.get('name') or ''), brand=brand)}</td>"
             f"<td>{_font_brand(str(row.get('sample_count') or 0), brand=brand)}</td>"
             f"<td>{_font_brand(str(row.get('mention_count') or 0), brand=brand)}</td>"
@@ -143,11 +224,11 @@ def render_mention_table(table_id: str, rows: list[dict[str, Any]]) -> str:
             "</tr>"
         )
     return (
-        f'<div id="{_esc(table_id)}"><tr"></tr">'
+        f'<div id="{_esc(table_id)}">'
         f'<table id="{_esc(table_id)}" class="RankTable">'
-        '<thead><tr>'
-        '<th width="25%">品牌名称</th><th width="10%">采集次数</th>'
-        '<th width="10%">提及次数</th><th width="30%">提及率</th>'
+        "<thead><tr>"
+        '<th width="25%">品牌名称</th><th width="12%">监测样本数</th>'
+        '<th width="12%">品牌提及次数</th><th width="30%">提及占比</th>'
         "</tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table></div>"
     )
@@ -212,9 +293,17 @@ def render_executive_block(*, executive_summary: str | None, highlights: list[st
     chunks: list[str] = []
     summary = str(executive_summary or "").strip()
     if summary:
-        chunks.append(
-            f'<p class="executive-summary">{summary if summary.startswith("<") else _esc(summary)}</p>'
-        )
+        # 核心结论段落首行缩进 2 字；下方 highlight 列表不缩进
+        if summary.startswith("<"):
+            body = summary
+        else:
+            parts = [p.strip() for p in re.split(r"(?<=[。！？；;])", summary) if p and p.strip()]
+            parts = [p for p in parts if p.strip("。！？；;，,、 ")]
+            if len(parts) <= 1:
+                body = _paragraph_html(summary, short=False)
+            else:
+                body = "".join(_paragraph_html(part, short=False) for part in parts)
+        chunks.append(f'<div class="executive-summary">{body}</div>')
     cleaned = [str(item).strip() for item in highlights if str(item).strip()]
     if cleaned:
         items = "".join(f"<li>{item if item.startswith('<') else _esc(item)}</li>" for item in cleaned[:6])
@@ -317,8 +406,15 @@ def render_diagnosis_swot(
         text = str(content or "").strip()
         if not text:
             continue
-        # plain text 保留换行，避免纵向块里挤成一段
-        body = text if text.startswith("<") else f'<p class="swot-body">{_esc(text)}</p>'
+        if text.startswith("<"):
+            body = text
+        else:
+            numbered = _numbered_list_html(text)
+            if numbered:
+                body = numbered
+            else:
+                # 优势/待改善常以分号串联多条，统一按句/分号拆行
+                body = _split_sentence_paragraphs(text)
         blocks.append(f'<div class="swot-card {css}"><h4>{_esc(title)}</h4>{body}</div>')
     if not blocks:
         return ""
@@ -342,12 +438,11 @@ def render_competitor_landscape_table(rows: list[dict[str, Any]]) -> str:
         )
         avg_rank = row.get("avg_rank")
         rank_text = "—" if avg_rank in (None, "") else f"{float(avg_rank):.1f}"
-        risk = classify_rank_risk(avg_rank)
         body.append(
-            f'<tr data-entity-color="{style.color}">'
+            f'<tr data-entity-color="{style.color}" style="--entity-color: {style.color};">'
             f"<td>{name_cell}</td>"
             f"<td>{float(row.get('mention_rate') or 0):.1f}%</td>"
-            f'<td>{_esc(rank_text)} <span class="rank-risk rank-risk-{risk.level}">{_esc(risk.label)}</span></td>'
+            f"<td>{_esc(rank_text)}</td>"
             "</tr>"
         )
     return (
@@ -360,21 +455,16 @@ def render_competitor_landscape_table(rows: list[dict[str, Any]]) -> str:
 def render_competitor_strategy(analysis: dict[str, Any]) -> str:
     if not analysis or not analysis.get("rows"):
         return ""
-    summary = _esc(analysis.get("management_summary") or "")
+    summary_html = _split_sentence_paragraphs(str(analysis.get("management_summary") or ""))
     actions = [str(item).strip() for item in analysis.get("actions") or [] if str(item).strip()]
     action_items = "".join(f"<li>{_esc(item)}</li>" for item in actions)
     return (
         '<div class="competitor-strategy">'
         '<div class="competitor-summary-card"><h4>竞争格局摘要</h4>'
-        f'<p>{summary}</p></div>'
+        f"{summary_html}</div>"
         '<div class="competitor-action-card"><h4>运营建议动作</h4>'
-        f'<ol>{action_items}</ol></div>'
-        '<div class="rank-risk-legend"><strong>排名风险说明：</strong>'
-        '<span class="rank-risk rank-risk-good">前三名：达标</span>'
-        '<span class="rank-risk rank-risk-watch">第4-5名：关注</span>'
-        '<span class="rank-risk rank-risk-warning">第6-7名：警告</span>'
-        '<span class="rank-risk rank-risk-danger">第8名以后：高风险</span>'
-        '</div></div>'
+        f'<ol class="competitor-action-list competitor-action-list--dense">{action_items}</ol></div>'
+        "</div>"
     )
 
 
@@ -415,15 +505,37 @@ def render_insight_paragraph(text: str | None) -> str:
         return ""
     if content.startswith("<"):
         return f'<div class="insight-text">{content}</div>'
-    return f'<p class="insight-text">{_esc(content)}</p>'
+    numbered = _numbered_list_html(content)
+    if numbered:
+        return f'<div class="insight-text">{numbered}</div>'
+    return f'<div class="insight-text">{_paragraph_html(content)}</div>'
 
 
 def render_tip_list(tips: list[str]) -> str:
-    cleaned = [str(item).strip() for item in tips if str(item).strip()]
+    """信源优化建议：与「数据分析与优化建议」同款白卡段落流。"""
+    cleaned: list[str] = []
+    for item in tips:
+        tip = str(item).strip()
+        if not tip:
+            continue
+        tip = re.sub(r"^针对\s*", "", tip)
+        tip = re.sub(r"^【(?:深度|广度|维度|策略)】\s*", "", tip)
+        tip = re.sub(r"验收口径[:：]?\s*", "", tip)
+        if "验收口径" in tip:
+            continue
+        if tip and tip not in cleaned:
+            cleaned.append(tip)
     if not cleaned:
         return ""
-    items = "".join(f"<li>{item if item.startswith('<') else _esc(item)}</li>" for item in cleaned)
-    return f'<ul class="action-tip-list">{items}</ul>'
+    cards: list[str] = []
+    for index, tip in enumerate(cleaned[:12], start=1):
+        text = tip if tip.startswith("<") else _esc(tip)
+        cards.append(
+            '<div class="analysis-block analysis-card pack-item tip-as-analysis">'
+            f'<p class="para--short"><span class="tip-card-index">{index:02d}</span>{text}</p>'
+            "</div>"
+        )
+    return f'<div class="tip-analysis-stack">{"".join(cards)}</div>'
 
 
 def render_prompt_comment(text: str | None) -> str:
@@ -432,7 +544,8 @@ def render_prompt_comment(text: str | None) -> str:
         return ""
     if content.startswith("<"):
         return f'<div class="prompt-comment">{content}</div>'
-    return f'<p class="prompt-comment">{_esc(content)}</p>'
+    # 点评多为短句，默认不缩进
+    return f'<p class="prompt-comment para--short">{_esc(content)}</p>'
 
 
 def render_chart_block(title: str, src: str) -> str:
@@ -482,36 +595,203 @@ def _normalize_analysis_h2(html: str) -> str:
 
 
 def _wrap_analysis_blocks(html: str) -> str:
-    parts = re.split(r"(?=<h2\b)", html.strip())
+    """按参考图：每段正文独立白卡片；章节 h2 不单独占卡（避免打断卡片节奏）。"""
     blocks: list[str] = []
-    for part in parts:
-        chunk = part.strip()
+    pattern = re.compile(
+        r"(<h2\b[^>]*>.*?</h2>)|(<p\b[^>]*>.*?</p>)|(<ul\b[^>]*>.*?</ul>)|(<ol\b[^>]*>.*?</ol>)",
+        re.I | re.S,
+    )
+    for match in pattern.finditer(html or ""):
+        chunk = match.group(0).strip()
         if not chunk:
             continue
-        blocks.append(f'<div class="analysis-block">{chunk}</div>')
-    return "\n".join(blocks)
+        if re.match(r"<h2\b", chunk, re.I):
+            continue
+        blocks.append(f'<div class="analysis-block analysis-card pack-item">{chunk}</div>')
+    if blocks:
+        return "\n".join(blocks)
+    # 无识别到的块时回退：整段包一张卡
+    fallback = (html or "").strip()
+    return f'<div class="analysis-block analysis-card pack-item">{fallback}</div>' if fallback else ""
+
+
+_EMPHASIS_RED = "#ff6666"
+_EMPHASIS_BLUE = "#66ccff"
+# 行动项里常见落点站点/平台，作次要蓝高亮（长词优先）
+_EMPHASIS_BLUE_TERMS = (
+    "百度知道",
+    "百家号",
+    "搜狐号",
+    "小红书",
+    "广告门",
+    "梅花网",
+    "DeepSeek",
+    "知乎",
+    "夸克",
+    "新浪",
+    "搜狐",
+    "抖音",
+    "微博",
+)
+
+
+def _highlight_analysis_plain(text: str) -> str:
+    """与分析卡同口径：主强调红、次要蓝（「」交替 + 站点名）。"""
+    esc = _esc(text)
+    quote_idx = 0
+
+    def _quote_repl(match: re.Match[str]) -> str:
+        nonlocal quote_idx
+        color = _EMPHASIS_RED if quote_idx % 2 == 0 else _EMPHASIS_BLUE
+        quote_idx += 1
+        return f'「<strong style="color:{color};">{match.group(1)}</strong>」'
+
+    esc = re.sub(r"「([^」]{1,48})」", _quote_repl, esc)
+    for term in _EMPHASIS_BLUE_TERMS:
+        token = f'<strong style="color:{_EMPHASIS_BLUE};">{term}</strong>'
+        if term not in esc or token in esc:
+            continue
+        # 勿拆开已包在 <strong> 内的更长短语（如 搜狐号 里的 搜狐）
+        replaced = False
+        for match in re.finditer(re.escape(term), esc):
+            before = esc[: match.start()]
+            if before.count("<strong") > before.count("</strong>"):
+                continue
+            esc = esc[: match.start()] + token + esc[match.end() :]
+            replaced = True
+            break
+        if not replaced:
+            continue
+    return esc
 
 
 def render_priority_actions(rows: list[dict[str, Any]]) -> str:
+    """行动项：与下方分析同款白卡长段落流，含红/蓝关键词高亮；不展示优先级/周期。"""
     if not rows:
         return ""
-    body = []
+    cards: list[str] = []
     for row in rows:
-        body.append(
-            "<tr>"
-            f"<td><span class=\"priority-tag priority-{str(row.get('priority') or 'P2').lower()}\">"
-            f"{_esc(row.get('priority') or 'P2')}</span></td>"
-            f"<td>{_esc(row.get('title') or '')}</td>"
-            f"<td>{_esc(row.get('timeline') or '—')}</td>"
-            "</tr>"
+        title = str(row.get("title") or "").strip()
+        if not title:
+            continue
+        # 禁止展示「验收口径」类附注，避免给客户交付制造刚性承诺
+        # 白卡行动项不缩进
+        cards.append(
+            '<div class="analysis-block analysis-card pack-item">'
+            f'<p class="para--short">{_highlight_analysis_plain(title)}</p></div>'
         )
-    return (
-        '<div class="analysis-block analysis-priority-block">'
-        '<h2 class="analysis-h2">6. 优先级行动清单</h2>'
-        '<table class="report-table overview-table">'
-        "<thead><tr><th>优先级</th><th>行动项</th><th>建议周期</th></tr></thead>"
-        f"<tbody>{''.join(body)}</tbody></table></div>"
+    return "\n".join(cards)
+
+
+def _analysis_plain_key(text: str) -> str:
+    plain = re.sub(r"<[^>]+>", "", str(text or ""))
+    plain = re.sub(r"\s+", "", plain)
+    plain = re.sub(
+        r"^(门户类|垂直类|问答类|自媒体类|行业类|新闻类)[:：]",
+        "",
+        plain,
     )
+    return plain
+
+
+def _near_dup_action(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) < 18 or len(b) < 18:
+        return False
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return shorter in longer and (len(shorter) / len(longer)) >= 0.78
+
+
+def _explode_lists_to_paragraphs(
+    html: str,
+    *,
+    dedupe_titles: list[str] | None = None,
+) -> str:
+    """ul/ol → 独立 p（一条一卡）；与 priority 近重复则丢弃。"""
+    body = str(html or "")
+    if not body:
+        return body
+    seen = {_analysis_plain_key(t) for t in (dedupe_titles or []) if _analysis_plain_key(t)}
+
+    def _repl(match: re.Match[str]) -> str:
+        chunk = match.group(0)
+        lis = re.findall(r"<li\b[^>]*>(.*?)</li>", chunk, flags=re.I | re.S)
+        if not lis:
+            return chunk
+        parts: list[str] = []
+        for li in lis:
+            inner = str(li or "").strip()
+            if not inner:
+                continue
+            key = _analysis_plain_key(inner)
+            if not key:
+                continue
+            if any(_near_dup_action(key, prev) for prev in seen):
+                continue
+            seen.add(key)
+            # 分类前缀保留原 HTML；统一短段不缩进
+            parts.append(f'<p class="para--short">{inner}</p>')
+        return "".join(parts)
+
+    return re.sub(r"<(ul|ol)\b[^>]*>.*?</\1>", _repl, body, flags=re.I | re.S)
+
+
+def ensure_analysis_action_items(
+    html: str,
+    *,
+    fill_titles: list[str],
+    min_count: int = 8,
+    max_count: int = 10,
+) -> str:
+    """第5节采取措施建议：li 不足 8 条时用诊断短板行动项补齐（不编造无依据条目）。"""
+    body = str(html or "").strip()
+    if not body:
+        return body
+    existing = re.findall(r"<li\b[^>]*>.*?</li>", body, flags=re.I | re.S)
+    # 粗略只统计「采取措施」相关 ul；若无法定位则按全文 li 计
+    section_match = re.search(
+        r"(采取措施建议|action_recommendations)([\s\S]*?)(?=<h2\b|$)",
+        body,
+        flags=re.I,
+    )
+    scope = section_match.group(0) if section_match else body
+    lis = re.findall(r"<li\b[^>]*>.*?</li>", scope, flags=re.I | re.S)
+    if len(lis) >= min_count:
+        return body
+
+    seen = {re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", li)) for li in lis}
+    extras: list[str] = []
+    for title in fill_titles:
+        plain = str(title or "").strip()
+        if not plain:
+            continue
+        key = re.sub(r"\s+", "", plain)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        extras.append(f"<li>{_esc(plain)}</li>")
+        if len(lis) + len(extras) >= max_count:
+            break
+    if not extras:
+        return body
+
+    # 插入最后一个 </ul> 前；若无 ul 则在文末追加一节
+    if re.search(r"</ul>", body, flags=re.I):
+        parts = re.split(r"(</ul>)", body, flags=re.I)
+        # 插到最后一个 </ul> 之前
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i].lower() == "</ul>":
+                parts[i] = "".join(extras) + parts[i]
+                break
+        return "".join(parts)
+    block = (
+        '<h2 class="analysis-h2">5. 采取措施建议</h2>'
+        f"<ul>{''.join(lis)}{''.join(extras)}</ul>"
+    )
+    return f"{body}\n{block}"
 
 
 def render_analysis_html(
@@ -520,12 +800,26 @@ def render_analysis_html(
     analysis_html: str | None = None,
     priority_actions: list[dict[str, Any]] | None = None,
     source_action_tips: list[str] | None = None,
+    analysis_action_tips: list[str] | None = None,
 ) -> str:
     from app.services.report_text_sanitize import sanitize_analysis_html
 
+    del analysis_action_tips  # 已取消【深度】分层块，参数保留兼容旧调用
+
+    priority_titles = [
+        str(row.get("title") or "").strip()
+        for row in (priority_actions or [])
+        if str(row.get("title") or "").strip()
+    ]
+    fill_titles = list(priority_titles)
+    fill_titles.extend(str(x).strip() for x in (source_action_tips or []) if str(x).strip())
+
     if analysis_html and str(analysis_html).strip():
         body = sanitize_analysis_html(str(analysis_html).strip())
+        body = ensure_analysis_action_items(body, fill_titles=fill_titles, min_count=8, max_count=10)
         body = _normalize_analysis_h2(body)
+        # 4A：措施列表拆成独立段落卡，并与置顶 priority 去重
+        body = _explode_lists_to_paragraphs(body, dedupe_titles=priority_titles)
         body = _wrap_analysis_blocks(body)
     else:
         chunks: list[str] = []
@@ -533,28 +827,31 @@ def render_analysis_html(
             raw = str(sections.get(key) or "").strip()
             if not raw:
                 continue
-            section_parts = [f'<h2 class="analysis-h2">{title}</h2>']
             if raw.startswith("<"):
-                section_parts.append(raw)
+                chunks.append(f'<div class="analysis-block analysis-card pack-item">{raw}</div>')
             else:
                 for part in re.split(r"\n+", raw):
                     part = part.strip()
                     if part:
-                        section_parts.append(f"<p>{_esc(part)}</p>")
-            chunks.append(f'<div class="analysis-block">{"".join(section_parts)}</div>')
+                        chunks.append(
+                            f'<div class="analysis-block analysis-card pack-item">'
+                            f"<p class=\"para--short\">{_esc(part)}</p></div>"
+                        )
         body = "\n".join(chunks)
 
-    extras: list[str] = []
+    # 行动项置顶（用户明确要求写到上边）
+    head: list[str] = []
     if priority_actions:
-        extras.append(render_priority_actions(priority_actions))
+        head.append(render_priority_actions(priority_actions))
     tips = [str(item).strip() for item in (source_action_tips or []) if str(item).strip()]
-    if tips and "采取措施建议" not in body:
-        items = "".join(f"<li>{_esc(item)}</li>" for item in tips[:5])
-        extras.append(
-            '<div class="analysis-block">'
+    # 有独立「信源优化建议」页时，tips 仅用于第5节凑满，不再在分析页追加「信源优化补充」
+    if tips and "采取措施建议" not in body and not priority_actions:
+        items = "".join(f"<li>{_esc(item)}</li>" for item in tips[:12])
+        head.append(
+            '<div class="analysis-block analysis-card pack-item">'
             '<h2 class="analysis-h2">信源优化补充</h2>'
             f"<ul>{items}</ul></div>"
         )
-    if extras:
-        body = f"{body}\n{''.join(extras)}"
+    if head:
+        body = f"{''.join(head)}\n{body}"
     return body

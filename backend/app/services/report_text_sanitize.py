@@ -113,10 +113,28 @@ _GARBAGE_SOURCE_RE = re.compile(
 
 
 def sanitize_analysis_html(html: str | None) -> str:
-    """清洗 AI 解读 HTML 中的脚本片段与明显垃圾信源引用。"""
+    """清洗 AI 解读 HTML；编号句拆成列表；短段标记不缩进。"""
+    from html import escape as html_escape
+
     text = str(html or "").strip()
     if not text:
         return ""
     text = _JS_RE.sub(" ", text)
     text = _GARBAGE_SOURCE_RE.sub("相关聚合页", text)
+
+    def _expand_p(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        plain = _TAG_RE.sub("", inner)
+        plain = _WS_RE.sub(" ", plain).strip()
+        numbered = re.findall(r"\d+[\.、．]\s*", plain)
+        if len(numbered) >= 2:
+            parts = re.split(r"(?:(?<=^)|(?<=\s)|(?<=[。；;]))\d+[\.、．]\s*", plain)
+            items = [p.strip(" ；;，,") for p in parts if p and p.strip(" ；;，,")]
+            if len(items) >= 2:
+                lis = "".join(f"<li>{html_escape(item)}</li>" for item in items[:12])
+                return f"<ol>{lis}</ol>"
+        cls = "para--short"
+        return f'<p class="{cls}">{inner}</p>'
+
+    text = re.sub(r"<p[^>]*>(.*?)</p>", _expand_p, text, flags=re.I | re.S)
     return text.strip()

@@ -42,6 +42,13 @@ def _short_schedule_label(label: Any) -> str:
     return text or "—"
 
 
+def _short_entity_label(name: str, *, limit: int = 8) -> str:
+    text = re.sub(r"\s+", "", str(name or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
 def _platform_label_map() -> dict[str, str]:
     return {
         str(item.get("code") or ""): str(item.get("name") or item.get("code") or "")
@@ -49,9 +56,18 @@ def _platform_label_map() -> dict[str, str]:
     }
 
 
-def _figure_to_png(fig: plt.Figure) -> bytes:
+def _figure_to_png(fig: plt.Figure, *, pad_inches: float = 0.55, tight: bool = True) -> bytes:
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=_CHART_DPI, bbox_inches="tight", facecolor="white")
+    kwargs: dict[str, Any] = {
+        "format": "png",
+        "dpi": _CHART_DPI,
+        "facecolor": "white",
+    }
+    if tight:
+        # pad_inches 防止 X 轴日期/标签贴边被裁切
+        kwargs["bbox_inches"] = "tight"
+        kwargs["pad_inches"] = pad_inches
+    fig.savefig(buffer, **kwargs)
     plt.close(fig)
     buffer.seek(0)
     return buffer.read()
@@ -118,28 +134,132 @@ def build_rank_trend_chart(rank_trend: list[dict[str, Any]]) -> bytes | None:
     return _figure_to_png(fig)
 
 
-def _entity_series(
-    trend_rows: list[dict[str, Any]],
-    entity_names: list[str],
-) -> dict[str, list[tuple[int, float]]]:
-    series: dict[str, list[tuple[int, float]]] = {name: [] for name in entity_names}
-    for index, row in enumerate(trend_rows):
-        entities = row.get("entities") or {}
-        for name in entity_names:
-            value = entities.get(name)
-            if value is None and names_match(name, row.get("brand_name")):
-                value = row.get("avg_rank")
-            if value is not None:
-                series[name].append((index, float(value)))
-    return series
-
-
 def names_match(left: str | None, right: str | None) -> bool:
     a = re.sub(r"\s+", "", str(left or "").strip().lower())
     b = re.sub(r"\s+", "", str(right or "").strip().lower())
     if not a or not b:
         return False
     return a == b or a in b or b in a
+
+
+def _collect_entity_series(
+    trend_rows: list[dict[str, Any]],
+    *,
+    brand: str,
+    entities: list[str],
+) -> tuple[list[dict[str, Any]], list[str], float]:
+    labels = [
+        _short_schedule_label(row.get("schedule_label") or row.get("schedule_key"))
+        for row in trend_rows
+    ]
+    series_data: list[dict[str, Any]] = []
+    max_rank = 1.0
+    for name in entities[:8]:
+        points: list[tuple[int, float]] = []
+        for point_index, row in enumerate(trend_rows):
+            entities_map = row.get("entities") or {}
+            value = entities_map.get(name)
+            if value is None and names_match(name, brand):
+                value = row.get("avg_rank")
+            if value is not None:
+                points.append((point_index, float(value)))
+                max_rank = max(max_rank, float(value))
+        if not points:
+            continue
+        style = entity_visual_style(name, brand_name=brand)
+        series_data.append(
+            {
+                "name": name,
+                "points": points,
+                "style": style,
+                "is_brand": names_match(name, brand),
+            }
+        )
+    return series_data, labels, max_rank
+
+
+def _draw_entity_lines(
+    ax: Any,
+    *,
+    series_data: list[dict[str, Any]],
+    labels: list[str],
+    max_rank: float,
+    title: str | None,
+    theme: Any,
+    compact: bool = False,
+    show_legend: bool = True,
+) -> list[Any]:
+    """在 ax 上画品牌/竞品折线；返回 legend handles。"""
+    if not series_data:
+        ax.set_axis_off()
+        if title:
+            ax.set_title(title, fontsize=11, color=theme.chart_title)
+        return []
+
+    point_count = max(len(item["points"]) for item in series_data)
+    sparse = point_count <= 3
+    y_bottom = max(max_rank + 1.2, 6.0)
+
+    ax.axhline(3.0, color="#21b981", linestyle="--", linewidth=0.9, alpha=0.45, zorder=1)
+    handles = []
+    for series_idx, item in enumerate(series_data):
+        points = item["points"]
+        px, py = zip(*points)
+        is_brand = bool(item["is_brand"])
+        color = item["style"].color
+        (line,) = ax.plot(
+            px,
+            py,
+            color=color,
+            linestyle=item["style"].line_style,
+            marker=item["style"].marker,
+            linewidth=2.8 if is_brand else 1.7,
+            markersize=(9 if sparse else 7) if is_brand else (7 if sparse else 5),
+            label=item["name"],
+            zorder=4 if is_brand else 2,
+            solid_capstyle="round",
+        )
+        handles.append(line)
+        if is_brand and not compact:
+            ax.fill_between(px, py, y_bottom, color=color, alpha=0.08, zorder=1)
+        # 每个有排名的点都标注数值（竞品此前只标首/尾/最优，导致「有些点不显示」）
+        if compact:
+            label_points = [points[-1]] if is_brand else []
+        else:
+            label_points = list(points)
+        series_offset = (series_idx % 3) * 3
+        for px_val, py_val in label_points:
+            rank_text = (
+                str(int(py_val)) if float(py_val).is_integer() else f"{py_val:.1f}"
+            )
+            ax.annotate(
+                rank_text,
+                (px_val, py_val),
+                textcoords="offset points",
+                xytext=(0, 8 + series_offset),
+                ha="center",
+                fontsize=(8 if compact else 9) if is_brand else (7 if compact else 8),
+                fontweight="bold" if is_brand else "normal",
+                color=color,
+                zorder=5 if is_brand else 3,
+            )
+
+    ax.invert_yaxis()
+    ax.set_ylim(y_bottom, 0.5)
+    ax.set_xticks(list(range(len(labels))))
+    ax.set_xticklabels(labels, fontsize=7 if compact else 9)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=5 if compact else 6))
+    ax.grid(axis="both", linestyle="--", alpha=0.2)
+    ax.set_facecolor("#f7fafc")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    if title:
+        ax.set_title(title, fontsize=11 if compact else 13, fontweight="bold", color=theme.chart_title, pad=6)
+    if show_legend and not compact:
+        ax.legend(loc="upper right", framealpha=0.92, fontsize=7, ncol=1)
+    if not compact:
+        ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis, fontsize=10)
+    return handles
 
 
 def build_entity_rank_trend_chart(
@@ -151,7 +271,7 @@ def build_entity_rank_trend_chart(
     subtitle: str | None = None,
     figsize: tuple[float, float] | None = None,
 ) -> bytes | None:
-    """品牌 + 竞品多线排名趋势图（Y 轴反向）。"""
+    """品牌 + 竞品多线排名趋势图（纯折线，Y 轴反向）。"""
     if not trend_rows:
         return None
     entities = tracked_entities or []
@@ -163,66 +283,314 @@ def build_entity_rank_trend_chart(
 
     _configure_matplotlib()
     theme = get_theme()
-    labels = [
-        _short_schedule_label(row.get("schedule_label") or row.get("schedule_key"))
-        for row in trend_rows
-    ]
-    fig, ax = plt.subplots(figsize=figsize or _CHART_FIGSIZE)
-    x = list(range(len(labels)))
-    max_rank = 1.0
+    series_data, labels, max_rank = _collect_entity_series(
+        trend_rows, brand=brand, entities=entities
+    )
+    if not series_data:
+        return None
 
-    for name in entities[:8]:
-        points = []
-        for point_index, row in enumerate(trend_rows):
+    size = figsize or _CHART_FIGSIZE
+    fig, ax = plt.subplots(figsize=size, facecolor="white")
+    _draw_entity_lines(
+        ax,
+        series_data=series_data,
+        labels=labels,
+        max_rank=max_rank,
+        title=title or None,
+        theme=theme,
+        compact=False,
+        show_legend=True,
+    )
+    if subtitle:
+        ax.text(0.0, 1.05, subtitle, transform=ax.transAxes, fontsize=10, color=theme.gray)
+    fig.tight_layout()
+    return _figure_to_png(fig)
+
+
+def build_merged_rank_trend_panels(
+    panels: list[dict[str, Any]],
+    *,
+    brand: str,
+    tracked_entities: list[str] | None = None,
+    figsize: tuple[float, float] = (16.5, 8.4),
+) -> bytes | None:
+    """把多张排名折线收成一页小多图（2 列）。
+
+    panels: [{title, trend_rows}, ...]
+    """
+    cleaned = [
+        {
+            "title": str(item.get("title") or "").strip() or "趋势",
+            "trend_rows": list(item.get("trend_rows") or []),
+        }
+        for item in panels
+        if item.get("trend_rows")
+    ]
+    if not cleaned:
+        return None
+
+    entities = tracked_entities or []
+    _configure_matplotlib()
+    theme = get_theme()
+    n = len(cleaned)
+    cols = 2 if n > 1 else 1
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(
+        rows,
+        cols,
+        figsize=figsize,
+        facecolor="white",
+        squeeze=False,
+    )
+    legend_handles: list[Any] = []
+    legend_labels: list[str] = []
+    for index, panel in enumerate(cleaned):
+        r, c = divmod(index, cols)
+        ax = axes[r][c]
+        panel_entities = entities
+        if not panel_entities and panel["trend_rows"]:
+            panel_entities = list((panel["trend_rows"][0].get("entities") or {}).keys())
+        series_data, labels, max_rank = _collect_entity_series(
+            panel["trend_rows"], brand=brand, entities=panel_entities
+        )
+        handles = _draw_entity_lines(
+            ax,
+            series_data=series_data,
+            labels=labels,
+            max_rank=max_rank,
+            title=panel["title"],
+            theme=theme,
+            compact=True,
+            show_legend=False,
+        )
+        if not legend_handles and handles:
+            legend_handles = handles
+            legend_labels = [h.get_label() for h in handles]
+
+    # 隐藏多余子图
+    for index in range(n, rows * cols):
+        r, c = divmod(index, cols)
+        axes[r][c].set_axis_off()
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncol=min(4, max(1, len(legend_labels))),
+            framealpha=0.95,
+            fontsize=9,
+            bbox_to_anchor=(0.5, 0.01),
+        )
+    fig.suptitle("品牌及竞品平均排名趋势（合图）", fontsize=14, fontweight="bold", color=theme.chart_title, y=0.98)
+    fig.tight_layout(rect=(0.02, 0.06, 0.98, 0.94))
+    return _figure_to_png(fig)
+
+
+def aggregate_trend_by_day(trend_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把多批次压成按自然日均值，便于「三天」对照图。"""
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in trend_rows:
+        label = str(row.get("schedule_label") or row.get("schedule_key") or "").strip()
+        day = label[:10] if len(label) >= 10 else label
+        if not day:
+            continue
+        bucket = buckets.setdefault(
+            day,
+            {"schedule_key": day, "schedule_label": day, "entities_acc": {}, "brand_ranks": []},
+        )
+        entities = row.get("entities") or {}
+        for name, value in entities.items():
+            if value is None:
+                continue
+            bucket["entities_acc"].setdefault(name, []).append(float(value))
+        if row.get("avg_rank") is not None:
+            bucket["brand_ranks"].append(float(row["avg_rank"]))
+    out: list[dict[str, Any]] = []
+    for day in sorted(buckets.keys()):
+        bucket = buckets[day]
+        entities = {
+            name: round(sum(vals) / len(vals), 1)
+            for name, vals in bucket["entities_acc"].items()
+            if vals
+        }
+        brand_ranks = bucket["brand_ranks"]
+        out.append(
+            {
+                "schedule_key": day,
+                "schedule_label": day[5:] if len(day) >= 10 else day,  # MM-DD
+                "avg_rank": round(sum(brand_ranks) / len(brand_ranks), 1) if brand_ranks else None,
+                "entities": entities,
+            }
+        )
+    return out
+
+
+def build_day_entity_grouped_bar(
+    trend_rows: list[dict[str, Any]],
+    *,
+    brand: str,
+    tracked_entities: list[str] | None = None,
+    title: str = "三日品牌/竞品均位对照",
+    figsize: tuple[float, float] = (16.5, 7.8),
+) -> bytes | None:
+    """一张柱状图：X=日期，系列=品牌/竞品，覆盖多日均位。"""
+    daily = aggregate_trend_by_day(trend_rows)
+    if not daily:
+        return None
+    entities = tracked_entities or []
+    if not entities:
+        entities = list((daily[0].get("entities") or {}).keys())
+    entities = entities[:6]
+    if not entities:
+        return None
+
+    _configure_matplotlib()
+    theme = get_theme()
+    days = [str(row.get("schedule_label") or row.get("schedule_key") or "") for row in daily]
+    x = list(range(len(days)))
+    width = min(0.8 / max(len(entities), 1), 0.22)
+    fig, ax = plt.subplots(figsize=figsize, facecolor="white")
+    max_rank = 1.0
+    for index, name in enumerate(entities):
+        values = []
+        for row in daily:
             entities_map = row.get("entities") or {}
             value = entities_map.get(name)
             if value is None and names_match(name, brand):
                 value = row.get("avg_rank")
+            values.append(float(value) if value is not None else 0.0)
             if value is not None:
-                points.append((point_index, float(value)))
                 max_rank = max(max_rank, float(value))
-        if not points:
-            continue
-        px, py = zip(*points)
         style = entity_visual_style(name, brand_name=brand)
-        linewidth = 2.8 if names_match(name, brand) else 2.2
-        ax.plot(
-            px,
-            py,
+        offsets = [pos + (index - (len(entities) - 1) / 2) * width for pos in x]
+        bars = ax.bar(
+            offsets,
+            values,
+            width=width * 0.92,
             color=style.color,
-            linestyle=style.line_style,
-            marker=style.marker,
-            linewidth=linewidth,
-            markersize=6,
-            label=name,
+            label=_short_entity_label(name, limit=10),
+            zorder=2,
         )
-        for px_val, py_val in points:
-            ax.annotate(
-                f"{py_val:.1f}",
-                (px_val, py_val),
-                textcoords="offset points",
-                xytext=(0, 8),
+        for bar, value in zip(bars, values):
+            # 无排名也标 0，避免「完全不显示」被误读成缺系列
+            label = f"{value:.1f}" if value > 0 else "0"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                (value + 0.08) if value > 0 else 0.12,
+                label,
                 ha="center",
-                fontsize=7,
-                color=style.color,
+                va="bottom",
+                fontsize=9,
+                fontweight="bold" if names_match(name, brand) else "normal",
+                color="#0f2744",
             )
-
-    ax.invert_yaxis()
-    ax.set_ylim(max(max_rank + 1, 6), 0.5)
+    ax.axhline(3.0, color="#21b981", linestyle="--", linewidth=1.1, alpha=0.55, zorder=1)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("平均排名（越小越靠前）", color=theme.chart_axis)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
+    day_labels = [_short_schedule_label(day) for day in days]
+    ax.set_xticklabels(day_labels, fontsize=14)
+    ax.tick_params(axis="x", pad=16, length=8, width=1.2)
+    ax.set_ylabel("平均排名（数值越小越靠前）", color=theme.chart_axis, fontsize=11)
+    ax.set_ylim(0, max(max_rank + 1.2, 5.5))
+    ax.set_title(title, fontsize=15, fontweight="bold", color=theme.chart_title, pad=12)
     ax.grid(axis="y", linestyle="--", alpha=0.25)
-    # 幻灯片页已有 slide-title 时传空 title，避免图内再叠一层同名标题
-    if title:
-        ax.set_title(title, fontsize=13, fontweight="bold", color=theme.chart_title, pad=12)
-    if subtitle:
-        ax.text(0.01, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=theme.gray)
-    ax.legend(loc="upper right", framealpha=0.9, fontsize=8)
+    ax.set_facecolor("#f7fafc")
     ax.spines["top"].set_visible(False)
-    fig.tight_layout()
-    return _figure_to_png(fig)
+    ax.spines["right"].set_visible(False)
+    ax.legend(loc="upper right", framealpha=0.95, fontsize=10, ncol=2)
+    # 不用 tight bbox：固定底部留白，保证日期完整进 PNG
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.26)
+    return _figure_to_png(fig, tight=False)
+
+
+def build_prompt_day_grouped_bar(
+    prompt_analytics: list[dict[str, Any]],
+    *,
+    brand: str,
+    title: str = "分语义词三日品牌均位",
+    figsize: tuple[float, float] = (16.5, 7.8),
+) -> bytes | None:
+    """一张柱状图：X=语义词，系列=自然日，值为本品牌均位（含三天全量）。"""
+    prompt_days: list[tuple[str, list[dict[str, Any]]]] = []
+    all_days: list[str] = []
+    for index, block in enumerate(prompt_analytics, start=1):
+        daily = aggregate_trend_by_day(list(block.get("round_trend") or []))
+        if not daily:
+            continue
+        prompt = str(block.get("prompt") or "").strip() or f"问题{index}"
+        short = prompt if len(prompt) <= 12 else prompt[:11] + "…"
+        prompt_days.append((f"Q{index}\n{short}", daily))
+        for row in daily:
+            day = str(row.get("schedule_key") or row.get("schedule_label") or "")
+            if day and day not in all_days:
+                all_days.append(day)
+    if not prompt_days or not all_days:
+        return None
+    all_days = sorted(all_days)
+
+    _configure_matplotlib()
+    theme = get_theme()
+    day_colors = ["#0057D9", "#F28E2B", "#009E73", "#C43C92", "#7A7A7A"]
+    x = list(range(len(prompt_days)))
+    width = min(0.8 / max(len(all_days), 1), 0.24)
+    fig, ax = plt.subplots(figsize=figsize, facecolor="white")
+    max_rank = 1.0
+    for day_index, day in enumerate(all_days):
+        values = []
+        for _label, daily in prompt_days:
+            matched = next(
+                (row for row in daily if str(row.get("schedule_key") or "") == day),
+                None,
+            )
+            value = None
+            if matched:
+                entities = matched.get("entities") or {}
+                value = entities.get(brand)
+                if value is None:
+                    for name, rank in entities.items():
+                        if names_match(name, brand):
+                            value = rank
+                            break
+                if value is None:
+                    value = matched.get("avg_rank")
+            values.append(float(value) if value is not None else 0.0)
+            if value is not None:
+                max_rank = max(max_rank, float(value))
+        offsets = [pos + (day_index - (len(all_days) - 1) / 2) * width for pos in x]
+        label = day[5:] if len(day) >= 10 else day
+        bars = ax.bar(
+            offsets,
+            values,
+            width=width * 0.9,
+            color=day_colors[day_index % len(day_colors)],
+            label=label,
+            zorder=2,
+        )
+        for bar, value in zip(bars, values):
+            label = f"{value:.1f}" if value > 0 else "0"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                (value + 0.08) if value > 0 else 0.12,
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="#0f2744",
+            )
+    ax.axhline(3.0, color="#21b981", linestyle="--", linewidth=1.1, alpha=0.55, zorder=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([item[0] for item in prompt_days], fontsize=10)
+    ax.set_ylabel("本品牌平均排名（越小越靠前）", color=theme.chart_axis, fontsize=11)
+    ax.set_ylim(0, max(max_rank + 1.2, 5.5))
+    ax.set_title(title, fontsize=15, fontweight="bold", color=theme.chart_title, pad=12)
+    ax.grid(axis="y", linestyle="--", alpha=0.25)
+    ax.set_facecolor("#f7fafc")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(title="监测日期", loc="upper right", framealpha=0.95, fontsize=10)
+    ax.tick_params(axis="x", pad=12, length=6)
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.86, bottom=0.24)
+    return _figure_to_png(fig, tight=False)
 
 
 def build_mention_rate_bar_chart(

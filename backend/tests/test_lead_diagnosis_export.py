@@ -19,6 +19,11 @@ def test_build_lead_diagnosis_export_passes_db(monkeypatch) -> None:
         "diagnosis_result": {"diagnosis": {"sentiment_summary": "ok"}, "kpis": {}},
     }
     monkeypatch.setattr(svc, "get_lead_diagnosis", lambda *_a, **_k: detail)
+    monkeypatch.setattr(
+        svc,
+        "_refresh_diagnosis_daily_ranks_for_export",
+        lambda _db, _lead_id, result: result,
+    )
 
     captured: dict = {}
 

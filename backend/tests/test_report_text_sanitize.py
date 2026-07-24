@@ -47,14 +47,58 @@ def test_render_analysis_html_wraps_sections() -> None:
         analysis_html=(
             "<h2>数据分析与优化建议</h2>"
             "<h2>1. 行业分析</h2><p>行业段落</p>"
-            "<h2>5. 采取措施建议</h2><ul><li>行动</li></ul>"
+            "<h2>5. 采取措施建议</h2><ul><li>行动甲独有建议</li><li>优化电梯语义词</li></ul>"
         ),
         priority_actions=[{"priority": "P0", "title": "优化电梯语义词", "timeline": "30天"}],
     )
     assert "analysis-block" in html
-    assert "analysis-h2" in html
+    assert "analysis-card" in html
+    assert html.count("analysis-card") >= 2
+    assert "行业段落" in html
     assert "数据分析与优化建议" not in html
-    assert "优先级行动清单" in html
+    assert "1. 行业分析" not in html
+    # 行动项：与分析同流白卡，禁止优先级/建议周期表格
+    assert "优化电梯语义词" in html
+    assert "优先级" not in html
+    assert "建议周期" not in html
+    assert "priority-action-table" not in html
+    assert html.index("优化电梯语义词") < html.index("行业段落")
+    # 4A：ul/li 拆成独立卡；与 priority 近重复的 li 去掉
+    assert "<ul>" not in html
+    assert "行动甲独有建议" in html
+    assert html.count("优化电梯语义词") == 1
+
+
+def test_render_tip_list_no_indent_class() -> None:
+    from app.services.report_molizhishu_fragments import render_tip_list
+
+    html = render_tip_list(
+        ["在知乎补电梯广告问答，提升品牌在对比问法中的露出机会，覆盖行业报告与百科类信源缺口"]
+    )
+    assert "para--short" in html
+    assert "para--indent" not in html
+    assert "tip-card-index" in html
+
+
+def test_render_priority_actions_highlights_quotes_and_platforms() -> None:
+    from app.services.report_molizhishu_fragments import render_priority_actions
+
+    html = render_priority_actions(
+        [
+            {
+                "priority": "P0",
+                "title": "在知乎、百度知道创建「电梯广告公司推荐」相关问答，嵌入品牌案例",
+                "timeline": "30天",
+            }
+        ]
+    )
+    assert "analysis-card" in html
+    assert 'style="color:#ff6666;"' in html
+    assert "电梯广告公司推荐" in html
+    assert 'style="color:#66ccff;"' in html
+    assert "知乎" in html
+    assert "优先级" not in html
+    assert "建议周期" not in html
 
 
 def test_sanitize_source_title_prefers_domain_for_seo_spam() -> None:

@@ -283,7 +283,7 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "completed_count": kpis.get("completed_count"),
         "source_count": kpis.get("source_count"),
         "executive_summary": ai_insights.get("executive_summary"),
-        "highlights": snapshot.get("highlights") or [],
+        "highlights": snapshot.get("highlights") or ai_insights.get("highlights") or [],
         "diagnosis": diagnosis,
         "platform_stats": snapshot.get("platform_stats") or [],
         "top_sources": snapshot.get("top_sources") or [],

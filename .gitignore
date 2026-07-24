@@ -23,6 +23,7 @@ sonar-project.properties.local
 .playwright-cli/
 e2e/report/
 e2e/test-results/
+backend/.cache/
 tmp/
 **/_tmp_*.py
 **/_out.txt

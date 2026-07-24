@@ -14,7 +14,117 @@ _DOMAIN_TIPS: dict[str, str] = {
     "baijiahao.baidu.com": "通过百家号发布行业榜单与场景化推荐文章。",
     "docin.com": "豆丁网：上传可引用的行业白皮书/研究报告 PDF。",
     "douban.com": "补充垂直社区中的品牌案例与口碑讨论。",
+    "baike.baidu.com": "完善百度百科品牌词条：荣誉、案例、覆盖城市与可核验事实分段写入。",
+    "weibo.com": "微博侧用话题+长文沉淀案例，标题含场景词与品牌全称，便于智搜引用。",
+    "cnblogs.com": "在博客园发布可复现的行业方法文或项目复盘，强化专业信源权重。",
+    "sohu.com": "门户新闻稿写清项目规模、场景与结果指标，避免空泛品牌软文。",
+    "163.com": "网易等资讯站优先投「榜单/盘点」体裁，首段给出可被摘录的结论句。",
+    "quark.cn": "夸克侧补结构化品牌介绍与 FAQ，标题对齐监测问法。",
 }
+
+_SITE_PLAYBOOKS: list[tuple[str, str]] = [
+    ("baike", "百科类：把资质、案例、覆盖范围写成可核验条目，减少口号式介绍。"),
+    ("zhihu|zhidao|wenwen", "问答类：按「痛点→对比维度→适用场景→品牌证据」写答，避免硬广口吻。"),
+    ("weibo|xiaohongshu|bilibili|douyin", "社交/视频类：用案例故事带出可引用结论，标题与标签对齐场景词。"),
+    ("docin|doc88|cnki|pdf", "文档库：上传白皮书/方案 PDF，首页摘要含品牌名与场景词。"),
+    ("baijiahao|toutiao|sohu|163|sina", "资讯门户：优先榜单/盘点/案例体裁，首段给可摘录结论。"),
+    ("blog|cnblogs|csdn|jianshu", "专业博客：写方法复盘与选型对比，提升被模型当作「专业信源」的概率。"),
+]
+
+
+def _playbook_for_domain(domain: str) -> str | None:
+    text = domain.lower()
+    for pattern, tip in _SITE_PLAYBOOKS:
+        if re.search(pattern, text):
+            return tip
+    return None
+
+
+def build_rule_source_tips(
+    source_analysis: dict[str, Any],
+    top_sources: list[dict[str, Any]],
+) -> list[str]:
+    tips: list[str] = []
+    seen_domains: set[str] = set()
+    for index, row in enumerate(source_analysis.get("domain_stats") or []):
+        if len(tips) >= 10:
+            break
+        domain = str(row.get("domain") or "").lower().removeprefix("www.")
+        if not domain or domain in seen_domains:
+            continue
+        seen_domains.add(domain)
+        count = int(row.get("count") or 0)
+        brand_n = int(row.get("brand_related_count") or 0)
+        playbook = _playbook_for_domain(domain)
+
+        for key, tip in _DOMAIN_TIPS.items():
+            if key in domain:
+                tips.append(
+                    f"{tip.rstrip('。')}（本报告该站约 {count} 次引用"
+                    + (f"，品牌相关 {brand_n} 次" if brand_n else "")
+                    + "）；优先补可被模型直接摘录的事实句与对比结论。"
+                )
+                break
+        else:
+            if brand_n == 0 and count >= 3:
+                tips.append(
+                    f"{domain} 引用约 {count} 次但品牌相关为 0：模型采信该站时几乎带不到品牌；"
+                    f"建议产出带完整品牌名的资料页/白皮书/案例长文，标题与首段露出场景词。"
+                    + (f"内容形态参考：{playbook}" if playbook else "")
+                )
+            elif brand_n > 0 and count >= 5:
+                ratio = brand_n / max(count, 1)
+                if ratio < 0.25:
+                    tips.append(
+                        f"{domain} 引用体量大（约 {count} 次）但品牌相关仅 {brand_n} 次，占比偏低；"
+                        f"把通稿改成「场景词 + 品牌证据」结构，提高被摘录时带品牌的概率。"
+                        + (f"{playbook}" if playbook else "")
+                    )
+                elif index % 2 == 0:
+                    tips.append(
+                        f"{domain} 已是有效采信通道（约 {count} 次引用，品牌相关 {brand_n}）；"
+                        f"维持更新节奏，用对比表、覆盖城市、项目结果刷新旧稿，防止引用权重下滑。"
+                    )
+                else:
+                    tips.append(
+                        f"巩固 {domain}：在既有 {brand_n} 次品牌相关引用基础上，"
+                        f"按监测短板语义词各补 1 篇可核验材料，形成「问法→证据」一一对应。"
+                        + (f"{playbook}" if playbook else "")
+                    )
+            elif playbook:
+                tips.append(f"{domain}（约 {count} 次引用）：{playbook}")
+
+    if not tips and top_sources:
+        tips.append(
+            "高频信源偏资讯聚合页，品牌可核验材料不足；"
+            "建议同步产出榜单、行业报告摘要与场景问答，提高品牌相关引用占比。"
+        )
+    if source_analysis.get("brand_related_references", 0) == 0:
+        tips.append(
+            "全量高频域名中品牌相关引用偏弱：先在垂直行业站建立可验证资料页，"
+            "再向问答与百科延伸，形成交叉采信。"
+        )
+    domain_n = len(source_analysis.get("domain_stats") or [])
+    if domain_n and domain_n < 5:
+        tips.append(
+            f"有效高频域名仅约 {domain_n} 个，信源覆盖面偏窄；"
+            f"向百科、问答、垂直媒体扩展可引用素材，降低对单一聚合站的依赖。"
+        )
+    tips.append(
+        "电梯、高铁、机场等场景词应分开建内容资产与标题体系，"
+        "避免一份通稿在多问法下被模型判定同质而降低露出。"
+    )
+    tips.append(
+        "对已领先平台保持更新频率，同时把验证有效的答法迁移到低提及平台，"
+        "用「优势答法复用」代替「同一渠道重复加码」。"
+    )
+    # 去重保序
+    deduped: list[str] = []
+    for tip in tips:
+        tip = tip.strip()
+        if tip and tip not in deduped:
+            deduped.append(tip)
+    return deduped[:10]
 
 
 def _strict_entity_match(left: str | None, right: str | None) -> bool:
@@ -191,29 +301,60 @@ def build_rule_platform_insight(
     bottom_name = platform_names.get(str(bottom.get("platform") or "")) or bottom.get("platform")
     spread = float(top.get("mention_rate") or 0) - float(bottom.get("mention_rate") or 0)
     return (
-        f"分平台提及率差距 {spread:.1f} 个百分点：{top_name} 最高（{float(top.get('mention_rate') or 0):.1f}%），"
-        f"{bottom_name} 最低（{float(bottom.get('mention_rate') or 0):.1f}%）。"
-        "建议在低提及平台补充结构化榜单内容与权威引用，缩小平台间曝光差异。"
+        f"分平台提及率差距约 {spread:.1f} 个百分点：{top_name} 相对领先"
+        f"（约 {float(top.get('mention_rate') or 0):.1f}%），"
+        f"{bottom_name} 明显落后（约 {float(bottom.get('mention_rate') or 0):.1f}%）。"
+        "低提及平台应优先补齐「场景词 + 可核验证据」组合内容，"
+        "并把高提及平台已验证的答法与信源类型迁移过去，缩小平台间曝光落差。"
     )
 
 
-def build_rule_source_tips(
+def build_rule_analysis_tips(
+    *,
+    brand: str,
+    platform_stats: list[dict[str, Any]],
+    platform_names: dict[str, str],
+    prompt_analytics: list[dict[str, Any]],
     source_analysis: dict[str, Any],
-    top_sources: list[dict[str, Any]],
+    kpis: dict[str, Any] | None = None,
 ) -> list[str]:
+    """无 LLM 时的分层策略兜底（深度/广度/维度/策略）。"""
     tips: list[str] = []
-    for row in (source_analysis.get("domain_stats") or [])[:5]:
-        domain = str(row.get("domain") or "").lower().removeprefix("www.")
-        for key, tip in _DOMAIN_TIPS.items():
-            if key in domain and tip not in tips:
-                tips.append(tip)
-        if len(tips) >= 4:
-            break
-    if not tips and top_sources:
-        tips.append("高频信源以资讯与聚合站为主，建议发布可被 AI 引用的榜单、报告与问答内容。")
-    if source_analysis.get("brand_related_references", 0) == 0:
-        tips.append("品牌相关引用偏少，优先在垂直行业站建立可验证的品牌资料页。")
-    return tips[:5]
+    kpis = kpis or {}
+    mention = float(kpis.get("mention_rate") or 0)
+    avg_rank = kpis.get("avg_rank")
+    top3 = float(kpis.get("top3_rate") or 0)
+
+    tips.append(f"【深度】围绕「{brand}」补齐可核验案例、报价口径与场景对比，提升回答中的论据厚度。")
+    if avg_rank is not None:
+        tips.append(f"【深度】当前均位约 {avg_rank}，针对未进 Top3 的语义词做专题页与权威背书，压缩与头部差距。")
+    else:
+        tips.append("【深度】均位样本不足，先保证核心语义词稳定出答案再谈位次优化。")
+
+    tips.append(f"【广度】品牌提及率 {mention:.1f}%，在低曝光语义词与长尾问法上铺开结构化回答入口。")
+    domain_n = len(source_analysis.get("domain_stats") or [])
+    tips.append(f"【广度】当前高频域名约 {domain_n} 个，向百科/问答/垂直媒体同步可引用素材，避免只靠聚合页。")
+
+    if platform_stats:
+        low = sorted(platform_stats, key=lambda row: float(row.get("mention_rate") or 0))[:2]
+        for row in low:
+            code = str(row.get("platform") or "")
+            name = platform_names.get(code) or code
+            rate = float(row.get("mention_rate") or 0)
+            tips.append(f"【维度】平台「{name}」提及率 {rate:.1f}%，按该平台内容形态补榜单/对比稿。")
+    tips.append(f"【维度】Top3 露出率 {top3:.1f}%，区分「曝光」与「推荐位」两套内容资产分别投放。")
+
+    if prompt_analytics:
+        worst = min(
+            prompt_analytics,
+            key=lambda row: (float(row.get("brand_mention_rate") or 0), float(row.get("brand_avg_rank") or 999)),
+        )
+        prompt = str(worst.get("prompt") or "")[:28]
+        if prompt:
+            tips.append(f"【策略】优先攻坚语义词「{prompt}」，30 天内完成内容生产与外链布局。")
+    tips.append("【策略】建立周更监测→短板语义词→信源投放闭环，以引用次数与均位双指标验收。")
+    tips.append("【策略】竞品高提及场景做对照表（能力/覆盖/合规），引导模型在对比问法中引用品牌。")
+    return tips[:10]
 
 
 def pick_answer_excerpts(
@@ -270,20 +411,26 @@ def merge_prompt_commentaries(
 def merge_priority_actions(
     rule_actions: list[dict[str, Any]],
     ai_actions: list[dict[str, Any]] | None,
+    *,
+    min_count: int = 8,
+    max_count: int = 10,
 ) -> list[dict[str, Any]]:
-    """优先采用 DeepSeek 生成的行动清单，空则回退规则引擎。"""
-    if not ai_actions:
-        return rule_actions
+    """LLM 优先润色，规则引擎补齐到 8~10 条（不瞎编：只保留有 title 的条目）。"""
     normalized: list[dict[str, Any]] = []
-    for item in ai_actions:
-        if not isinstance(item, dict):
-            continue
+    seen: set[str] = set()
+
+    def _append(item: dict[str, Any]) -> None:
         title = str(item.get("title") or "").strip()
         if not title:
-            continue
+            return
+        title = re.sub(r"验收口径[:：]?\s*", "", title).strip()
+        key = re.sub(r"\s+", "", title)
+        if not key or key in seen:
+            return
         priority = str(item.get("priority") or "P2").upper()
         if priority not in {"P0", "P1", "P2"}:
             priority = "P2"
+        seen.add(key)
         normalized.append(
             {
                 "priority": priority,
@@ -291,7 +438,23 @@ def merge_priority_actions(
                 "timeline": str(item.get("timeline") or "90天").strip(),
             }
         )
-    return normalized[:5] if normalized else rule_actions
+
+    for item in ai_actions or []:
+        if isinstance(item, dict):
+            _append(item)
+    for item in rule_actions or []:
+        if len(normalized) >= max_count:
+            break
+        if isinstance(item, dict):
+            _append(item)
+    # 仍不足时继续从规则池补（build_priority_actions 已按诊断短板生成）
+    if len(normalized) < min_count:
+        for item in rule_actions or []:
+            if len(normalized) >= min_count:
+                break
+            if isinstance(item, dict):
+                _append(item)
+    return normalized[:max_count] if normalized else list(rule_actions or [])[:max_count]
 
 
 def build_priority_actions(
@@ -299,43 +462,122 @@ def build_priority_actions(
     platform_stats: list[dict[str, Any]],
     *,
     platform_names: dict[str, str],
+    source_analysis: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    """按诊断短板生成可落地行动项（供凑满 8~10 条，禁止空话）。"""
     actions: list[dict[str, Any]] = []
     if prompt_analytics:
-        worst = min(
+        ranked = sorted(
             prompt_analytics,
             key=lambda row: (float(row.get("brand_mention_rate") or 0), float(row.get("brand_avg_rank") or 999)),
         )
-        prompt = str(worst.get("prompt") or "")
-        if prompt and float(worst.get("brand_mention_rate") or 0) < 30:
+        for row in ranked[:5]:
+            prompt = str(row.get("prompt") or "").strip()
+            rate = float(row.get("brand_mention_rate") or 0)
+            avg_rank = row.get("brand_avg_rank")
+            if not prompt:
+                continue
+            rank_bit = (
+                f"，当前均位约 {float(avg_rank):.1f}"
+                if avg_rank not in (None, "")
+                else ""
+            )
             actions.append(
                 {
-                    "priority": "P0",
-                    "title": f"补齐语义词「{prompt[:24]}」的内容与引用布局",
-                    "timeline": "30天",
+                    "priority": "P0" if rate < 20 else "P1",
+                    "title": (
+                        f"围绕语义词「{prompt[:28]}」补场景案例、对比口径与可引用结论"
+                        f"（提及率约 {rate:.1f}%{rank_bit}），优先覆盖低露出问法的内容缺口"
+                    ),
+                    "timeline": "30天" if rate < 20 else "60天",
                 }
             )
     if platform_stats:
-        low = sorted(platform_stats, key=lambda row: float(row.get("mention_rate") or 0))[:2]
-        for row in low:
-            if float(row.get("mention_rate") or 0) < 20:
-                code = str(row.get("platform") or "")
-                name = platform_names.get(code) or code
+        low = sorted(platform_stats, key=lambda row: float(row.get("mention_rate") or 0))
+        for row in low[:4]:
+            rate = float(row.get("mention_rate") or 0)
+            if rate >= 40:
+                continue
+            code = str(row.get("platform") or "")
+            name = platform_names.get(code) or code
+            actions.append(
+                {
+                    "priority": "P1",
+                    "title": (
+                        f"在「{name}」按平台内容形态补榜单/问答/结构化品牌介绍"
+                        f"（当前提及率约 {rate:.1f}%），缩小与优势平台的露出差距"
+                    ),
+                    "timeline": "60天",
+                }
+            )
+        high = sorted(platform_stats, key=lambda row: float(row.get("mention_rate") or 0), reverse=True)
+        if high:
+            top = high[0]
+            top_rate = float(top.get("mention_rate") or 0)
+            if top_rate >= 50:
+                top_name = platform_names.get(str(top.get("platform") or "")) or top.get("platform")
                 actions.append(
                     {
-                        "priority": "P1",
-                        "title": f"提升 {name} 平台品牌内容覆盖",
+                        "priority": "P2",
+                        "title": (
+                            f"巩固优势平台「{top_name}」（提及率约 {top_rate:.1f}%）的有效答法与证据链，"
+                            f"迁移到短板平台形成统一口径"
+                        ),
                         "timeline": "60天",
                     }
                 )
+    domain_stats = list((source_analysis or {}).get("domain_stats") or [])
+    for row in domain_stats[:3]:
+        domain = str(row.get("domain") or "").strip()
+        count = int(row.get("count") or 0)
+        brand_n = int(row.get("brand_related_count") or 0)
+        if not domain or count < 2:
+            continue
+        if brand_n == 0:
+            actions.append(
+                {
+                    "priority": "P1",
+                    "title": (
+                        f"针对高频域名 {domain}（约 {count} 次引用、品牌相关 0）"
+                        f"补带完整品牌名的白皮书/案例页，提高被摘录时带品牌的概率"
+                    ),
+                    "timeline": "60天",
+                }
+            )
+        elif brand_n / max(count, 1) < 0.3:
+            actions.append(
+                {
+                    "priority": "P2",
+                    "title": (
+                        f"优化 {domain} 上的品牌相关材料结构（引用约 {count} 次、品牌相关 {brand_n}），"
+                        f"用「场景词+可核验结论」替换空泛通稿"
+                    ),
+                    "timeline": "90天",
+                }
+            )
     actions.append(
         {
             "priority": "P2",
-            "title": "在垂直行业站/问答平台发布榜单与案例，增加可引用信源",
+            "title": "在垂直行业站与问答平台同步投放可核验案例，抬升品牌相关引用密度",
             "timeline": "90天",
         }
     )
-    return actions[:5]
+    actions.append(
+        {
+            "priority": "P2",
+            "title": "建立「短板平台×短板语义词」周复盘清单，固定内容生产与外链投放节奏",
+            "timeline": "90天",
+        }
+    )
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in actions:
+        key = re.sub(r"\s+", "", str(item.get("title") or ""))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:10]
 
 
 def build_report_enrichment(
@@ -375,5 +617,6 @@ def build_report_enrichment(
             prompt_analytics,
             platform_stats,
             platform_names=platform_names,
+            source_analysis=source_analysis,
         ),
     }

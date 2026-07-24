@@ -1262,7 +1262,10 @@ def aggregate_lead_diagnosis(
             if isinstance(ai_tips, list) and ai_tips:
                 report_enrichment["source_action_tips"] = [
                     str(item).strip() for item in ai_tips if str(item).strip()
-                ][:5]
+                ][:12]
+            report_enrichment.pop("analysis_action_tips", None)
+            if ai.get("analysis_html"):
+                analysis_html = ai.get("analysis_html")
             report_enrichment["priority_actions"] = merge_priority_actions(
                 report_enrichment.get("priority_actions") or [],
                 ai.get("priority_actions"),
@@ -1665,7 +1668,9 @@ def build_lead_diagnosis_export(
     detail = get_lead_diagnosis(db, lead_id, current=current)
     if detail.get("status") != "ready":
         raise ValueError("诊断尚未完成，暂无法导出")
-    result = detail.get("diagnosis_result") or {}
+    result = dict(detail.get("diagnosis_result") or {})
+    # 导出前用现算日均覆盖快照时段行，并写回，避免反复吃旧 cache
+    result = _refresh_diagnosis_daily_ranks_for_export(db, lead_id, result)
     report = {
         "report_title": f"{detail['brand_name']} 售前品牌诊断报告",
         "report_type": "diagnosis",
@@ -1685,6 +1690,33 @@ def build_lead_diagnosis_export(
 
     fmt = _resolve_export_format(export_format)
     return build_report_export(report, fmt, db=db)
+
+
+def _refresh_diagnosis_daily_ranks_for_export(
+    db: Session,
+    lead_id: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.lead_diagnosis_analytics import refresh_daily_rank_fields_in_diagnosis_result
+
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    subtasks = _load_subtasks(db, lead)
+    task_ids = [run.task_id for run in (lead.runs or []) if run.task_id]
+    refreshed = refresh_daily_rank_fields_in_diagnosis_result(
+        lead,
+        subtasks,
+        result,
+        competitors=[str(item).strip() for item in (lead.competitors_json or []) if str(item).strip()],
+        task_region_map=_task_region_map_for_task_ids(db, task_ids),
+    )
+    lead.diagnosis_result_json = refreshed
+    flag_modified(lead, "diagnosis_result_json")
+    db.commit()
+    return refreshed
 
 
 def _resolve_export_format(export_format: str) -> str:

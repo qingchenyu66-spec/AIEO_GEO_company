@@ -45,9 +45,11 @@ def test_execution_key_falls_back_to_schedule_key_then_updated_at() -> None:
     from app.services.lead_diagnosis_analytics import _execution_key_from_run
 
     run_without_label = _RunStub("202607031430", "", "task-1")
+    run_dashed = _RunStub("20260630-1449", "", "task-3")
     run_without_schedule = _RunStub("", "", "task-2")
 
     assert _execution_key_from_run(run_without_label) == "2026-07-03 14:30"
+    assert _execution_key_from_run(run_dashed) == "2026-06-30 14:49"
     assert _execution_key_from_run(
         run_without_schedule,
         updated_at=datetime(2026, 7, 3, 19, 42),
@@ -194,6 +196,47 @@ def test_molizhishu_ranking_rows_only_include_tracked_entities() -> None:
     names = {row["name"] for row in rows}
     assert "儒思HR" in names
     assert "新潮传媒" not in names
+
+
+def test_compact_ranking_rows_for_deck_forces_default_category() -> None:
+    from app.services.lead_diagnosis_analytics import compact_ranking_rows_for_deck
+
+    rows = [
+        {
+            "name": "分众传媒",
+            "type_label": "最近",
+            "category": "全国头部龙头",
+            "rank_display": "1",
+            "is_brand": False,
+        },
+        {
+            "name": "分众传媒",
+            "type_label": "最近",
+            "category": "怎么选",
+            "rank_display": "1",
+            "is_brand": False,
+        },
+        {
+            "name": "艾迪亚控股集团有限公司",
+            "type_label": "最近",
+            "category": "全国性中腰部",
+            "rank_display": "3",
+            "is_brand": True,
+        },
+        {
+            "name": "分众传媒",
+            "type_label": "最优",
+            "category": "全国头部龙头",
+            "rank_display": "1",
+            "is_brand": False,
+        },
+    ]
+    out = compact_ranking_rows_for_deck(rows, only_recent=False)
+    assert len(out) == 3
+    assert {r["category"] for r in out} == {"默认分类"}
+    assert {r["type_label"] for r in out} == {"最近", "最优"}
+    recent = [r for r in out if r["type_label"] == "最近"]
+    assert len(recent) == 2
 
 
 def test_strict_entity_match_avoids_two_char_false_positive() -> None:

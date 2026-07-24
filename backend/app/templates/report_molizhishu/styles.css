@@ -7,7 +7,7 @@ body {
     margin: 0;
     padding: 0;
     background: #ffffff;
-    font-family: 'GeoReportCJK', 'Microsoft YaHei', 'Segoe UI', system-ui, sans-serif;
+    font-family: 'GeoReportCJK', KaiTi, STKaiti, 'Microsoft YaHei', 'Segoe UI', system-ui, serif;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
 }
@@ -59,7 +59,7 @@ body {
     z-index: 2;
     margin: 0;
     max-width: 1800px;
-    font-size: 46px;
+    font-size: 54px;
     line-height: 1.15;
     font-weight: 900;
     letter-spacing: 0.02em;
@@ -77,16 +77,16 @@ body {
 .cover-note {
     left: 110px;
     bottom: 72px;
-    width: 980px;
+    width: 1280px;
     color: #ffffff;
-    font-size: 22px;
+    font-size: 24px;
     line-height: 1.55;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.72);
 }
 
 .note-kicker {
     margin-bottom: 10px;
-    font-size: 20px;
+    font-size: 22px;
     letter-spacing: 0.04em;
     color: rgba(220, 248, 255, 0.92);
 }
@@ -95,38 +95,107 @@ body {
     margin-bottom: 14px;
     padding-left: 16px;
     border-left: 7px solid #20dfff;
-    font-size: 34px;
+    font-size: 36px;
     font-weight: 800;
 }
 
 .note-meta {
     display: grid;
-    gap: 6px;
+    gap: 12px;
     margin-bottom: 12px;
 }
 
+.note-meta-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
 .note-label {
-    display: inline-block;
-    min-width: 7.5em;
-    margin-right: 8px;
+    flex: 0 0 7.5em;
+    margin-right: 0;
     color: rgba(180, 230, 255, 0.88);
     font-weight: 600;
+    line-height: 1.6;
+}
+
+.note-value {
+    flex: 1;
+    line-height: 1.6;
+}
+
+.note-meta-row--platforms {
+    align-items: flex-start;
+}
+
+.platform-chip-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 1180px;
+    min-width: 0;
+}
+
+.platform-chip-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px 10px;
+    align-items: center;
+}
+
+.platform-chip {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 auto;
+    padding: 3px 11px;
+    border-radius: 999px;
+    background: rgba(20, 120, 200, 0.28);
+    border: 1px solid rgba(120, 220, 255, 0.35);
+    color: #eaf8ff;
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.3;
+    white-space: nowrap;
+    text-shadow: none;
 }
 
 .note-competitors {
     padding-top: 8px;
     border-top: 1px solid rgba(255, 255, 255, 0.28);
-    font-size: 21px;
+    font-size: 23px;
     line-height: 1.45;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
 }
 
 .note-competitor-list {
     color: #ffb36b;
     font-weight: 700;
+    flex: 1;
 }
 
 .pack-body {
-    max-height: 1100px;
+    max-height: 1040px;
+}
+
+.para--short {
+    text-indent: 0;
+}
+
+.para--indent {
+    text-indent: 2em;
+}
+
+/* 分析/信源白卡内一律不缩进（覆盖上方更具体的 2em 选择器） */
+.analysis-slide-body > .analysis-block > p.para--indent,
+.analysis-slide-body .analysis-card > p,
+.analysis-slide-body .analysis-card > p.para--indent,
+.tip-slide-body .analysis-card > p,
+.tip-slide-body .tip-as-analysis > p,
+.tip-slide-body .tip-as-analysis > p.para--indent {
+    text-indent: 0;
 }
 
 .pack-item {
@@ -157,9 +226,9 @@ body {
 
 .dark-content {
     left: 132px;
-    top: 210px;
+    top: 248px;
     width: 2260px;
-    max-height: 1100px;
+    max-height: 1040px;
     color: #ffffff;
     overflow: hidden;
 }
@@ -187,9 +256,9 @@ body {
 
 .light-content {
     left: 132px;
-    top: 210px;
+    top: 248px;
     width: 2260px;
-    max-height: 1100px;
+    max-height: 1040px;
     color: #092b55;
     overflow: hidden;
 }
@@ -203,7 +272,7 @@ body {
 .light-content h3,
 .block-title {
     margin: 28px 0 18px;
-    font-size: 30px;
+    font-size: 34px;
     line-height: 1.25;
     font-weight: 800;
 }
@@ -223,20 +292,233 @@ body {
 }
 
 .chart-card {
-    padding: 18px 20px;
+    padding: 14px 18px 36px;
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.35);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+    overflow: visible;
+}
+
+.chart-axis-caption {
+    margin: 12px 0 0;
+    text-align: center;
+    font-size: 22px;
+    line-height: 1.4;
+    font-weight: 700;
+    color: #0f2744;
 }
 
 .slide--dark .action-tip-list {
     color: rgba(255, 255, 255, 0.94);
-    font-size: 28px;
+    font-size: 24px;
+    line-height: 1.55;
 }
 
 .slide--dark .action-tip-list li {
-    margin: 0 0 16px;
+    margin: 0 0 14px;
+}
+
+.tip-list--dense li {
+    margin: 0 0 12px;
+}
+
+/* 信源建议：对齐分析页白卡（仍可放在 dark 母版上） */
+.tip-slide-body.tip-slide-body,
+.tip-slide-body {
+    max-height: 1040px;
+}
+
+.tip-analysis-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.tip-slide-body .analysis-card.tip-as-analysis {
+    margin: 0;
+    padding: 16px 20px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(0, 92, 180, 0.14);
+    box-shadow: 0 6px 18px rgba(0, 20, 40, 0.18);
+}
+
+.tip-slide-body .tip-as-analysis p {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.5;
+    color: #163653;
+    text-indent: 0;
+}
+
+.tip-slide-body .tip-as-analysis .tip-card-index {
+    display: inline-block;
+    min-width: 2.1em;
+    margin-right: 8px;
+    font-weight: 800;
+    color: #0b6bcb;
+}
+
+.tip-card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    width: 100%;
+}
+
+.tip-card {
+    box-sizing: border-box;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin: 0;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: rgba(4, 14, 32, 0.82);
+    border: 1px solid rgba(64, 196, 255, 0.26);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+.tip-card-index {
+    flex: 0 0 auto;
+    min-width: 2.2em;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.35;
+    color: #5cf5ff;
+    letter-spacing: 0.02em;
+}
+
+.tip-card-text {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.45;
+    color: rgba(236, 248, 255, 0.94);
+    text-indent: 0;
+}
+
+.priority-title {
+    font-weight: 800;
+    color: #092b55;
+    margin-bottom: 6px;
+}
+
+.priority-detail {
+    font-size: 0.88em;
+    color: #4a6b88;
+    line-height: 1.4;
+}
+
+.priority-action-table td {
+    padding-top: 18px;
+    padding-bottom: 18px;
+}
+
+.chart-image--full {
+    display: block;
+    width: 2180px;
+    max-width: 100%;
+    height: auto;
+    max-height: 860px;
+    object-fit: contain;
+    object-position: top center;
+    /* 禁止圆角裁切：否则 X 轴日期下半截会被 border-radius 切掉 */
+    border-radius: 0;
+    background: #ffffff;
+    box-shadow: none;
+}
+
+.chart-card-subtitle {
+    margin: 0 0 12px;
+    font-size: 24px;
+}
+
+/* 方案 C：上问法+KPI，下整宽图 */
+.chart-slide-body--stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 1040px;
+}
+
+.chart-prompt-panel {
+    flex: 0 0 auto;
+    padding: 16px 22px 14px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.chart-prompt-text {
+    margin: 0 0 12px;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.45;
+    color: #0f2744;
+}
+
+.chart-kpi-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+}
+
+.chart-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 120px;
+}
+
+.chart-kpi-label {
+    font-size: 18px;
+    line-height: 1.3;
+    color: #4a6b88;
+}
+
+.chart-kpi-value {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.25;
+    color: #0f2744;
+}
+
+.chart-slide-body--stack .chart-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 10px 14px 20px;
+}
+
+.chart-slide-body--stack .chart-image--full {
+    max-height: 760px;
+}
+
+.executive-summary.para--indent,
+.dark-block > p.para--indent,
+.competitor-summary-card p.para--indent,
+.insight-text p.para--indent,
+.prompt-comment.para--indent {
+    text-indent: 2em;
+}
+
+.executive-summary.para--short,
+.dark-block > p.para--short,
+.competitor-summary-card p.para--short,
+.analysis-slide-body > .analysis-block > p.para--short,
+.insight-text p.para--short,
+.prompt-comment.para--short {
+    text-indent: 0;
+}
+
+.executive-summary {
+    margin: 0 0 14px;
+}
+
+.highlight-list {
+    text-indent: 0;
 }
 
 .hint,
@@ -247,14 +529,38 @@ body {
 .analysis-content,
 .highlight-list,
 .tip-list {
-    font-size: 26px;
+    font-size: 34px;
     line-height: 1.5;
 }
 
+/* 图1：核心结论正文加大 */
+.dark-block .executive-summary,
+.dark-block .executive-summary p,
 .dark-content .executive-summary,
-.dark-content .highlight-list,
-.dark-content .tip-list {
-    color: rgba(255, 255, 255, 0.92);
+.dark-content .executive-summary p {
+    font-size: 38px;
+    line-height: 1.58;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.dark-block .executive-summary p,
+.dark-content .executive-summary p,
+.dark-block .executive-summary p.para--indent,
+.dark-content .executive-summary p.para--indent,
+.dark-block .executive-summary p.para--short,
+.dark-content .executive-summary p.para--short {
+    margin: 0 0 12px;
+    text-indent: 2em;
+}
+
+.dark-block .highlight-list,
+.dark-content .highlight-list {
+    font-size: 36px;
+    line-height: 1.55;
+}
+
+.dark-block .highlight-list li {
+    margin: 0 0 12px;
 }
 
 .highlight-list,
@@ -294,7 +600,7 @@ body {
 .slide-body--dense .report-table,
 .slide-body--dense .RankTable,
 .slide-body--dense table {
-    font-size: 22px;
+    font-size: 30px;
 }
 
 .slide-body--dense .report-table th,
@@ -303,18 +609,23 @@ body {
 .slide-body--dense .RankTable td,
 .slide-body--dense table th,
 .slide-body--dense table td {
-    padding: 12px 10px;
+    padding: 11px 10px;
 }
 
 .report-table,
 .RankTable,
 table {
     width: 100%;
-    border-collapse: collapse;
-    font-size: 26px;
-    line-height: 1.3;
-    color: #163653;
-    background: rgba(255, 255, 255, 0.82);
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 32px;
+    line-height: 1.35;
+    color: #143552;
+    background: #ffffff;
+    border: 1px solid rgba(15, 55, 100, 0.12);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 6px 18px rgba(9, 43, 85, 0.06);
 }
 
 .report-table th,
@@ -323,25 +634,156 @@ table {
 .RankTable td,
 table th,
 table td {
-    padding: 14px 16px;
-    border: 1px solid rgba(0, 92, 180, 0.18);
+    padding: 15px 16px;
+    border-bottom: 1px solid rgba(0, 92, 180, 0.10);
+    border-right: 1px solid rgba(0, 92, 180, 0.05);
     vertical-align: middle;
     word-break: break-word;
+}
+
+.report-table tr td:last-child,
+.report-table tr th:last-child,
+.RankTable tr td:last-child,
+.RankTable tr th:last-child,
+table tr td:last-child,
+table tr th:last-child {
+    border-right: none;
+}
+
+.report-table tbody tr:nth-child(even),
+.RankTable tbody tr:nth-child(even),
+table tbody tr:nth-child(even) {
+    background: #eef6ff;
+}
+
+.report-table tbody tr:nth-child(odd),
+.RankTable tbody tr:nth-child(odd),
+table tbody tr:nth-child(odd) {
+    background: #ffffff;
+}
+
+.report-table tbody tr[data-entity-color],
+.RankTable tbody tr[data-entity-color] {
+    box-shadow: inset 5px 0 0 var(--entity-color, #005fd4);
+}
+
+.report-table tbody tr:last-child td,
+.RankTable tbody tr:last-child td,
+table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* 全报告表头统一：浅底深字（对齐排名明细 A+B） */
+.report-table thead,
+.RankTable thead,
+table thead {
+    background: #e8f1fa !important;
+    color: #143552 !important;
 }
 
 .report-table thead th,
 .RankTable thead th,
 table thead th {
     white-space: normal;
-    line-height: 1.2;
+    line-height: 1.25;
     hyphens: auto;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    font-size: 26px;
+    text-shadow: none;
+    color: #143552 !important;
+    background: #e8f1fa !important;
+    border-bottom: 1px solid rgba(15, 55, 100, 0.12);
 }
 
-.report-table thead,
-.RankTable thead,
-table thead {
-    background: #005fd4;
-    color: #ffffff;
+.report-table tbody td:first-child,
+.RankTable tbody td:first-child {
+    font-weight: 700;
+    color: #0b2f55;
+}
+
+/* 排名明细：四列收窄居中，避免拉满整页显空 */
+.ranking-detail-wrap {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.RankTable.ranking-detail-table {
+    width: 56%;
+    max-width: 1280px;
+    margin: 0 auto;
+    table-layout: fixed;
+}
+
+.RankTable.ranking-detail-table th,
+.RankTable.ranking-detail-table td {
+    padding: 16px 22px;
+}
+
+.RankTable.ranking-detail-table th.rank-col,
+.RankTable.ranking-detail-table td.rank-col {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    width: 18%;
+}
+
+.RankTable.ranking-detail-table th.date-col,
+.RankTable.ranking-detail-table td.date-col {
+    text-align: right;
+    width: 20%;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.RankTable.ranking-detail-table th.type-col,
+.RankTable.ranking-detail-table td:nth-child(2) {
+    width: 18%;
+    text-align: center;
+}
+
+.RankTable.ranking-detail-table th.name-col {
+    width: 44%;
+}
+
+.RankTable.ranking-detail-table tbody tr.rank-row--brand,
+.RankTable tbody tr.rank-row--brand {
+    background: #e7f0ff !important;
+}
+
+.RankTable.ranking-detail-table tbody tr.rank-row--brand td,
+.RankTable tbody tr.rank-row--brand td {
+    font-weight: 700;
+}
+
+.rank-type-tag {
+    display: inline-block;
+    min-width: 3.2em;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: center;
+}
+
+.rank-type-tag--recent {
+    color: #4a6078;
+    background: #e8eef5;
+}
+
+.rank-type-tag--best {
+    color: #1a7a45;
+    background: #e3f6ea;
+}
+
+.rank-type-tag--worst {
+    color: #b45309;
+    background: #fff1e0;
+}
+
+.rank-type-tag--muted {
+    opacity: 0.72;
 }
 
 .brand-highlight,
@@ -354,6 +796,83 @@ table thead {
 .competitor-highlight {
     color: #f28e2b;
     font-weight: 800;
+}
+
+.competitor-strategy {
+    margin-top: 18px;
+}
+
+.competitor-summary-card,
+.competitor-action-card {
+    margin-top: 14px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: rgba(8, 56, 110, 0.04);
+    border: 1px solid rgba(8, 56, 110, 0.08);
+}
+
+.competitor-summary-card h4,
+.competitor-action-card h4 {
+    margin: 0 0 10px;
+    font-size: 28px;
+    color: #092b55;
+}
+
+.competitor-summary-card p {
+    margin: 0 0 8px;
+    font-size: 26px;
+    line-height: 1.55;
+    color: #163653;
+    display: block;
+    text-indent: 0;
+}
+
+.competitor-summary-card p:last-child {
+    margin-bottom: 0;
+}
+
+.competitor-summary-card p.para--indent {
+    text-indent: 0;
+}
+
+.competitor-action-list {
+    margin: 0;
+    padding-left: 1.25em;
+}
+
+.competitor-action-list li,
+.competitor-action-list--dense li {
+    margin: 0 0 8px;
+    font-size: 22px;
+    line-height: 1.45;
+    color: #163653;
+}
+
+.competitor-slide-body .competitor-summary-card p {
+    font-size: 22px;
+    line-height: 1.45;
+    text-indent: 0;
+    margin: 0 0 6px;
+}
+
+.competitor-slide-body .competitor-summary-card p:last-child {
+    margin-bottom: 0;
+}
+
+.competitor-slide-body .competitor-summary-card p.para--indent {
+    text-indent: 0;
+}
+
+.competitor-slide-body .competitor-summary-card h4,
+.competitor-slide-body .competitor-action-card h4 {
+    font-size: 24px;
+    margin-bottom: 6px;
+}
+
+.competitor-slide-body .competitor-summary-card,
+.competitor-slide-body .competitor-action-card {
+    margin-top: 10px;
+    padding: 12px 14px;
 }
 
 .progress-container {
@@ -410,17 +929,6 @@ table thead {
 
 .chart-slide-body .hint {
     margin: 0 0 18px;
-}
-
-.chart-image--full {
-    display: block;
-    width: 2180px;
-    max-width: 100%;
-    height: auto;
-    max-height: 980px;
-    object-fit: contain;
-    background: rgba(255, 255, 255, 0.88);
-    border-radius: 8px;
 }
 
 .chart-grid img,
@@ -524,10 +1032,20 @@ table thead {
 .swot-card p,
 .swot-card li,
 .swot-body {
-    margin: 0;
+    margin: 0 0 8px;
     font-size: 24px;
     line-height: 1.5;
     color: #163653;
+    text-indent: 0;
+}
+
+.swot-card p:last-child,
+.swot-card li:last-child {
+    margin-bottom: 0;
+}
+
+.swot-card p.para--indent {
+    text-indent: 0; /* SWOT 已是逐条短句，统一不缩进 */
 }
 
 .swot-body {
@@ -541,7 +1059,7 @@ table thead {
 }
 
 .swot-card li + li {
-    margin-top: 6px;
+    margin-top: 8px;
 }
 
 .analysis-time-pill {
@@ -559,53 +1077,132 @@ table thead {
 }
 
 .analysis-slide-body {
-    top: 200px;
-    max-height: 1120px;
+    top: 248px;
+    max-height: 1040px;
 }
 
-.analysis-slide-body .analysis-block {
-    margin: 0 0 16px;
-    padding: 16px 20px;
+/* 参考图：一段一卡，白底圆角 + 轻边框 */
+.analysis-slide-body .analysis-block,
+.analysis-slide-body .analysis-card {
+    margin: 0 0 14px;
+    padding: 18px 22px;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.86);
-    border: 1px solid rgba(0, 92, 180, 0.14);
+    background: #ffffff;
+    border: 1px solid rgba(15, 39, 68, 0.08);
+    box-shadow: 0 2px 10px rgba(9, 43, 85, 0.06);
+}
+
+.analysis-slide-body .analysis-block:last-child,
+.analysis-slide-body .analysis-card:last-child {
+    margin-bottom: 0;
 }
 
 .analysis-slide-body .analysis-h2 {
     margin: 0 0 10px;
-    padding-left: 14px;
-    border-left: 6px solid #005fd4;
-    font-size: 26px;
+    padding-left: 0;
+    border-left: none;
+    font-size: 32px;
+    font-weight: 800;
     color: #092b55;
+}
+
+.analysis-priority-block .priority-action-table {
+    font-size: 24px;
+}
+
+.analysis-priority-block .priority-action-table td {
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.prompt-comment,
+.prompt-comment.para--short {
+    font-size: 32px !important;
+    line-height: 1.5;
+}
+
+.analysis-slide-body .analysis-card > p,
+.analysis-slide-body .analysis-card > ul,
+.analysis-slide-body .analysis-card > ol {
+    margin: 0;
 }
 
 .analysis-slide-body p,
 .analysis-slide-body li {
-    font-size: 22px;
-    line-height: 1.45;
+    font-size: 32px;
+    line-height: 1.55;
     color: #163653;
 }
 
-.analysis-slide-body ul {
-    margin: 8px 0 0;
-    padding-left: 1.2em;
+.analysis-slide-body p {
+    text-indent: 0;
+    margin: 0;
+}
+
+.analysis-slide-body p.para--indent {
+    text-indent: 0; /* 卡片内段落与参考图一致，不缩进 */
+}
+
+.analysis-slide-body ul,
+.analysis-slide-body ol {
+    margin: 0;
+    padding-left: 1.35em;
+    text-indent: 0;
+}
+
+.analysis-slide-body li {
+    text-indent: 0;
+    margin: 0 0 10px;
+}
+
+.analysis-slide-body li:last-child {
+    margin-bottom: 0;
+}
+
+.analysis-slide-body .analysis-card strong {
+    font-weight: 700;
 }
 
 .action-tip-list {
     margin: 0;
     padding-left: 1.2em;
-    font-size: 28px;
-    line-height: 1.7;
+    font-size: 26px;
+    line-height: 1.55;
     color: #163653;
 }
 
 .action-tip-list li {
+    margin: 0 0 12px;
+}
+
+.tip-list--dense li,
+.action-tip-list.tip-list--dense li {
+    margin: 0 0 10px;
+}
+
+.dark-content .tip-list li,
+.dark-panel .action-tip-list li,
+.dark-panel .tip-list li {
     margin: 0 0 14px;
+    line-height: 1.55;
 }
 
 .domain-map-table thead,
-.RankTable.domain-map-table thead {
-    background: linear-gradient(90deg, #0056c8 0%, #14c8d8 100%);
+.RankTable.domain-map-table thead,
+.domain-map-table thead th,
+.RankTable.domain-map-table thead th {
+    background: #e8f1fa !important;
+    color: #143552 !important;
+}
+
+/* 映射表略收行高，减少「差几行就拆一页」 */
+.domain-map-table th,
+.domain-map-table td,
+.RankTable.domain-map-table th,
+.RankTable.domain-map-table td {
+    padding: 11px 14px;
+    font-size: 30px;
+    line-height: 1.3;
 }
 
 .priority-tag {

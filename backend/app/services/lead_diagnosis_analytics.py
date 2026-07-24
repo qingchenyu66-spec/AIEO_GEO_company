@@ -13,7 +13,6 @@ from app.core.region_catalog import region_display_name, normalize_region_codes
 from app.services.monitor_sample_metrics import SUCCESS_STATUSES
 from app.services.ranking_parser import (
     normalize_structured_rankings,
-    ranking_entry_category,
     ranking_entry_explicit_rank,
     ranking_entry_name,
 )
@@ -109,6 +108,66 @@ def canonical_ranking_name(name: str, brand: str, competitors: list[str]) -> str
         if _strict_entity_match(name, comp):
             return comp
     return str(name or "").strip()
+
+
+def compact_ranking_rows_for_deck(
+    rows: list[dict[str, Any]],
+    *,
+    only_recent: bool = False,
+) -> list[dict[str, Any]]:
+    """报告 deck：分类强制「默认分类」，按 (类型, 品牌) 聚合；保留最近/最优/最差。"""
+    if not rows:
+        return []
+    filtered = [
+        row
+        for row in rows
+        if (not only_recent) or str(row.get("type_label") or "") in {"", "最近"}
+    ]
+    if not filtered:
+        filtered = list(rows)
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in filtered:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        label = str(row.get("type_label") or "最近").strip() or "最近"
+        key = (label, name)
+        try:
+            rank_val = float(str(row.get("rank_display") or "").strip() or "nan")
+        except ValueError:
+            rank_val = None
+        prev = buckets.get(key)
+        if prev is None:
+            buckets[key] = {
+                **row,
+                "type_label": label,
+                "category": "默认分类",
+                "rank_display": row.get("rank_display") or "—",
+                "_rank_vals": [rank_val] if rank_val is not None else [],
+            }
+            continue
+        if rank_val is not None:
+            prev.setdefault("_rank_vals", []).append(rank_val)
+    out: list[dict[str, Any]] = []
+    for item in buckets.values():
+        vals = [v for v in item.pop("_rank_vals", []) if v is not None]
+        if vals:
+            rank_value = round(sum(vals) / len(vals), 1)
+            item["rank_display"] = (
+                str(int(rank_value)) if float(rank_value).is_integer() else str(rank_value)
+            )
+        item["category"] = "默认分类"
+        out.append(item)
+    type_order = {"最近": 0, "最优": 1, "最差": 2}
+    out.sort(
+        key=lambda row: (
+            type_order.get(str(row.get("type_label") or ""), 9),
+            0 if row.get("is_brand") else 1,
+            float(str(row.get("rank_display") or "999") or 999),
+            str(row.get("name") or ""),
+        )
+    )
+    return out
 
 
 def _mention_row(
@@ -247,8 +306,17 @@ def _execution_key_from_run(
     if run is None:
         return updated_at.strftime("%Y-%m-%d %H:%M") if updated_at else "时间数据缺失"
     key = str(run.schedule_key or "").strip()
-    if len(key) >= 12 and key[:12].isdigit():
-        return f"{key[:4]}-{key[4:6]}-{key[6:8]} {key[8:10]}:{key[10:12]}"
+    # YYYYMMDD-HHMM（售前诊断常见）
+    dashed = re.match(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})$", key)
+    if dashed:
+        return (
+            f"{dashed.group(1)}-{dashed.group(2)}-{dashed.group(3)} "
+            f"{dashed.group(4)}:{dashed.group(5)}"
+        )
+    # YYYYMMDDHHMM / YYYYMMDDHHMMSS
+    digits = re.sub(r"\D", "", key)
+    if len(digits) >= 12:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}"
     finished = getattr(run, "finished_at", None) or getattr(run, "updated_at", None) or updated_at
     label = str(run.schedule_label or "").strip()
     if finished is not None:
@@ -286,6 +354,29 @@ def _group_rows_by_execution(
     return grouped
 
 
+def _day_key_from_execution(value: str) -> str:
+    """执行批次键 → 自然日（YYYY-MM-DD），排名明细只按天展示。"""
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text or "时间数据缺失"
+
+
+def _group_rows_by_day(
+    rows: list[GeoMonitorSubtask],
+    task_run_map: dict[str, LeadDiagnosisRun],
+) -> dict[str, list[GeoMonitorSubtask]]:
+    """按自然日合并同日多时段抓取，供排名明细均位。"""
+    by_day: dict[str, list[GeoMonitorSubtask]] = {}
+    for execution_key, batch in _group_rows_by_execution(rows, task_run_map).items():
+        day = _day_key_from_execution(execution_key)
+        by_day.setdefault(day, []).extend(batch)
+    return by_day
+
+
 def _build_molizhishu_ranking_rows(
     rows: list[GeoMonitorSubtask],
     *,
@@ -293,22 +384,22 @@ def _build_molizhishu_ranking_rows(
     competitors: list[str],
     task_run_map: dict[str, LeadDiagnosisRun],
 ) -> list[dict[str, Any]]:
-    """最近 / 最优 / 最差 三批次排名明细，对齐模力报告 RankTable。"""
+    """最近 / 最优 / 最差：按自然日均位；分类一律「默认分类」（贴金样一词一页）。"""
     if not rows or not task_run_map:
         return []
 
-    by_execution = _group_rows_by_execution(rows, task_run_map)
-    execution_keys = sorted(by_execution.keys(), key=_execution_sort_key)
-    if not execution_keys:
+    by_day = _group_rows_by_day(rows, task_run_map)
+    day_keys = sorted(by_day.keys(), key=_execution_sort_key)
+    if not day_keys:
         return []
 
     day_brand_rank: dict[str, float] = {}
-    for day in execution_keys:
-        avg = _avg_rank_for_entity_in_batch(by_execution[day], brand, is_brand=True)
+    for day in day_keys:
+        avg = _avg_rank_for_entity_in_batch(by_day[day], brand, is_brand=True)
         if avg is not None:
             day_brand_rank[day] = avg
 
-    latest_day = execution_keys[-1]
+    latest_day = day_keys[-1]
     best_day = min(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
     worst_day = max(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
 
@@ -321,8 +412,9 @@ def _build_molizhishu_ranking_rows(
     result: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
     for day, label, muted in export_plan:
-        batch = by_execution.get(day) or []
-        aggregated: dict[tuple[str, str], list[float]] = {}
+        batch = by_day.get(day) or []
+        # R1：忽略回答内 AI 分类，按实体日均聚合成「默认分类」
+        aggregated: dict[str, list[float]] = {}
         for item in batch:
             for entry in item.all_rankings_json or []:
                 if not isinstance(entry, dict):
@@ -333,13 +425,11 @@ def _build_molizhishu_ranking_rows(
                 rank = ranking_entry_explicit_rank(entry)
                 if rank is None:
                     continue
-                category = str(ranking_entry_category(entry) or "默认分类")
                 canonical = canonical_ranking_name(name, brand, competitors)
-                aggregated.setdefault((canonical, category), []).append(float(rank))
-        collected_at = day
-        for (name, category), ranks in sorted(aggregated.items(), key=lambda row: min(row[1])):
+                aggregated.setdefault(canonical, []).append(float(rank))
+        for name, ranks in sorted(aggregated.items(), key=lambda row: min(row[1])):
             rank_value = round(sum(ranks) / len(ranks), 1)
-            dedupe = (label, name, category, rank_value, collected_at)
+            dedupe = (label, name, rank_value, day)
             if dedupe in seen:
                 continue
             seen.add(dedupe)
@@ -350,29 +440,41 @@ def _build_molizhishu_ranking_rows(
                     "name": name,
                     "type_label": label,
                     "type_muted": muted,
-                    "category": category,
+                    "category": "默认分类",
                     "rank_display": rank_display,
                     **flags,
-                    "collected_at": collected_at,
+                    "collected_at": day,
                 }
             )
     return result
 
 
 def _build_date_prompt_matrix(prompt_analytics: list[dict[str, Any]]) -> dict[str, Any]:
+    """按自然日汇总各语义词均位（同日多时段取均值），不展示每个抓取时点。"""
     prompts = [str(row.get("prompt") or "") for row in prompt_analytics if row.get("prompt")]
-    date_map: dict[str, dict[str, Any]] = {}
+    # day -> prompt -> [ranks]
+    day_map: dict[str, dict[str, list[float]]] = {}
     for prompt, block in zip(prompts, prompt_analytics):
         for point in block.get("round_trend") or []:
-            # 保留分钟级批次键，禁止截成 YYYY-MM-DD 导致一天三次合并
-            date_key = str(point.get("schedule_label") or point.get("schedule_key") or "").strip()
-            if not date_key:
+            label = str(point.get("schedule_label") or point.get("schedule_key") or "").strip()
+            if not label:
                 continue
-            date_map.setdefault(date_key, {})[prompt] = point.get("avg_rank")
-    rows = [
-        {"label": date_key, "cells": [date_map[date_key].get(prompt) for prompt in prompts]}
-        for date_key in sorted(date_map, key=_execution_sort_key)
-    ]
+            day_key = label[:10] if len(label) >= 10 else label
+            rank = point.get("avg_rank")
+            if rank is None:
+                continue
+            try:
+                value = float(rank)
+            except (TypeError, ValueError):
+                continue
+            day_map.setdefault(day_key, {}).setdefault(prompt, []).append(value)
+    rows = []
+    for day_key in sorted(day_map, key=_execution_sort_key):
+        cells = []
+        for prompt in prompts:
+            vals = day_map[day_key].get(prompt) or []
+            cells.append(round(sum(vals) / len(vals), 1) if vals else None)
+        rows.append({"label": day_key, "cells": cells})
     return {"prompts": prompts, "rows": rows}
 
 
@@ -481,6 +583,8 @@ def build_source_analysis(
     *,
     brand: str,
 ) -> dict[str, Any]:
+    from app.services.report_source_label_service import pick_site_label_from_votes
+
     domain_map: dict[str, dict[str, Any]] = {}
     brand_linked = 0
     total_refs = 0
@@ -495,7 +599,13 @@ def build_source_analysis(
             domain = _source_domain(url) or url
             bucket = domain_map.setdefault(
                 domain,
-                {"domain": domain, "count": 0, "brand_related_count": 0, "platforms": []},
+                {
+                    "domain": domain,
+                    "count": 0,
+                    "brand_related_count": 0,
+                    "platforms": [],
+                    "site_votes": {},
+                },
             )
             bucket["count"] += 1
             if brand_mentioned:
@@ -503,8 +613,19 @@ def build_source_analysis(
                 brand_linked += 1
             if item.platform and item.platform not in bucket["platforms"]:
                 bucket["platforms"].append(item.platform)
+            # 对齐门户信源：累计引用 site 中文票
+            site_raw = str(source.get("site") or "").strip()
+            if site_raw:
+                votes = bucket.setdefault("site_votes", {})
+                votes[site_raw] = int(votes.get(site_raw) or 0) + 1
 
     domain_stats = sorted(domain_map.values(), key=lambda row: row["count"], reverse=True)[:15]
+    for bucket in domain_stats:
+        votes = dict(bucket.get("site_votes") or {})
+        best = pick_site_label_from_votes(votes, brand=brand)
+        if best:
+            bucket["site"] = best
+        # 保留 site_votes 供 enrich；体积很小
     coverage_note = (
         f"共采集 {len(rows)} 条有效回答、{total_refs} 条引用；"
         f"其中 {brand_linked} 条引用出现在品牌被提及的样本中。"
@@ -709,3 +830,58 @@ def build_lead_diagnosis_analytics(
         "brand_date_matrix": brand_date_matrix,
         "brand_city_matrix": brand_city_matrix,
     }
+
+
+def refresh_daily_rank_fields_in_diagnosis_result(
+    lead: LeadDiagnosis,
+    subtasks: list[GeoMonitorSubtask],
+    result: dict[str, Any],
+    *,
+    competitors: list[str] | None = None,
+    task_region_map: dict[str, list[str] | None] | None = None,
+) -> dict[str, Any]:
+    """用现算「按天均位」覆盖快照中的排名明细与日期矩阵。
+
+    诊断 finalize 时写入的 monitor_snapshot 会过期；导出若直读快照会继续带 16:30 时段。
+    """
+    if not isinstance(result, dict):
+        return result
+    analytics = build_lead_diagnosis_analytics(
+        lead,
+        subtasks,
+        list(lead.runs or []),
+        competitors=competitors,
+        task_region_map=task_region_map,
+    )
+    snap = result.setdefault("monitor_snapshot", {})
+    if not isinstance(snap, dict):
+        snap = {}
+        result["monitor_snapshot"] = snap
+    live_by_prompt = {
+        str(block.get("prompt") or ""): block
+        for block in (analytics.get("prompt_analytics") or [])
+        if str(block.get("prompt") or "").strip()
+    }
+    refreshed: list[dict[str, Any]] = []
+    for block in snap.get("prompt_analytics") or []:
+        if not isinstance(block, dict):
+            continue
+        prompt = str(block.get("prompt") or "")
+        live = live_by_prompt.get(prompt)
+        if live is None:
+            refreshed.append(block)
+            continue
+        updated = dict(block)
+        updated["molizhishu_ranking_rows"] = list(live.get("molizhishu_ranking_rows") or [])
+        updated["ranking_list"] = list(live.get("ranking_list") or [])
+        updated["round_trend"] = list(live.get("round_trend") or [])
+        refreshed.append(updated)
+    if refreshed:
+        snap["prompt_analytics"] = refreshed
+    snap["brand_date_matrix"] = analytics.get("brand_date_matrix") or snap.get("brand_date_matrix") or {}
+    snap["rank_trend"] = analytics.get("rank_trend") or snap.get("rank_trend") or []
+    snap["brand_city_matrix"] = analytics.get("brand_city_matrix") or snap.get("brand_city_matrix") or {}
+    snap["brand_city_rankings"] = (
+        analytics.get("brand_city_rankings") or snap.get("brand_city_rankings") or []
+    )
+    return result

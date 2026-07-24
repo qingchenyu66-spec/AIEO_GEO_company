@@ -459,21 +459,25 @@ class DeepseekClient:
             json_schema += (
                 ',\n'
                 '  "report_sections": {\n'
-                f'    "industry_analysis": "行业与 AI 搜索意图分析，120-200字，{html_hint}",\n'
-                f'    "ranking_analysis": "{section_hint}，120-200字，{html_hint}",\n'
-                f'    "mention_analysis": "提及率与曝光分析，100-180字，{html_hint}",\n'
-                f'    "source_analysis": "引用网站与信源覆盖，100-180字，{html_hint}",\n'
+                f'    "industry_analysis": "行业与 AI 搜索意图分析；输出 2~4 个独立短段（每段 40~90 字，可用多个 <p>），勿合成一段长文；{html_hint}",\n'
+                f'    "ranking_analysis": "{section_hint}；输出 2~4 个独立短段（每段 40~90 字），覆盖短板语义词与竞品差距；{html_hint}",\n'
+                f'    "mention_analysis": "提及率与曝光分析；输出 2~4 个独立短段（每段 40~90 字），覆盖整体与平台差异；{html_hint}",\n'
+                f'    "source_analysis": "引用网站与信源覆盖；输出 2~4 个独立短段（每段 40~90 字）；{html_hint}",\n'
                 f'    "action_recommendations": "分网站类型的优化建议列表，{html_hint}"\n'
                 "  }"
             )
             if lead_analytics:
                 json_schema += (
                     ',\n'
-                    '  "analysis_html": "可选；五节解读 HTML（h2 为 1~5 节标题，第5节含分类 ul/li），勿重复概览 KPI",\n'
-                    '  "priority_actions": [{"priority":"P0|P1|P2","title":"行动项","timeline":"30天|60天|90天"}],\n'
+                    '  "analysis_html": "必填；五节解读 HTML（h2 为 1~5 节标题）。'
+                    '第1~4节每节须输出 2~4 个独立 <p>（每段 40~90 字），从不同角度写短板/竞品/平台差异，禁止每节只写一大段；'
+                    '第5节「采取措施建议」须含门户/垂直/问答/自媒体四类，每类下至少 2 条 li，'
+                    '整节合计 8~10 条可执行建议（不得少于 8 条），勿输出【深度】【广度】等标签",\n'
+                    '  "priority_actions": [{"priority":"P0|P1|P2","title":"行动项（40~80字，含对象+做法+场景，禁止写验收口径/承诺指标）","timeline":"30天|60天|90天"}],\n'
                     '  "prompt_commentaries": [{"prompt": "语义词原文", "comment": "80-120字 HTML 短评"}],\n'
                     '  "platform_insight": "分平台差异解读，100-150字",\n'
-                    '  "source_action_tips": ["按信源类型的优化建议，3-5条"]'
+                    '  "source_action_tips": ["信源优化建议 10 条；每条 60~110 字；咨询顾问口吻；'
+                    '说明「为何做+做什么+落到哪个站/问法」；禁止以「针对」开头；禁止验收口径/量化承诺"]'
                 )
         json_schema += "\n}"
 
@@ -492,8 +496,13 @@ class DeepseekClient:
                 "前文诊断概览已展示 KPI，analysis_html 禁止重复具体 KPI 数字"
                 "（如提及率%、Top3%、平均排名、样本数、信源数），改用「偏低/领先/落后竞品/差距明显」等定性表述。"
                 "禁止引用异常/新闻杂讯类信源标题，用域名或网站类型描述。"
-                "第5节须用分类 ul/li 列出门户、垂直、问答、自媒体等网站类型建议。"
-                "priority_actions 须 3~5 条，与第5节方向一致但更具体，含 P0/P1/P2 与 timeline。"
+                "第1~4节每节必须拆成 2~4 条独立短段落（多个 <p>），不要每节一大段；"
+                "第5节须用分类 ul/li 列出门户、垂直、问答、自媒体等网站类型建议，合计 8~10 条，每条写清动作与场景；不得少于 8 条。"
+                "priority_actions 须 8~10 条，含 P0/P1/P2、timeline；title 40~80 字写清对象与动作；"
+                "严禁出现「验收口径」「提升X%」「阅读量超过」等承诺式指标。"
+                "source_action_tips 须恰好 10 条、每条 60~110 字：顾问口吻，说明原因+动作+落点站点/问法；"
+                "严禁「针对」开头与空话套话；严禁验收口径。"
+                "不要输出 analysis_action_tips，不要使用【深度】【广度】【维度】【策略】标签。"
             )
         prompt_section = ""
         if prompt_lines:
@@ -527,8 +536,8 @@ class DeepseekClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.25,
-            max_tokens=4096 if (lead_analytics or periodic_report) else 1800,
+            temperature=0.3,
+            max_tokens=5600 if (lead_analytics or periodic_report) else 1800,
             source="report-insights",
         )
         payload = self._parse_json_payload(content)
@@ -588,7 +597,22 @@ class DeepseekClient:
         if not isinstance(source_action_tips, list):
             source_action_tips = None
         else:
-            source_action_tips = [str(item).strip() for item in source_action_tips if str(item).strip()][:5] or None
+            cleaned_tips: list[str] = []
+            for item in source_action_tips:
+                tip = str(item).strip()
+                if not tip:
+                    continue
+                tip = re.sub(r"^针对\s*", "", tip)
+                tip = re.sub(r"^【(?:深度|广度|维度|策略)】\s*", "", tip)
+                tip = re.sub(r"验收口径[:：]?\s*", "", tip)
+                # 去掉承诺式指标尾巴（提升X%、超过N）
+                tip = re.sub(r"[，,；;].{0,24}(?:提升|达到|超过).{0,16}%[^。！？]*", "", tip)
+                tip = tip.strip(" ：:;；")
+                if tip and "验收口径" not in tip and tip not in cleaned_tips:
+                    cleaned_tips.append(tip if tip.endswith(("。", "！", "？")) else tip + "。")
+                if len(cleaned_tips) >= 12:
+                    break
+            source_action_tips = cleaned_tips or None
 
         priority_actions = payload.get("priority_actions")
         if not isinstance(priority_actions, list):
@@ -597,12 +621,16 @@ class DeepseekClient:
             priority_actions = [
                 {
                     "priority": str(item.get("priority") or "P2").upper(),
-                    "title": str(item.get("title") or "").strip(),
+                    "title": re.sub(
+                        r"(验收口径|提升\s*\d+%|超过\s*\d+)",
+                        "",
+                        str(item.get("title") or "").strip(),
+                    ).strip(" ：:;；"),
                     "timeline": str(item.get("timeline") or "90天").strip(),
                 }
                 for item in priority_actions
                 if isinstance(item, dict) and str(item.get("title") or "").strip()
-            ][:5] or None
+            ][:8] or None
 
         return {
             "executive_summary": _text("executive_summary"),
@@ -619,6 +647,85 @@ class DeepseekClient:
             "source_action_tips": source_action_tips,
             "priority_actions": priority_actions,
         }
+
+    def resolve_domain_site_labels(
+        self,
+        items: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        """从候选站名中选择汉字发布方名；无把握则省略该键。禁止发明候选外名称。"""
+        cleaned: list[dict[str, Any]] = []
+        for raw in items[:40]:
+            host = str((raw or {}).get("domain") or "").strip().lower()
+            if not host:
+                continue
+            cands = []
+            seen: set[str] = set()
+            for c in list((raw or {}).get("candidates") or []):
+                text = str(c or "").strip()
+                if not text or text.lower() == host or text in seen:
+                    continue
+                seen.add(text)
+                cands.append(text)
+            titles = [str(t).strip() for t in list((raw or {}).get("titles") or []) if str(t).strip()][:3]
+            if not cands and not titles:
+                continue
+            cleaned.append(
+                {
+                    "domain": host,
+                    "candidates": cands[:8],
+                    "titles": titles,
+                    "brand": str((raw or {}).get("brand") or "").strip(),
+                }
+            )
+        if not cleaned or not self.report_enabled:
+            return {}
+
+        blocks = []
+        for row in cleaned:
+            blocks.append(
+                f"域名: {row['domain']}\n"
+                f"候选站名: {json.dumps(row['candidates'], ensure_ascii=False)}\n"
+                f"引用标题样例: {json.dumps(row['titles'], ensure_ascii=False)}\n"
+                f"客户品牌(禁止当作站名): {row['brand'] or '—'}"
+            )
+        content = self.chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是中文信源站名校对助手。任务是从「候选站名」里选出最像第三方发布方/媒体的汉字站名。"
+                        "硬性规则：\n"
+                        "1) 只能输出候选列表中的某一项原文，禁止改写、禁止发明候选外名称；\n"
+                        "2) 若候选都不像独立站名、或只是客户品牌/公司主体、或全是英文域名碎片，省略该域名；\n"
+                        "3) 只输出 JSON 对象：键=域名，值=选中的候选原文；无把握的键不要出现。\n"
+                        "标题仅作辅助判断，不能当站名输出（除非它也出现在候选里）。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "请处理：\n\n"
+                    + "\n\n".join(blocks)
+                    + '\n\n只输出 JSON，例如 {"jobui.com":"职友集"}',
+                },
+            ],
+            temperature=0.0,
+            max_tokens=800,
+            source="site-label",
+        )
+        payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            return {}
+        allowed = {row["domain"]: set(row["candidates"]) for row in cleaned}
+        out: dict[str, str] = {}
+        for key, value in payload.items():
+            host = str(key or "").strip().lower()
+            label = str(value or "").strip()
+            if not host or not label:
+                continue
+            if label not in allowed.get(host, set()):
+                continue
+            out[host] = label
+        return out
 
     def parse_knowledge_document(
         self,

@@ -26,8 +26,8 @@ _SLIDE_HEIGHT_PX = 1417
 _PDF_PAGE_W_PT = _SLIDE_WIDTH_PX * 72 / 96
 _PDF_PAGE_H_PT = _SLIDE_HEIGHT_PX * 72 / 96
 # 指纹用：改导出链路时 bump，避免命中旧缓存
-# jpeg-pages-v2：单页 JPEG 一次编码（避开 Chromium page.pdf 二次 DCT），体积远小于 PNG 无损
-_PDF_PIPELINE = "jpeg-pages-v2"
+# jpeg-pages-v4：排名明细强制日均刷新，废旧时段快照/导出缓存
+_PDF_PIPELINE = "jpeg-pages-v4"
 _JPEG_SCREENSHOT_QUALITY = 90
 
 _tls = threading.local()
@@ -46,7 +46,7 @@ def _pack_js() -> str:
 
 def _idea_asset_stamp() -> str:
     parts: list[str] = [_PDF_PIPELINE]
-    for name in ("idea-cover.jpg", "idea-section.jpg", "idea-dark.jpg", "idea-light.png", "idea-thanks.jpg"):
+    for name in ("idea-cover.jpg", "idea-section.jpg", "idea-dark.jpg", "idea-light.jpg", "idea-thanks.jpg"):
         path = _ASSET_DIR / name
         try:
             st = path.stat()
@@ -63,7 +63,7 @@ def _idea_asset_urls_cached(stamp: str) -> dict[str, str]:
     Playwright ``set_content`` blocks ``file://`` images; absolute file URIs
     also break HTML preview. Data URIs work for both PDF and portal preview.
     stamp 变化时自动换缓存，避免母版替换后进程内仍用旧图。
-    亮底用 PNG 无损，避免 JPEG 近白蚊噪二次损伤。
+    亮底用新母版 JPG（0723）；截图侧 JPEG 只编码一次。
     """
     del stamp  # only used as lru key
 
@@ -79,7 +79,7 @@ def _idea_asset_urls_cached(stamp: str) -> dict[str, str]:
         "cover": _data_uri("idea-cover.jpg"),
         "section": _data_uri("idea-section.jpg"),
         "dark": _data_uri("idea-dark.jpg"),
-        "light": _data_uri("idea-light.png"),
+        "light": _data_uri("idea-light.jpg"),
         "thanks": _data_uri("idea-thanks.jpg"),
     }
 

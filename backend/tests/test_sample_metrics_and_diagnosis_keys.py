@@ -43,7 +43,7 @@ def test_execution_key_keeps_minute_from_schedule_key():
     assert _execution_key_from_run(run) == "2026-07-09 13:30"
 
 
-def test_date_prompt_matrix_does_not_collapse_same_day_rounds():
+def test_date_prompt_matrix_aggregates_same_day_rounds_to_daily_mean():
     matrix = _build_date_prompt_matrix(
         [
             {
@@ -56,5 +56,6 @@ def test_date_prompt_matrix_does_not_collapse_same_day_rounds():
             }
         ]
     )
-    assert len(matrix["rows"]) == 3
-    assert matrix["rows"][0]["label"] == "2026-07-09 09:30"
+    assert len(matrix["rows"]) == 1
+    assert matrix["rows"][0]["label"] == "2026-07-09"
+    assert matrix["rows"][0]["cells"] == [2.0]
