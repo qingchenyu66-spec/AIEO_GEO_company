@@ -11,6 +11,7 @@ import { extractErrorDetail } from '../../../utils/requestError'
 import { platformAccentColor, platformLabelMap, sortPlatformCodes } from '../portalMaps'
 import {
   buildMatrixRankScope,
+  matrixHeatChartHeight,
   resolveScopedColumnMentionStats,
   sliceMatrixByPlatform,
 } from './rankingMatrixChartUtils'
@@ -69,7 +70,7 @@ function buildHeatmapFromSnapshots(
   const keywords = [...new Set([
     ...keywordsHint,
     ...snapshots.map(snapshotKeyword),
-  ].filter(Boolean))].slice(0, 12)
+  ].filter(Boolean))]
   if (!keywords.length) return null
 
   const bucket = new Map<string, { mentioned: number; total: number }>()
@@ -417,6 +418,9 @@ export function useKeywordPlatformHeatmapChart(
       return
     }
     const runtime = await loadEchartsRuntime('matrix')
+    // 与排名矩阵热力同口径：按词数撑高，外层 wrap 滚动，避免固定 360 只露出约 12 行
+    const chartHeight = matrixHeatChartHeight(payload.keywords.length)
+    el.style.height = `${chartHeight}px`
     chart = runtime.getInstanceByDom(el) || runtime.init(el)
     chart.setOption({
       animation: false,
@@ -448,7 +452,7 @@ export function useKeywordPlatformHeatmapChart(
         type: 'category',
         data: payload.keywords,
         splitArea: { show: true },
-        axisLabel: { color: '#64748b', fontSize: 12 },
+        axisLabel: { color: '#64748b', fontSize: 12, interval: 0 },
         axisTick: { show: false },
       },
       visualMap: {
@@ -459,7 +463,7 @@ export function useKeywordPlatformHeatmapChart(
         right: 8,
         top: 'center',
         itemWidth: 12,
-        itemHeight: 140,
+        itemHeight: Math.min(140, Math.max(80, Math.floor(chartHeight * 0.35))),
         text: ['高', '低'],
         textStyle: { color: '#64748b', fontSize: 11 },
         inRange: { color: ['#eff6ff', '#93c5fd', '#2563eb', '#1e3a8a'] },
@@ -470,7 +474,7 @@ export function useKeywordPlatformHeatmapChart(
           item[2] < 0 ? [item[0], item[1], 0] : item
         )),
         label: {
-          show: true,
+          show: payload.keywords.length <= 80,
           formatter: (params: { data: [number, number, number] }) => {
             const raw = payload.data.find(item => item[0] === params.data[0] && item[1] === params.data[1])
             if (!raw || raw[2] < 0) return '—'

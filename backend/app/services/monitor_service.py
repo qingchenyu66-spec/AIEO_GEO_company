@@ -3982,7 +3982,10 @@ def _workspace_brief_from_daily_stats(
 
 
 def _workspace_monitor_keyword_labels(keyword_groups: list) -> list[str]:
-    """Chip / 热力图行标签：展开各组全部监测词（与前端 brand 口径一致）。"""
+    """Chip / 热力图行标签：展开各组全部监测词（与前端 brand 口径一致）。
+
+    不截断：词多时由前端按行高自适应 + wrap 滚动展示。
+    """
     labels: list[str] = []
     seen: set[str] = set()
     for group in keyword_groups:
@@ -3991,7 +3994,7 @@ def _workspace_monitor_keyword_labels(keyword_groups: list) -> list[str]:
             if primary and primary not in seen:
                 seen.add(primary)
                 labels.append(primary)
-    return labels[:24]
+    return labels
 
 
 def _workspace_match_monitor_keyword(

@@ -637,7 +637,9 @@ onUnmounted(() => {
           >?</span>
         </div>
         <div v-if="showHeatmapLoading" class="ws-board-mini-empty">热力图加载中…</div>
-        <div v-else-if="keywordPlatformHeatmap?.keywords.length" ref="heatmapChartRef" class="ws-board-chart-heat" />
+        <div v-else-if="keywordPlatformHeatmap?.keywords.length" class="ws-board-chart-heat-wrap">
+          <div ref="heatmapChartRef" class="ws-board-chart-heat" />
+        </div>
         <p v-else class="ws-board-mini-empty">暂无词×平台矩阵数据</p>
         <p v-if="matrixError && keywordPlatformHeatmap?.keywords.length" class="ws-board-matrix-hint">
           {{ matrixError }}
