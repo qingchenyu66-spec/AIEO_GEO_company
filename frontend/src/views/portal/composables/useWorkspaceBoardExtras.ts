@@ -426,7 +426,9 @@ export function useKeywordPlatformHeatmapChart(
       animation: false,
       grid: { left: 140, right: 72, top: 20, bottom: 72, containLabel: false },
       tooltip: {
-        position: 'top',
+        // heat-wrap 有 overflow:auto；position:top 在首行会被裁成一条白边
+        appendTo: 'body',
+        extraCssText: 'z-index:40;max-width:280px;white-space:normal;',
         formatter: (params: { data: [number, number, number] }) => {
           const [xIndex, yIndex] = params.data
           const platform = payload.platformLabels[xIndex] || '—'
