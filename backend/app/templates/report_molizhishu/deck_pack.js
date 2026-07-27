@@ -1,7 +1,12 @@
 /**
  * 横版诊断 PDF：量高后拆页，同类短页再合并。
  * 仅处理 [data-pack] 幻灯片；合并仅限相同 data-merge-group 且双方都偏短。
- * 仅超出约 1～2 行时优先缩放字号/表格，避免半行裁切与无谓拆页。
+ *
+ * 变更记录（日期 - 问题 - 改法）：
+ * - 2026-07-27 - 页底文字只露一半（overflow:hidden 裁切）- 曾用「实测溢出再剥到续页」上线，易无谓增页，已回退
+ * - 2026-07-27 - 超出约一两行时不想拆页 - softShrinkFit 缩内容字号/表 padding；勿对 body 用 zoom
+ * - 2026-07-27 - 缩太小看不清 + 半行仍在 - 缩放设下限（约九成/≥26px），缩不进则整行剥到续页，禁止半行留页
+ * - 2026-07-27 - 一两行仍误拆页 - 26px+仅缩10%收不回约78px；改：先软缩（字≥24 / pad≥0.70），失败再剥行
  */
 (() => {
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
@@ -10,8 +15,10 @@
   const SPARSE_RATIO = 0.52;
   const MERGE_RATIO = 0.94;
   const CLIP_EPS = 2;
-  // ~1–2 行（含表 padding）；再大仍走拆页，避免整页字被压糊
-  const SOFT_OVERFLOW_MAX = 140;
+  // 2026-07-27 - 字号下限 24px（横版大页仍可读）；padding 可比字号多压一点，优先收一两行
+  const MIN_SOFT_FACTOR = 0.88;
+  const MIN_PAD_FACTOR = 0.70;
+  const MIN_FONT_PX = 24;
 
   function bodyEl(slide) {
     return (
@@ -42,6 +49,24 @@
     return overflowPx(body) > CLIP_EPS;
   }
 
+  /** 任一行底边明显越过内容区底 → 半行裁切（含徽章加高后的真实行） */
+  function hasRowPastBottom(body) {
+    if (!body) return false;
+    const box = body.getBoundingClientRect();
+    // 容差：亚像素/边框不要误判，避免一页剥成一行
+    const limit = box.bottom + 4;
+    const rows = body.querySelectorAll("tbody tr");
+    for (const row of rows) {
+      if (row.getBoundingClientRect().bottom > limit) return true;
+    }
+    return false;
+  }
+
+  function needsFit(body) {
+    // 以 scrollHeight 为准；行底 getBoundingClientRect 易因亚像素/边框误判导致一页剥碎
+    return isClipped(body);
+  }
+
   function itemHeight(el) {
     const style = window.getComputedStyle(el);
     const mt = parseFloat(style.marginTop) || 0;
@@ -49,18 +74,24 @@
     return Math.ceil(el.getBoundingClientRect().height + mt + mb);
   }
 
+  function clampFont(px, factor) {
+    return Math.max(MIN_FONT_PX, px * factor);
+  }
+
   /**
    * 轻微溢出：只缩小内容字号/表格 padding（不动容器 max-height）。
-   * 注意：不能对 body 用 zoom——会连同 max-height 一起缩放，溢出比例不变。
+   * 2026-07-27 - 差一两行不拆页 - 逐步缩字号/padding，但受 MIN_SOFT_FACTOR / MIN_FONT_PX 约束
+   * 2026-07-27 - 试过 body.style.zoom - 会连同 max-height 缩放，已弃用
+   * 缩到下限仍合不进 → 返回 shrink-failed（由 peel 整行下移，不再继续压字）
    */
   function softShrinkFit(body) {
-    const over = overflowPx(body);
-    if (over <= CLIP_EPS) return { fitted: false, reason: "ok" };
-    if (over > SOFT_OVERFLOW_MAX) return { fitted: false, reason: "too-tall" };
+    if (!needsFit(body)) return { fitted: false, reason: "ok" };
 
     const cells = Array.from(body.querySelectorAll("th, td"));
     const textNodes = Array.from(
-      body.querySelectorAll("p, li, h3, .block-title, .pack-item, .tip-card, .analysis-block")
+      body.querySelectorAll(
+        "p, li, h3, .block-title, .pack-item, .tip-card, .analysis-block, .badge, .type-badge"
+      )
     );
     const cellOrig = cells.map((el) => {
       const cs = window.getComputedStyle(el);
@@ -85,30 +116,34 @@
     }));
     const bodyFs = parseFloat(window.getComputedStyle(body).fontSize) || 0;
 
-    for (let step = 1; step <= 12; step += 1) {
-      const factor = Math.max(0.72, 1 - step * 0.025);
-      if (bodyFs > 0) body.style.fontSize = `${(bodyFs * factor).toFixed(2)}px`;
+    // 字号步进慢、padding 步进快：一两行优先靠行距收，字号尽量留大
+    for (let step = 1; step <= 10; step += 1) {
+      const fontFactor = Math.max(MIN_SOFT_FACTOR, 1 - step * 0.012);
+      const padFactor = Math.max(MIN_PAD_FACTOR, 1 - step * 0.03);
+      if (bodyFs > 0) body.style.fontSize = `${clampFont(bodyFs, fontFactor).toFixed(2)}px`;
       tableOrig.forEach((o) => {
-        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
       });
       cellOrig.forEach((o) => {
-        o.el.style.padding = `${(o.pt * factor).toFixed(1)}px ${(o.pr * factor).toFixed(1)}px ${(o.pb * factor).toFixed(1)}px ${(o.pl * factor).toFixed(1)}px`;
-        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+        o.el.style.padding = `${(o.pt * padFactor).toFixed(1)}px ${(o.pr * padFactor).toFixed(1)}px ${(o.pb * padFactor).toFixed(1)}px ${(o.pl * padFactor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
         if (o.lh && o.lh !== "normal") {
           const lh = parseFloat(o.lh);
           if (Number.isFinite(lh) && lh > 4) {
-            o.el.style.lineHeight = `${(lh * factor).toFixed(1)}px`;
+            o.el.style.lineHeight = `${Math.max(MIN_FONT_PX + 4, lh * fontFactor).toFixed(1)}px`;
           }
         }
       });
       textOrig.forEach((o) => {
-        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
       });
-      if (!isClipped(body)) {
-        return { fitted: true, step, factor };
+      if (!needsFit(body)) {
+        return { fitted: true, step, fontFactor, padFactor };
       }
+      if (fontFactor <= MIN_SOFT_FACTOR + 0.001 && padFactor <= MIN_PAD_FACTOR + 0.001) break;
     }
 
+    // 缩到下限仍溢出：恢复原尺寸，交给剥行（避免糊字）
     body.style.fontSize = "";
     tableOrig.forEach((o) => {
       o.el.style.fontSize = "";
@@ -126,15 +161,138 @@
 
   function fitSoftOverflows() {
     let fitted = 0;
-    let skippedTall = 0;
+    let shrinkFailed = 0;
     document
       .querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
       .forEach((body) => {
         const r = softShrinkFit(body);
         if (r.fitted) fitted += 1;
-        else if (r.reason === "too-tall") skippedTall += 1;
+        else if (r.reason === "shrink-failed") shrinkFailed += 1;
       });
-    return { fitted, skippedTall };
+    return { fitted, shrinkFailed };
+  }
+
+  function stripPageSuffix(title) {
+    return String(title || "").replace(/\s*\(\d+\/\d+\)\s*$/, "").trim();
+  }
+
+  /**
+   * 2026-07-27 - 软缩到下限仍裁半行 - 整行剥到续页；一次剥到本页合下为止，禁止半行、避免一页一行
+   */
+  function peelOverflow(slide) {
+    const body = bodyEl(slide);
+    if (!body || !needsFit(body)) return 0;
+
+    const table = body.querySelector("table");
+    const tbody = table && table.tBodies[0];
+    if (tbody && tbody.rows.length >= 2) {
+      const movedRows = [];
+      // 从末行向前剥，直到本页不再裁切；至少留 1 行
+      while (needsFit(body) && tbody.rows.length >= 2) {
+        movedRows.unshift(tbody.rows[tbody.rows.length - 1]);
+        // detach; will attach to续页
+        movedRows[0].remove();
+      }
+      if (!movedRows.length) return 0;
+
+      const blank = slide.cloneNode(true);
+      const blankBody = bodyEl(blank);
+      if (!blankBody) {
+        // 回滚
+        movedRows.forEach((r) => tbody.appendChild(r));
+        return 0;
+      }
+      blankBody.innerHTML = "";
+      blank.querySelector(".analysis-time-pill")?.remove();
+      blank.setAttribute("data-pack", "1");
+      if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
+      const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
+      const title = blank.querySelector(".slide-title");
+      if (title) title.textContent = base ? `${base}（续）` : "（续）";
+
+      const wrap = document.createElement("div");
+      wrap.className = "pack-item ranking-unit";
+      const cont = document.createElement("div");
+      cont.className = "block-title";
+      cont.textContent = "（续）";
+      wrap.appendChild(cont);
+      const t = document.createElement("table");
+      t.className = table.className;
+      if (table.tHead) t.appendChild(table.tHead.cloneNode(true));
+      const tb = document.createElement("tbody");
+      movedRows.forEach((r) => tb.appendChild(r));
+      t.appendChild(tb);
+      wrap.appendChild(t);
+      blankBody.appendChild(wrap);
+      slide.after(blank);
+      return 1;
+    }
+
+    ensurePackItems(body);
+    const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
+    if (items.length <= 1) return 0;
+    const last = items[items.length - 1];
+    const blank = slide.cloneNode(true);
+    const blankBody = bodyEl(blank);
+    if (!blankBody) return 0;
+    blankBody.innerHTML = "";
+    blank.querySelector(".analysis-time-pill")?.remove();
+    blank.setAttribute("data-pack", "1");
+    if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
+    const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
+    const title = blank.querySelector(".slide-title");
+    if (title) title.textContent = base ? `${base}（续）` : "（续）";
+    slide.after(blank);
+    blankBody.appendChild(last);
+    return 1;
+  }
+
+  function fixRemainingOverflow() {
+    let total = 0;
+    let round = 0;
+    while (round++ < 24) {
+      let moved = 0;
+      Array.from(document.querySelectorAll(".slide")).forEach((slide) => {
+        const body = bodyEl(slide);
+        if (!body || !needsFit(body)) return;
+        moved += peelOverflow(slide);
+      });
+      total += moved;
+      if (!moved) break;
+    }
+    return total;
+  }
+
+  function renumberPackedTitles() {
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    let i = 0;
+    while (i < slides.length) {
+      const raw = slides[i].querySelector(".slide-title")?.textContent || "";
+      const base = stripPageSuffix(raw).replace(/（续）\s*$/, "").trim();
+      if (!base) {
+        i += 1;
+        continue;
+      }
+      let j = i + 1;
+      while (j < slides.length) {
+        const other = stripPageSuffix(slides[j].querySelector(".slide-title")?.textContent || "")
+          .replace(/（续）\s*$/, "")
+          .trim();
+        if (other !== base) break;
+        j += 1;
+      }
+      const chunk = slides.slice(i, j);
+      if (chunk.length >= 2) {
+        chunk.forEach((s, idx) => {
+          const title = s.querySelector(".slide-title");
+          if (title) title.textContent = `${base} (${idx + 1}/${chunk.length})`;
+        });
+      } else {
+        const title = chunk[0].querySelector(".slide-title");
+        if (title) title.textContent = base;
+      }
+      i = j;
+    }
   }
 
   function ensurePackItems(body) {
@@ -261,10 +419,6 @@
     });
   }
 
-  function stripPageSuffix(title) {
-    return String(title || "").replace(/\s*\(\d+\/\d+\)\s*$/, "").trim();
-  }
-
   function packSlide(slide) {
     if (!slide.hasAttribute("data-pack")) return;
     const body = bodyEl(slide);
@@ -273,7 +427,7 @@
     ensurePackItems(body);
     explodeOversizedTables(body, maxH);
 
-    if (body.scrollHeight <= body.clientHeight + 6) return;
+    if (!needsFit(body)) return;
 
     const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
     if (items.length <= 1) return;
@@ -470,10 +624,18 @@
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
     (body) => rewrapTipCards(body)
   );
+  // 先软缩（有下限）；仍裁切则整行剥续页
   const softFit = fitSoftOverflows();
+  const peeled = fixRemainingOverflow();
+  renumberPackedTitles();
+  const stillBad = Array.from(
+    document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
+  ).filter((body) => needsFit(body)).length;
   return {
     slides: document.querySelectorAll(".slide").length,
     softFitted: softFit.fitted,
-    softSkippedTall: softFit.skippedTall,
+    softShrinkFailed: softFit.shrinkFailed,
+    peeled,
+    stillClipped: stillBad,
   };
 })();

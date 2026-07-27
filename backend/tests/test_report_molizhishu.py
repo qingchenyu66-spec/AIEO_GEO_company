@@ -364,19 +364,19 @@ def test_deck_pack_splits_overflow_and_merges_sparse() -> None:
 
 
 def test_deck_pack_soft_shrink_fits_one_two_lines() -> None:
-    """轻微溢出（约一两行）应缩放字号/表格收回，而不是拆页。"""
+    """轻微溢出（约一两行）应在缩放下限内收回，不拆页。"""
     from playwright.sync_api import sync_playwright
 
     from app.services.report_molizhishu_pdf_service import _pack_js
 
-    # 无 data-pack：不走拆页，只验证 softShrink；max-height 340，表高约 400
+    # 溢出约 40px（一两行），软缩可收回；字号不低于 24px；不拆页
     html = """<!DOCTYPE html><html><head><style>
     .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
-    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:340px;overflow:hidden;font-size:28px}
+    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:360px;overflow:hidden;font-size:28px}
     .pack-item{margin:0}
     .slide-title{position:absolute;left:140px;top:118px}
     table{width:100%;border-collapse:collapse;font-size:28px}
-    td,th{padding:14px 12px;border:1px solid #ccc}
+    td,th{padding:12px 10px;border:1px solid #ccc}
     </style></head><body><main class="deck">
     <section class="slide" data-merge-group="domain">
       <h2 class="slide-title">映射表</h2>
@@ -409,21 +409,77 @@ def test_deck_pack_soft_shrink_fits_one_two_lines() -> None:
             after = page.evaluate(
                 """() => {
                   const b = document.querySelector('.pack-body');
+                  const fonts = [...document.querySelectorAll('td')].map(
+                    (el) => parseFloat(getComputedStyle(el).fontSize) || 0
+                  );
                   return {
-                    over: b.scrollHeight - b.clientHeight,
+                    over: b ? b.scrollHeight - b.clientHeight : 0,
                     slides: document.querySelectorAll('.slide').length,
-                    fontSize: b.style.fontSize || '',
+                    minFont: fonts.length ? Math.min(...fonts) : 0,
                   };
                 }"""
             )
         finally:
             browser.close()
 
-    assert before > 2, before
-    assert before <= 140, before
-    assert result.get("softFitted", 0) >= 1, (result, before, after)
-    assert after["slides"] == 1, after
     assert after["over"] <= 2, after
+    assert after["slides"] == 1, after
+    assert after["minFont"] >= 24 - 0.5, after
+    assert result.get("softFitted", 0) >= 1, result
+    assert result.get("stillClipped", 0) == 0, result
+
+
+def test_deck_pack_peel_when_shrink_floor_not_enough() -> None:
+    """缩到下限仍放不下时，整行剥到续页，且不出现半行越界。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    rows = "".join(
+        f"<tr><td>品牌{i}</td><td><span style='display:inline-block;padding:4px 10px;background:#fa0'>最差</span></td>"
+        f"<td>{i}</td><td>07-0{(i % 9) + 1}</td></tr>"
+        for i in range(1, 12)
+    )
+    html = f"""<!DOCTYPE html><html><head><style>
+    .slide{{width:2520px;height:1417px;position:relative;overflow:hidden}}
+    .pack-body{{position:absolute;left:132px;top:210px;width:2260px;max-height:420px;overflow:hidden;font-size:30px}}
+    .pack-item{{margin:0}}
+    .slide-title{{position:absolute;left:140px;top:118px}}
+    table{{width:100%;border-collapse:collapse;font-size:30px}}
+    td,th{{padding:16px 12px;border:1px solid #ccc}}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="ranking">
+      <h2 class="slide-title">品牌排名</h2>
+      <div class="pack-body"><div class="pack-item">
+        <table><thead><tr><th>品牌</th><th>标记</th><th>值</th><th>日</th></tr></thead>
+        <tbody>{rows}</tbody></table>
+      </div></div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(_pack_js())
+            info = page.evaluate(
+                """() => [...document.querySelectorAll('.slide')].map((s) => {
+                  const b = s.querySelector('.pack-body');
+                  return {
+                    rows: b.querySelectorAll('tbody tr').length,
+                    over: b.scrollHeight - b.clientHeight,
+                  };
+                })"""
+            )
+        finally:
+            browser.close()
+
+    assert result.get("stillClipped", 0) == 0, result
+    assert all(page["over"] <= 2 for page in info), info
+    assert all(page["rows"] >= 1 for page in info), info
+    # 不应剥成「一页一行」
+    assert all(page["rows"] >= 2 or len(info) == 1 for page in info), info
 
 
 def test_deck_pack_domain_explode_avoids_one_row_tail() -> None:
