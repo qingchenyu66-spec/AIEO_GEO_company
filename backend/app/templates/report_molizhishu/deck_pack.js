@@ -1,15 +1,13 @@
 /**
  * 横版诊断 PDF：量高后拆页，同类短页再合并。
  * 仅处理 [data-pack] 幻灯片；合并仅限相同 data-merge-group 且双方都偏短。
- * 末尾强制用 scrollHeight 校验：仍溢出则逐块剥到续页，杜绝 overflow:hidden 裁半行。
  */
 (() => {
-  // 必须 ≤ .light-content/.dark-content 的 max-height(1040)，并留足半行以上安全距
-  const BODY_MAX = 980;
-  const ANALYSIS_BODY_MAX = 1000;
+  // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
+  const BODY_MAX = 1000;
+  const ANALYSIS_BODY_MAX = 1020;
   const SPARSE_RATIO = 0.52;
-  const MERGE_RATIO = 0.90;
-  const CLIP_EPS = 2;
+  const MERGE_RATIO = 0.94;
 
   function bodyEl(slide) {
     return (
@@ -26,15 +24,9 @@
     // 用 CSS max-height，勿用 clientHeight：短页时 clientHeight≈内容高，会误伤合并
     const parsed = parseFloat(window.getComputedStyle(body).maxHeight);
     if (Number.isFinite(parsed) && parsed > 80) {
-      // 预留约一行+间距，避免估算偏小导致底行只露一半
-      return Math.min(cssMax, Math.floor(parsed) - 40);
+      return Math.min(cssMax, Math.floor(parsed) - 12);
     }
     return cssMax;
-  }
-
-  function isClipped(body) {
-    if (!body) return false;
-    return body.scrollHeight > body.clientHeight + CLIP_EPS;
   }
 
   function itemHeight(el) {
@@ -180,7 +172,7 @@
     ensurePackItems(body);
     explodeOversizedTables(body, maxH);
 
-    if (body.scrollHeight <= body.clientHeight + CLIP_EPS) return;
+    if (body.scrollHeight <= body.clientHeight + 6) return;
 
     const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
     if (items.length <= 1) return;
@@ -361,7 +353,7 @@
         }
         b.remove();
 
-        if (bodyA.scrollHeight > bodyA.clientHeight + CLIP_EPS) {
+        if (bodyA.scrollHeight > bodyA.clientHeight + 6) {
           a.setAttribute("data-pack", "1");
           packSlide(a);
         }
@@ -372,108 +364,12 @@
     }
   }
 
-  /** 实测溢出则把末块剥到续页；单块大表再炸行。彻底消灭半行裁切。 */
-  function peelOverflow(slide) {
-    let moved = 0;
-    let guard = 0;
-    while (guard++ < 40) {
-      const body = bodyEl(slide);
-      if (!body || !isClipped(body)) break;
-      ensurePackItems(body);
-      let items = Array.from(body.querySelectorAll(":scope > .pack-item"));
-      if (items.length <= 1) {
-        explodeOversizedTables(body, Math.floor(slideMax(slide) * 0.92));
-        items = Array.from(body.querySelectorAll(":scope > .pack-item"));
-        if (items.length <= 1) break;
-      }
-      const last = items[items.length - 1];
-      const blank = slide.cloneNode(true);
-      const blankBody = bodyEl(blank);
-      if (!blankBody) break;
-      blankBody.innerHTML = "";
-      blank.querySelector(".analysis-time-pill")?.remove();
-      blank.setAttribute("data-pack", "1");
-      if (slide.dataset.mergeGroup) {
-        blank.dataset.mergeGroup = slide.dataset.mergeGroup;
-      }
-      const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
-      const title = blank.querySelector(".slide-title");
-      if (title) title.textContent = base ? `${base}（续）` : "（续）";
-      slide.after(blank);
-      blankBody.appendChild(last);
-      moved += 1;
-      // 续页若仍溢出，下一轮会处理 blank（外层全量扫描）
-      if (!isClipped(body)) break;
-    }
-    return moved;
-  }
-
-  function fixAllOverflow() {
-    let total = 0;
-    let round = 0;
-    while (round++ < 20) {
-      let moved = 0;
-      const slides = Array.from(document.querySelectorAll(".slide"));
-      for (const slide of slides) {
-        const body = bodyEl(slide);
-        if (!body || !isClipped(body)) continue;
-        moved += peelOverflow(slide);
-      }
-      total += moved;
-      if (!moved) break;
-    }
-    return total;
-  }
-
-  /** 同标题连续页重标 (i/n)，去掉临时「（续）」；按标题正文分组，勿按 merge-group 整段通编。 */
-  function renumberPackedTitles() {
-    const slides = Array.from(document.querySelectorAll(".slide"));
-    let i = 0;
-    while (i < slides.length) {
-      const raw = slides[i].querySelector(".slide-title")?.textContent || "";
-      const base = stripPageSuffix(raw).replace(/（续）\s*$/, "").trim();
-      if (!base) {
-        i += 1;
-        continue;
-      }
-      let j = i + 1;
-      while (j < slides.length) {
-        const other = stripPageSuffix(
-          slides[j].querySelector(".slide-title")?.textContent || ""
-        )
-          .replace(/（续）\s*$/, "")
-          .trim();
-        if (other !== base) break;
-        j += 1;
-      }
-      const chunk = slides.slice(i, j);
-      if (chunk.length >= 2) {
-        chunk.forEach((s, idx) => {
-          const title = s.querySelector(".slide-title");
-          if (title) title.textContent = `${base} (${idx + 1}/${chunk.length})`;
-        });
-      } else {
-        const title = chunk[0].querySelector(".slide-title");
-        if (title) title.textContent = base;
-      }
-      i = j;
-    }
-  }
-
   Array.from(document.querySelectorAll(".slide[data-pack]")).forEach((slide) => packSlide(slide));
   mergeSparse();
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
     (body) => rewrapTipCards(body)
   );
-  // tip 重排后高度会变，必须再验溢；合并也可能留下裁切
-  const peeled = fixAllOverflow();
-  renumberPackedTitles();
-  const stillClipped = Array.from(
-    document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
-  ).filter((body) => isClipped(body)).length;
   return {
     slides: document.querySelectorAll(".slide").length,
-    peeled,
-    stillClipped,
   };
 })();
