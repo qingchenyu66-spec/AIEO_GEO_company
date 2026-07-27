@@ -285,17 +285,6 @@
   font-size: 12px;
 }
 
-.report-score-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(16, 185, 129, .12);
-  color: #047857;
-  font-weight: 700;
-}
-
 .report-preview-body {
   display: grid;
   gap: 16px;

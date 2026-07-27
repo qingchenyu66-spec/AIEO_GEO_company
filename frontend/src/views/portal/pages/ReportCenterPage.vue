@@ -184,7 +184,6 @@ function diagnosisTitleText(title: string | null | undefined) {
           >
             <div class="report-card-top">
               <b>{{ displayReportTitle(item) }}</b>
-              <span v-if="item.health_score != null" class="report-score-chip">{{ item.health_score }} 分</span>
             </div>
             <div class="report-card-meta">
               <span class="report-badge type">{{ item.report_type_label || item.report_type }}</span>
