@@ -198,6 +198,15 @@
   overscroll-behavior: contain;
 }
 
+/* HTML 预览：iframe 吃掉剩余高度，底栏贴底；勿让 flex 留白 */
+.report-preview-panel > .report-preview-body.report-html-preview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
 .report-list-head h3,
 .report-preview-head h3 {
   margin: 0;
@@ -598,6 +607,7 @@
 }
 
 .report-html-preview .report-preview-actions {
+  flex: 0 0 auto;
   padding: 12px 16px;
   border-top: 1px solid #e2e8f0;
   background: #fafcff;
@@ -606,21 +616,15 @@
 .report-html-frame {
   display: block;
   width: 100%;
-  flex: 1 1 auto;
+  /* iframe 对 flex:auto 常不长高；用 0 基准 + grow 吃满剩余高度 */
+  flex: 1 1 0%;
   min-height: 0;
+  height: 100%;
   border: 0;
   background: #f5f7fb;
 }
 
-/* 客户端：与平台同一套面板高度，仅略放大可视区（顶栏更矮） */
+/* 客户端顶栏较矮，略放大可视高度 */
 .report-page.is-customer-reports .report-layout {
   --report-panels-height: calc(100dvh - 200px);
-}
-
-.report-page.is-customer-reports .report-preview-panel > .report-preview-body.report-html-preview {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
 }
