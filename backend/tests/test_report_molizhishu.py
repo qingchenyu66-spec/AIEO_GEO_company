@@ -363,6 +363,69 @@ def test_deck_pack_splits_overflow_and_merges_sparse() -> None:
     assert result["slides"] >= 3
 
 
+def test_deck_pack_soft_shrink_fits_one_two_lines() -> None:
+    """轻微溢出（约一两行）应缩放字号/表格收回，而不是拆页。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    # 无 data-pack：不走拆页，只验证 softShrink；max-height 340，表高约 400
+    html = """<!DOCTYPE html><html><head><style>
+    .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
+    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:340px;overflow:hidden;font-size:28px}
+    .pack-item{margin:0}
+    .slide-title{position:absolute;left:140px;top:118px}
+    table{width:100%;border-collapse:collapse;font-size:28px}
+    td,th{padding:14px 12px;border:1px solid #ccc}
+    </style></head><body><main class="deck">
+    <section class="slide" data-merge-group="domain">
+      <h2 class="slide-title">映射表</h2>
+      <div class="pack-body"><div class="pack-item">
+        <table><thead><tr><th>域名</th><th>网站</th></tr></thead>
+        <tbody>
+          <tr><td>a.com</td><td>A</td></tr>
+          <tr><td>b.com</td><td>B</td></tr>
+          <tr><td>c.com</td><td>C</td></tr>
+          <tr><td>d.com</td><td>D</td></tr>
+          <tr><td>e.com</td><td>E</td></tr>
+          <tr><td>f.com</td><td>F</td></tr>
+        </tbody></table>
+      </div></div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            before = page.evaluate(
+                """() => {
+                  const b = document.querySelector('.pack-body');
+                  return b.scrollHeight - b.clientHeight;
+                }"""
+            )
+            result = page.evaluate(_pack_js())
+            after = page.evaluate(
+                """() => {
+                  const b = document.querySelector('.pack-body');
+                  return {
+                    over: b.scrollHeight - b.clientHeight,
+                    slides: document.querySelectorAll('.slide').length,
+                    fontSize: b.style.fontSize || '',
+                  };
+                }"""
+            )
+        finally:
+            browser.close()
+
+    assert before > 2, before
+    assert before <= 140, before
+    assert result.get("softFitted", 0) >= 1, (result, before, after)
+    assert after["slides"] == 1, after
+    assert after["over"] <= 2, after
+
+
 def test_deck_pack_domain_explode_avoids_one_row_tail() -> None:
     """B：超高映射表拆页后，不应留下仅 1 行的（续）页。"""
     from playwright.sync_api import sync_playwright

@@ -1,6 +1,7 @@
 /**
  * 横版诊断 PDF：量高后拆页，同类短页再合并。
  * 仅处理 [data-pack] 幻灯片；合并仅限相同 data-merge-group 且双方都偏短。
+ * 仅超出约 1～2 行时优先缩放字号/表格，避免半行裁切与无谓拆页。
  */
 (() => {
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
@@ -8,6 +9,9 @@
   const ANALYSIS_BODY_MAX = 1020;
   const SPARSE_RATIO = 0.52;
   const MERGE_RATIO = 0.94;
+  const CLIP_EPS = 2;
+  // ~1–2 行（含表 padding）；再大仍走拆页，避免整页字被压糊
+  const SOFT_OVERFLOW_MAX = 140;
 
   function bodyEl(slide) {
     return (
@@ -29,11 +33,108 @@
     return cssMax;
   }
 
+  function overflowPx(body) {
+    if (!body) return 0;
+    return Math.max(0, body.scrollHeight - body.clientHeight);
+  }
+
+  function isClipped(body) {
+    return overflowPx(body) > CLIP_EPS;
+  }
+
   function itemHeight(el) {
     const style = window.getComputedStyle(el);
     const mt = parseFloat(style.marginTop) || 0;
     const mb = parseFloat(style.marginBottom) || 0;
     return Math.ceil(el.getBoundingClientRect().height + mt + mb);
+  }
+
+  /**
+   * 轻微溢出：只缩小内容字号/表格 padding（不动容器 max-height）。
+   * 注意：不能对 body 用 zoom——会连同 max-height 一起缩放，溢出比例不变。
+   */
+  function softShrinkFit(body) {
+    const over = overflowPx(body);
+    if (over <= CLIP_EPS) return { fitted: false, reason: "ok" };
+    if (over > SOFT_OVERFLOW_MAX) return { fitted: false, reason: "too-tall" };
+
+    const cells = Array.from(body.querySelectorAll("th, td"));
+    const textNodes = Array.from(
+      body.querySelectorAll("p, li, h3, .block-title, .pack-item, .tip-card, .analysis-block")
+    );
+    const cellOrig = cells.map((el) => {
+      const cs = window.getComputedStyle(el);
+      return {
+        el,
+        pt: parseFloat(cs.paddingTop) || 0,
+        pr: parseFloat(cs.paddingRight) || 0,
+        pb: parseFloat(cs.paddingBottom) || 0,
+        pl: parseFloat(cs.paddingLeft) || 0,
+        fs: parseFloat(cs.fontSize) || 0,
+        lh: cs.lineHeight,
+      };
+    });
+    const textOrig = textNodes.map((el) => {
+      const cs = window.getComputedStyle(el);
+      return { el, fs: parseFloat(cs.fontSize) || 0 };
+    });
+    const tables = Array.from(body.querySelectorAll("table"));
+    const tableOrig = tables.map((el) => ({
+      el,
+      fs: parseFloat(window.getComputedStyle(el).fontSize) || 0,
+    }));
+    const bodyFs = parseFloat(window.getComputedStyle(body).fontSize) || 0;
+
+    for (let step = 1; step <= 12; step += 1) {
+      const factor = Math.max(0.72, 1 - step * 0.025);
+      if (bodyFs > 0) body.style.fontSize = `${(bodyFs * factor).toFixed(2)}px`;
+      tableOrig.forEach((o) => {
+        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+      });
+      cellOrig.forEach((o) => {
+        o.el.style.padding = `${(o.pt * factor).toFixed(1)}px ${(o.pr * factor).toFixed(1)}px ${(o.pb * factor).toFixed(1)}px ${(o.pl * factor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+        if (o.lh && o.lh !== "normal") {
+          const lh = parseFloat(o.lh);
+          if (Number.isFinite(lh) && lh > 4) {
+            o.el.style.lineHeight = `${(lh * factor).toFixed(1)}px`;
+          }
+        }
+      });
+      textOrig.forEach((o) => {
+        if (o.fs > 0) o.el.style.fontSize = `${(o.fs * factor).toFixed(1)}px`;
+      });
+      if (!isClipped(body)) {
+        return { fitted: true, step, factor };
+      }
+    }
+
+    body.style.fontSize = "";
+    tableOrig.forEach((o) => {
+      o.el.style.fontSize = "";
+    });
+    cellOrig.forEach((o) => {
+      o.el.style.padding = "";
+      o.el.style.fontSize = "";
+      o.el.style.lineHeight = "";
+    });
+    textOrig.forEach((o) => {
+      o.el.style.fontSize = "";
+    });
+    return { fitted: false, reason: "shrink-failed" };
+  }
+
+  function fitSoftOverflows() {
+    let fitted = 0;
+    let skippedTall = 0;
+    document
+      .querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
+      .forEach((body) => {
+        const r = softShrinkFit(body);
+        if (r.fitted) fitted += 1;
+        else if (r.reason === "too-tall") skippedTall += 1;
+      });
+    return { fitted, skippedTall };
   }
 
   function ensurePackItems(body) {
@@ -369,7 +470,10 @@
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
     (body) => rewrapTipCards(body)
   );
+  const softFit = fitSoftOverflows();
   return {
     slides: document.querySelectorAll(".slide").length,
+    softFitted: softFit.fitted,
+    softSkippedTall: softFit.skippedTall,
   };
 })();
