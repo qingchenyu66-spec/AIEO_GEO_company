@@ -1,6 +1,7 @@
 from datetime import date, datetime, time
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,7 @@ from app.services.monitor_service import (
     submit_monitor_task,
     sync_monitor_task,
 )
+from app.services.molizhishu_callback_service import ingest_molizhishu_callback, verify_callback_token
 from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
@@ -62,6 +64,43 @@ from app.services.schedule_context import schedule_plan_summary, schedule_runs_f
 from app.services.schedule_service import preview_scheduled_tasks, run_due_scheduled_tasks
 
 router = APIRouter(prefix="/monitor")
+
+
+@router.post("/molizhishu/callback", response_model=ApiResponse[dict])
+async def molizhishu_callback(
+    request: Request,
+    token: str | None = Query(default=None, description="回调鉴权 token"),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """模力指数 Webhook：无 JWT，靠 query token；幂等写入子任务结果。"""
+    if not verify_callback_token(token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="回调鉴权失败")
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="回调体不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="回调体必须是 JSON 对象")
+
+    task_id = str(payload.get("taskId") or "").strip()
+    from app.core.redis_client import redis_lock
+
+    # 与手动/Celery sync 共用锁，避免并发写花子任务
+    lock_key = f"sync-task:{task_id}" if task_id else "sync-task:unknown-callback"
+    with redis_lock(lock_key, ttl_seconds=600) as acquired:
+        if not acquired:
+            # 返回 409 会触发模力退避重试，合理
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="任务正在同步中，请稍后重试")
+        try:
+            result = ingest_molizhishu_callback(db, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"回调处理失败：{exc}",
+            ) from exc
+    return ApiResponse(data=result)
 
 
 def _keyword_groups_for_tenant(db: Session, tenant_id: int | None) -> list[dict]:

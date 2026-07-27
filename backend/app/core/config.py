@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     molizhishu_base_url: str = "https://business-api.molizhishu.com/api/business/monitor"
     molizhishu_token: str = ""
     molizhishu_callback_url: str = ""
+    # 回调鉴权：优先用本字段；为空则解析 molizhishu_callback_url 的 ?token=
+    molizhishu_callback_token: str = ""
     molizhishu_timeout_seconds: float = 30.0
 
     deepseek_api_key: str = ""

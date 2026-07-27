@@ -15,6 +15,7 @@ _EXEMPT_PREFIXES = (
     "/api/v1/auth/select-identity",
     "/health",
     "/api/v1/health",
+    "/api/v1/monitor/molizhishu/callback",
 )
 
 
