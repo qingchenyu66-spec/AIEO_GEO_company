@@ -137,7 +137,9 @@
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  /* 顶栏 + hero 约占位；左右面板同高，内容各自内部滚动 */
+  --report-panels-height: calc(100dvh - 260px);
 }
 
 .report-list-panel,
@@ -150,17 +152,19 @@
   overflow: hidden;
   position: sticky;
   top: 12px;
-  max-height: calc(100dvh - 96px);
+  height: var(--report-panels-height);
+  max-height: var(--report-panels-height);
+  min-height: 360px;
+  min-width: 0;
 }
 
 .report-list-panel {
-  align-self: start;
+  align-self: stretch;
 }
 
 .report-preview-panel {
   width: 100%;
-  min-width: 0;
-  align-self: start;
+  align-self: stretch;
 }
 
 .report-list-head,
@@ -551,7 +555,9 @@
   .report-list-panel,
   .report-preview-panel {
     position: static;
+    height: auto;
     max-height: none;
+    min-height: 0;
   }
 
   .report-list-body,
@@ -601,31 +607,20 @@
   display: block;
   width: 100%;
   flex: 1 1 auto;
-  min-height: 520px;
+  min-height: 0;
   border: 0;
   background: #f5f7fb;
 }
 
-/* 客户端：预览区加高，iframe 内滚动阅读完整报告 */
-.report-page.is-customer-reports .report-preview-panel {
-  max-height: calc(100dvh - 40px);
-  min-height: min(920px, calc(100dvh - 88px));
-}
-
-.report-page.is-customer-reports .report-list-panel {
-  max-height: min(760px, calc(100dvh - 100px));
+/* 客户端：与平台同一套面板高度，仅略放大可视区（顶栏更矮） */
+.report-page.is-customer-reports .report-layout {
+  --report-panels-height: calc(100dvh - 200px);
 }
 
 .report-page.is-customer-reports .report-preview-panel > .report-preview-body.report-html-preview {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: min(820px, calc(100dvh - 200px));
+  min-height: 0;
   overflow: hidden;
-}
-
-.report-page.is-customer-reports .report-html-frame {
-  min-height: 720px;
-  height: calc(100dvh - 248px);
-  max-height: none;
 }
