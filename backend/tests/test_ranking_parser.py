@@ -787,3 +787,44 @@ def test_parse_yuanbao_medal_tier_h3_section_local_rank():
     )
     assert matched is True
     assert rank == 4
+
+
+def test_rankings_for_storage_prefers_section_local_over_flat_remote():
+    """方案 B：正文段内第 1 入库，不被模力扁平连号 12 覆盖。"""
+    from app.services.ranking_parser import rankings_for_storage
+
+    answer = """
+## 一、课本全解类
+1. **《教材帮》**
+2. **《教材全解》**
+
+## 三、单元/同步试卷（每周/单元检测）
+1. **万唯大小卷**
+    小卷周测，大卷单元测。
+2. **53全优卷**
+3. **亮点给力大试卷**
+"""
+    remote = [
+        {"name": "《教材帮》", "rank": 1},
+        {"name": "《教材全解》", "rank": 2},
+        {"name": "万唯大小卷", "rank": 12},
+        {"name": "53全优卷", "rank": 13},
+    ]
+    stored = rankings_for_storage(answer, remote)
+    assert stored is not None
+    wanwei = [row for row in stored if "万唯大小卷" in str(row.get("name") or "")]
+    assert len(wanwei) == 1
+    assert wanwei[0]["rank"] == 1
+    assert "单元" in str(wanwei[0].get("category") or "") or "试卷" in str(wanwei[0].get("category") or "")
+
+
+def test_rankings_for_storage_falls_back_to_remote_without_answer():
+    from app.services.ranking_parser import rankings_for_storage
+
+    remote = [
+        {"name": "甲", "rank": 1, "category": "中腰部"},
+        {"name": "乙", "rank": 5, "category": "中腰部"},
+    ]
+    stored = rankings_for_storage("", remote)
+    assert stored is not None
+    assert [row["rank"] for row in stored] == [1, 2]

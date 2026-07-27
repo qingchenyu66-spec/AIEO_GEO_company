@@ -40,7 +40,7 @@ from app.services.monitor_service import (
     subtask_needs_snapshot_backfill,
 )
 from app.core.masking import excerpt_sensitive_text
-from app.services.ranking_parser import parse_answer_rankings
+from app.services.ranking_parser import rankings_for_storage
 from app.services.share_page_fetch_service import fetch_share_page
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
@@ -404,10 +404,8 @@ def apply_snapshot_backfill(
     elif previous_answer:
         subtask.sentiment = None
 
-    parsed = parse_answer_rankings(_subtask_answer_plaintext(subtask))
-    subtask.all_rankings_json = [
-        {"name": entry.get("name"), "rank": entry.get("rank")} for entry in parsed
-    ] if parsed else None
+    # 2026-07-27 - 补录写榜丢掉 category - 入库保留段内序与分类
+    subtask.all_rankings_json = rankings_for_storage(_subtask_answer_plaintext(subtask), None)
     subtask.competitor_rankings_json = None
 
     recompute_subtask_rank_from_answer(db, subtask, task, override_mention_position=mention_position)

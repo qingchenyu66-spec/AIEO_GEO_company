@@ -50,6 +50,7 @@ from app.services.ranking_parser import (
     find_best_brand_rank_scoped,
     normalize_structured_rankings,
     parse_answer_rankings,
+    rankings_for_storage,
 )
 from app.services.tenant_scope import assert_monitor_task_access, ensure_sales_tenant_access, sales_owned_tenant_ids
 from app.services.schedule_context import (
@@ -72,6 +73,13 @@ logger = logging.getLogger(__name__)
 
 def _has_structured_rankings(value: Any) -> bool:
     return bool(normalize_structured_rankings(value or []))
+
+
+def _normalize_subtask_rankings_on_write(subtask: GeoMonitorSubtask) -> None:
+    """upsert/补录后把 all_rankings_json 规范成段内序，避免扁平连号入库。"""
+    normalized = rankings_for_storage(subtask.answer_content, subtask.all_rankings_json)
+    if normalized is not None:
+        subtask.all_rankings_json = normalized
 
 
 def _merge_remote_rank_fields(subtask: GeoMonitorSubtask, item: dict[str, Any]) -> None:
@@ -922,6 +930,8 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
     subtask.sentiment = kept_sentiment
     subtask.raw_result_json = merged_raw
     _merge_remote_rank_fields(subtask, item)
+    # 2026-07-27 - 扁平 allRankings 与段内序冲突 - upsert 后按正文分段规范化入库
+    _normalize_subtask_rankings_on_write(subtask)
     return subtask
 
 
@@ -2607,12 +2617,13 @@ def _brand_term_match_fragments(term: str) -> list[str]:
 
 
 def _brand_appears_in_text(text: str | None, brand_terms: list[str]) -> bool:
+    # 2026-07-27 - 短行「北京」反向命中「北京艾迪亚」- 只认 term/核心片段 ⊆ 正文
     normalized = (text or "").lower()
     if not normalized:
         return False
     for term in brand_terms:
         text_value = term.strip().lower()
-        if text_value and (text_value in normalized or normalized in text_value):
+        if text_value and text_value in normalized:
             return True
         for fragment in _brand_term_match_fragments(term):
             token = fragment.lower()
@@ -2650,6 +2661,10 @@ def _subtask_answer_plaintext(subtask: GeoMonitorSubtask) -> str:
 
 
 def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
+    """榜单项是否命中品牌：只允许品牌词/核心片段 ⊆ 条目名。
+
+    2026-07-27 - 「北京」「北」命中别名「北京艾迪亚」假阳性 - 去掉 name⊆term 反向包含
+    """
     normalized = name.strip().lower()
     if not normalized:
         return False
@@ -2657,11 +2672,11 @@ def _name_matches_brand(name: str, brand_terms: list[str]) -> bool:
         text = term.strip().lower()
         if not text:
             continue
-        if text in normalized or normalized in text:
+        if text in normalized:
             return True
         for fragment in _brand_term_match_fragments(term):
             token = fragment.lower()
-            if _significant_brand_fragment(token) and (token in normalized or normalized in token):
+            if _significant_brand_fragment(token) and token in normalized:
                 return True
     return False
 
@@ -2808,13 +2823,41 @@ def _matched_brand_category(
     return None
 
 
+def _rank_sort_key(rank: int | float) -> float:
+    try:
+        return float(rank)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _pick_frontmost_resolution(
+    candidates: list[BrandRankResolution],
+    *,
+    mentioned: bool,
+) -> BrandRankResolution:
+    """方案 X：自动规则里取名次最靠前（数字最小）的一条。"""
+    numeric = [item for item in candidates if item.rank is not None]
+    if not numeric:
+        return BrandRankResolution(
+            rank=None,
+            mentioned=mentioned,
+            source="none",
+            confidence=0.9 if not mentioned else 0.4,
+        )
+    return min(numeric, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
+
+
 def _resolve_brand_rank_detail(
     subtask: GeoMonitorSubtask,
     monitor_keywords: str | None,
     brand_terms: list[str],
     asset: BrandAsset | None = None,
 ) -> BrandRankResolution:
-    """Resolve brand rank with provenance for matrix display and LLM fallback."""
+    """Resolve brand rank with provenance for matrix display and LLM fallback.
+
+    2026-07-27 - 方案X 全自动规则取最前 - 结构化/点名序/库内位次取 min；人工锁与 LLM 仍优先
+    ponytail: 乐观偏差会抬高 Top3；若改回保守瀑布，收紧候选池即可
+    """
     combined_text = _subtask_brand_text(subtask)
     has_brand_in_text = _brand_appears_in_text(combined_text, brand_terms)
     if prompt_monitor_intent(subtask.prompt) != "ranking":
@@ -2865,10 +2908,10 @@ def _resolve_brand_rank_detail(
         )
 
     monitor_keyword = str(monitor_keywords or "").strip()
-    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
     scope = _ranking_scope_text(monitor_keyword, subtask.prompt)
     answer_text = _subtask_answer_plaintext(subtask)
-    has_parsed_entries = bool(_collect_ranking_entries(subtask))
+    candidates: list[BrandRankResolution] = []
+    mentioned = has_brand_in_text
 
     rank_from_list, in_ranking_list, list_category = _find_brand_in_rankings(
         subtask,
@@ -2876,80 +2919,56 @@ def _resolve_brand_rank_detail(
         asset,
         monitor_keywords=monitor_keyword,
     )
-    if rank_from_list is not None:
+    # 2026-07-27 - 正文无露出却 structured 虚抬名次 - 榜命中须同时正文有品牌
+    if has_brand_in_text and rank_from_list is not None:
         category = list_category or _matched_brand_category(subtask, brand_terms, rank_from_list)
         basis = "table" if "|" in answer_text and "企业" in answer_text else "section"
-        return BrandRankResolution(
-            rank=rank_from_list,
-            mentioned=True,
-            source="structured",
-            confidence=0.95,
-            category=category,
-            rank_basis=basis,
+        candidates.append(
+            BrandRankResolution(
+                rank=rank_from_list,
+                mentioned=True,
+                source="structured",
+                confidence=0.95,
+                category=category,
+                rank_basis=basis,
+            )
         )
-    if in_ranking_list:
-        return BrandRankResolution(
-            rank=None,
-            mentioned=True,
-            source="structured",
-            confidence=0.5,
-        )
+        mentioned = True
+    elif has_brand_in_text and in_ranking_list:
+        mentioned = True
 
     if has_brand_in_text:
         appearance_rank = _appearance_order_rank(
             answer_text,
             brand_terms,
             scope,
-            allow_global=not has_parsed_entries,
+            allow_global=True,
         )
         if appearance_rank is not None:
-            # 点名序只采信 Top3；更深位次易被字段行/补充段虚高，宁记「提及无位次」
-            if int(appearance_rank) <= 3:
-                return BrandRankResolution(
+            beyond = int(appearance_rank) > 3
+            candidates.append(
+                BrandRankResolution(
                     rank=appearance_rank,
                     mentioned=True,
                     source="appearance",
-                    confidence=0.55,
+                    confidence=0.45 if beyond else 0.55,
+                    rank_basis="appearance_beyond_top3" if beyond else None,
                 )
-            return BrandRankResolution(
-                rank=None,
-                mentioned=True,
-                source="appearance",
-                confidence=0.45,
-                rank_basis="appearance_beyond_top3",
             )
-
-    if is_industry_task:
-        return BrandRankResolution(
-            rank=None,
-            mentioned=has_brand_in_text,
-            source="none",
-            confidence=0.9 if not has_brand_in_text else 0.4,
-        )
-
-    # 本地已解析出名单但品牌不在名单上（仅出现在建议段）→ 勿回退旧 mention_position 虚高值
-    if has_parsed_entries:
-        return BrandRankResolution(
-            rank=None,
-            mentioned=has_brand_in_text,
-            source="none",
-            confidence=0.9 if not has_brand_in_text else 0.4,
-        )
+            mentioned = True
 
     if subtask.mention_position is not None and has_brand_in_text:
-        return BrandRankResolution(
-            rank=subtask.mention_position,
-            mentioned=True,
-            source="api",
-            confidence=0.6,
+        candidates.append(
+            BrandRankResolution(
+                rank=subtask.mention_position,
+                mentioned=True,
+                source="api",
+                confidence=0.6,
+            )
         )
+        mentioned = True
 
-    return BrandRankResolution(
-        rank=None,
-        mentioned=has_brand_in_text,
-        source="none",
-        confidence=0.9 if not has_brand_in_text else 0.3,
-    )
+    return _pick_frontmost_resolution(candidates, mentioned=mentioned)
 
 
 def _resolve_brand_rank(
@@ -5391,6 +5410,8 @@ def recompute_subtask_rank_from_answer(
     override_mention_position: int | None = None,
 ) -> None:
     """根据补录正文重算 mention_position，供聚合与健康分使用。"""
+    # 先规范化榜单，再算品牌位次，避免手填/重算仍读到扁平连号
+    _normalize_subtask_rankings_on_write(subtask)
     if override_mention_position is not None:
         subtask.mention_position = override_mention_position
         return

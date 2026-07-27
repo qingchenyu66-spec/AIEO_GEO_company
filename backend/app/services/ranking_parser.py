@@ -650,6 +650,29 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
     return results
 
 
+def rankings_for_storage(
+    answer: str | None,
+    remote_rankings: list[Any] | None = None,
+) -> list[dict[str, Any]] | None:
+    """入库榜单：正文能分段则写段内序+category；否则规范化远端扁平榜。
+
+    2026-07-27 - 模力 allRankings 跨段连号与段内名次冲突 - 持久化以正文分段为准
+    """
+    parsed = parse_answer_rankings(answer or "")
+    if parsed:
+        return [
+            {
+                "name": row.get("name"),
+                "rank": row.get("rank"),
+                "category": row.get("category"),
+            }
+            for row in parsed
+            if row.get("name")
+        ]
+    remote_norm = normalize_structured_rankings(remote_rankings or [])
+    return remote_norm or None
+
+
 def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     """Extract ranked list items from answer text, grouped by category when present."""
     if not text:
