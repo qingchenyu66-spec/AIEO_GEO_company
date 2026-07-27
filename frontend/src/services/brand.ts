@@ -60,16 +60,24 @@ export function defaultBrandWordGroupName(index: number) {
   return `品牌词组 ${index + 1}`
 }
 
+function defaultPlatformMode(code: string): PlatformSelection['mode'] {
+  // 桌面 DeepSeek 非联网无信源；search 与 standard 同价
+  return code === 'deepseek' ? 'search' : 'standard'
+}
+
 export function normalizePlatformSelection(raw: string | PlatformSelection | null | undefined): PlatformSelection | null {
   if (!raw) return null
   if (typeof raw === 'string') {
     const code = raw.trim()
     if (!code) return null
-    return { code, mode: 'standard', screenshot: 1 }
+    return { code, mode: defaultPlatformMode(code), screenshot: 1 }
   }
   const code = String(raw.code || '').trim()
   if (!code) return null
-  const mode = (['standard', 'reasoning', 'search', 'reasoning_search'].includes(raw.mode) ? raw.mode : 'standard') as PlatformSelection['mode']
+  if (code === 'deepseek') {
+    return { code, mode: 'search', screenshot: 1 }
+  }
+  const mode = (['standard', 'reasoning', 'search', 'reasoning_search'].includes(raw.mode) ? raw.mode : defaultPlatformMode(code)) as PlatformSelection['mode']
   // 截图强制开启（客户证据），不再接受关闭
   return { code, mode, screenshot: 1 }
 }

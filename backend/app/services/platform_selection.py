@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.schemas.monitor import FAST_MONITOR_MODE, MonitorMode, ScreenshotMode
+from app.schemas.monitor import (
+    DEEPSEEK_SEARCH_MODE,
+    MonitorMode,
+    ScreenshotMode,
+    default_monitor_mode,
+)
 
 VALID_MODES = frozenset({"standard", "reasoning", "search", "reasoning_search"})
 
@@ -15,7 +20,7 @@ def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
         code = raw.strip().lower()
         if not code:
             return None
-        return {"code": code, "mode": FAST_MONITOR_MODE, "screenshot": 1}
+        return {"code": code, "mode": default_monitor_mode(code), "screenshot": 1}
     if hasattr(raw, "model_dump") and callable(raw.model_dump):
         raw = raw.model_dump()
     elif hasattr(raw, "dict") and callable(raw.dict) and not isinstance(raw, dict):
@@ -24,17 +29,21 @@ def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
         code = getattr(raw, "code", None) or getattr(raw, "platform", None)
         if code is None:
             return None
+        code_text = str(code).strip().lower()
         raw = {
-            "code": code,
-            "mode": getattr(raw, "mode", FAST_MONITOR_MODE),
+            "code": code_text,
+            "mode": getattr(raw, "mode", default_monitor_mode(code_text)),
             "screenshot": getattr(raw, "screenshot", 1),
         }
     code = str(raw.get("code") or raw.get("platform") or "").strip().lower()
     if not code:
         return None
-    mode = str(raw.get("mode") or FAST_MONITOR_MODE).strip().lower()
+    # 桌面 DeepSeek：强制 search（存量 standard 配置也走联网，拿信源；同价）
+    if code == "deepseek":
+        return {"code": code, "mode": DEEPSEEK_SEARCH_MODE, "screenshot": 1}
+    mode = str(raw.get("mode") or default_monitor_mode(code)).strip().lower()
     if mode not in VALID_MODES:
-        mode = FAST_MONITOR_MODE
+        mode = default_monitor_mode(code)
     # ponytail: 产品强制截图作客户证据；UI 不再提供关闭入口，入口归一化恒为 1
     return {"code": code, "mode": mode, "screenshot": 1}
 

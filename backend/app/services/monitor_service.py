@@ -873,7 +873,13 @@ def _build_submit_payload(
 
 def _fast_platform_payload(item: PlatformConfig) -> dict[str, Any]:
     """提交平台配置；保留企业配置的 mode/screenshot（与模力计费项一致）。"""
-    return item.model_dump()
+    from app.schemas.monitor import DEEPSEEK_SEARCH_MODE
+
+    payload = item.model_dump()
+    # 桌面 DeepSeek 非联网无信源；提交层再兜底一次，覆盖诊断/探测等未走 normalize 的路径
+    if str(payload.get("platform") or "").strip().lower() == "deepseek":
+        payload["mode"] = DEEPSEEK_SEARCH_MODE
+    return payload
 
 
 def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonitorSubtask:

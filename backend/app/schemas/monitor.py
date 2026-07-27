@@ -9,6 +9,16 @@ ScreenshotMode = Literal[0, 1, 2]
 # 模力指数快速模式。本系统统一使用快速模式，避免专家/深度模式造成耗时和费用不可控。
 FAST_MONITOR_MODE: MonitorMode = "standard"
 
+# 桌面 DeepSeek 非联网无信源；search 与 standard 同价，仅此平台默认/强制 search。
+DEEPSEEK_SEARCH_MODE: MonitorMode = "search"
+
+
+def default_monitor_mode(platform: str) -> MonitorMode:
+    code = (platform or "").strip().lower()
+    if code == "deepseek":
+        return DEEPSEEK_SEARCH_MODE
+    return FAST_MONITOR_MODE
+
 
 class PlatformConfig(BaseModel):
     """提交给模力指数的平台配置。"""

@@ -15,6 +15,16 @@ def test_normalize_legacy_string_platforms():
     assert rows[0]["screenshot"] == 1
 
 
+def test_normalize_deepseek_forced_search():
+    rows = normalize_platform_selections([
+        "deepseek",
+        {"code": "deepseek", "mode": "standard", "screenshot": 1},
+        {"code": "deepseek_mobile", "mode": "standard", "screenshot": 1},
+    ])
+    assert rows[0] == {"code": "deepseek", "mode": "search", "screenshot": 1}
+    assert rows[1] == {"code": "deepseek_mobile", "mode": "standard", "screenshot": 1}
+
+
 def test_normalize_object_platforms():
     rows = normalize_platform_selections([
         {"code": "yuanbao", "mode": "reasoning", "screenshot": 0},
