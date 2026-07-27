@@ -363,6 +363,48 @@ def test_deck_pack_splits_overflow_and_merges_sparse() -> None:
     assert result["slides"] >= 3
 
 
+def test_deck_pack_peel_overflow_no_clip() -> None:
+    """估算装页偏满时，收尾 peel 必须以 scrollHeight 为准，不留下裁切。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    # 固定块高合计 > max-height，且拆页后仍可能因 margin 实测溢出 → peel 兜底
+    html = """<!DOCTYPE html><html><head><style>
+    .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
+    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:300px;overflow:hidden}
+    .pack-item{margin:0 0 20px;height:140px;box-sizing:border-box;background:#eee;border:1px solid #ccc}
+    .slide-title{position:absolute;left:140px;top:118px}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="analysis">
+      <h2 class="slide-title">数据分析与优化建议</h2>
+      <div class="pack-body">
+        <div class="pack-item">A1</div>
+        <div class="pack-item">A2</div>
+        <div class="pack-item">A3 底行若被裁只露一半</div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(_pack_js())
+            clipped = page.evaluate(
+                """() => [...document.querySelectorAll('.pack-body')].filter(
+                  (b) => b.scrollHeight > b.clientHeight + 2
+                ).length"""
+            )
+        finally:
+            browser.close()
+
+    assert result.get("stillClipped", 0) == 0, result
+    assert clipped == 0, result
+    assert result["slides"] >= 2, result
+
+
 def test_deck_pack_domain_explode_avoids_one_row_tail() -> None:
     """B：超高映射表拆页后，不应留下仅 1 行的（续）页。"""
     from playwright.sync_api import sync_playwright
