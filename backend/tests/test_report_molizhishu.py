@@ -619,6 +619,135 @@ def test_deck_pack_core_kpi_keeps_together() -> None:
     assert result.get("stillClipped", 0) == 0, result
 
 
+def test_deck_pack_no_double_thead_when_table_nested_in_wrap() -> None:
+    """排名表在 wrap 内时拆页不得克隆整表，同页只能有一个 thead。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    rows = "".join(
+        f"<tr><td>品牌{i}</td><td>{'最近' if i < 5 else '最优'}</td><td>{i}</td><td>07-01</td></tr>"
+        for i in range(1, 14)
+    )
+    html = f"""<!DOCTYPE html><html><head><style>
+    .slide{{width:2520px;height:1417px;position:relative;overflow:hidden}}
+    .pack-body{{position:absolute;left:132px;top:210px;width:2260px;max-height:520px;overflow:hidden;font-size:28px}}
+    .pack-item{{margin:0 0 10px}}
+    .slide-title{{position:absolute;left:140px;top:118px}}
+    .block-title{{font-size:32px;margin:0 0 12px}}
+    table{{width:100%;border-collapse:collapse;font-size:28px}}
+    td,th{{padding:14px 10px;border:1px solid #ccc}}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="ranking">
+      <h2 class="slide-title">排名明细</h2>
+      <div class="pack-body">
+        <div class="pack-item ranking-unit">
+          <div class="block-title">3. 语义词: 机场广告公司推荐</div>
+          <div class="ranking-detail-wrap">
+            <table class="RankTable ranking-detail-table">
+              <thead><tr><th>品牌名称</th><th>类型</th><th>排名</th><th>监测日期</th></tr></thead>
+              <tbody>{rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(_pack_js())
+            info = page.evaluate(
+                """() => [...document.querySelectorAll('.slide')].map((s) => {
+                  const b = s.querySelector('.pack-body');
+                  const theads = b.querySelectorAll('thead').length;
+                  const firstRows = [...b.querySelectorAll('tbody tr')].slice(0, 3).map(
+                    (r) => (r.cells[0] && r.cells[0].textContent) || ''
+                  );
+                  return {
+                    theads,
+                    tables: b.querySelectorAll('table').length,
+                    rows: b.querySelectorAll('tbody tr').length,
+                    firstRows,
+                    over: b.scrollHeight - b.clientHeight,
+                  };
+                })"""
+            )
+        finally:
+            browser.close()
+
+    assert result.get("stillClipped", 0) == 0, result
+    assert all(p["theads"] == 1 for p in info), info
+    assert all(p["tables"] == 1 for p in info), info
+    assert all(p["over"] <= 2 for p in info), info
+    # 全报告行不重复：各页行数之和 = 原始 13
+    assert sum(p["rows"] for p in info) == 13, info
+
+
+def test_deck_pack_coalesce_two_table_chunks_on_same_page() -> None:
+    """同页两个表块并回后应合成一张表、一个表头。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    html = """<!DOCTYPE html><html><head><style>
+    .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
+    .pack-body{position:absolute;left:132px;top:210px;width:2260px;max-height:900px;overflow:hidden;font-size:28px}
+    .pack-item{margin:0 0 10px}
+    .slide-title{position:absolute;left:140px;top:118px}
+    table{width:100%;border-collapse:collapse;font-size:28px}
+    td,th{padding:10px;border:1px solid #ccc}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="ranking">
+      <h2 class="slide-title">排名明细</h2>
+      <div class="pack-body">
+        <div class="pack-item ranking-unit">
+          <table class="RankTable"><thead><tr><th>品牌</th><th>类型</th></tr></thead>
+          <tbody>
+            <tr><td>A</td><td>最近</td></tr><tr><td>B</td><td>最近</td></tr>
+            <tr><td>C</td><td>最优</td></tr><tr><td>D</td><td>最优</td></tr>
+          </tbody></table>
+        </div>
+        <div class="pack-item ranking-unit">
+          <div class="block-title">（续）</div>
+          <table class="RankTable"><thead><tr><th>品牌</th><th>类型</th></tr></thead>
+          <tbody>
+            <tr><td>E</td><td>最差</td></tr><tr><td>F</td><td>最差</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            page.evaluate(_pack_js())
+            info = page.evaluate(
+                """() => {
+                  const b = document.querySelector('.pack-body');
+                  return {
+                    theads: b.querySelectorAll('thead').length,
+                    tables: b.querySelectorAll('table').length,
+                    rows: b.querySelectorAll('tbody tr').length,
+                    cont: [...b.querySelectorAll('.block-title')].some((el) => el.textContent.includes('续')),
+                  };
+                }"""
+            )
+        finally:
+            browser.close()
+
+    assert info["theads"] == 1, info
+    assert info["tables"] == 1, info
+    assert info["rows"] == 6, info
+    assert info["cont"] is False, info
+
+
 def test_deck_pack_domain_explode_avoids_one_row_tail() -> None:
     """B：超高映射表拆页后，不应留下仅 1 行的（续）页。"""
     from playwright.sync_api import sync_playwright

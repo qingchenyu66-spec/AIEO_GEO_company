@@ -8,6 +8,7 @@
  * - 2026-07-27 - 缩太小看不清 + 半行仍在 - 缩放设下限（约九成/≥26px），缩不进则整行剥到续页，禁止半行留页
  * - 2026-07-27 - 一两行仍误拆页 - 26px+仅缩10%收不回约78px；改：先软缩（字≥24 / pad≥0.70），失败再剥行
  * - 2026-07-27 - 页底表头+一两行孤儿 / 核心指标被剥成 2/2 - 短表尾整块下挪；核心页只软缩不 peel
+ * - 2026-07-27 - 同页两个表头 - ①拆表时误克隆包着 table 的 wrap 导致整表+分组表并存；②短续页并回后合表只留一个 thead
  */
 (() => {
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
@@ -412,11 +413,11 @@
       const rows = Array.from(table.tBodies[0].rows);
       if (rows.length <= 1) return;
 
-      // table 之前的标题/点评：只挂第一页
+      // table 之前的标题/点评：只挂第一页（勿把包着 table 的 wrap 整块克隆，否则同页重复表头+行）
       const prefixEls = [];
       let prefixH = 0;
       for (const child of Array.from(item.children)) {
-        if (child === table) break;
+        if (child === table || child.contains(table)) break;
         prefixEls.push(child.cloneNode(true));
         prefixH += itemHeight(child);
       }
@@ -424,12 +425,16 @@
       const groups = [];
       let cur = [];
       let h = theadH + 12 + prefixH;
-      rows.forEach((row) => {
+      rows.forEach((row, idx) => {
         const rh = Math.max(row.getBoundingClientRect().height, 32);
+        const remaining = rows.length - idx;
         if (cur.length && h + rh > fitH) {
-          groups.push(cur);
-          cur = [];
-          h = theadH + 12 + 36; // 续页小标题占位
+          // 勿切出/留下 ≤ORPHAN 行的碎片（页底表头+一两行）
+          if (remaining > ORPHAN_TABLE_ROWS && cur.length > ORPHAN_TABLE_ROWS) {
+            groups.push(cur);
+            cur = [];
+            h = theadH + 12 + 36; // 续页小标题占位
+          }
         }
         cur.push(row.cloneNode(true));
         h += rh;
@@ -450,6 +455,16 @@
         }
         prev.push(...last);
         groups.pop();
+      }
+      // 中间页也禁止 ≤ORPHAN 行碎片
+      for (let g = 0; g < groups.length - 1; g += 1) {
+        while (groups[g].length <= ORPHAN_TABLE_ROWS && groups[g + 1] && groups[g + 1].length) {
+          groups[g].push(groups[g + 1].shift());
+        }
+        if (groups[g + 1] && groups[g + 1].length === 0) {
+          groups.splice(g + 1, 1);
+          g -= 1;
+        }
       }
       if (groups.length <= 1) return;
 
@@ -498,6 +513,40 @@
         if (!pages[i].length) pages.splice(i, 1);
       }
       if (!moved) break;
+    }
+  }
+
+  /**
+   * 2026-07-27 - 同页两个表头 - 短续页并回后相邻表块各带 thead；拼成一张表只留一个表头
+   */
+  function coalesceAdjacentTables(body) {
+    if (!body) return;
+    let guard = 0;
+    while (guard++ < 40) {
+      const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
+      let merged = false;
+      for (let i = 0; i < items.length - 1; i += 1) {
+        const a = items[i];
+        const b = items[i + 1];
+        const tableA = a.querySelector("table");
+        const tableB = b.querySelector("table");
+        if (!tableA || !tableB || !tableA.tBodies[0] || !tableB.tBodies[0]) continue;
+        const contB = (b.querySelector(".block-title")?.textContent || "").includes("续");
+        const bothUnit =
+          a.classList.contains("ranking-unit") && b.classList.contains("ranking-unit");
+        const sameClass =
+          String(tableA.className || "") === String(tableB.className || "") &&
+          String(tableA.className || "").length > 0;
+        if (!contB && !bothUnit && !sameClass) continue;
+
+        Array.from(tableB.tBodies[0].rows).forEach((row) => {
+          tableA.tBodies[0].appendChild(row);
+        });
+        b.remove();
+        merged = true;
+        break;
+      }
+      if (!merged) break;
     }
   }
 
@@ -575,6 +624,7 @@
       items.forEach((el) => el.remove());
       body.innerHTML = "";
       pages[0].forEach((el) => body.appendChild(el));
+      coalesceAdjacentTables(body);
       const title = slide.querySelector(".slide-title");
       if (title) title.textContent = stripPageSuffix(title.textContent || "");
       return;
@@ -596,6 +646,7 @@
       if (!b) return;
       b.innerHTML = "";
       group.forEach((el) => b.appendChild(el));
+      coalesceAdjacentTables(b);
       const title = s.querySelector(".slide-title");
       if (title) title.textContent = `${baseTitle} (${idx + 1}/${pages.length})`;
       if (idx > 0) {
@@ -644,8 +695,10 @@
 
         const titleAEl = a.querySelector(".slide-title");
         const titleBRaw = b.querySelector(".slide-title")?.textContent || "";
-        const baseA = stripPageSuffix(titleAEl?.textContent || "");
-        const baseB = stripPageSuffix(titleBRaw);
+        const baseA = stripPageSuffix(titleAEl?.textContent || "")
+          .replace(/（续）\s*$/, "")
+          .trim();
+        const baseB = stripPageSuffix(titleBRaw).replace(/（续）\s*$/, "").trim();
         const sameSection = baseA && baseA === baseB;
 
         const tableA = tableAEarly;
@@ -686,6 +739,7 @@
           Array.from(bodyB.querySelectorAll(":scope > .pack-item")).forEach((el) => {
             bodyA.appendChild(el);
           });
+          coalesceAdjacentTables(bodyA);
         }
 
         if (titleAEl && sameSection) {
@@ -707,7 +761,10 @@
   Array.from(document.querySelectorAll(".slide[data-pack]")).forEach((slide) => packSlide(slide));
   mergeSparse();
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
-    (body) => rewrapTipCards(body)
+    (body) => {
+      rewrapTipCards(body);
+      coalesceAdjacentTables(body);
+    }
   );
   // 先软缩（有下限）；仍裁切则整行剥续页
   const softFit = fitSoftOverflows();
