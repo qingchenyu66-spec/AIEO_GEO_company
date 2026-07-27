@@ -7,6 +7,7 @@
  * - 2026-07-27 - 超出约一两行时不想拆页 - softShrinkFit 缩内容字号/表 padding；勿对 body 用 zoom
  * - 2026-07-27 - 缩太小看不清 + 半行仍在 - 缩放设下限（约九成/≥26px），缩不进则整行剥到续页，禁止半行留页
  * - 2026-07-27 - 一两行仍误拆页 - 26px+仅缩10%收不回约78px；改：先软缩（字≥24 / pad≥0.70），失败再剥行
+ * - 2026-07-27 - 页底表头+一两行孤儿 / 核心指标被剥成 2/2 - 短表尾整块下挪；核心页只软缩不 peel
  */
 (() => {
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
@@ -19,6 +20,12 @@
   const MIN_SOFT_FACTOR = 0.88;
   const MIN_PAD_FACTOR = 0.70;
   const MIN_FONT_PX = 24;
+  // 核心指标+结论：禁止拆页，允许略强软缩
+  const KEEP_MIN_SOFT_FACTOR = 0.82;
+  const KEEP_MIN_PAD_FACTOR = 0.62;
+  const KEEP_MIN_FONT_PX = 22;
+  // 表块 ≤ 此行数视为孤儿尾，不得独占页底（应整块到下一页）
+  const ORPHAN_TABLE_ROWS = 2;
 
   function bodyEl(slide) {
     return (
@@ -74,8 +81,15 @@
     return Math.ceil(el.getBoundingClientRect().height + mt + mb);
   }
 
-  function clampFont(px, factor) {
-    return Math.max(MIN_FONT_PX, px * factor);
+  function keepTogetherSlide(slide) {
+    if (!slide) return false;
+    if (slide.querySelector(".dark-panel--kpi")) return true;
+    const title = slide.querySelector(".slide-title")?.textContent || "";
+    return title.includes("核心指标");
+  }
+
+  function clampFont(px, factor, minPx) {
+    return Math.max(minPx == null ? MIN_FONT_PX : minPx, px * factor);
   }
 
   /**
@@ -84,13 +98,17 @@
    * 2026-07-27 - 试过 body.style.zoom - 会连同 max-height 缩放，已弃用
    * 缩到下限仍合不进 → 返回 shrink-failed（由 peel 整行下移，不再继续压字）
    */
-  function softShrinkFit(body) {
+  function softShrinkFit(body, opts) {
     if (!needsFit(body)) return { fitted: false, reason: "ok" };
+    const keep = !!(opts && opts.keepTogether);
+    const minSoft = keep ? KEEP_MIN_SOFT_FACTOR : MIN_SOFT_FACTOR;
+    const minPad = keep ? KEEP_MIN_PAD_FACTOR : MIN_PAD_FACTOR;
+    const minFont = keep ? KEEP_MIN_FONT_PX : MIN_FONT_PX;
 
     const cells = Array.from(body.querySelectorAll("th, td"));
     const textNodes = Array.from(
       body.querySelectorAll(
-        "p, li, h3, .block-title, .pack-item, .tip-card, .analysis-block, .badge, .type-badge"
+        "p, li, h3, .block-title, .pack-item, .tip-card, .analysis-block, .badge, .type-badge, .kpi-label, .kpi-value, .executive-summary"
       )
     );
     const cellOrig = cells.map((el) => {
@@ -115,35 +133,71 @@
       fs: parseFloat(window.getComputedStyle(el).fontSize) || 0,
     }));
     const bodyFs = parseFloat(window.getComputedStyle(body).fontSize) || 0;
+    const panels = Array.from(body.querySelectorAll(".dark-panel, .dark-block"));
+    const panelOrig = panels.map((el) => {
+      const cs = window.getComputedStyle(el);
+      return {
+        el,
+        pt: parseFloat(cs.paddingTop) || 0,
+        pr: parseFloat(cs.paddingRight) || 0,
+        pb: parseFloat(cs.paddingBottom) || 0,
+        pl: parseFloat(cs.paddingLeft) || 0,
+        mb: parseFloat(cs.marginBottom) || 0,
+        h: el.getBoundingClientRect().height,
+        isKpi: el.classList.contains("dark-panel--kpi"),
+      };
+    });
 
     // 字号步进慢、padding 步进快：一两行优先靠行距收，字号尽量留大
-    for (let step = 1; step <= 10; step += 1) {
-      const fontFactor = Math.max(MIN_SOFT_FACTOR, 1 - step * 0.012);
-      const padFactor = Math.max(MIN_PAD_FACTOR, 1 - step * 0.03);
-      if (bodyFs > 0) body.style.fontSize = `${clampFont(bodyFs, fontFactor).toFixed(2)}px`;
+    for (let step = 1; step <= 12; step += 1) {
+      const fontFactor = Math.max(minSoft, 1 - step * 0.012);
+      const padFactor = Math.max(minPad, 1 - step * 0.03);
+      if (bodyFs > 0) body.style.fontSize = `${clampFont(bodyFs, fontFactor, minFont).toFixed(2)}px`;
       tableOrig.forEach((o) => {
-        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor, minFont).toFixed(1)}px`;
       });
       cellOrig.forEach((o) => {
         o.el.style.padding = `${(o.pt * padFactor).toFixed(1)}px ${(o.pr * padFactor).toFixed(1)}px ${(o.pb * padFactor).toFixed(1)}px ${(o.pl * padFactor).toFixed(1)}px`;
-        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor, minFont).toFixed(1)}px`;
         if (o.lh && o.lh !== "normal") {
           const lh = parseFloat(o.lh);
           if (Number.isFinite(lh) && lh > 4) {
-            o.el.style.lineHeight = `${Math.max(MIN_FONT_PX + 4, lh * fontFactor).toFixed(1)}px`;
+            o.el.style.lineHeight = `${Math.max(minFont + 4, lh * fontFactor).toFixed(1)}px`;
           }
         }
       });
       textOrig.forEach((o) => {
-        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor).toFixed(1)}px`;
+        if (o.fs > 0) o.el.style.fontSize = `${clampFont(o.fs, fontFactor, minFont).toFixed(1)}px`;
+      });
+      panelOrig.forEach((o) => {
+        o.el.style.padding = `${(o.pt * padFactor).toFixed(1)}px ${(o.pr * padFactor).toFixed(1)}px ${(o.pb * padFactor).toFixed(1)}px ${(o.pl * padFactor).toFixed(1)}px`;
+        o.el.style.marginBottom = `${(o.mb * padFactor).toFixed(1)}px`;
+        if (keep && o.isKpi && o.h > 0) {
+          o.el.style.height = "auto";
+          o.el.style.maxHeight = `${Math.max(160, Math.floor(o.h * padFactor)).toFixed(0)}px`;
+          o.el.style.overflow = "hidden";
+        }
       });
       if (!needsFit(body)) {
         return { fitted: true, step, fontFactor, padFactor };
       }
-      if (fontFactor <= MIN_SOFT_FACTOR + 0.001 && padFactor <= MIN_PAD_FACTOR + 0.001) break;
+      if (fontFactor <= minSoft + 0.001 && padFactor <= minPad + 0.001) break;
     }
 
-    // 缩到下限仍溢出：恢复原尺寸，交给剥行（避免糊字）
+    // 缩到下限仍溢出
+    if (keep) {
+      // 核心页禁止 peel：保留最强软缩，再压 KPI，尽量一页装下
+      panelOrig.forEach((o) => {
+        if (!o.isKpi) return;
+        o.el.style.height = "auto";
+        o.el.style.maxHeight = `${Math.max(140, Math.floor(body.clientHeight * 0.38))}px`;
+        o.el.style.overflow = "hidden";
+      });
+      if (!needsFit(body)) {
+        return { fitted: true, step: 99, keep: true };
+      }
+      return { fitted: false, reason: "shrink-failed" };
+    }
     body.style.fontSize = "";
     tableOrig.forEach((o) => {
       o.el.style.fontSize = "";
@@ -156,6 +210,10 @@
     textOrig.forEach((o) => {
       o.el.style.fontSize = "";
     });
+    panelOrig.forEach((o) => {
+      o.el.style.padding = "";
+      o.el.style.marginBottom = "";
+    });
     return { fitted: false, reason: "shrink-failed" };
   }
 
@@ -165,7 +223,8 @@
     document
       .querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
       .forEach((body) => {
-        const r = softShrinkFit(body);
+        const slide = body.closest(".slide");
+        const r = softShrinkFit(body, { keepTogether: keepTogetherSlide(slide) });
         if (r.fitted) fitted += 1;
         else if (r.reason === "shrink-failed") shrinkFailed += 1;
       });
@@ -419,6 +478,29 @@
     });
   }
 
+  function liftOrphanTableTails(pages) {
+    let guard = 0;
+    while (guard++ < 40) {
+      let moved = false;
+      for (let i = 0; i < pages.length - 1; i += 1) {
+        const page = pages[i];
+        // 本页只剩一块时不挪空
+        if (page.length < 2) continue;
+        const last = page[page.length - 1];
+        const rows = last.querySelectorAll("tbody tr").length;
+        if (rows > 0 && rows <= ORPHAN_TABLE_ROWS) {
+          page.pop();
+          pages[i + 1].unshift(last);
+          moved = true;
+        }
+      }
+      for (let i = pages.length - 1; i >= 0; i -= 1) {
+        if (!pages[i].length) pages.splice(i, 1);
+      }
+      if (!moved) break;
+    }
+  }
+
   function packSlide(slide) {
     if (!slide.hasAttribute("data-pack")) return;
     const body = bodyEl(slide);
@@ -476,6 +558,9 @@
         pages.pop();
       }
     }
+
+    // 2026-07-27 - 页底表头+一两行孤儿：整块挪到下一页（下一页本就带表头）
+    liftOrphanTableTails(pages);
 
     // 分析页：仅极短尾页并回，避免把两张 tall 页吞成一页导致无分页
     if (slide.dataset.mergeGroup === "analysis" && pages.length === 2) {

@@ -482,6 +482,143 @@ def test_deck_pack_peel_when_shrink_floor_not_enough() -> None:
     assert all(page["rows"] >= 2 or len(info) == 1 for page in info), info
 
 
+def test_deck_pack_no_orphan_header_one_row_at_page_bottom() -> None:
+    """页底不得只留表头+一两行；短表块应整块到下一页。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    # 先塞一块高表，再塞「表头+1行」短块，模拟页底孤儿
+    tall_rows = "".join(f"<tr><td>优{i}</td><td>最优</td><td>{i}</td></tr>" for i in range(1, 9))
+    html = f"""<!DOCTYPE html><html><head><style>
+    .slide{{width:2520px;height:1417px;position:relative;overflow:hidden}}
+    .pack-body{{position:absolute;left:132px;top:210px;width:2260px;max-height:520px;overflow:hidden;font-size:28px}}
+    .pack-item{{margin:0 0 10px}}
+    .slide-title{{position:absolute;left:140px;top:118px}}
+    table{{width:100%;border-collapse:collapse;font-size:28px}}
+    td,th{{padding:14px 10px;border:1px solid #ccc}}
+    </style></head><body><main class="deck">
+    <section class="slide" data-pack="1" data-merge-group="ranking">
+      <h2 class="slide-title">排名明细</h2>
+      <div class="pack-body">
+        <div class="pack-item ranking-unit">
+          <table><thead><tr><th>品牌</th><th>类型</th><th>排名</th></tr></thead>
+          <tbody>{tall_rows}</tbody></table>
+        </div>
+        <div class="pack-item ranking-unit">
+          <table><thead><tr><th>品牌</th><th>类型</th><th>排名</th></tr></thead>
+          <tbody><tr><td>艾迪亚控股</td><td>最近</td><td>1</td></tr></tbody></table>
+        </div>
+        <div class="pack-item ranking-unit">
+          <table><thead><tr><th>品牌</th><th>类型</th><th>排名</th></tr></thead>
+          <tbody>
+            <tr><td>A</td><td>最差</td><td>2</td></tr>
+            <tr><td>B</td><td>最差</td><td>3</td></tr>
+            <tr><td>C</td><td>最差</td><td>4</td></tr>
+            <tr><td>D</td><td>最差</td><td>5</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(_pack_js())
+            info = page.evaluate(
+                """() => [...document.querySelectorAll('.slide')].map((s) => {
+                  const b = s.querySelector('.pack-body');
+                  const items = [...b.querySelectorAll(':scope > .pack-item')].map((it) => ({
+                    rows: it.querySelectorAll('tbody tr').length,
+                    text: (it.innerText || '').slice(0, 40),
+                  }));
+                  return {
+                    title: (s.querySelector('.slide-title') || {}).textContent || '',
+                    over: b.scrollHeight - b.clientHeight,
+                    items,
+                    lastItemRows: items.length ? items[items.length - 1].rows : 0,
+                  };
+                })"""
+            )
+        finally:
+            browser.close()
+
+    assert result.get("stillClipped", 0) == 0, result
+    assert all(p["over"] <= 2 for p in info), info
+    # 任一非末页：最后一块表不得只有 1～2 行（孤儿表头）
+    for p in info[:-1]:
+        if p["items"]:
+            assert p["lastItemRows"] == 0 or p["lastItemRows"] > 2, info
+
+
+def test_deck_pack_core_kpi_keeps_together() -> None:
+    """核心指标与结论：略超高时软缩留一页，禁止剥成 2/2。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    html = """<!DOCTYPE html><html><head><style>
+    .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
+    .dark-content{position:absolute;left:132px;top:210px;width:2260px;max-height:620px;overflow:hidden;color:#fff}
+    .dark-panel{padding:28px 32px;margin:0 0 24px;background:#123}
+    .dark-panel--kpi{height:280px}
+    .dark-block{padding:24px;font-size:36px;line-height:1.55}
+    .dark-block p{margin:0 0 10px;font-size:36px}
+    .slide-title{position:absolute;left:140px;top:118px}
+    .kpi-value{font-size:44px}
+    </style></head><body><main class="deck">
+    <section class="slide slide--dark">
+      <h2 class="slide-title">核心指标与结论</h2>
+      <div class="dark-content">
+        <div class="dark-panel dark-panel--kpi"><div class="kpi-value">提及率 36%</div></div>
+        <div class="dark-panel dark-block pack-item">
+          <h3>核心结论</h3>
+          <div class="executive-summary">
+            <p>在监测周期内品牌表现稳定，分平台差异显著，建议强化垂直内容与引用布局。</p>
+            <p>高铁广告语义词排名靠前，微博智搜提及率高于夸克与 DeepSeek。</p>
+            <p>整体口碑偏正向，需持续跟踪核心语义词波动。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            before = page.evaluate(
+                """() => {
+                  const b = document.querySelector('.dark-content');
+                  return b.scrollHeight - b.clientHeight;
+                }"""
+            )
+            result = page.evaluate(_pack_js())
+            after = page.evaluate(
+                """() => {
+                  const slides = [...document.querySelectorAll('.slide')];
+                  const b = document.querySelector('.dark-content');
+                  return {
+                    slides: slides.length,
+                    titles: slides.map((s) => (s.querySelector('.slide-title') || {}).textContent || ''),
+                    over: b ? b.scrollHeight - b.clientHeight : -1,
+                  };
+                }"""
+            )
+        finally:
+            browser.close()
+
+    assert before > 2, before
+    assert after["slides"] == 1, after
+    assert not any("2/2" in t or "（续）" in t for t in after["titles"]), after
+    assert after["over"] <= 2, after
+    assert result.get("stillClipped", 0) == 0, result
+
+
 def test_deck_pack_domain_explode_avoids_one_row_tail() -> None:
     """B：超高映射表拆页后，不应留下仅 1 行的（续）页。"""
     from playwright.sync_api import sync_playwright
