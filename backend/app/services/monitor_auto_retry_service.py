@@ -53,6 +53,8 @@ def subtask_failure_awaits_or_in_auto_retry(subtask: GeoMonitorSubtask) -> bool:
 
 
 def _platform_payload(task: GeoMonitorTask, platform: str) -> dict[str, Any]:
+    from app.schemas.monitor import FAST_MONITOR_MODE
+
     for item in task.platforms_json or []:
         if not isinstance(item, dict):
             continue
@@ -60,12 +62,12 @@ def _platform_payload(task: GeoMonitorTask, platform: str) -> dict[str, Any]:
             try:
                 return PlatformConfig(
                     platform=platform,
-                    mode=item.get("mode") or "standard",
+                    mode=FAST_MONITOR_MODE,
                     screenshot=item.get("screenshot") if item.get("screenshot") is not None else 1,
                 ).model_dump()
             except Exception:
                 break
-    return PlatformConfig(platform=platform).model_dump()
+    return PlatformConfig(platform=platform, mode=FAST_MONITOR_MODE).model_dump()
 
 
 def _strip_geo_meta(body: dict[str, Any]) -> dict[str, Any]:

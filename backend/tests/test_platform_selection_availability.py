@@ -11,18 +11,22 @@ from app.services.platform_selection import normalize_platform_selections, selec
 def test_normalize_legacy_string_platforms():
     rows = normalize_platform_selections(["doubao", "kimi", "doubao"])
     assert selection_codes(rows) == ["doubao", "kimi"]
-    assert rows[0]["mode"] == "standard"
+    assert rows[0]["mode"] == "search"
     assert rows[0]["screenshot"] == 1
 
 
-def test_normalize_deepseek_forced_search():
+def test_normalize_all_platforms_forced_search():
     rows = normalize_platform_selections([
         "deepseek",
         {"code": "deepseek", "mode": "standard", "screenshot": 1},
-        {"code": "deepseek_mobile", "mode": "standard", "screenshot": 1},
+        {"code": "doubao", "mode": "reasoning_search", "screenshot": 1},
+        {"code": "kimi", "mode": "reasoning", "screenshot": 0},
     ])
-    assert rows[0] == {"code": "deepseek", "mode": "search", "screenshot": 1}
-    assert rows[1] == {"code": "deepseek_mobile", "mode": "standard", "screenshot": 1}
+    assert rows == [
+        {"code": "deepseek", "mode": "search", "screenshot": 1},
+        {"code": "doubao", "mode": "search", "screenshot": 1},
+        {"code": "kimi", "mode": "search", "screenshot": 1},
+    ]
 
 
 def test_normalize_object_platforms():
@@ -30,9 +34,9 @@ def test_normalize_object_platforms():
         {"code": "yuanbao", "mode": "reasoning", "screenshot": 0},
         {"platform": "qianwen"},
     ])
-    assert rows[0] == {"code": "yuanbao", "mode": "reasoning", "screenshot": 1}
+    assert rows[0] == {"code": "yuanbao", "mode": "search", "screenshot": 1}
     assert rows[1]["code"] == "qianwen"
-    assert rows[1]["mode"] == "standard"
+    assert rows[1]["mode"] == "search"
     assert rows[1]["screenshot"] == 1
 
 

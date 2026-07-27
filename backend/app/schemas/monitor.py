@@ -6,17 +6,11 @@ from pydantic import BaseModel, Field, HttpUrl
 MonitorMode = Literal["standard", "reasoning", "search", "reasoning_search"]
 ScreenshotMode = Literal[0, 1, 2]
 
-# 模力指数快速模式。本系统统一使用快速模式，避免专家/深度模式造成耗时和费用不可控。
-FAST_MONITOR_MODE: MonitorMode = "standard"
-
-# 桌面 DeepSeek 非联网无信源；search 与 standard 同价，仅此平台默认/强制 search。
-DEEPSEEK_SEARCH_MODE: MonitorMode = "search"
+# 模力联网 search：与 standard 同价且返回信源；全平台统一，避免深度模式额外计费。
+FAST_MONITOR_MODE: MonitorMode = "search"
 
 
 def default_monitor_mode(platform: str) -> MonitorMode:
-    code = (platform or "").strip().lower()
-    if code == "deepseek":
-        return DEEPSEEK_SEARCH_MODE
     return FAST_MONITOR_MODE
 
 
