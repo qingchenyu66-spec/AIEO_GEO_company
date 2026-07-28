@@ -35,7 +35,7 @@ from app.services.report_period_comparison_service import (
 from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
-PERIOD_DECK_PIPELINE = "monitor-deck-v10"
+PERIOD_DECK_PIPELINE = "monitor-deck-v11"
 
 
 def _esc(value: Any) -> str:

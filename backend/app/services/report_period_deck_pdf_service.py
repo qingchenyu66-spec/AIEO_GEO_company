@@ -94,13 +94,19 @@ def _monitor_asset_urls() -> dict[str, str]:
 
 def _monitor_asset_http_urls() -> dict[str, str]:
     """预览用同源静态路径（勿 data URI）；由 frontend/public/report-assets/monitor 提供。"""
+    # 2026-07-28 - 压图后用 mtime 破浏览器旧大图缓存
+    try:
+        ver = str(int((_ASSET_DIR / "monitor-cover.jpg").stat().st_mtime))
+    except OSError:
+        ver = "1"
+    q = f"?v={ver}"
     return {
-        "cover": "/report-assets/monitor/monitor-cover.jpg",
-        "section": "/report-assets/monitor/monitor-section.jpg",
-        "dark": "/report-assets/monitor/monitor-dark.jpg",
-        "light": "/report-assets/monitor/monitor-light.jpg",
-        "light_wide": "/report-assets/monitor/monitor-light-wide.jpg",
-        "thanks": "/report-assets/monitor/monitor-thanks.jpg",
+        "cover": f"/report-assets/monitor/monitor-cover.jpg{q}",
+        "section": f"/report-assets/monitor/monitor-section.jpg{q}",
+        "dark": f"/report-assets/monitor/monitor-dark.jpg{q}",
+        "light": f"/report-assets/monitor/monitor-light.jpg{q}",
+        "light_wide": f"/report-assets/monitor/monitor-light-wide.jpg{q}",
+        "thanks": f"/report-assets/monitor/monitor-thanks.jpg{q}",
     }
 
 

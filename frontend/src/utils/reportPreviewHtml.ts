@@ -1,7 +1,26 @@
 /** 报告 blob 预览：同源静态资源 + 大画布幻灯片适配 iframe 宽度。 */
 
-/** 模力诊断/周期 HTML 母版固定宽（与 report_molizhishu/styles.css .deck 一致） */
-export const REPORT_SLIDE_WIDTH_PX = 2520
+/** 进入报告中心时预取母版图与 echarts，减轻客户首点预览等待。 */
+export function prefetchReportPreviewAssets(origin = typeof window !== 'undefined' ? window.location.origin : ''): void {
+  if (!origin || typeof document === 'undefined') return
+  const urls = [
+    `${origin}/report-assets/echarts.min.js`,
+    `${origin}/report-assets/monitor/monitor-cover.jpg`,
+    `${origin}/report-assets/monitor/monitor-light.jpg`,
+    `${origin}/report-assets/monitor/monitor-dark.jpg`,
+    `${origin}/report-assets/monitor/monitor-light-wide.jpg`,
+    `${origin}/report-assets/monitor/monitor-thanks.jpg`,
+  ]
+  for (const href of urls) {
+    if (document.querySelector(`link[data-geo-prefetch="${href}"]`)) continue
+    const link = document.createElement('link')
+    link.rel = 'prefetch'
+    link.as = href.endsWith('.js') ? 'script' : 'image'
+    link.href = href
+    link.dataset.geoPrefetch = href
+    document.head.appendChild(link)
+  }
+}
 
 /** 预览适配缩放：iframe 窄于母版时等比缩小，不放大。 */
 export function computePreviewFitScale(

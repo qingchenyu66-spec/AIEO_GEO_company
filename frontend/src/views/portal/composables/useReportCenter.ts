@@ -16,7 +16,7 @@ import {
 } from '../../../services/reports'
 import type { TenantInfo } from '../../../services/management'
 import { formatReportDisplayTitle } from '../portalUtils'
-import { prepareReportPreviewHtml } from '../../../utils/reportPreviewHtml'
+import { prepareReportPreviewHtml, prefetchReportPreviewAssets } from '../../../utils/reportPreviewHtml'
 import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
 
 function errorMessage(error: unknown) {
@@ -304,6 +304,8 @@ export function useReportCenter(options: UseReportCenterOptions) {
   })
 
   onMounted(async () => {
+    // 2026-07-28 - 客户门户首点周报慢：进页先预取母版图/echarts（平台端常已有缓存）
+    prefetchReportPreviewAssets()
     applyInitialRouteQuery()
     if (options.isPlatform() && !isPreviewMode.value && options.tenants().length && tenantFilter.value === '') {
       tenantFilter.value = options.tenants()[0].id

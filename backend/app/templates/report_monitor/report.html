@@ -17,7 +17,7 @@
 <body class="report-theme-monitor" data-pipeline="{{ pipeline }}">
     <main class="deck">
         <section class="slide slide--cover">
-            <img class="master-bg" src="{{ monitor_assets.cover }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.cover }}" alt="" decoding="async">
             <div class="overlay cover-note">
                 <div class="note-kicker">{{ type_label }} · 专业版</div>
                 <div class="note-brand">{{ brand_name }}</div>
@@ -55,7 +55,7 @@
         </section>
 
         <section class="slide slide--dark">
-            <img class="master-bg" src="{{ monitor_assets.dark }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.dark }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">核心指标 · 环比上一周期</h2>
             <p class="slide-subtitle">本期核心表现</p>
             <div class="overlay dark-content">
@@ -74,7 +74,7 @@
 
         {% if preface_html %}
         <section class="slide slide--light" data-pack="1" data-merge-group="preface">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">报告前言</h2>
             <p class="slide-subtitle">{{ preface_subtitle }}</p>
             <div class="overlay light-content pack-body">
@@ -85,7 +85,7 @@
 
         {% if has_trend %}
         <section class="slide slide--light-wide" data-pack="1" data-merge-group="trend">
-            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">趋势分析</h2>
             <p class="slide-subtitle">{{ trend_subtitle }}</p>
             <div class="overlay light-content light-content--wide pack-body">
@@ -99,7 +99,7 @@
 
         {% if keyword_html %}
         <section class="slide slide--light" data-pack="1" data-merge-group="keywords">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">核心监测词表现</h2>
             <p class="slide-subtitle">{{ keyword_subtitle }}</p>
             <div class="overlay light-content pack-body slide-body--dense">
@@ -110,7 +110,7 @@
 
         {% if has_matrix %}
         <section class="slide slide--light-wide" data-pack="1" data-merge-group="matrix">
-            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">短板词 × 平台矩阵</h2>
             <p class="slide-subtitle">{{ matrix_subtitle }}</p>
             <div class="overlay light-content light-content--wide pack-body slide-body--dense">
@@ -121,7 +121,7 @@
 
         {% if competitor_html %}
         <section class="slide slide--light" data-pack="1" data-merge-group="competitor">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">竞品对比分析</h2>
             <p class="slide-subtitle">{{ competitor_subtitle }}</p>
             <div class="overlay light-content pack-body slide-body--dense">
@@ -141,7 +141,7 @@
         {% endif %}
 
         <section class="slide slide--light" data-pack="1" data-merge-group="platform">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">分平台排名与提及率</h2>
             <p class="slide-subtitle">{{ platform_subtitle }}</p>
             <div class="overlay light-content pack-body slide-body--dense">
@@ -151,7 +151,7 @@
 
         {% if has_tail %}
         <section class="slide slide--light" data-pack="1" data-merge-group="tail">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">{{ tail_title }}</h2>
             <p class="slide-subtitle">{{ tail_subtitle }}</p>
             <div class="overlay light-content pack-body">
@@ -162,7 +162,7 @@
 
         {% if has_disclaimer %}
         <section class="slide slide--light">
-            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
             <h2 class="slide-title">免责声明</h2>
             <p class="slide-subtitle">{{ disclaimer_subtitle }}</p>
             <div class="overlay light-content">
@@ -172,7 +172,7 @@
         {% endif %}
 
         <section class="slide slide--thanks">
-            <img class="master-bg" src="{{ monitor_assets.thanks }}" alt="">
+            <img class="master-bg" src="{{ monitor_assets.thanks }}" alt="" loading="lazy" decoding="async">
         </section>
     </main>
     {# 2026-07-28 - 预览 iframe 也要跑 pack，否则 overflow:hidden 裁切、与 PDF 分页不一致 #}
