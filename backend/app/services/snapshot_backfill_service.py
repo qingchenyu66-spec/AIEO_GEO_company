@@ -874,10 +874,7 @@ def dismiss_snapshot_backfill(
         item = build_snapshot_backfill_item(db, subtask, task)
         return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
 
-    item_probe = build_snapshot_backfill_item(db, subtask, task)
-    if not item_probe.get("needs_backfill"):
-        raise ValueError("当前子任务不在待补录状态，无需忽略")
-
+    # 2026-07-28 - 点开即可忽略消红点 - 不要求仍是待补状态
     subtask.backfill_dismissed_at = datetime.now(UTC).replace(tzinfo=None)
     subtask.backfill_dismissed_by = current.user.id
     dismiss_desc = _snapshot_backfill_log_description(db, subtask, task, action_type="忽略补录")
@@ -1559,8 +1556,17 @@ def list_snapshot_backfill_matrix(
                 }
             )
         avg = _average_mention_position(ranks)
-        # 2026-07-28 - 红点只看日均位次>阈值（或算不出均值）；勿用单场 needs_backfill 误标 Top3
-        has_todo = matrix_cell_has_todo(ranks=ranks, sample_count=len(samples))
+        # 2026-07-28 - 忽略后红点仍在 - 红点只看未忽略场次的日均；全忽略则灭
+        active_samples = [sample for sample in samples if not sample.get("backfill_dismissed")]
+        active_ranks: list[float] = []
+        for sample in active_samples:
+            rank = sample.get("mention_position")
+            try:
+                if rank is not None:
+                    active_ranks.append(float(rank))
+            except (TypeError, ValueError):
+                pass
+        has_todo = matrix_cell_has_todo(ranks=active_ranks, sample_count=len(active_samples))
         cells.append(
             {
                 "platform": plat,

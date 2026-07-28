@@ -254,6 +254,63 @@ def test_matrix_cell_has_todo_rules() -> None:
     assert matrix_cell_has_todo(ranks=[1.0, 1.0, 1.0], sample_count=3) is False
 
 
+def test_dismiss_allows_non_pending_slot(db_session, monkeypatch) -> None:
+    """点开即可忽略：Top3 场次也可忽略，用于消格子红点。"""
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app.services.snapshot_backfill_service import dismiss_snapshot_backfill
+
+    tenant = Tenant(name="任意忽略企业", code="tenant-any-dismiss", deleted=False, owner_user_id=9)
+    db_session.add(tenant)
+    db_session.flush()
+    task = GeoMonitorTask(
+        task_id="task-any-dismiss",
+        tenant_id=tenant.id,
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["好排名"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-any-dismiss",
+        task_id="task-any-dismiss",
+        platform="doubao",
+        mode="standard",
+        prompt="好排名",
+        status="completed",
+        answer_content="品牌A 第一",
+        mention_position=1,
+        raw_result_json={},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(identity_type="PLATFORM", tenant_id=None),
+        user=SimpleNamespace(id=1, display_name="运营", username="ops"),
+    )
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.get_monitor_subtask",
+        lambda db, sid, _c: db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == sid)),
+    )
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.get_monitor_task",
+        lambda db, tid, _c: db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == tid)),
+    )
+
+    result = dismiss_snapshot_backfill(db_session, subtask_id="st-any-dismiss", current=current)
+    assert result["backfill_dismissed"] is True
+    assert subtask.backfill_dismissed_at is not None
+    assert subtask.mention_position == 1
+
+
 def test_matrix_platform_visible_hides_unpurchased() -> None:
     """快照补录侧栏与排名矩阵共用：未购/历史平台不可见，桌面/移动成对可见。"""
     from app.services.monitor_service import matrix_platform_visible

@@ -326,9 +326,16 @@ function averageRanks(ranks: number[]) {
   return Math.round((total / ranks.length) * 10) / 10
 }
 
-function cellHasTodo(ranks: number[], sampleCount: number) {
-  // 2026-07-28 - 红点口径：日均位次>3 或有场次但算不出均值；≤3 不标（含刚好=3）
-  if (sampleCount <= 0) return false
+function cellHasTodo(slots: SnapshotBackfillMatrixSlot[]) {
+  // 2026-07-28 - 点开可忽略消红点 - 红点只看未忽略场次日均>3（或无均值）
+  const active = slots.filter(slot => !slot.backfill_dismissed)
+  if (!active.length) return false
+  const ranks: number[] = []
+  for (const slot of active) {
+    if (slot.mention_position != null && Number.isFinite(Number(slot.mention_position))) {
+      ranks.push(Number(slot.mention_position))
+    }
+  }
   if (!ranks.length) return true
   const avg = averageRanks(ranks)
   return avg == null ? true : avg > 3
@@ -349,7 +356,7 @@ function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrix
     fail_count: failCount,
     sample_count: cell.slots.length,
     rank_sample_count: ranks.length,
-    has_todo: cellHasTodo(ranks, cell.slots.length),
+    has_todo: cellHasTodo(cell.slots),
   }
 }
 
@@ -486,7 +493,7 @@ function isFailurePending(slot: SnapshotBackfillMatrixSlot) {
 }
 
 async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
-  if (!canSubmitBackfill.value || !slot.needs_backfill) return
+  if (!canSubmitBackfill.value || slot.backfill_dismissed) return
   try {
     if (isFailurePending(slot)) {
       await ElMessageBox.confirm(
@@ -496,7 +503,7 @@ async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
       )
     }
     await dismissSnapshotBackfill(slot.subtask_id)
-    // 2026-07-28 - 忽略只消提醒 - 保留场次排名/快照，本地清 needs_backfill，勿 removeSlot
+    // 2026-07-28 - 点开即可忽略 - 清 needs_backfill + 标已忽略，红点按未忽略场次重算
     patchSlotLocally(slot.subtask_id, {
       needs_backfill: false,
       backfill_dismissed: true,
@@ -607,6 +614,7 @@ async function openFromQuery() {
 }
 
 function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
+  if (slot.backfill_dismissed) return '已忽略'
   if (slot.needs_backfill && !slot.has_answer) return '失败待补'
   if (slot.needs_backfill) return '待补录'
   if (slot.has_answer) return '已有结果'
@@ -888,7 +896,7 @@ watch(
               补录
             </button>
             <button
-              v-if="canSubmitBackfill && slot.needs_backfill"
+              v-if="canSubmitBackfill && !slot.backfill_dismissed"
               type="button"
               class="sb-btn ghost"
               @click="dismissSlot(slot)"
