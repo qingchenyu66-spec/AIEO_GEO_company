@@ -44,6 +44,8 @@ export interface SnapshotBackfillQuery {
   tenant_id?: number | null
   all_tenants?: boolean
   date?: string
+  date_from?: string
+  date_to?: string
   source?: 'tenant_monitor' | 'lead_diagnosis' | ''
   platform?: string
   keyword?: string
@@ -77,6 +79,62 @@ export interface SnapshotBackfillListResult {
   summary: SnapshotBackfillListSummary
 }
 
+export interface SnapshotBackfillMatrixPlatform {
+  id: string
+  name: string
+  todo: number
+  fail: number
+  avg: number | null
+}
+
+export interface SnapshotBackfillMatrixSlot {
+  subtask_id: string
+  task_id?: string
+  schedule_label?: string | null
+  schedule_window_key?: string | null
+  mention_position?: number | null
+  needs_backfill?: boolean
+  has_answer?: boolean
+  status?: string | null
+  error_message?: string | null
+  prompt?: string
+  platform?: string
+  tenant_id?: number | null
+  tenant_name?: string | null
+  brand_name?: string | null
+  source?: string
+  monitor_keywords?: string | null
+  keyword_group?: string | null
+  updated_at?: string | null
+}
+
+export interface SnapshotBackfillMatrixCell {
+  platform: string
+  word: string
+  date: string
+  rank: number | null
+  has_todo: boolean
+  fail_count: number
+  sample_count: number
+  rank_sample_count: number
+  slots: SnapshotBackfillMatrixSlot[]
+}
+
+export interface SnapshotBackfillMatrixResult {
+  date_from: string
+  date_to: string
+  dates: string[]
+  words: string[]
+  platforms: SnapshotBackfillMatrixPlatform[]
+  cells: SnapshotBackfillMatrixCell[]
+  summary: {
+    todo_cells: number
+    fail_slots: number
+    item_total: number
+    scan_capped?: boolean
+  }
+}
+
 export async function getPendingSnapshotBackfills(
   query: SnapshotBackfillQuery = {},
   options?: { signal?: AbortSignal },
@@ -90,6 +148,8 @@ export async function getPendingSnapshotBackfills(
       tenant_id: query.tenant_id || undefined,
       all_tenants: query.tenant_id ? undefined : (query.all_tenants ?? true),
       date: query.date || undefined,
+      date_from: query.date_from || undefined,
+      date_to: query.date_to || undefined,
       source: query.source || undefined,
       platform: query.platform || undefined,
       keyword: query.keyword || undefined,
@@ -116,6 +176,26 @@ export async function getPendingSnapshotBackfills(
     }
   }
   return data as SnapshotBackfillListResult
+}
+
+export async function getSnapshotBackfillMatrix(
+  query: SnapshotBackfillQuery = {},
+  options?: { signal?: AbortSignal },
+): Promise<SnapshotBackfillMatrixResult> {
+  const response = await http.get('/v1/monitor/snapshot-backfill/matrix', {
+    signal: options?.signal,
+    params: {
+      tenant_id: query.tenant_id || undefined,
+      all_tenants: query.tenant_id ? undefined : (query.all_tenants ?? true),
+      date_from: query.date_from || undefined,
+      date_to: query.date_to || undefined,
+      source: query.source || undefined,
+      platform: query.platform || undefined,
+      keyword: query.keyword || undefined,
+      keyword_group: query.keyword_group || undefined,
+    },
+  })
+  return response.data.data as SnapshotBackfillMatrixResult
 }
 
 export async function submitSnapshotBackfill(

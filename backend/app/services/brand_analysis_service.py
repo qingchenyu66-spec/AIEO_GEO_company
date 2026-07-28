@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, time, timedelta
@@ -27,16 +28,21 @@ from app.services.media_proxy_service import public_screenshot_url
 
 logger = logging.getLogger(__name__)
 
-BA_SENTIMENT_SOURCE = "deepseek"
-BA_DESC_SOURCE = "deepseek"
+# 2026-07-28 - 正负面：v2 过严正面归零；v3 适中口径，打开页会重判
+BA_SENTIMENT_SOURCE = "deepseek-v3"
+# 2026-07-27 - 一快照多要点：bump source，旧单句视为未抽，仪表盘会重抽
+BA_DESC_SOURCE = "deepseek-v2"
 BA_SENTIMENT_BATCH = 12
 BA_SENTIMENT_MAX_PER_REQUEST = 24
 BA_DESC_BATCH = 10
 BA_DESC_MAX_PER_REQUEST = 24
 SENTIMENT_KEYS = ("positive", "neutral", "negative")
-# ponytail: SequenceMatcher on short CN text; 0.66 merges near-paraphrases (1998 全媒叙事).
-# Ceiling: transitive over-merge possible; upgrade path: embedding / DeepSeek cluster.
-BA_DESC_SIMILARITY = 0.66
+# 软上限 8（prompt 引导）；确有更多独立要点可到硬上限 16
+BA_DESC_SOFT_MAX = 8
+BA_DESC_HARD_MAX = 16
+# ponytail: SequenceMatcher on short CN text; 0.60 + LCS 门闩合并近义、少误并不同业务点。
+# Ceiling: 仍可能漏并换词大的近义；upgrade path: embedding / DeepSeek cluster.
+BA_DESC_SIMILARITY = 0.60
 _DESC_PUNCT_RE = re.compile(r"[\s、。，；：！？\"'“”‘’（）()\[\]【】《》·\-—_/\\|＋+]+")
 
 
@@ -72,15 +78,52 @@ def _has_deepseek_description(subtask: GeoMonitorSubtask) -> bool:
     return str(raw.get("_ba_description_source") or "") == BA_DESC_SOURCE
 
 
-def _ba_description(subtask: GeoMonitorSubtask) -> str:
+def _normalize_description_list(items: list[Any] | None) -> list[str]:
+    """清洗要点列表：去空、截断、去重；硬上限 BA_DESC_HARD_MAX。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        text = re.sub(r"\s+", "", str(item or "").strip())
+        if len(text) < 4:
+            continue
+        if len(text) > 60:
+            text = text[:60]
+        key = _normalize_description_key(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= BA_DESC_HARD_MAX:
+            break
+    return out
+
+
+def _ba_descriptions(subtask: GeoMonitorSubtask) -> list[str]:
+    """读多条要点；兼容旧字段单句 _ba_description。"""
     raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
-    return str(raw.get("_ba_description") or "").strip()
+    multi = raw.get("_ba_descriptions")
+    if isinstance(multi, list):
+        return _normalize_description_list(multi)
+    single = str(raw.get("_ba_description") or "").strip()
+    return _normalize_description_list([single] if single else [])
+
+
+def _ba_description(subtask: GeoMonitorSubtask) -> str:
+    rows = _ba_descriptions(subtask)
+    return rows[0] if rows else ""
 
 
 def _mark_deepseek_description(subtask: GeoMonitorSubtask, description: str) -> None:
+    _mark_deepseek_descriptions(subtask, [description] if description else [])
+
+
+def _mark_deepseek_descriptions(subtask: GeoMonitorSubtask, descriptions: list[str]) -> None:
+    cleaned = _normalize_description_list(descriptions)
     raw = dict(subtask.raw_result_json) if isinstance(subtask.raw_result_json, dict) else {}
     raw["_ba_description_source"] = BA_DESC_SOURCE
-    raw["_ba_description"] = description
+    raw["_ba_descriptions"] = cleaned
+    # 兼容旧读者：首条仍写单字段
+    raw["_ba_description"] = cleaned[0] if cleaned else ""
     subtask.raw_result_json = raw
     flag_modified(subtask, "raw_result_json")
 
@@ -99,6 +142,44 @@ def _description_similarity(a: str, b: str) -> float:
     if na == nb:
         return 1.0
     return SequenceMatcher(None, na, nb).ratio()
+
+
+def _lcs_run_len(a: str, b: str) -> int:
+    """最长连续公共子串长度（短中文要点够用）。"""
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for i, ca in enumerate(a, start=1):
+        cur = [0] * (len(b) + 1)
+        for j, cb in enumerate(b, start=1):
+            if ca == cb:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+def _descriptions_similar(a: str, b: str, *, threshold: float = BA_DESC_SIMILARITY) -> bool:
+    """近义合并判定：全等/包含/高相似直接并；中段相似须 LCS≥6，避免不同业务点误并。"""
+    na = _normalize_description_key(a)
+    nb = _normalize_description_key(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    # 2026-07-28 - 「总部位于北京」vs「2008年成立总部位于北京」类包含句应合并
+    if len(shorter) >= 6 and shorter in longer:
+        return True
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    if ratio >= 0.85:
+        return True
+    if ratio < threshold:
+        return False
+    # 2026-07-28 - 0.60~0.85 易把短视频/户外等不同要点并掉 - 加连续公共子串门闩
+    return _lcs_run_len(na, nb) >= 6
 
 
 def _dominant_sent_key(tally: dict[str, int]) -> str:
@@ -142,7 +223,11 @@ def _merge_similar_description_buckets(
                 _dominant_sent_key(buckets[j]["_sent_tally"]),
             ):
                 continue
-            if _description_similarity(buckets[i]["description"], buckets[j]["description"]) >= threshold:
+            if _descriptions_similar(
+                buckets[i]["description"],
+                buckets[j]["description"],
+                threshold=threshold,
+            ):
                 union(i, j)
 
     merged: dict[int, dict[str, Any]] = {}
@@ -157,10 +242,27 @@ def _merge_similar_description_buckets(
                 "_platforms": set(bucket["_platforms"]),
             }
             continue
-        target["answers"].extend(bucket["answers"])
-        for key, count in bucket["_sent_tally"].items():
-            target["_sent_tally"][key] = int(target["_sent_tally"].get(key, 0)) + int(count)
-        target["_platforms"].update(bucket["_platforms"])
+        # 近义组合并时按 subtask 去重，避免多样本要点并组后样本数虚高
+        existing = {str(a.get("subtask_id") or "") for a in target["answers"]}
+        for answer in bucket["answers"]:
+            sid = str(answer.get("subtask_id") or "")
+            if sid and sid in existing:
+                continue
+            target["answers"].append(answer)
+            if sid:
+                existing.add(sid)
+            label = str(answer.get("sentiment") or "")
+            sent_key = {
+                "正面": "positive",
+                "中性": "neutral",
+                "负面": "negative",
+            }.get(label, "unknown")
+            # 上面跳过重复后才加 tally；用 answers 情感近似（与分组时一致）
+            tally = target["_sent_tally"]
+            tally[sent_key] = int(tally.get(sent_key, 0)) + 1
+            code = str(answer.get("platform") or "").strip()
+            if code:
+                target["_platforms"].add(code)
         if len(str(bucket["description"])) > len(str(target["description"])):
             target["description"] = bucket["description"]
     return list(merged.values())
@@ -185,6 +287,11 @@ def preserve_brand_analysis_sentiment_on_upsert(
     if str(prev.get("_ba_description_source") or "") == BA_DESC_SOURCE:
         raw["_ba_description_source"] = BA_DESC_SOURCE
         raw["_ba_description"] = str(prev.get("_ba_description") or "").strip()
+        prev_multi = prev.get("_ba_descriptions")
+        if isinstance(prev_multi, list):
+            raw["_ba_descriptions"] = _normalize_description_list(prev_multi)
+        elif raw["_ba_description"]:
+            raw["_ba_descriptions"] = [raw["_ba_description"]]
     return sentiment_out, raw
 
 
@@ -275,15 +382,19 @@ def parse_brand_word_descriptions_with_deepseek(
         ]
         try:
             rows = client.extract_brand_answer_descriptions(brand_name=brand_name, items=payload)
-        except DeepseekApiError as exc:
+        except (DeepseekApiError, json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.warning("brand analysis description parse failed tenant=%s error=%s", tenant_id, exc)
             errors.append(str(exc))
             break
-        by_id = {row["id"]: row.get("description", "") for row in rows}
+        by_id = {
+            row["id"]: list(row.get("descriptions") or [])
+            for row in rows
+            if row.get("id")
+        }
         for item in batch:
             if item.subtask_id not in by_id:
                 continue
-            _mark_deepseek_description(item, str(by_id[item.subtask_id] or "").strip())
+            _mark_deepseek_descriptions(item, by_id[item.subtask_id])
             parsed += 1
     if parsed:
         db.commit()
@@ -299,48 +410,50 @@ def _group_ai_descriptions(
     *,
     platform_names: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """相同/语义相近短描述归并；空描述跳过。点击卡片看组内全部快照。"""
+    """相同/语义相近短描述归并；空描述跳过。一快照可贡献多条要点。点击卡片看组内全部快照。"""
     groups: dict[str, dict[str, Any]] = {}
     for item in subtasks:
-        desc = _ba_description(item)
-        key = _normalize_description_key(desc)
-        if not key:
-            continue
-        code = str(item.platform or "").strip()
-        label = _normalize_sentiment_label(item.sentiment)
-        sent_key = {
-            "正面": "positive",
-            "中性": "neutral",
-            "负面": "negative",
-        }.get(label, "unknown")
-        excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
-        answer = {
-            "subtask_id": item.subtask_id,
-            "task_id": item.task_id,
-            "platform": code,
-            "platform_name": platform_names.get(code) or code,
-            "prompt": item.prompt,
-            "excerpt": excerpt,
-            "sentiment": label,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            "page_screenshot": public_screenshot_url(item.page_screenshot),
-        }
-        bucket = groups.get(key)
-        if bucket is None:
-            groups[key] = {
-                "description": desc,
-                "answers": [answer],
-                "_sent_tally": {sent_key: 1},
-                "_platforms": {code} if code else set(),
+        for desc in _ba_descriptions(item):
+            key = _normalize_description_key(desc)
+            if not key:
+                continue
+            code = str(item.platform or "").strip()
+            label = _normalize_sentiment_label(item.sentiment)
+            sent_key = {
+                "正面": "positive",
+                "中性": "neutral",
+                "负面": "negative",
+            }.get(label, "unknown")
+            excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
+            answer = {
+                "subtask_id": item.subtask_id,
+                "task_id": item.task_id,
+                "platform": code,
+                "platform_name": platform_names.get(code) or code,
+                "prompt": item.prompt,
+                "excerpt": excerpt,
+                "sentiment": label,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "page_screenshot": public_screenshot_url(item.page_screenshot),
             }
-            continue
-        bucket["answers"].append(answer)
-        tally = bucket["_sent_tally"]
-        tally[sent_key] = int(tally.get(sent_key, 0)) + 1
-        if code:
-            bucket["_platforms"].add(code)
-        if len(desc) > len(str(bucket.get("description") or "")):
-            bucket["description"] = desc
+            bucket = groups.get(key)
+            if bucket is None:
+                groups[key] = {
+                    "description": desc,
+                    "answers": [answer],
+                    "_sent_tally": {sent_key: 1},
+                    "_platforms": {code} if code else set(),
+                }
+                continue
+            # 同一快照多要点归到同组时，answers 不去重：样本仍计一次语义出现
+            if not any(a.get("subtask_id") == item.subtask_id for a in bucket["answers"]):
+                bucket["answers"].append(answer)
+                tally = bucket["_sent_tally"]
+                tally[sent_key] = int(tally.get(sent_key, 0)) + 1
+                if code:
+                    bucket["_platforms"].add(code)
+            if len(desc) > len(str(bucket.get("description") or "")):
+                bucket["description"] = desc
 
     buckets = _merge_similar_description_buckets(list(groups.values()))
 
@@ -467,12 +580,17 @@ def build_brand_analysis_dashboard(
         "description_errors": [],
     }
     if parse_sentiments and subtasks:
-        sent_meta = parse_brand_word_sentiments_with_deepseek(
-            db,
-            tenant_id=resolved,
-            brand_name=str(brand_name),
-            subtasks=subtasks,
-        )
+        # 2026-07-28 - parse=true 时 LLM/JSON 异常曾整接口 400，前端吞错一直停在旧单句
+        try:
+            sent_meta = parse_brand_word_sentiments_with_deepseek(
+                db,
+                tenant_id=resolved,
+                brand_name=str(brand_name),
+                subtasks=subtasks,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("brand analysis sentiment parse crashed tenant=%s", resolved)
+            sent_meta = {"parsed": 0, "pending_left": len(subtasks), "errors": [str(exc)]}
         subtasks = _load_brand_word_subtasks(
             db,
             tenant_id=resolved,
@@ -481,12 +599,16 @@ def build_brand_analysis_dashboard(
         )
         if purchased_set:
             subtasks = [item for item in subtasks if item.platform in purchased_set]
-        desc_meta = parse_brand_word_descriptions_with_deepseek(
-            db,
-            tenant_id=resolved,
-            brand_name=str(brand_name),
-            subtasks=subtasks,
-        )
+        try:
+            desc_meta = parse_brand_word_descriptions_with_deepseek(
+                db,
+                tenant_id=resolved,
+                brand_name=str(brand_name),
+                subtasks=subtasks,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("brand analysis description parse crashed tenant=%s", resolved)
+            desc_meta = {"parsed": 0, "pending_left": len(subtasks), "errors": [str(exc)]}
         parse_meta = {
             "parsed": int(sent_meta.get("parsed") or 0),
             "pending_left": int(sent_meta.get("pending_left") or 0),

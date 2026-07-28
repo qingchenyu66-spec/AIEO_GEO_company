@@ -1027,6 +1027,21 @@ def _cached_preview_matches(html: str, fingerprint: str) -> bool:
     return bool(match and match.group(1) == fingerprint)
 
 
+def _preview_html_cache_usable(html: str, fingerprint: str) -> bool:
+    """落盘预览是否可直读。
+
+    2026-07-27 - 诊断预览每次点开都重算 30MB+ - @font-face 的 file:// 字体被误判为脏缓存；
+    仅拦截 jsDelivr 与 src/href 上的 file:// 资源，字体路径不再逼着重生成。
+    """
+    if not _cached_preview_matches(html, fingerprint):
+        return False
+    if "jsdelivr.net" in html or "cdn.jsdelivr" in html:
+        return False
+    if re.search(r"""(?i)(?:src|href)\s*=\s*['"]file:""", html):
+        return False
+    return True
+
+
 def materialize_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> Path | None:
     """生成时落盘 HTML，预览优先读文件。返回路径；不支持的类型返回 None。"""
     from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES
@@ -1044,21 +1059,14 @@ def materialize_report_html_preview(db: Session, report: dict[str, Any], *, them
 
 
 def read_or_build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> str:
-    """预览：指纹匹配的落盘文件直读，否则现算并落盘。含 jsDelivr 的旧缓存强制重建。"""
+    """预览：指纹匹配的落盘文件直读，否则现算并落盘。"""
     report_id = int(report.get("id") or 0)
     fingerprint = _report_preview_fingerprint(report, theme=theme)
     if report_id > 0:
         path = report_preview_html_path(report_id)
         if path.is_file():
             cached = path.read_text(encoding="utf-8")
-            if (
-                "jsdelivr.net" not in cached
-                and "cdn.jsdelivr" not in cached
-                and "/report-assets/echarts" not in cached
-                and "file:///" not in cached
-                and "file://" not in cached
-                and _cached_preview_matches(cached, fingerprint)
-            ):
+            if _preview_html_cache_usable(cached, fingerprint):
                 return cached
             path.unlink(missing_ok=True)
     path = materialize_report_html_preview(db, report, theme=theme)

@@ -65,6 +65,41 @@ export function matrixDayKeys(rows: RankingMatrixRow[]) {
   return [...new Set(rows.map(rowDayKey).filter(Boolean))].sort()
 }
 
+/** 闭区间枚举 YYYY-MM-DD；过长则截断，避免年视图热力炸表 */
+export function enumerateDateKeys(startDate: string, endDate: string, maxDays = 62): string[] {
+  const start = (startDate || '').trim().slice(0, 10)
+  const end = (endDate || '').trim().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+    return []
+  }
+  const out: string[] = []
+  const cursor = new Date(`${start}T00:00:00`)
+  const last = new Date(`${end}T00:00:00`)
+  while (cursor <= last && out.length < maxDays) {
+    const y = cursor.getFullYear()
+    const m = String(cursor.getMonth() + 1).padStart(2, '0')
+    const d = String(cursor.getDate()).padStart(2, '0')
+    out.push(`${y}-${m}-${d}`)
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return out
+}
+
+function platformCodeFamily(code: string) {
+  return code.replace(/_mobile$/i, '').trim().toLowerCase()
+}
+
+/** 2026-07-28 - 热力按词组平台裁列 - 未配置该平台的词不展示 */
+export function columnVisibleOnPlatform(column: RankingMatrixColumn, platform: string) {
+  const plats = (column.platforms || []).map(item => String(item || '').trim()).filter(Boolean)
+  if (!plats.length) return true
+  const target = String(platform || '').trim()
+  if (!target) return true
+  if (plats.includes(target)) return true
+  const family = platformCodeFamily(target)
+  return plats.some(code => platformCodeFamily(code) === family)
+}
+
 function averageRankValues(values: number[]) {
   if (!values.length) return null
   const total = values.reduce((sum, value) => sum + value, 0)
@@ -284,9 +319,9 @@ export function resolveColumnRow(
   dayKey?: string,
 ) {
   const sorted = sortMatrixRowsAsc(rows)
-  const targetDay = dayKey || matrixDayKeys(sorted).at(-1) || ''
+  const targetDay = (dayKey || matrixDayKeys(sorted).at(-1) || '').slice(0, 10)
   const pool = targetDay
-    ? sorted.filter(row => rowDayKey(row) === targetDay)
+    ? sorted.filter(row => rowDayKey(row).slice(0, 10) === targetDay)
     : sorted
   if (!pool.length) return null
 
@@ -454,8 +489,9 @@ export function sliceMatrixByPlatform(matrix: RankingMatrix, platform: string): 
   const rows = sortMatrixRowsAsc(
     matrix.rows.filter(row => (matrix.all_platforms ? row.platform === platform : true)),
   )
+  const columns = matrix.columns.filter(column => columnVisibleOnPlatform(column, platform))
   return {
-    columns: matrix.columns,
+    columns,
     rows,
     platform,
   }
@@ -870,11 +906,17 @@ export function buildMatrixBarOption(
   }
 }
 
-export function buildMatrixHeatOption(slice: MatrixPlatformSlice) {
-  const dayKeys = matrixDayKeys(slice.rows)
+export function buildMatrixHeatOption(
+  slice: MatrixPlatformSlice,
+  range?: { startDate?: string; endDate?: string },
+) {
+  const dataDays = matrixDayKeys(slice.rows).map(key => key.slice(0, 10))
+  // 2026-07-28 - 切「月」无体感 - 按筛选区间铺满日期轴，无样本日显示 —
+  const ranged = enumerateDateKeys(range?.startDate || '', range?.endDate || '')
+  const dayKeys = ranged.length ? ranged : dataDays
   const dates = dayKeys.map(dayKey => {
-    const row = slice.rows.find(item => rowDayKey(item) === dayKey)
-    return row?.schedule_label || dayKey || '—'
+    const row = slice.rows.find(item => rowDayKey(item).slice(0, 10) === dayKey)
+    return row?.schedule_label || dayKey.slice(5) || '—'
   })
   const keywords = slice.columns.map(labelMatrixPrompt)
   const data: Array<[number, number, number]> = []

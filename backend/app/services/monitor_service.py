@@ -2200,9 +2200,18 @@ def _build_matrix_columns(
     keyword_groups: list[BrandKeywordGroup],
     prompt_set: dict[str, str | None],
     rows: list[dict[str, Any]] | None = None,
+    *,
+    platform: str | None = None,
+    asset: BrandAsset | None = None,
 ) -> list[dict[str, Any]]:
-    """按监测词建列：每个词组的每个 monitor keyword 各占一列。"""
+    """按监测词建列：每个词组的每个 monitor keyword 各占一列。
+
+    platform 有值时只保留词组配置含该平台的列（企业配置未勾的平台不展示空行）。
+    """
+    from app.core.platform_order import platforms_compatible
+
     matrix_rows = rows or []
+    selected = str(platform or "").strip() or None
     eligible = sorted(
         [
             group for group in keyword_groups
@@ -2216,6 +2225,11 @@ def _build_matrix_columns(
     columns: list[dict[str, Any]] = []
     seen_prompts: set[str] = set()
     for group in eligible:
+        group_platforms = keyword_group_platforms(group, asset)
+        # 2026-07-28 - 热力按词组平台裁列 - 未配置该平台的词不占行
+        if selected and group_platforms:
+            if not any(platforms_compatible(selected, code) for code in group_platforms):
+                continue
         keywords = keyword_group_monitor_keywords(group)
         if not keywords:
             explicit = str(group.monitor_keyword or "").strip()
@@ -2233,6 +2247,7 @@ def _build_matrix_columns(
                 "group_name": keyword_group_display_label(group),
                 "monitor_keyword": text,
                 "group_id": group.id,
+                "platforms": list(group_platforms),
             })
 
     if columns:
@@ -2255,6 +2270,11 @@ def _build_matrix_columns(
                 matched.id
                 if (matched := _resolve_prompt_keyword_group(prompt, keyword_groups))
                 else None
+            ),
+            "platforms": (
+                keyword_group_platforms(matched, asset)
+                if (matched := _resolve_prompt_keyword_group(prompt, keyword_groups))
+                else []
             ),
         }
         for prompt in visible_prompts
@@ -3090,6 +3110,32 @@ def _should_reconcile_structured_rank(subtask: GeoMonitorSubtask) -> bool:
         return True
 
 
+def _structured_reconcile_override_ok(
+    stored_rank: int | float | None,
+    list_rank: int | float | None,
+) -> bool:
+    """对账覆盖护栏：库内好名次被文末同名衍生品拉飞时拒绝覆盖。
+
+    允许小幅纠偏（如脏全员第1→出场序第4）；拒绝 1→22 这类跃迁。
+    """
+    if stored_rank is None or list_rank is None:
+        return False
+    try:
+        stored = float(stored_rank)
+        listed = float(list_rank)
+    except (TypeError, ValueError):
+        return False
+    if stored == listed:
+        return False
+    delta = abs(listed - stored)
+    # 2026-07-27 - 万唯热力图 1+22+27→16.7 - 对账命中靠后产品名时拒覆盖
+    if stored <= 3 and listed >= 10:
+        return False
+    if delta >= 5:
+        return False
+    return True
+
+
 def _orm_attr_loaded(obj: Any, key: str) -> bool:
     """True if attribute is already in identity map; False means would lazy-load."""
     try:
@@ -3148,6 +3194,14 @@ def _read_display_brand_rank(
 
     if subtask.mention_position is not None:
         source, raw = _stored_display_rank_source(subtask)
+        # 2026-07-28 - 手填名次绝对锁定 - 读路径禁止对账/全文改写
+        if source == "manual" and raw.get("manual_rank_locked", True):
+            return BrandRankResolution(
+                rank=subtask.mention_position,
+                mentioned=True,
+                source="manual",
+                confidence=1.0,
+            )
         # 人工/LLM 锁定；自动写入的 mention_position 可能来自模力「全员第1」脏榜，详情允许重算
         if source in {"manual", "llm"} or not allow_full_parse:
             stored = raw.get("rank_resolution") if isinstance(raw.get("rank_resolution"), dict) else {}
@@ -3159,9 +3213,11 @@ def _read_display_brand_rank(
                     confidence = 0.9
                 confidence = max(0.0, min(1.0, confidence))
             # 轻量路径：仅在脏榜高发区与结构化榜对账，其余信任 mention_position
+            # 2026-07-27 - 矩阵未 load raw 时对账会把补录第1改成文末第22 - raw 未加载则跳过对账
             if (
                 source == "stored"
                 and not allow_full_parse
+                and _orm_attr_loaded(subtask, "raw_result_json")
                 and _should_reconcile_structured_rank(subtask)
             ):
                 rank_from_list, _, list_category = _find_brand_in_structured_rankings(
@@ -3171,19 +3227,21 @@ def _read_display_brand_rank(
                     monitor_keywords=str(monitor_keywords or "").strip(),
                     normalize_cache=normalize_cache,
                 )
-                if rank_from_list is not None:
-                    try:
-                        if float(rank_from_list) != float(subtask.mention_position):
-                            return BrandRankResolution(
-                                rank=rank_from_list,
-                                mentioned=True,
-                                source="structured",
-                                confidence=0.95,
-                                category=list_category,
-                                rank_basis="table",
-                            )
-                    except (TypeError, ValueError):
-                        pass
+                if (
+                    rank_from_list is not None
+                    and _structured_reconcile_override_ok(
+                        subtask.mention_position,
+                        rank_from_list,
+                    )
+                ):
+                    return BrandRankResolution(
+                        rank=rank_from_list,
+                        mentioned=True,
+                        source="structured",
+                        confidence=0.95,
+                        category=list_category,
+                        rank_basis="table",
+                    )
             return BrandRankResolution(
                 rank=subtask.mention_position,
                 mentioned=True,
@@ -3581,7 +3639,13 @@ def ranking_matrix(
             "cells": cells,
         })
 
-    columns = _build_matrix_columns(keyword_group_rows, prompt_set, rows)
+    columns = _build_matrix_columns(
+        keyword_group_rows,
+        prompt_set,
+        rows,
+        platform=selected_platform,
+        asset=asset,
+    )
     columns = _filter_matrix_columns_for_scope(
         columns,
         prompt_set,
@@ -4269,7 +4333,10 @@ def list_inclusion_snapshots(
 
     lookback_start = trend_start - timedelta(days=14)
     # 平台已筛时多取一些；补录会刷新 updated_at，窄窗+硬截断会挤掉同周期旧样本
-    fetch_cap = min(600, max(limit * 8, 160 if platform_key else 240))
+    period_days = max(1, (trend_end.date() - trend_start.date()).days + 1)
+    fetch_cap = min(1200, max(limit * 8, period_days * 40, 160 if platform_key else 240))
+    # 2026-07-27 - 收录明细须跟上边近7/30/全部同一周期：可见性按 detect_day∈[start,昨日]，
+    # 勿再用 updated_at<=昨日——今日洗库/回写会把周期内行全部误杀（艾迪亚近7天变空）
     conditions = [
         GeoMonitorTask.deleted.is_(False),
         GeoMonitorTask.tenant_id == tenant_id,
@@ -4279,7 +4346,6 @@ def list_inclusion_snapshots(
             GeoMonitorSubtask.updated_at >= lookback_start,
             GeoMonitorTask.created_at >= lookback_start,
         ),
-        GeoMonitorSubtask.updated_at <= range_end,
     ]
     if platform_key:
         from app.core.platform_order import platform_code_family

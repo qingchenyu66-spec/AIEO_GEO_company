@@ -72,7 +72,8 @@ def test_celery_notification_category_gated():
     assert can_view_notification_category("celery_queue", **flags) is False
     assert can_view_notification_category("celery_queue", **{**flags, "can_view_ops_alerts": True}) is True
     assert can_view_notification_category("snapshot_backfill", **flags) is False
-    assert can_view_notification_category("snapshot_backfill", **{**flags, "can_view_snapshot_backfill": True}) is True
+    # 有菜单权限后仍需按 payload 归属判断
+    assert can_view_notification_category("snapshot_backfill", **{**flags, "can_view_snapshot_backfill": True}) is None
     assert (
         can_view_notification_category(
             "snapshot_backfill",
@@ -141,7 +142,48 @@ def test_snapshot_backfill_owner_only_read_check(db_session):
             can_view_customer_reports=False,
             snapshot_backfill_owner_only=False,
         )
+        is False
+    )
+    # 运营可见：无人认领
+    unclaimed = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="snapshot_backfill",
+        level="warning",
+        title="待补录 · 无人认领",
+        message="测试 · 早 · 待补录1条",
+        payload_json='{"subtask_id": "st-2"}',
+        source_key="backfill:batch:lead:x:2026-07-28:早",
+    )
+    db_session.add(unclaimed)
+    db_session.commit()
+    assert (
+        _user_can_read_notification(
+            unclaimed,
+            user_id=99,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=False,
+            snapshot_backfill_owner_only=False,
+        )
         is True
+    )
+    assert (
+        _user_can_read_notification(
+            unclaimed,
+            user_id=99,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            can_review_approvals=False,
+            can_view_ops_alerts=False,
+            can_view_snapshot_backfill=True,
+            can_view_customer_reports=False,
+            snapshot_backfill_owner_only=True,
+        )
+        is False
     )
     assert (
         _user_can_read_notification(

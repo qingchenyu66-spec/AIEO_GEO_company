@@ -399,3 +399,472 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── A逻辑 + B皮肤：矩阵运营台 ── */
+.sb-skin {
+  --sb-ink: #1a2b3c;
+  --sb-muted: #6a7c8f;
+  --sb-line: #dde5ee;
+  --sb-accent: #e4572e;
+  --sb-green: #1f9d6a;
+  --sb-green-bg: #e6f7ef;
+  --sb-yellow: #c98416;
+  --sb-yellow-bg: #fff3d9;
+  --sb-gray: #8b97a6;
+  --sb-gray-bg: #eef1f4;
+  --sb-todo: #e4572e;
+  --sb-todo-bg: #fde8e2;
+  --sb-radius: 16px;
+  --sb-shadow: 0 10px 28px rgba(26, 43, 60, 0.07);
+}
+
+.sb-range-sep {
+  color: var(--sb-muted);
+  font-size: 12px;
+}
+
+.sb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--sb-line);
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--sb-ink);
+}
+
+.sb-toggle.on {
+  border-color: #f0b49f;
+  background: #fff7f3;
+  color: #a13d1c;
+  font-weight: 700;
+}
+
+.sb-toggle input {
+  accent-color: var(--sb-accent);
+}
+
+/* 2026-07-28 - 天数多时右栏被表格 min-content 挤没 - 主栏 minmax(0,1fr) 内滚，侧栏固定列宽 */
+.sb-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(220px, 24vw, 280px);
+  gap: 18px;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 仅很窄时叠成上下；中等宽度仍保留右侧平台列 */
+@media (max-width: 640px) {
+  .sb-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sb-side {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: none;
+  }
+}
+
+.sb-panel {
+  background: #fff;
+  border: 1px solid var(--sb-line);
+  border-radius: var(--sb-radius);
+  box-shadow: var(--sb-shadow);
+}
+
+.sb-main {
+  padding: 18px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.sb-main-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.sb-platform-title {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.sb-platform-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  background: #40566c;
+}
+
+.sb-platform-title h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--sb-ink);
+}
+
+.sb-platform-title p {
+  margin: 4px 0 0;
+  color: var(--sb-muted);
+  font-size: 12px;
+}
+
+.sb-kpis {
+  display: flex;
+  gap: 10px;
+}
+
+.sb-kpi {
+  min-width: 92px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  text-align: center;
+  border: 1px solid var(--sb-line);
+  background: #f8fafc;
+}
+
+.sb-kpi strong {
+  display: block;
+  font-size: 22px;
+  color: var(--sb-ink);
+}
+
+.sb-kpi span {
+  font-size: 12px;
+  color: var(--sb-muted);
+}
+
+.sb-kpi.primary {
+  background: #fff7f3;
+  border-color: #f5cbb8;
+}
+
+.sb-kpi.primary strong {
+  color: var(--sb-todo);
+}
+
+.sb-kpi.secondary strong {
+  font-size: 18px;
+}
+
+.sb-matrix-wrap {
+  border: 1px solid var(--sb-line);
+  border-radius: 14px;
+  overflow: auto;
+  max-height: min(520px, calc(100vh - 280px));
+  width: 100%;
+  max-width: 100%;
+  background: #fbfcfd;
+  /* 天数多时在方框内横滚，不撑破布局 */
+  overscroll-behavior: contain;
+}
+
+table.sb-matrix {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table.sb-matrix th,
+table.sb-matrix td {
+  border-bottom: 1px solid #e8edf3;
+  border-right: 1px solid #eef2f6;
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 13px;
+}
+
+table.sb-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f2f5f8;
+  color: var(--sb-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+table.sb-matrix tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #fff;
+  text-align: left;
+  max-width: 220px;
+  padding-left: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-cell {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 48px;
+  min-height: 40px;
+  padding: 5px 6px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-weight: 800;
+  background: transparent;
+  font: inherit;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+
+.sb-cell:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .08);
+}
+
+.sb-cell small {
+  font-weight: 600;
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.sb-cell.rank-good {
+  background: var(--sb-green-bg);
+  color: var(--sb-green);
+  border-color: #bfe8d3;
+}
+
+.sb-cell.rank-mid {
+  background: var(--sb-yellow-bg);
+  color: var(--sb-yellow);
+  border-color: #f0d59a;
+}
+
+.sb-cell.rank-none {
+  background: var(--sb-gray-bg);
+  color: var(--sb-gray);
+  border-color: #d7dde4;
+}
+
+.sb-cell.is-empty {
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+.sb-cell.has-todo {
+  box-shadow: inset 0 0 0 2px var(--sb-todo);
+  background: var(--sb-todo-bg) !important;
+  color: var(--sb-todo) !important;
+  border-color: #f5c2b4 !important;
+}
+
+.sb-cell.has-todo::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sb-todo);
+  border: 2px solid #fff;
+}
+
+.sb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  color: var(--sb-muted);
+  font-size: 12px;
+  align-items: center;
+}
+
+.sb-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border: 1px solid rgba(0, 0, 0, .06);
+}
+
+.sb-side {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  /* 侧栏自身过高时内部滚，勿被主矩阵顶出视口 */
+  max-height: min(640px, calc(100vh - 160px));
+  overflow: auto;
+}
+
+.sb-side h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--sb-ink);
+}
+
+.sb-plat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sb-plat-card {
+  border: 1px solid var(--sb-line);
+  border-radius: 14px;
+  padding: 12px;
+  cursor: pointer;
+  background: #fff;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.sb-plat-card.active {
+  border-color: var(--sb-accent);
+  box-shadow: 0 0 0 3px rgba(228, 87, 46, 0.14);
+}
+
+.sb-plat-card.dim {
+  opacity: 0.42;
+}
+
+.sb-plat-card .row1 {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.sb-plat-card .name {
+  font-weight: 800;
+}
+
+.sb-plat-card .meta {
+  font-size: 12px;
+  color: var(--sb-muted);
+}
+
+.sb-plat.stats,
+.sb-plat-card .stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  text-align: center;
+}
+
+.sb-plat-card .stats div {
+  background: #f6f8fa;
+  border-radius: 10px;
+  padding: 6px 4px;
+}
+
+.sb-plat-card .stats strong {
+  display: block;
+  font-size: 15px;
+}
+
+.sb-plat-card .stats span {
+  font-size: 11px;
+  color: var(--sb-muted);
+}
+
+.sb-plat-card .stats .hi strong {
+  color: var(--sb-todo);
+}
+
+.sb-drawer {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 30, 40, 0.35);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 40;
+}
+
+.sb-drawer-panel {
+  width: min(420px, 92vw);
+  background: #fff;
+  padding: 18px;
+  overflow: auto;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, .14);
+}
+
+.sb-drawer-panel h3 {
+  margin: 0 0 6px;
+}
+
+.sb-drawer-panel .sub {
+  color: var(--sb-muted);
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.sb-todo-item {
+  border: 1px solid var(--sb-line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: #fafbfc;
+}
+
+.sb-todo-item .t {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.sb-todo-item .d {
+  font-size: 12px;
+  color: var(--sb-muted);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.sb-todo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sb-btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--sb-accent);
+  color: #fff;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sb-btn.ghost {
+  background: #eef2f5;
+  color: var(--sb-ink);
+}

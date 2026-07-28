@@ -922,6 +922,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     detailVisible.value = true
     try {
       const subtask = await withRetry(() => getMonitorSubtask(subtaskId))
+      if (!subtask) throw new Error('子任务不存在')
       selectedMatrixCell.value = {
         taskId: taskId || subtask.task_id || '',
         platform: subtask.platform || null,
@@ -1113,6 +1114,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     try {
       const subtask = await withRetry(() => getMonitorSubtask(snapshot.subtask_id))
       if (seq !== snapshotDetailSeq) return
+      if (!subtask) throw new Error('missing')
       detailSubtask.value = subtask
     } catch (error: unknown) {
       if (seq !== snapshotDetailSeq) return
@@ -1180,6 +1182,14 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   function applyDatePreset(preset: MonitorDatePreset) {
     if (isCustomerView.value) {
       if (!isCustomerDatePreset(preset)) return
+      // 2026-07-28 - 切月/季无体感 - 同选项再点也强制重拉；标签会显示「本月 …」
+      if (preset === datePreset.value && preset !== 'custom') {
+        const range = workspaceTrendDateRange(preset)
+        filters.startDate = range.startDate
+        filters.endDate = range.endDate
+        void loadRankingMatrix()
+        return
+      }
       datePreset.value = preset
       if (preset === 'custom') return
       const range = workspaceTrendDateRange(preset)
@@ -1189,6 +1199,13 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       return
     }
     if (!['7d', '30d', 'custom'].includes(preset)) return
+    if (preset === datePreset.value && preset !== 'custom') {
+      const range = defaultDateRange(preset === '30d' ? 30 : 7)
+      filters.startDate = range.startDate
+      filters.endDate = range.endDate
+      void loadRankingMatrix()
+      return
+    }
     datePreset.value = preset as RealtimeDatePreset
     if (preset === 'custom') return
     const range = defaultDateRange(preset === '30d' ? 30 : 7)

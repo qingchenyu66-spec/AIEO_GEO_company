@@ -85,7 +85,6 @@ const {
   formatDateTime,
 } = useMonitorRealtime()
 
-
 const isLoading = computed(() => {
   if (viewMode.value === 'matrix') {
     return loadingMatrix.value && !rankingMatrix.value

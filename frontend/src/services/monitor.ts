@@ -193,6 +193,8 @@ export interface RankingMatrixColumn {
   group_name: string | null
   monitor_keyword?: string | null
   group_id?: number | null
+  /** 词组配置的监测平台；切平台 Tab 时据此隐藏未配置词 */
+  platforms?: string[]
 }
 
 export interface RankingMatrixCellSnapshot {
@@ -632,8 +634,11 @@ export async function getBrandAnalysis(
     params: {
       tenant_id: params?.tenant_id,
       parse: params?.parse ?? false,
+      // 2026-07-28 - 避免中间层/浏览器把旧「1 组」响应当缓存
+      _ts: Date.now(),
     },
     timeout: options?.timeout ?? 120_000,
+    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
   } as GeoHttpRequestConfig)
   return response.data.data as BrandAnalysisDashboard
 }

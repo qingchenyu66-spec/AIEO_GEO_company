@@ -91,10 +91,25 @@ async function handleRead(item: SystemNotification) {
   }
   if (item.category === 'snapshot_backfill' && item.payload) {
     const payload = item.payload
-    portalNavigate('platform.snapshot_backfill', false, {
-      subtask_id: String(payload.subtask_id || ''),
-      backfill: '1',
-    })
+    const query: Record<string, string> = {}
+    // 2026-07-28 - 汇总通知进矩阵 - 带企业/日期，勿只跳随机单条
+    if (payload.tenant_id != null && String(payload.tenant_id)) {
+      query.tenant_id = String(payload.tenant_id)
+    }
+    const day = String(payload.detect_day || payload.date_from || '')
+    if (day) {
+      query.date_from = day
+      query.date_to = String(payload.date_to || day)
+    }
+    if (payload.platform) {
+      query.platform = String(payload.platform)
+    }
+    // 单条旧通知仍可直达补录；批次只打开矩阵
+    if (!payload.batch && payload.subtask_id) {
+      query.subtask_id = String(payload.subtask_id)
+      query.backfill = '1'
+    }
+    portalNavigate('platform.snapshot_backfill', false, query)
     open.value = false
     return
   }

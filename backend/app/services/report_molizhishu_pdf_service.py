@@ -26,8 +26,8 @@ _SLIDE_HEIGHT_PX = 1417
 _PDF_PAGE_W_PT = _SLIDE_WIDTH_PX * 72 / 96
 _PDF_PAGE_H_PT = _SLIDE_HEIGHT_PX * 72 / 96
 # 指纹用：改导出链路时 bump，避免命中旧缓存
-# jpeg-pages-v4：排名明细强制日均刷新，废旧时段快照/导出缓存
-_PDF_PIPELINE = "jpeg-pages-v4"
+# jpeg-pages-v5：核心页禁止 KPI 裁切；结论过多拆续页；封面 chip 换行
+_PDF_PIPELINE = "jpeg-pages-v5"
 _JPEG_SCREENSHOT_QUALITY = 90
 
 _tls = threading.local()

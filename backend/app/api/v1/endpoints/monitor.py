@@ -45,6 +45,7 @@ from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
     dismiss_snapshot_backfill,
+    list_snapshot_backfill_matrix,
     list_snapshot_backfill_page,
     undismiss_snapshot_backfill,
 )
@@ -471,6 +472,8 @@ def monitor_snapshot_backfill_pending(
         description="为 true 时允许不传 tenant_id 查询全部企业（默认需指定企业以防误扫全库）",
     ),
     on_date: date | None = Query(default=None, alias="date"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     source: str | None = Query(default=None, pattern="^(tenant_monitor|lead_diagnosis)$"),
     platform: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
@@ -485,7 +488,7 @@ def monitor_snapshot_backfill_pending(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[SnapshotBackfillListResponse]:
-    """运营端快照补录列表：可按企业、单日、来源、平台、关键词/词组筛选；默认含已有结果以便覆盖更正。"""
+    """运营端快照补录列表：可按企业、单日/区间、来源、平台、关键词/词组筛选；默认含已有结果以便覆盖更正。"""
     require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     if tenant_id is None and not all_tenants:
         raise HTTPException(
@@ -526,6 +529,8 @@ def monitor_snapshot_backfill_pending(
                 str(tenant_id or ""),
                 ",".join(str(x) for x in (scoped_tenant_ids or [])),
                 str(on_date or ""),
+                str(date_from or ""),
+                str(date_to or ""),
                 str(source or ""),
                 str(platform or ""),
                 str(keyword or ""),
@@ -546,6 +551,8 @@ def monitor_snapshot_backfill_pending(
         tenant_ids=scoped_tenant_ids,
         allowed_lead_task_ids=allowed_lead_task_ids,
         detect_date=on_date,
+        detect_date_from=date_from,
+        detect_date_to=date_to,
         source=source,
         platform=platform,
         keyword=keyword,
@@ -560,6 +567,88 @@ def monitor_snapshot_backfill_pending(
 
         set_json_cache(cache_key, payload, ttl_seconds=45)
     return ApiResponse(data=SnapshotBackfillListResponse.model_validate(payload))
+
+
+@router.get("/snapshot-backfill/matrix", response_model=ApiResponse[dict])
+def monitor_snapshot_backfill_matrix(
+    tenant_id: int | None = None,
+    all_tenants: bool = Query(default=False),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    source: str | None = Query(default=None, pattern="^(tenant_monitor|lead_diagnosis)$"),
+    platform: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    keyword_group: str | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """运营端快照补录热力：词×日三次均值；红点=均值>3或算不出均值。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    if tenant_id is None and not all_tenants:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请指定 tenant_id，或显式传入 all_tenants=true 查询全部企业",
+        )
+    try:
+        require_snapshot_backfill_permission(db, current, "can_export")
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    owned = sales_owned_tenant_ids(db, current)
+    scoped_tenant_ids: list[int] | None = None
+    allowed_lead_task_ids: list[str] | None = None
+    if owned is not None:
+        allowed_lead_task_ids = sales_owned_lead_diagnosis_task_ids(db, current.user.id)
+        if tenant_id is not None:
+            try:
+                ensure_sales_tenant_access(db, current, tenant_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        elif all_tenants:
+            if not owned and not allowed_lead_task_ids:
+                return ApiResponse(data={
+                    "dates": [], "words": [], "platforms": [], "cells": [],
+                    "summary": {"todo_cells": 0, "fail_slots": 0, "item_total": 0},
+                })
+            scoped_tenant_ids = owned
+            tenant_id = None
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定 tenant_id")
+
+    from app.core.redis_client import get_json_cache, set_json_cache
+    import hashlib
+
+    # 2026-07-28 - 矩阵首屏慢 - 短缓存；忽略走本地更新不依赖此缓存即时一致
+    raw = "|".join(
+        [
+            str(tenant_id or ""),
+            ",".join(str(x) for x in (scoped_tenant_ids or [])),
+            str(date_from or ""),
+            str(date_to or ""),
+            str(source or ""),
+            str(platform or ""),
+            str(keyword or ""),
+            str(keyword_group or ""),
+        ]
+    )
+    cache_key = f"snapshot_backfill:mtx:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+    cached = get_json_cache(cache_key)
+    if isinstance(cached, dict) and "cells" in cached:
+        return ApiResponse(data=cached)
+
+    data = list_snapshot_backfill_matrix(
+        db,
+        tenant_id=tenant_id,
+        tenant_ids=scoped_tenant_ids,
+        allowed_lead_task_ids=allowed_lead_task_ids,
+        detect_date_from=date_from,
+        detect_date_to=date_to,
+        source=source,
+        platform=platform,
+        keyword=keyword,
+        keyword_group=keyword_group,
+    )
+    set_json_cache(cache_key, data, ttl_seconds=30)
+    return ApiResponse(data=data)
 
 
 @router.post("/subtasks/{subtask_id}/snapshot-backfill", response_model=ApiResponse[dict])

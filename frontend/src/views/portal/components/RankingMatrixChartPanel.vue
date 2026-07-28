@@ -226,7 +226,10 @@ async function renderChart() {
   }
   if (version !== renderVersion) return
 
-  const option = built?.option ?? buildMatrixHeatOption(slice)
+  const option = built?.option ?? buildMatrixHeatOption(slice, {
+    startDate: props.filterStartDate,
+    endDate: props.filterEndDate,
+  })
   chartInstance.setOption(option, { notMerge: true })
   chartInstance.resize({ width: chartRef.value.clientWidth, height: renderHeight })
 

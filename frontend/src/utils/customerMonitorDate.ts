@@ -110,8 +110,18 @@ export function workspaceTrendPeriodLabel(
   startDate: string,
   endDate: string,
 ) {
-  void preset
-  return formatCompactDateRange(startDate, endDate)
+  const range = formatCompactDateRange(startDate, endDate)
+  const names: Record<WorkspaceTrendPreset, string> = {
+    '7d': '近7日',
+    month: '本月',
+    quarter: '本季',
+    year: '本年',
+    custom: '自定义',
+  }
+  const name = names[preset] || ''
+  // 2026-07-28 - 切周期无体感 - 标签带预设名，避免只看热力误以为没切
+  if (!range) return name
+  return name ? `${name} ${range}` : range
 }
 
 /** 与当前筛选等长的上一期：近7天→再往前7天；本月→上月同期；本季/本年同理；自定义→紧邻前一段。 */

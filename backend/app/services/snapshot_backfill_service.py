@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from collections import defaultdict
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
@@ -27,6 +28,7 @@ from app.services.media_proxy_service import public_screenshot_url
 from app.services.monitor_service import (
     backfill_weak_rank_threshold,
     TERMINAL_STATUSES,
+    _average_mention_position,
     _platform_display_names,
     _prompt_belongs_to_group,
     _reconcile_task_progress,
@@ -50,7 +52,7 @@ from app.services.schedule_context import (
 )
 from app.services.system_notification_service import (
     resolve_subtask_backfill_notification,
-    upsert_subtask_backfill_notification as persist_backfill_notification,
+    upsert_batch_backfill_notification as persist_batch_backfill_notification,
 )
 
 _SNAPSHOT_HOST_HINTS: dict[str, set[str]] = {
@@ -194,20 +196,254 @@ def clear_subtask_backfill_dismiss(subtask: GeoMonitorSubtask) -> None:
     subtask.backfill_dismissed_by = None
 
 
+def _bust_snapshot_backfill_matrix_cache() -> None:
+    try:
+        from app.core.redis_client import delete_cache_pattern
+
+        delete_cache_pattern("snapshot_backfill:mtx:*")
+    except Exception:
+        pass
+
+
+def parse_schedule_slot(
+    window_key: str | None,
+    schedule_label: str | None = None,
+) -> tuple[str, str]:
+    """场次 key + 展示时刻。返回 (20260728-0430, 2026-07-28 04:30)。
+
+    2026-07-28 - 通知不用早午晚 - 场次未必一天三次，按具体时刻汇总
+    """
+    text = str(window_key or "").strip()
+    if len(text) >= 13 and text[8] == "-" and text[:8].isdigit():
+        day, hm = text[:8], text[9:]
+        if len(hm) >= 4 and hm[:4].isdigit():
+            label = f"{day[0:4]}-{day[4:6]}-{day[6:8]} {hm[0:2]}:{hm[2:4]}"
+            return f"{day}-{hm[:4]}", label
+
+    label_raw = str(schedule_label or "").strip().replace("：", ":")
+    # "2026-07-28 09:30" / "2026-07-28 9:30"
+    if len(label_raw) >= 16 and label_raw[4] == "-" and label_raw[7] == "-":
+        day_part = label_raw[:10]
+        rest = label_raw[11:].strip()
+        if ":" in rest:
+            hh_s, mm_s = rest.split(":", 1)[0], rest.split(":", 1)[1][:2]
+            try:
+                hh, mm = int(hh_s), int(mm_s)
+                key = f"{day_part.replace('-', '')}-{hh:02d}{mm:02d}"
+                return key, f"{day_part} {hh:02d}:{mm:02d}"
+            except ValueError:
+                pass
+    # 仅时刻 "09:30" —— 无日期时退回时段
+    for token in label_raw.split():
+        if ":" in token:
+            parts = token.split(":", 1)
+            try:
+                hh, mm = int(parts[0]), int(parts[1][:2])
+                today = date.today()
+                key = f"{today.strftime('%Y%m%d')}-{hh:02d}{mm:02d}"
+                return key, f"{today.isoformat()} {hh:02d}:{mm:02d}"
+            except ValueError:
+                continue
+    return "unknown", "时段"
+
+
+def schedule_slot_label(window_key: str | None, schedule_label: str | None = None) -> str:
+    """通知正文用的具体场次时刻。"""
+    return parse_schedule_slot(window_key, schedule_label)[1]
+
+
+def schedule_period_bucket(window_key: str | None, schedule_label: str | None = None) -> str:
+    """兼容旧名：现返回具体时刻，不再映射早/午/晚。"""
+    return schedule_slot_label(window_key, schedule_label)
+
+
+def _detect_day_from_schedule(schedule_ctx: dict[str, Any] | None) -> str | None:
+    ctx = schedule_ctx or {}
+    for key in (ctx.get("schedule_window_key"), ctx.get("schedule_key")):
+        text = str(key or "").strip()
+        if len(text) >= 8 and text[:8].isdigit():
+            return f"{text[0:4]}-{text[4:6]}-{text[6:8]}"
+    label = str(ctx.get("schedule_label") or "").strip()
+    if len(label) >= 10 and label[4] == "-" and label[7] == "-":
+        return label[:10]
+    return None
+
+
+def matrix_cell_has_todo(*, ranks: list[float], sample_count: int) -> bool:
+    """词×平台×日红点：有场次且（无均值 或 均值>阈值）。无场次不标。"""
+    if sample_count <= 0:
+        return False
+    # 2026-07-28 - 算不出均值也标红 - 有场次但无一有效展示位次
+    if not ranks:
+        return True
+    avg = _average_mention_position(ranks)
+    if avg is None:
+        return True
+    return float(avg) > float(backfill_weak_rank_threshold())
+
+
+def build_snapshot_backfill_matrix_sample(
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    schedule_ctx: dict[str, Any],
+    tenant_name: str | None = None,
+    lead_ctx: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """矩阵轻量样本：跳过展示对账，避免千级子任务逐条 serialize。"""
+    # 2026-07-28 - 矩阵加载慢 - 热力只用库内位次，抽屉点详情再拉完整展示
+    has_answer = bool((subtask.answer_content or "").strip())
+    pos = subtask.mention_position
+    try:
+        effective = int(pos) if pos is not None else None
+    except (TypeError, ValueError):
+        effective = None
+    needs = subtask_needs_snapshot_backfill(
+        subtask,
+        effective_rank=effective,
+        use_effective_rank=True,
+    )
+    updated = getattr(subtask, "updated_at", None)
+    return {
+        "subtask_id": subtask.subtask_id,
+        "task_id": task.task_id,
+        "tenant_id": task.tenant_id,
+        "tenant_name": tenant_name,
+        "brand_name": (lead_ctx or {}).get("brand_name"),
+        "platform": subtask.platform,
+        "prompt": subtask.prompt,
+        "error_message": subtask.error_message,
+        "monitor_keywords": task.monitor_keywords,
+        "mention_position": effective,
+        "needs_backfill": bool(needs),
+        "has_answer": has_answer,
+        "status": subtask.status,
+        "schedule_key": schedule_ctx.get("schedule_key"),
+        "schedule_window_key": schedule_ctx.get("schedule_window_key"),
+        "schedule_label": schedule_ctx.get("schedule_label"),
+        "source": _resolve_snapshot_backfill_source(task, lead_ctx or {}),
+        "updated_at": updated.isoformat(sep=" ", timespec="seconds") if updated else None,
+    }
+
+
 def notify_failed_subtasks_for_task(db: Session, task: GeoMonitorTask) -> int:
-    """任务进入终态或存在失败子任务时，为待补录项写入单条通知。"""
+    """任务终态时按「公司×具体场次时刻」汇总写入待补录通知（平台拆进正文）。"""
     if task.status not in TERMINAL_STATUSES and (task.failed_items or 0) <= 0:
         return 0
-    count = 0
+    groups: dict[tuple[str, str, str], list[tuple[GeoMonitorSubtask, dict[str, Any]]]] = defaultdict(list)
     for subtask in task.subtasks or []:
         if subtask_backfill_dismissed(subtask):
             continue
         ctx = build_snapshot_backfill_item(db, subtask, task)
         if not ctx.get("needs_backfill"):
             continue
-        _notify_subtask_backfill(db, subtask, task, ctx=ctx)
-        count += 1
+        slot_key, slot_label = parse_schedule_slot(
+            ctx.get("schedule_window_key"), ctx.get("schedule_label")
+        )
+        detect_day = _detect_day_from_schedule(ctx) or (
+            f"{slot_key[0:4]}-{slot_key[4:6]}-{slot_key[6:8]}" if len(slot_key) >= 8 and slot_key[:8].isdigit() else date.today().isoformat()
+        )
+        scope = str(ctx.get("brand_name") or ctx.get("tenant_name") or task.monitor_keywords or "监测任务")
+        groups[(slot_key, slot_label, scope)].append((subtask, ctx))
+
+    count = 0
+    for (slot_key, slot_label, scope), rows in groups.items():
+        payloads = [ctx for _st, ctx in rows]
+        detect_day = _detect_day_from_schedule(payloads[0]) if payloads else date.today().isoformat()
+        if not detect_day:
+            detect_day = (
+                f"{slot_key[0:4]}-{slot_key[4:6]}-{slot_key[6:8]}"
+                if len(slot_key) >= 8 and slot_key[:8].isdigit()
+                else date.today().isoformat()
+            )
+        entries = []
+        for st, ctx in rows:
+            platform = str(st.platform or ctx.get("platform") or "").strip() or "unknown"
+            entries.append(
+                {
+                    "subtask_id": str(st.subtask_id),
+                    "platform": platform,
+                    "platform_label": None,
+                }
+            )
+        _notify_batch_backfill(
+            db,
+            period=slot_label,
+            slot_key=slot_key,
+            detect_day=detect_day,
+            scope=scope,
+            subtask_entries=entries,
+            payloads=payloads,
+        )
+        count += len(rows)
     return count
+
+
+def _notify_batch_backfill(
+    db: Session,
+    *,
+    period: str,
+    detect_day: str,
+    scope: str,
+    payloads: list[dict[str, Any]],
+    subtask_entries: list[dict[str, Any]] | None = None,
+    platform: str | None = None,
+    subtask_ids: list[str] | None = None,
+    slot_key: str | None = None,
+) -> None:
+    platform_names = _platform_display_names()
+    owner_user_id = None
+    tenant_id = None
+    for payload in payloads:
+        if payload.get("owner_user_id") is not None:
+            owner_user_id = payload.get("owner_user_id")
+        if payload.get("tenant_id") is not None:
+            tenant_id = payload.get("tenant_id")
+
+    entries: list[dict[str, Any]] = []
+    for item in subtask_entries or []:
+        code = str(item.get("platform") or platform or "unknown").strip() or "unknown"
+        entries.append(
+            {
+                "subtask_id": str(item.get("subtask_id") or "").strip(),
+                "platform": code,
+                "platform_label": str(item.get("platform_label") or platform_names.get(code) or code),
+            }
+        )
+    if not entries and subtask_ids:
+        code = str(platform or "unknown").strip() or "unknown"
+        label = platform_names.get(code) or code
+        for sid in subtask_ids:
+            entries.append(
+                {
+                    "subtask_id": str(sid),
+                    "platform": code,
+                    "platform_label": label,
+                }
+            )
+    entries = [e for e in entries if e.get("subtask_id")]
+    if not entries:
+        return
+
+    resolved_slot = slot_key
+    if not resolved_slot and payloads:
+        resolved_slot, _label = parse_schedule_slot(
+            payloads[0].get("schedule_window_key"),
+            payloads[0].get("schedule_label"),
+        )
+
+    # 同批多次 notify 合并 subtask_ids，N 用合并后条数
+    persist_batch_backfill_notification(
+        db,
+        period=period,
+        slot_key=resolved_slot,
+        detect_day=detect_day,
+        scope=scope,
+        subtask_entries=entries,
+        owner_user_id=owner_user_id,
+        tenant_id=tenant_id,
+        sample_payload=payloads[0] if payloads else {},
+    )
 
 
 def _notify_subtask_backfill(
@@ -217,22 +453,32 @@ def _notify_subtask_backfill(
     *,
     ctx: dict[str, Any] | None = None,
 ) -> None:
+    """兼容旧调用：单条并入公司×场次时刻汇总。"""
     payload = ctx or build_snapshot_backfill_item(db, subtask, task)
-    scope = payload.get("brand_name") or payload.get("tenant_name") or task.monitor_keywords or "监测任务"
-    prompt_preview = (subtask.prompt or "")[:80]
-    rank = payload.get("mention_position")
-    if rank is not None and (subtask.answer_content or "").strip():
-        title = "排名落后待补录"
-        message = f"{scope} · {subtask.platform} · 第{int(rank)}名 · {prompt_preview}"
-    else:
-        title = "快照待补录"
-        message = f"{scope} · {subtask.platform} · {prompt_preview}"
-    persist_backfill_notification(
+    scope = str(payload.get("brand_name") or payload.get("tenant_name") or task.monitor_keywords or "监测任务")
+    platform = str(subtask.platform or payload.get("platform") or "").strip() or "unknown"
+    slot_key, slot_label = parse_schedule_slot(
+        payload.get("schedule_window_key"), payload.get("schedule_label")
+    )
+    detect_day = _detect_day_from_schedule(payload) or (
+        f"{slot_key[0:4]}-{slot_key[4:6]}-{slot_key[6:8]}"
+        if len(slot_key) >= 8 and slot_key[:8].isdigit()
+        else date.today().isoformat()
+    )
+    _notify_batch_backfill(
         db,
-        subtask_id=subtask.subtask_id,
-        title=title,
-        message=message,
-        payload=payload,
+        period=slot_label,
+        slot_key=slot_key,
+        detect_day=detect_day,
+        scope=scope,
+        subtask_entries=[
+            {
+                "subtask_id": str(subtask.subtask_id),
+                "platform": platform,
+                "platform_label": None,
+            }
+        ],
+        payloads=[payload],
     )
 
 
@@ -324,6 +570,7 @@ def apply_snapshot_backfill(
         else:
             invalidate_monitor_summary_cache(bust_overview=True)
         resolve_subtask_backfill_notification(db, subtask.subtask_id)
+        _bust_snapshot_backfill_matrix_cache()
 
         from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
 
@@ -467,6 +714,7 @@ def apply_snapshot_backfill(
     else:
         invalidate_monitor_summary_cache(bust_overview=True)
     resolve_subtask_backfill_notification(db, subtask.subtask_id)
+    _bust_snapshot_backfill_matrix_cache()
 
     from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
 
@@ -636,6 +884,7 @@ def dismiss_snapshot_backfill(
     )
     db.commit()
     resolve_subtask_backfill_notification(db, subtask.subtask_id)
+    _bust_snapshot_backfill_matrix_cache()
     db.refresh(subtask)
     item = build_snapshot_backfill_item(db, subtask, task)
     return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
@@ -884,6 +1133,8 @@ def list_snapshot_backfill_page(
     tenant_ids: list[int] | None = None,
     allowed_lead_task_ids: list[str] | None = None,
     detect_date: date | None = None,
+    detect_date_from: date | None = None,
+    detect_date_to: date | None = None,
     source: str | None = None,
     platform: str | None = None,
     keyword: str | None = None,
@@ -892,16 +1143,26 @@ def list_snapshot_backfill_page(
     offset: int = 0,
     limit: int = 50,
     include_summary: bool = True,
+    light: bool = False,
 ) -> dict[str, Any]:
-    """运营端快照补录列表（含汇总统计），可按企业/检测日/来源/平台/关键词筛选。
+    """运营端快照补录列表（含汇总统计），可按企业/检测日(区间)/来源/平台/关键词筛选。
 
     include_summary=False 时尽早凑齐本页后停止扫描，供首屏轻量加载；
     汇总请另请求 include_summary=True（可走短缓存）。
+    light=True：矩阵专用，跳过展示位次对账，只取库内位次与待补标记。
     """
     platform_code = str(platform or "").strip()
     keyword_text = str(keyword or "").strip()
     keyword_group_filter = str(keyword_group or "").strip()
     source_filter = str(source or "").strip()
+
+    # 2026-07-28 - 补录支持日期区间 - 单日参数兼容映射到 from/to
+    range_from = detect_date_from
+    range_to = detect_date_to
+    if detect_date is not None and range_from is None and range_to is None:
+        range_from = range_to = detect_date
+    if range_from is not None and range_to is not None and range_from > range_to:
+        range_from, range_to = range_to, range_from
 
     stmt = (
         select(GeoMonitorSubtask)
@@ -965,20 +1226,29 @@ def list_snapshot_backfill_page(
                 GeoMonitorTask.task_id.notin_(lead_task_ids),
             )
         )
-    if detect_date is not None:
-        day_prefix = detect_date.strftime("%Y%m%d")
+    if range_from is not None or range_to is not None:
+        d0 = range_from or range_to
+        d1 = range_to or range_from
+        assert d0 is not None and d1 is not None
+        start_key = d0.strftime("%Y%m%d")
+        end_key_exclusive = (d1 + timedelta(days=1)).strftime("%Y%m%d")
         lead_task_ids = select(LeadDiagnosisRun.task_id).where(
             LeadDiagnosisRun.task_id.isnot(None),
-            LeadDiagnosisRun.schedule_key.like(f"{day_prefix}-%"),
+            LeadDiagnosisRun.schedule_key >= start_key,
+            LeadDiagnosisRun.schedule_key < end_key_exclusive,
         )
         schedule_task_ids = select(GeoMonitorScheduleRun.task_id).where(
-            GeoMonitorScheduleRun.schedule_key.like(f"{day_prefix}%"),
+            GeoMonitorScheduleRun.schedule_key >= start_key,
+            GeoMonitorScheduleRun.schedule_key < end_key_exclusive,
         )
         stmt = stmt.where(
             or_(
                 GeoMonitorTask.task_id.in_(lead_task_ids),
                 GeoMonitorTask.task_id.in_(schedule_task_ids),
-                func.date(GeoMonitorTask.created_at) == detect_date,
+                and_(
+                    func.date(GeoMonitorTask.created_at) >= d0,
+                    func.date(GeoMonitorTask.created_at) <= d1,
+                ),
             )
         )
 
@@ -1006,7 +1276,8 @@ def list_snapshot_backfill_page(
     has_scope_filter = bool(
         tenant_id
         or tenant_ids
-        or detect_date
+        or range_from
+        or range_to
         or platform_code
         or keyword_text
         or keyword_group_filter
@@ -1063,7 +1334,8 @@ def list_snapshot_backfill_page(
 
         keyword_group_rows: list = []
         keyword_group_dicts: list[dict[str, Any]] = []
-        if task.tenant_id:
+        # light 矩阵且无词组筛选：跳过词组库查询
+        if task.tenant_id and (keyword_group_filter or not light):
             if task.tenant_id not in keyword_groups_cache:
                 try:
                     orm_groups = list_keyword_groups(db, task.tenant_id)
@@ -1094,18 +1366,27 @@ def list_snapshot_backfill_page(
             lead_runs_map=lead_runs_map,
             brand_asset_cache=brand_asset_cache,
         )
-        item = build_snapshot_backfill_item(
-            db,
-            subtask,
-            task,
-            schedule_runs_map=schedule_runs_map,
-            lead_runs_map=lead_runs_map,
-            keyword_groups_cache=keyword_groups_cache,
-            keyword_group_dict_cache=keyword_group_dict_cache,
-            brand_asset_cache=brand_asset_cache,
-            tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
-            lead_ctx=lead_ctx,
-        )
+        if light:
+            item = build_snapshot_backfill_matrix_sample(
+                subtask,
+                task,
+                schedule_ctx=schedule_ctx,
+                tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
+                lead_ctx=lead_ctx,
+            )
+        else:
+            item = build_snapshot_backfill_item(
+                db,
+                subtask,
+                task,
+                schedule_runs_map=schedule_runs_map,
+                lead_runs_map=lead_runs_map,
+                keyword_groups_cache=keyword_groups_cache,
+                keyword_group_dict_cache=keyword_group_dict_cache,
+                brand_asset_cache=brand_asset_cache,
+                tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
+                lead_ctx=lead_ctx,
+            )
         needs = bool(item.get("needs_backfill"))
         has_answer = bool(item.get("has_answer"))
         if pending_only and not needs:
@@ -1136,6 +1417,181 @@ def list_snapshot_backfill_page(
             "has_more": page_offset + len(page_items) < total,
             "scan_capped": bool(scan_cap is not None and len(rows) >= scan_cap),
             "summary_partial": not include_summary,
+        },
+    }
+
+
+def list_snapshot_backfill_matrix(
+    db: Session,
+    *,
+    tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
+    allowed_lead_task_ids: list[str] | None = None,
+    detect_date_from: date | None = None,
+    detect_date_to: date | None = None,
+    source: str | None = None,
+    platform: str | None = None,
+    keyword: str | None = None,
+    keyword_group: str | None = None,
+) -> dict[str, Any]:
+    """词×日热力：格内为日三次均值；红点=均值>阈值或算不出均值。"""
+    today = date.today()
+    d1 = detect_date_to or today
+    d0 = detect_date_from or (d1 - timedelta(days=6))
+    if d0 > d1:
+        d0, d1 = d1, d0
+    # 区间最多 31 天，避免一次扫爆
+    if (d1 - d0).days > 30:
+        d0 = d1 - timedelta(days=30)
+
+    payload = list_snapshot_backfill_page(
+        db,
+        tenant_id=tenant_id,
+        tenant_ids=tenant_ids,
+        allowed_lead_task_ids=allowed_lead_task_ids,
+        detect_date_from=d0,
+        detect_date_to=d1,
+        source=source,
+        platform=platform,
+        keyword=keyword,
+        keyword_group=keyword_group,
+        pending_only=False,
+        offset=0,
+        limit=4000,
+        include_summary=True,
+        light=True,
+    )
+    items = payload.get("items") or []
+    platform_names = _platform_display_names()
+
+    dates: list[str] = []
+    cursor = d0
+    while cursor <= d1:
+        dates.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+
+    # key: (platform, word, date) -> samples
+    buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    word_order: list[str] = []
+    word_seen: set[str] = set()
+    platform_order: list[str] = []
+    platform_seen: set[str] = set()
+
+    for item in items:
+        plat = str(item.get("platform") or "").strip()
+        if not plat:
+            continue
+        word = str(item.get("prompt") or item.get("keyword_group") or item.get("monitor_keywords") or "").strip()
+        if not word:
+            continue
+        day = _detect_day_from_schedule(item)
+        if not day or day < d0.isoformat() or day > d1.isoformat():
+            # 无调度日时退回 updated_at 日期
+            updated = str(item.get("updated_at") or "")[:10]
+            day = updated if updated and d0.isoformat() <= updated <= d1.isoformat() else None
+        if not day:
+            continue
+        if plat not in platform_seen:
+            platform_seen.add(plat)
+            platform_order.append(plat)
+        if word not in word_seen:
+            word_seen.add(word)
+            word_order.append(word)
+        buckets[(plat, word, day)].append(item)
+
+    cells: list[dict[str, Any]] = []
+    platform_stats: dict[str, dict[str, Any]] = {
+        code: {"id": code, "name": platform_names.get(code) or code, "todo": 0, "fail": 0, "avg_ranks": []}
+        for code in platform_order
+    }
+
+    for (plat, word, day), samples in buckets.items():
+        ranks: list[float] = []
+        fail_count = 0
+        slots: list[dict[str, Any]] = []
+        for sample in samples:
+            rank = sample.get("mention_position")
+            try:
+                if rank is not None:
+                    ranks.append(float(rank))
+            except (TypeError, ValueError):
+                pass
+            is_fail = bool(sample.get("needs_backfill")) and not bool(sample.get("has_answer"))
+            if is_fail:
+                fail_count += 1
+            slots.append(
+                {
+                    "subtask_id": sample.get("subtask_id"),
+                    "task_id": sample.get("task_id"),
+                    "schedule_label": sample.get("schedule_label"),
+                    "schedule_window_key": sample.get("schedule_window_key"),
+                    "mention_position": sample.get("mention_position"),
+                    "needs_backfill": bool(sample.get("needs_backfill")),
+                    "has_answer": bool(sample.get("has_answer")),
+                    "status": sample.get("status"),
+                    "error_message": sample.get("error_message"),
+                    "prompt": sample.get("prompt"),
+                    "platform": plat,
+                    "tenant_id": sample.get("tenant_id"),
+                    "tenant_name": sample.get("tenant_name"),
+                    "brand_name": sample.get("brand_name"),
+                    "source": sample.get("source"),
+                    "monitor_keywords": sample.get("monitor_keywords"),
+                    "keyword_group": sample.get("keyword_group"),
+                    "updated_at": sample.get("updated_at"),
+                }
+            )
+        avg = _average_mention_position(ranks)
+        has_todo = matrix_cell_has_todo(ranks=ranks, sample_count=len(samples))
+        cells.append(
+            {
+                "platform": plat,
+                "word": word,
+                "date": day,
+                "rank": avg,
+                "has_todo": has_todo,
+                "fail_count": fail_count,
+                "sample_count": len(samples),
+                "rank_sample_count": len(ranks),
+                "slots": slots,
+            }
+        )
+        stats = platform_stats.setdefault(
+            plat,
+            {"id": plat, "name": platform_names.get(plat) or plat, "todo": 0, "fail": 0, "avg_ranks": []},
+        )
+        if has_todo:
+            stats["todo"] += 1
+        stats["fail"] += fail_count
+        if avg is not None:
+            stats["avg_ranks"].append(float(avg))
+
+    platforms_out: list[dict[str, Any]] = []
+    for code in platform_order:
+        stats = platform_stats[code]
+        avg_ranks = stats.pop("avg_ranks", [])
+        platforms_out.append(
+            {
+                "id": code,
+                "name": stats["name"],
+                "todo": int(stats["todo"]),
+                "fail": int(stats["fail"]),
+                "avg": _average_mention_position(avg_ranks),
+            }
+        )
+
+    return {
+        "date_from": d0.isoformat(),
+        "date_to": d1.isoformat(),
+        "dates": dates,
+        "words": word_order,
+        "platforms": platforms_out,
+        "cells": cells,
+        "summary": {
+            "todo_cells": sum(1 for cell in cells if cell.get("has_todo")),
+            "fail_slots": sum(int(cell.get("fail_count") or 0) for cell in cells),
+            "item_total": len(items),
+            "scan_capped": bool((payload.get("summary") or {}).get("scan_capped")),
         },
     }
 

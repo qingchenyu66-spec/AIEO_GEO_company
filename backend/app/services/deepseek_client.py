@@ -149,12 +149,62 @@ class DeepseekClient:
             start = raw.find("{")
             end = raw.rfind("}")
             if start >= 0 and end > start:
-                return json.loads(raw[start:end + 1])
+                chunk = raw[start:end + 1]
+                try:
+                    return json.loads(chunk)
+                except json.JSONDecodeError:
+                    repaired = DeepseekClient._repair_json_like(chunk)
+                    try:
+                        return json.loads(repaired)
+                    except json.JSONDecodeError as exc:
+                        raise DeepseekApiError("DeepSeek 返回内容无法解析为 JSON") from exc
             start = raw.find("[")
             end = raw.rfind("]")
             if start >= 0 and end > start:
-                return json.loads(raw[start:end + 1])
+                try:
+                    return json.loads(raw[start:end + 1])
+                except json.JSONDecodeError as exc:
+                    raise DeepseekApiError("DeepSeek 返回内容无法解析为 JSON") from exc
             raise DeepseekApiError("DeepSeek 返回内容无法解析为 JSON") from None
+
+    @staticmethod
+    def _repair_json_like(text: str) -> str:
+        """轻量修常见坏 JSON：中文弯引号、尾逗号、缺失收尾括号。"""
+        s = (
+            str(text or "")
+            .replace("“", '"')
+            .replace("”", '"')
+            .replace("‘", "'")
+            .replace("’", "'")
+        )
+        s = re.sub(r",\s*([}\]])", r"\1", s)
+        # 2026-07-27 - 多要点输出偶发截断少 ]} - 按栈补全收尾
+        stack: list[str] = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            elif ch == "]" and stack and stack[-1] == "[":
+                stack.pop()
+        if in_str:
+            s += '"'
+        while stack:
+            opener = stack.pop()
+            s += "}" if opener == "{" else "]"
+        return s
 
     def classify_brand_answer_sentiments(
         self,
@@ -182,18 +232,20 @@ class DeepseekClient:
         )
         system_prompt = (
             "你是品牌舆情分析助手。根据 AI 搜索/问答原文，判断对指定品牌的情感倾向。"
-            "只输出 JSON，不要解释。"
+            "口径适中：有清晰优势/认可可判正面，不要过度压成中性。只输出 JSON，不要解释。"
         )
         user_prompt = (
             f"品牌名称：{brand_name}\n"
             "请对下列编号摘录分别判定情感：positive（正面）、neutral（中性）、negative（负面）。\n"
             "规则：\n"
-            "1. 以该品牌在文中的评价口径为准，忽略无关竞品褒贬\n"
-            "2. 无明显褒贬或仅客观罗列 → neutral\n"
-            "3. 批评、风险、不推荐、差评 → negative\n"
-            "4. 推荐、优势、认可 → positive\n"
-            '5. 严格输出：{"items":[{"id":"...","sentiment":"positive|neutral|negative"}]}\n'
-            "6. 必须覆盖全部输入 id\n\n"
+            "1. 只看该品牌在文中的评价口径，忽略无关竞品褒贬\n"
+            "2. neutral：纯客观百科罗列（成立时间/产能数字/资质名录堆砌），几乎无优劣评价\n"
+            "3. negative：明确批评、风险、投诉、不推荐、负面对比占主导\n"
+            "4. positive：推荐、优势、好评、认可、领先/王牌/开创、口碑与实力背书等；"
+            "专精特新/高新等若作为优势亮点写出（而非冷冰冰名录）也可 positive\n"
+            "5. 正负都有时看主导倾向；主导正面 → positive，主导负面 → negative，难分主次 → neutral\n"
+            '6. 严格输出：{"items":[{"id":"...","sentiment":"positive|neutral|negative"}]}\n'
+            "7. 必须覆盖全部输入 id\n\n"
             f"{numbered}"
         )
         content = self.chat_completion(
@@ -201,6 +253,7 @@ class DeepseekClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            # 2026-07-28 - v2「优先 neutral」过严、正面被压没 - 回调适中口径（已弃用「拿不准就中性」）
             temperature=0.1,
             max_tokens=1200,
             source="brand-analysis-sentiment",
@@ -227,15 +280,17 @@ class DeepseekClient:
         *,
         brand_name: str,
         items: list[dict[str, str]],
-    ) -> list[dict[str, str]]:
-        """抽取每条回答中对该品牌的一句短描述。
+    ) -> list[dict[str, Any]]:
+        """抽取每条回答中对该品牌的有用独立要点（可多条）。
 
-        items: [{id, text}]，返回 [{id, description}]。
+        items: [{id, text}]，返回 [{id, descriptions: [str, ...]}]。
+        软上限约 8；确有更多独立有用信息可到 16。
         """
         rows = [
             {
                 "id": str(item.get("id") or "").strip(),
-                "text": str(item.get("text") or "").strip()[:1200],
+                # 2026-07-27 - 长文只送 1200 易丢产品线/工程要点 - 提到 3600
+                "text": str(item.get("text") or "").strip()[:3600],
             }
             for item in items
             if str(item.get("id") or "").strip() and str(item.get("text") or "").strip()
@@ -247,19 +302,22 @@ class DeepseekClient:
             for index, row in enumerate(rows, start=1)
         )
         system_prompt = (
-            "你是品牌监测文案助手。根据 AI 回答原文，抽取一句关于指定品牌的客观短描述。"
-            "只输出 JSON，不要解释。"
+            "你是品牌监测文案助手。根据 AI 回答原文，抽取关于指定品牌的全部有用独立要点。"
+            "只输出合法 JSON（双引号、无注释、无尾逗号），不要解释。"
         )
         user_prompt = (
             f"品牌名称：{brand_name}\n"
-            "请对下列编号摘录各写一句中文短描述（12～36 字），概括该文对该品牌的核心说法。\n"
+            "请对下列编号摘录各写若干条中文短描述（每条 12～36 字）。\n"
             "规则：\n"
-            "1. 只写与该品牌相关的内容，忽略无关竞品\n"
+            "1. 只写与该品牌相关的内容，忽略无关竞品与导航/套话\n"
             "2. 客观陈述，不要加「我认为」\n"
-            "3. 同类说法尽量使用相同措辞，便于归并\n"
-            "4. 文中未实质提及该品牌 → description 用空字符串\n"
-            '5. 严格输出：{"items":[{"id":"...","description":"..."}]}\n'
-            "6. 必须覆盖全部输入 id\n\n"
+            "3. 一个要点一条：企业属性、资质称号、产品线、代表工程、产能等必须拆开，"
+            "禁止合并成一句长话\n"
+            "4. 通常 3～8 条；确有更多独立有用信息时可超过，最多 16 条；"
+            "正文若明显含多段信息，不得只返回 1 条\n"
+            "5. 文中未实质提及该品牌 → descriptions 用空数组\n"
+            '6. 严格输出：{"items":[{"id":"...","descriptions":["要点1","要点2"]}]}\n'
+            "7. 必须覆盖全部输入 id；description 字符串内不要使用双引号\n\n"
             f"{numbered}"
         )
         content = self.chat_completion(
@@ -268,26 +326,59 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=1600,
+            max_tokens=2400,
             source="brand-analysis-description",
         )
-        payload = self._parse_json_payload(content)
+        try:
+            payload = self._parse_json_payload(content)
+        except DeepseekApiError:
+            # 2026-07-27 - 多要点 JSON 偶发坏格式 - 降温度重试一次
+            content = self.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                        + "\n\n上次输出不是合法 JSON，请只重新输出 JSON 对象。",
+                    },
+                ],
+                temperature=0,
+                max_tokens=2400,
+                source="brand-analysis-description-retry",
+            )
+            payload = self._parse_json_payload(content)
         raw_items = payload.get("items") if isinstance(payload, dict) else payload
         if not isinstance(raw_items, list):
             raise DeepseekApiError("DeepSeek JSON 缺少 items 数组")
         known_ids = {row["id"] for row in rows}
-        results: list[dict[str, str]] = []
+        results: list[dict[str, Any]] = []
         for item in raw_items:
             if not isinstance(item, dict):
                 continue
             item_id = str(item.get("id") or "").strip()
-            description = str(item.get("description") or "").strip()
-            description = re.sub(r"\s+", "", description)
             if item_id not in known_ids:
                 continue
-            if len(description) > 60:
-                description = description[:60]
-            results.append({"id": item_id, "description": description})
+            raw_descs = item.get("descriptions")
+            if not isinstance(raw_descs, list):
+                # 兼容旧单句字段
+                single = str(item.get("description") or "").strip()
+                raw_descs = [single] if single else []
+            cleaned: list[str] = []
+            seen: set[str] = set()
+            for desc in raw_descs:
+                text = re.sub(r"\s+", "", str(desc or "").strip())
+                if len(text) < 4:
+                    continue
+                if len(text) > 60:
+                    text = text[:60]
+                key = text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append(text)
+                if len(cleaned) >= 16:
+                    break
+            results.append({"id": item_id, "descriptions": cleaned})
         return results
 
     def extract_sentiment_phrases(

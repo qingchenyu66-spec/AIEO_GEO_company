@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { EyeOff, RefreshCw, Upload } from '@lucide/vue'
 import '../../../styles/snapshot-backfill.css'
-import PlatformBadge from '../../../components/PlatformBadge.vue'
 import SnapshotBackfillDialog from '../components/SnapshotBackfillDialog.vue'
 import SnapshotBackfillDetailDrawer from '../components/SnapshotBackfillDetailDrawer.vue'
 import {
   dismissSnapshotBackfill,
-  getPendingSnapshotBackfills,
+  getSnapshotBackfillMatrix,
   undismissSnapshotBackfill,
+  type SnapshotBackfillMatrixCell,
+  type SnapshotBackfillMatrixPlatform,
+  type SnapshotBackfillMatrixSlot,
   type SnapshotBackfillPendingItem,
 } from '../../../services/snapshotBackfill'
 import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
@@ -27,8 +29,7 @@ import {
 import { useAuthStore } from '../../../stores/auth'
 import { notifyOperationError } from '../../../utils/requestError'
 import { withRetry } from '../../../composables/useRetry'
-import { formatMonitorSubtaskRank } from '../portalUtils'
-import { mergeSnapshotBackfillItem, snapshotBackfillBatchLabel } from '../snapshotBackfillDisplay'
+import { mergeSnapshotBackfillItem } from '../snapshotBackfillDisplay'
 import { emitMonitorRefresh } from '../../../utils/monitorRefresh'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 
@@ -40,25 +41,9 @@ const backfillMenu = computed(() => auth.allowedMenus.find(menu => menu.menu_cod
 const canViewBackfill = computed(() => Boolean(backfillMenu.value?.can_export))
 const canSubmitBackfill = computed(() => Boolean(backfillMenu.value?.can_update))
 
-const PAGE_SIZE = 40
 const FILTER_DEBOUNCE_MS = 350
 
 const loading = ref(false)
-const loadingMore = ref(false)
-const items = ref<SnapshotBackfillPendingItem[]>([])
-const listSummary = ref({
-  total: 0,
-  pending: 0,
-  overwrite: 0,
-  shown: 0,
-  offset: 0,
-  limit: PAGE_SIZE,
-  has_more: false,
-  scan_capped: false,
-  summary_partial: false,
-})
-const loadMoreSentinel = ref<HTMLElement | null>(null)
-let loadMoreObserver: IntersectionObserver | null = null
 const tenants = ref<TenantInfo[]>([])
 const backfillVisible = ref(false)
 const backfillTarget = ref<MonitorSubtask | null>(null)
@@ -68,19 +53,41 @@ const detailItem = ref<SnapshotBackfillPendingItem | null>(null)
 const detailSubtask = ref<MonitorSubtask | null>(null)
 
 const tenantFilter = ref<number | ''>('')
-const filterDate = ref('')
+const filterDateFrom = ref('')
+const filterDateTo = ref('')
 const sourceFilter = ref<'' | 'tenant_monitor' | 'lead_diagnosis'>('')
 const platformFilter = ref('')
 const keywordGroupFilter = ref('')
 const keywordFilter = ref('')
 const keywordGroupOptions = ref<BrandKeywordGroup[]>([])
 const tenantMonitoredPlatforms = ref<string[]>([])
-const pendingOnly = ref(false)
+const todoOnly = ref(true)
+
+const platforms = ref<SnapshotBackfillMatrixPlatform[]>([])
+const dates = ref<string[]>([])
+const words = ref<string[]>([])
+const cells = ref<SnapshotBackfillMatrixCell[]>([])
+const activePlatform = ref('')
+const cellDrawerVisible = ref(false)
+const cellDrawer = ref<SnapshotBackfillMatrixCell | null>(null)
 
 let listRequestSeq = 0
 let listAbortController: AbortController | null = null
 let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let filterBootstrapping = false
+
+function defaultDateRange() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - 6)
+  const fmt = (d: Date) => {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  return { from: fmt(start), to: fmt(end) }
+}
 
 const platformFilterOptions = computed(() => {
   if (tenantFilter.value === '') return supportedPlatforms
@@ -112,51 +119,53 @@ const monitorKeywordOptions = computed(() => {
   return options.sort((left, right) => left.localeCompare(right, 'zh-CN'))
 })
 
-const pendingCount = computed(() => listSummary.value.pending)
-const overwriteCount = computed(() => listSummary.value.overwrite)
-const totalCount = computed(() => listSummary.value.total)
-const shownCount = computed(() => items.value.length)
-const hasMore = computed(() => listSummary.value.has_more && items.value.length < listSummary.value.total)
-const statsTruncated = computed(() => items.value.length < listSummary.value.total)
-
-const hasActiveFilters = computed(() => Boolean(
-  tenantFilter.value !== ''
-  || filterDate.value
-  || sourceFilter.value
-  || platformFilter.value
-  || keywordGroupFilter.value
-  || keywordFilter.value.trim()
-  || pendingOnly.value,
+const visiblePlatforms = computed(() => (
+  todoOnly.value ? platforms.value.filter(p => p.todo > 0) : platforms.value
 ))
 
-function sourceLabel(item: SnapshotBackfillPendingItem) {
-  if (item.source === 'lead_diagnosis') return '售前诊断'
-  return 'GEO 监测'
+const activePlatformMeta = computed(() => (
+  platforms.value.find(p => p.id === activePlatform.value) || null
+))
+
+const visibleWords = computed(() => {
+  if (!todoOnly.value) return words.value
+  const set = new Set(
+    cells.value
+      .filter(c => c.platform === activePlatform.value && c.has_todo)
+      .map(c => c.word),
+  )
+  const list = words.value.filter(w => set.has(w))
+  return list.length ? list : words.value
+})
+
+const cellMap = computed(() => {
+  const map = new Map<string, SnapshotBackfillMatrixCell>()
+  for (const cell of cells.value) {
+    if (cell.platform !== activePlatform.value) continue
+    map.set(`${cell.word}||${cell.date}`, cell)
+  }
+  return map
+})
+
+function shortDate(iso: string) {
+  return iso.length >= 10 ? iso.slice(5) : iso
 }
 
-function scopeLabel(item: SnapshotBackfillPendingItem) {
-  return item.brand_name || item.tenant_name || item.monitor_keywords || '未命名任务'
+function rankClass(rank: number | null | undefined) {
+  if (rank == null) return 'rank-none'
+  if (rank <= 3) return 'rank-good'
+  return 'rank-mid'
 }
 
-function actionLabel(item: SnapshotBackfillPendingItem) {
-  if (item.needs_backfill) return '快照补录'
-  if (item.has_answer) return '覆盖更正'
-  return '补录'
+function rankText(rank: number | null | undefined) {
+  return rank == null ? '—' : String(rank)
 }
 
-function rankMetricClass(item: SnapshotBackfillPendingItem) {
-  const rank = formatMonitorSubtaskRank(item)
-  return rank !== '-' && rank !== '—' && rank !== '未提及' ? 'is-rank' : ''
-}
-
-function statusLabel(item: SnapshotBackfillPendingItem) {
-  if (item.needs_backfill) return '待补录'
-  if (item.has_answer) return '已有结果'
-  return item.status || '—'
+function getCell(word: string, date: string) {
+  return cellMap.value.get(`${word}||${date}`) || null
 }
 
 function isTenantInService(tenant: TenantInfo) {
-  // 与后端 tenant_service_is_operational 对齐：服务中 = 启用且在合同期内、非人工停服
   if (!tenant.status) return false
   if (tenant.stop_reason === 'manual' || tenant.stop_reason === 'canceled') return false
   const today = new Date()
@@ -187,15 +196,6 @@ async function loadTenants() {
   }
 }
 
-const keywordGroupSummary = computed(() => {
-  if (!keywordGroupFilter.value) return ''
-  const index = keywordGroupOptions.value.findIndex(
-    (group, groupIndex) => keywordGroupSelectValue(group, groupIndex) === keywordGroupFilter.value,
-  )
-  if (index >= 0) return keywordGroupDisplayName(keywordGroupOptions.value[index], index)
-  return keywordGroupFilter.value
-})
-
 async function loadTenantKeywordGroups() {
   keywordGroupFilter.value = ''
   keywordFilter.value = ''
@@ -216,118 +216,199 @@ async function loadTenantKeywordGroups() {
   }
 }
 
-function buildListQuery(offset = 0, includeSummary = false) {
-  return {
-    limit: PAGE_SIZE,
-    offset,
-    pending_only: pendingOnly.value,
-    tenant_id: tenantFilter.value === '' ? null : Number(tenantFilter.value),
-    date: filterDate.value || undefined,
-    source: sourceFilter.value || undefined,
-    platform: platformFilter.value || undefined,
-    keyword: keywordFilter.value.trim() || undefined,
-    keyword_group: keywordGroupFilter.value || undefined,
-    include_summary: includeSummary,
+function ensureActivePlatform() {
+  const list = todoOnly.value ? visiblePlatforms.value : platforms.value
+  if (!list.length) {
+    activePlatform.value = platforms.value[0]?.id || ''
+    return
+  }
+  if (!list.some(p => p.id === activePlatform.value)) {
+    activePlatform.value = list[0].id
   }
 }
 
-async function fetchPage(offset: number, append: boolean, includeSummary = false) {
+async function loadMatrix(options?: { quiet?: boolean }) {
   listAbortController?.abort()
   const controller = new AbortController()
   listAbortController = controller
   const seq = ++listRequestSeq
-  const result = await getPendingSnapshotBackfills(buildListQuery(offset, includeSummary), { signal: controller.signal })
-  if (seq !== listRequestSeq) return
-  if (append) {
-    const existing = new Set(items.value.map(item => item.subtask_id))
-    const merged = [...items.value]
-    for (const item of result.items) {
-      if (!existing.has(item.subtask_id)) merged.push(item)
-    }
-    items.value = merged
-  } else {
-    items.value = result.items
-  }
-  listSummary.value = {
-    ...result.summary,
-    scan_capped: Boolean(result.summary.scan_capped),
-    summary_partial: Boolean(result.summary.summary_partial),
-  }
-}
-
-async function refreshSummaryInBackground() {
-  // 全企业汇总极慢且易触发截断提示；仅在已选企业时后台补全统计
-  if (tenantFilter.value === '') return
-  const seq = listRequestSeq
+  const quiet = Boolean(options?.quiet)
+  if (!quiet) loading.value = true
   try {
-    const result = await getPendingSnapshotBackfills(buildListQuery(0, true))
+    const result = await getSnapshotBackfillMatrix({
+      tenant_id: tenantFilter.value === '' ? null : Number(tenantFilter.value),
+      date_from: filterDateFrom.value || undefined,
+      date_to: filterDateTo.value || undefined,
+      source: sourceFilter.value || undefined,
+      platform: platformFilter.value || undefined,
+      keyword: keywordFilter.value.trim() || undefined,
+      keyword_group: keywordGroupFilter.value || undefined,
+    }, { signal: controller.signal })
     if (seq !== listRequestSeq) return
-    listSummary.value = {
-      ...listSummary.value,
-      total: result.summary.total,
-      pending: result.summary.pending,
-      overwrite: result.summary.overwrite,
-      scan_capped: Boolean(result.summary.scan_capped),
-      summary_partial: false,
-    }
-  } catch {
-    // 汇总失败不挡列表
-  }
-}
-
-async function loadItems() {
-  loading.value = true
-  try {
-    await fetchPage(0, false, false)
-    void refreshSummaryInBackground()
+    platforms.value = result.platforms || []
+    dates.value = result.dates || []
+    words.value = result.words || []
+    cells.value = result.cells || []
+    if (result.date_from && !filterDateFrom.value) filterDateFrom.value = result.date_from
+    if (result.date_to && !filterDateTo.value) filterDateTo.value = result.date_to
+    ensureActivePlatform()
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if ((error as { code?: string })?.code === 'ERR_CANCELED') return
-    notifyOperationError(error, '加载补录列表失败')
+    notifyOperationError(error, '加载补录矩阵失败')
   } finally {
-    loading.value = false
-    await nextTick()
-    setupLoadMoreObserver()
+    if (seq === listRequestSeq && !quiet) loading.value = false
   }
 }
 
-function scheduleLoadItems() {
+function scheduleLoadMatrix() {
   if (!canViewBackfill.value) return
   if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
   filterDebounceTimer = setTimeout(() => {
     filterDebounceTimer = null
-    void loadItems()
+    void loadMatrix()
   }, FILTER_DEBOUNCE_MS)
 }
 
-async function loadMore() {
-  if (loading.value || loadingMore.value || !hasMore.value) return
-  loadingMore.value = true
-  try {
-    await fetchPage(items.value.length, true)
-  } catch (error: unknown) {
-    notifyOperationError(error, '加载更多失败')
-  } finally {
-    loadingMore.value = false
-    await nextTick()
-    setupLoadMoreObserver()
+function selectPlatform(id: string) {
+  activePlatform.value = id
+  if (todoOnly.value) {
+    const p = platforms.value.find(x => x.id === id)
+    if (p && p.todo === 0) {
+      const first = visiblePlatforms.value[0]
+      if (first) activePlatform.value = first.id
+    }
   }
 }
 
-function setupLoadMoreObserver() {
-  loadMoreObserver?.disconnect()
-  if (!loadMoreSentinel.value) return
-  loadMoreObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some(entry => entry.isIntersecting)) void loadMore()
-    },
-    { root: null, rootMargin: '240px 0px' },
-  )
-  loadMoreObserver.observe(loadMoreSentinel.value)
+function openCell(word: string, date: string) {
+  const cell = getCell(word, date)
+  if (!cell) return
+  cellDrawer.value = cell
+  cellDrawerVisible.value = true
 }
 
-function detectTimeLabel(item: SnapshotBackfillPendingItem) {
-  return snapshotBackfillBatchLabel(item)
+function closeCellDrawer() {
+  cellDrawerVisible.value = false
+  cellDrawer.value = null
+}
+
+function averageRanks(ranks: number[]) {
+  if (!ranks.length) return null
+  const total = ranks.reduce((sum, value) => sum + value, 0)
+  return Math.round((total / ranks.length) * 10) / 10
+}
+
+function cellHasTodo(ranks: number[], sampleCount: number) {
+  if (sampleCount <= 0) return false
+  if (!ranks.length) return true
+  const avg = averageRanks(ranks)
+  return avg == null ? true : avg > 3
+}
+
+function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrixCell {
+  const ranks: number[] = []
+  let failCount = 0
+  for (const slot of cell.slots) {
+    if (slot.mention_position != null && Number.isFinite(Number(slot.mention_position))) {
+      ranks.push(Number(slot.mention_position))
+    }
+    if (slot.needs_backfill && !slot.has_answer) failCount += 1
+  }
+  return {
+    ...cell,
+    rank: averageRanks(ranks),
+    fail_count: failCount,
+    sample_count: cell.slots.length,
+    rank_sample_count: ranks.length,
+    has_todo: cellHasTodo(ranks, cell.slots.length),
+  }
+}
+
+function refreshPlatformStats(platformId: string) {
+  const platCells = cells.value.filter(cell => cell.platform === platformId)
+  const idx = platforms.value.findIndex(p => p.id === platformId)
+  if (idx < 0) return
+  const avgs = platCells
+    .map(cell => cell.rank)
+    .filter((rank): rank is number => rank != null && Number.isFinite(rank))
+  platforms.value[idx] = {
+    ...platforms.value[idx],
+    todo: platCells.filter(cell => cell.has_todo).length,
+    fail: platCells.reduce((sum, cell) => sum + (cell.fail_count || 0), 0),
+    avg: averageRanks(avgs),
+  }
+}
+
+/** 忽略/补录后只改本地格子，不整表重拉 */
+function removeSlotLocally(subtaskId: string) {
+  const nextCells: SnapshotBackfillMatrixCell[] = []
+  let touchedPlatform = ''
+  for (const cell of cells.value) {
+    if (!cell.slots.some(slot => slot.subtask_id === subtaskId)) {
+      nextCells.push(cell)
+      continue
+    }
+    touchedPlatform = cell.platform
+    const slots = cell.slots.filter(slot => slot.subtask_id !== subtaskId)
+    if (!slots.length) continue
+    nextCells.push(recomputeCell({ ...cell, slots }))
+  }
+  cells.value = nextCells
+  if (touchedPlatform) refreshPlatformStats(touchedPlatform)
+  // 词行若已无格子则从表头去掉
+  const liveWords = new Set(nextCells.filter(c => c.platform === activePlatform.value).map(c => c.word))
+  words.value = words.value.filter(word => liveWords.has(word) || nextCells.some(c => c.word === word))
+  if (cellDrawer.value) {
+    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date)
+    cellDrawer.value = refreshed
+    if (!refreshed || !refreshed.slots.length) closeCellDrawer()
+  }
+  ensureActivePlatform()
+}
+
+function patchSlotLocally(
+  subtaskId: string,
+  patch: Partial<SnapshotBackfillMatrixSlot>,
+) {
+  let touchedPlatform = ''
+  cells.value = cells.value.map((cell) => {
+    const idx = cell.slots.findIndex(slot => slot.subtask_id === subtaskId)
+    if (idx < 0) return cell
+    touchedPlatform = cell.platform
+    const slots = cell.slots.slice()
+    slots[idx] = { ...slots[idx], ...patch }
+    return recomputeCell({ ...cell, slots })
+  })
+  if (touchedPlatform) refreshPlatformStats(touchedPlatform)
+  if (cellDrawer.value) {
+    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date)
+    if (refreshed) cellDrawer.value = refreshed
+  }
+}
+
+function slotToItem(slot: SnapshotBackfillMatrixSlot): SnapshotBackfillPendingItem {
+  return {
+    subtask_id: slot.subtask_id,
+    task_id: slot.task_id || '',
+    tenant_id: slot.tenant_id ?? null,
+    tenant_name: slot.tenant_name ?? null,
+    platform: slot.platform || activePlatform.value,
+    prompt: slot.prompt || cellDrawer.value?.word || '',
+    error_message: slot.error_message ?? null,
+    source: (slot.source as SnapshotBackfillPendingItem['source']) || 'tenant_monitor',
+    monitor_keywords: slot.monitor_keywords ?? null,
+    task_status: slot.status ?? null,
+    updated_at: slot.updated_at ?? null,
+    needs_backfill: slot.needs_backfill,
+    has_answer: slot.has_answer,
+    status: slot.status ?? null,
+    mention_position: slot.mention_position ?? null,
+    keyword_group: slot.keyword_group ?? null,
+    brand_name: slot.brand_name ?? null,
+    schedule_label: slot.schedule_label ?? null,
+    schedule_window_key: slot.schedule_window_key ?? null,
+  }
 }
 
 async function loadSubtask(subtaskId: string) {
@@ -388,39 +469,33 @@ function openBackfillFromDetail() {
   backfillVisible.value = true
 }
 
-async function openBackfill(item: SnapshotBackfillPendingItem) {
+async function openBackfillFromSlot(slot: SnapshotBackfillMatrixSlot) {
   if (!canSubmitBackfill.value) return
   try {
-    backfillTarget.value = await loadSubtask(item.subtask_id)
+    backfillTarget.value = await loadSubtask(slot.subtask_id)
     backfillVisible.value = true
   } catch (error: unknown) {
     notifyOperationError(error, '加载子任务失败')
   }
 }
 
-function isFailurePending(item: SnapshotBackfillPendingItem) {
-  return Boolean(item.needs_backfill) && !item.has_answer
+function isFailurePending(slot: SnapshotBackfillMatrixSlot) {
+  return Boolean(slot.needs_backfill) && !slot.has_answer
 }
 
-async function dismissItem(item: SnapshotBackfillPendingItem) {
-  if (!canSubmitBackfill.value || !item.needs_backfill) return
+async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
+  if (!canSubmitBackfill.value || !slot.needs_backfill) return
   try {
-    if (isFailurePending(item)) {
+    if (isFailurePending(slot)) {
       await ElMessageBox.confirm(
         '当前无有效回答，忽略后将不再提醒补录，客户侧仍按未抓取/失败统计（不会补出排名）。确认忽略？',
         '忽略待补录',
         { type: 'warning', confirmButtonText: '确认忽略', cancelButtonText: '取消' },
       )
     }
-    await dismissSnapshotBackfill(item.subtask_id)
-    items.value = items.value.filter(row => row.subtask_id !== item.subtask_id)
-    if (listSummary.value.pending > 0) listSummary.value.pending -= 1
-    if (listSummary.value.total > 0) listSummary.value.total -= 1
-    if (detailItem.value?.subtask_id === item.subtask_id) {
-      detailVisible.value = false
-      detailItem.value = null
-      detailSubtask.value = null
-    }
+    await dismissSnapshotBackfill(slot.subtask_id)
+    // 2026-07-28 - 忽略后整表重拉不合理 - 本地剔除该场次并重算格子
+    removeSlotLocally(slot.subtask_id)
     ElMessage.success('已忽略，不再提醒')
     emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
   } catch (error: unknown) {
@@ -435,12 +510,42 @@ async function undismissFromDetail() {
   try {
     const result = await undismissSnapshotBackfill(subtaskId)
     ElMessage.success(result.item.needs_backfill ? '已取消忽略，已重新纳入待补录' : '已取消忽略')
-    await loadItems()
+    // 取消忽略需重新进矩阵桶，安静重拉一次即可
+    await loadMatrix({ quiet: true })
     emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
     await openDetailById(subtaskId, result.item)
   } catch (error: unknown) {
     notifyOperationError(error, '取消忽略失败')
   }
+}
+
+async function handleSuccess(updatedSubtask?: MonitorSubtask) {
+  const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id
+  if (updatedSubtask?.subtask_id) {
+    patchSlotLocally(updatedSubtask.subtask_id, {
+      mention_position: updatedSubtask.mention_position ?? null,
+      needs_backfill: updatedSubtask.needs_backfill ?? false,
+      has_answer: Boolean(updatedSubtask.answer_content),
+      status: updatedSubtask.status ?? null,
+      error_message: updatedSubtask.error_message ?? null,
+    })
+  } else {
+    await loadMatrix({ quiet: true })
+  }
+  emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+
+  if (detailVisible.value && activeId) {
+    if (updatedSubtask?.subtask_id === activeId) {
+      detailSubtask.value = updatedSubtask
+      const baseItem = detailItem.value || backfillItemFromSubtask(updatedSubtask)
+      detailItem.value = mergeSnapshotBackfillItem(baseItem, updatedSubtask)
+    } else {
+      await openDetailById(activeId, detailItem.value)
+    }
+  }
+
+  ElMessage.success('快照补录已保存')
+  clearDeepLink()
 }
 
 function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendingItem {
@@ -464,33 +569,6 @@ function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendi
   }
 }
 
-async function handleSuccess(updatedSubtask?: MonitorSubtask) {
-  const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id
-
-  await loadItems()
-  emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
-
-  if (detailVisible.value && activeId) {
-    if (updatedSubtask?.subtask_id === activeId) {
-      detailSubtask.value = updatedSubtask
-      const baseItem = detailItem.value
-        || items.value.find(row => row.subtask_id === activeId)
-        || backfillItemFromSubtask(updatedSubtask)
-      detailItem.value = mergeSnapshotBackfillItem(baseItem, updatedSubtask)
-    } else {
-      const refreshed = items.value.find(row => row.subtask_id === activeId)
-      if (refreshed) {
-        await openDetail(refreshed)
-      } else {
-        await openDetailById(activeId, detailItem.value)
-      }
-    }
-  }
-
-  ElMessage.success('快照补录已保存，列表与详情已刷新')
-  clearDeepLink()
-}
-
 function clearDeepLink() {
   const nextQuery = { ...route.query }
   delete nextQuery.subtask_id
@@ -499,66 +577,73 @@ function clearDeepLink() {
 }
 
 function resetFilters() {
-  tenantFilter.value = ''
-  filterDate.value = ''
+  const range = defaultDateRange()
+  tenantFilter.value = tenants.value[0]?.id ?? ''
+  filterDateFrom.value = range.from
+  filterDateTo.value = range.to
   sourceFilter.value = ''
   platformFilter.value = ''
   keywordGroupFilter.value = ''
   keywordFilter.value = ''
   keywordGroupOptions.value = []
   tenantMonitoredPlatforms.value = []
-  pendingOnly.value = false
-  void loadItems()
+  todoOnly.value = true
+  void loadTenantKeywordGroups().then(() => loadMatrix())
 }
 
 async function openFromQuery() {
   const subtaskId = String(route.query.subtask_id || '').trim()
   if (!subtaskId) return
   const wantBackfill = String(route.query.backfill || '') === '1'
-  const item = items.value.find(row => row.subtask_id === subtaskId)
-  if (item) {
-    await openDetail(item)
-  } else {
-    await openDetailById(subtaskId)
-  }
+  await openDetailById(subtaskId)
   if (wantBackfill && canSubmitBackfill.value && detailSubtask.value) {
     openBackfillFromDetail()
   }
 }
 
+function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
+  if (slot.needs_backfill && !slot.has_answer) return '失败待补'
+  if (slot.needs_backfill) return '待补录'
+  if (slot.has_answer) return '已有结果'
+  return slot.status || '—'
+}
+
 onMounted(async () => {
+  const range = defaultDateRange()
+  filterDateFrom.value = range.from
+  filterDateTo.value = range.to
   if (!canViewBackfill.value) {
     await loadTenants()
     return
   }
   await loadTenants()
+  // 2026-07-28 - 通知 deep-link - 用企业/日期/平台打开矩阵，勿丢筛选
+  const qTenant = String(route.query.tenant_id || '').trim()
+  const qFrom = String(route.query.date_from || '').trim()
+  const qTo = String(route.query.date_to || '').trim()
+  const qPlatform = String(route.query.platform || '').trim()
+  filterBootstrapping = true
+  if (qTenant && tenants.value.some(t => String(t.id) === qTenant)) {
+    tenantFilter.value = Number(qTenant)
+  }
+  if (qFrom) filterDateFrom.value = qFrom
+  if (qTo) filterDateTo.value = qTo
+  if (qPlatform) platformFilter.value = qPlatform
+  filterBootstrapping = false
   const hasDeepLink = String(route.query.backfill || '') === '1' || Boolean(route.query.subtask_id)
-  // 进页默认落到具体企业，避免 all_tenants 全库扫描（数秒～十余秒）
-  if (!hasDeepLink && tenantFilter.value === '' && tenants.value.length) {
+  if (!hasDeepLink && !qTenant && tenantFilter.value === '' && tenants.value.length) {
     filterBootstrapping = true
     tenantFilter.value = tenants.value[0].id
     filterBootstrapping = false
   }
-  await loadItems()
-  setupLoadMoreObserver()
-  if (hasDeepLink) {
-    await openFromQuery()
-  }
+  await loadTenantKeywordGroups()
+  await loadMatrix()
+  if (hasDeepLink) await openFromQuery()
 })
 
 onUnmounted(() => {
-  loadMoreObserver?.disconnect()
-  loadMoreObserver = null
   if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
   listAbortController?.abort()
-})
-
-watch(loadMoreSentinel, () => {
-  setupLoadMoreObserver()
-})
-
-watch(hasMore, (value) => {
-  if (value) setupLoadMoreObserver()
 })
 
 watch(
@@ -579,10 +664,17 @@ watch(platformFilterOptions, (options) => {
   }
 })
 
-watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter, pendingOnly], () => {
-  if (filterBootstrapping) return
-  scheduleLoadItems()
+watch(todoOnly, () => {
+  ensureActivePlatform()
 })
+
+watch(
+  [tenantFilter, filterDateFrom, filterDateTo, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter],
+  () => {
+    if (filterBootstrapping) return
+    scheduleLoadMatrix()
+  },
+)
 </script>
 
 <template>
@@ -592,24 +684,7 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
       <p>如需处理失败抓取，请联系管理员在岗位权限中开启快照补录查看与补录操作。</p>
     </div>
   </section>
-  <section v-else class="snapshot-backfill-page">
-    <Teleport to="#portal-page-head-extra" defer>
-      <div class="snapshot-backfill-stats snapshot-backfill-stats--head">
-        <article class="snapshot-backfill-stat">
-          <strong>{{ totalCount }}</strong>
-          <span>{{ statsTruncated ? `已加载 ${shownCount} / ${totalCount}` : '符合筛选' }}</span>
-        </article>
-        <article v-if="pendingCount" class="snapshot-backfill-stat is-warn">
-          <strong>{{ pendingCount }}</strong>
-          <span>待补录</span>
-        </article>
-        <article v-if="overwriteCount" class="snapshot-backfill-stat is-ok">
-          <strong>{{ overwriteCount }}</strong>
-          <span>可覆盖</span>
-        </article>
-      </div>
-    </Teleport>
-
+  <section v-else class="snapshot-backfill-page sb-skin">
     <div class="snapshot-backfill-toolbar">
       <div class="snapshot-backfill-toolbar-inner">
         <select v-model="tenantFilter" title="企业">
@@ -618,7 +693,9 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
             {{ tenant.name }}
           </option>
         </select>
-        <input v-model="filterDate" type="date" title="检测日期">
+        <input v-model="filterDateFrom" type="date" title="开始日期">
+        <span class="sb-range-sep">至</span>
+        <input v-model="filterDateTo" type="date" title="结束日期">
         <select v-model="sourceFilter" title="来源">
           <option value="">全部来源</option>
           <option value="tenant_monitor">GEO 监测</option>
@@ -657,14 +734,14 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
             {{ keyword }}
           </option>
         </select>
-        <label class="snapshot-backfill-toolbar-check">
-          <input v-model="pendingOnly" type="checkbox">
-          仅待补录
+        <label class="sb-toggle" :class="{ on: todoOnly }">
+          <input v-model="todoOnly" type="checkbox">
+          只看待补
         </label>
         <div class="snapshot-backfill-toolbar-actions">
           <span v-if="loading" class="snapshot-backfill-loading-dot">加载中…</span>
           <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
-          <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadItems">
+          <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadMatrix">
             <RefreshCw :size="14" />
             刷新
           </button>
@@ -672,94 +749,149 @@ watch([tenantFilter, filterDate, sourceFilter, platformFilter, keywordGroupFilte
       </div>
     </div>
 
-    <div v-if="hasActiveFilters" class="snapshot-backfill-chips">
-      <span v-if="filterDate" class="snapshot-backfill-chip">检测日 {{ filterDate }}</span>
-      <span v-if="sourceFilter" class="snapshot-backfill-chip">
-        {{ sourceFilter === 'lead_diagnosis' ? '售前诊断' : 'GEO 监测' }}
-      </span>
-      <span v-if="platformFilter" class="snapshot-backfill-chip">
-        {{ platformLabelMap[platformFilter] || platformFilter }}
-      </span>
-      <span v-if="keywordGroupSummary" class="snapshot-backfill-chip">词组 {{ keywordGroupSummary }}</span>
-      <span v-if="keywordFilter" class="snapshot-backfill-chip">监测词 {{ keywordFilter }}</span>
-      <small>通知铃铛可直达对应子任务</small>
+    <div class="sb-layout">
+      <section class="sb-panel sb-main">
+        <div class="sb-main-head">
+          <div class="sb-platform-title">
+            <div class="sb-platform-logo">
+              {{ (activePlatformMeta?.name || activePlatform || '—').slice(0, 1) }}
+            </div>
+            <div>
+              <h2>{{ activePlatformMeta?.name || platformLabelMap[activePlatform] || activePlatform || '—' }}</h2>
+              <p>{{ todoOnly ? '只看待补格子' : '全量词 × 日均位' }}</p>
+            </div>
+          </div>
+          <div class="sb-kpis">
+            <div class="sb-kpi primary">
+              <strong>{{ activePlatformMeta?.todo ?? 0 }}</strong>
+              <span>待补录</span>
+            </div>
+            <div class="sb-kpi">
+              <strong>{{ activePlatformMeta?.fail ?? 0 }}</strong>
+              <span>失败未忽略</span>
+            </div>
+            <div class="sb-kpi secondary">
+              <strong>{{ activePlatformMeta?.avg ?? '—' }}</strong>
+              <span>均位</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="loading" class="mini-empty">加载中…</div>
+        <div v-else-if="!visibleWords.length || !dates.length" class="mini-empty snapshot-backfill-empty">
+          当前筛选下没有矩阵数据
+        </div>
+        <template v-else>
+          <div class="sb-matrix-wrap">
+            <table class="sb-matrix">
+              <thead>
+                <tr>
+                  <th>监测词 \\ 日期</th>
+                  <th v-for="d in dates" :key="d">{{ shortDate(d) }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="word in visibleWords" :key="word">
+                  <th :title="word">{{ word }}</th>
+                  <td v-for="d in dates" :key="`${word}-${d}`">
+                    <button
+                      v-if="getCell(word, d)"
+                      type="button"
+                      class="sb-cell"
+                      :class="[
+                        rankClass(getCell(word, d)?.rank),
+                        { 'has-todo': getCell(word, d)?.has_todo },
+                      ]"
+                      @click="openCell(word, d)"
+                    >
+                      <span>{{ rankText(getCell(word, d)?.rank) }}</span>
+                      <small>{{ getCell(word, d)?.sample_count || 0 }}次</small>
+                    </button>
+                    <span v-else class="sb-cell rank-none is-empty">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="sb-legend">
+            <span><i class="sb-swatch" style="background:#e6f7ef" />1–3</span>
+            <span><i class="sb-swatch" style="background:#fff3d9" />4+</span>
+            <span><i class="sb-swatch" style="background:#eef1f4" />无位次</span>
+            <span>
+              <i class="sb-swatch" style="background:#fde8e2;outline:2px solid #e4572e;outline-offset:1px" />
+              暖色+红点 = 待补
+            </span>
+          </div>
+        </template>
+      </section>
+
+      <aside class="sb-panel sb-side">
+        <h3>全平台对比</h3>
+        <div class="sb-plat-list">
+          <button
+            v-for="p in platforms"
+            :key="p.id"
+            type="button"
+            class="sb-plat-card"
+            :class="{ active: p.id === activePlatform, dim: todoOnly && p.todo <= 0 }"
+            @click="selectPlatform(p.id)"
+          >
+            <div class="row1">
+              <span class="name">{{ p.name }}</span>
+              <span class="meta">{{ words.length }}词</span>
+            </div>
+            <div class="stats">
+              <div class="hi"><strong>{{ p.todo }}</strong><span>待补</span></div>
+              <div><strong>{{ p.fail }}</strong><span>失败</span></div>
+              <div><strong>{{ p.avg ?? '—' }}</strong><span>均位</span></div>
+            </div>
+          </button>
+        </div>
+      </aside>
     </div>
 
-    <div v-if="loading" class="mini-empty">加载中…</div>
-    <div v-else-if="!items.length" class="mini-empty snapshot-backfill-empty">
-      当前筛选下没有可补录/可覆盖项。请调整企业、检测日期、来源或平台，或取消「仅待补录」。
-    </div>
-    <template v-else>
-      <div class="snapshot-backfill-list">
-        <article
-          v-for="item in items"
-          :key="item.subtask_id"
-          class="snapshot-backfill-card"
-          @click="openDetail(item)"
+    <div v-if="cellDrawerVisible && cellDrawer" class="sb-drawer" @click.self="closeCellDrawer">
+      <div class="sb-drawer-panel">
+        <h3>格子待办</h3>
+        <div class="sub">
+          {{ activePlatformMeta?.name || activePlatform }} · {{ cellDrawer.word }} · {{ cellDrawer.date }}
+          · 均位 {{ rankText(cellDrawer.rank) }}
+        </div>
+        <div
+          v-for="slot in cellDrawer.slots"
+          :key="slot.subtask_id"
+          class="sb-todo-item"
         >
-          <div class="snapshot-backfill-card-head">
-            <span class="snapshot-backfill-tag source">{{ sourceLabel(item) }}</span>
-            <span
-              class="snapshot-backfill-tag"
-              :class="{ pending: item.needs_backfill, done: item.has_answer && !item.needs_backfill }"
-            >
-              {{ statusLabel(item) }}
-            </span>
-            <PlatformBadge :code="item.platform" size="xs" />
+          <div class="t">{{ slot.schedule_label || slot.schedule_window_key || '场次' }} · {{ slotStatusLabel(slot) }}</div>
+          <div class="d">
+            位次 {{ rankText(slot.mention_position) }}
+            <template v-if="slot.error_message"> · {{ slot.error_message }}</template>
           </div>
-          <p class="snapshot-backfill-card-tenant">{{ scopeLabel(item) }}</p>
-          <h3 class="snapshot-backfill-card-prompt">{{ item.prompt }}</h3>
-          <dl class="snapshot-backfill-metrics">
-            <div class="snapshot-backfill-metric">
-              <dt>词组</dt>
-              <dd>{{ item.keyword_group || item.monitor_keywords || '—' }}</dd>
-            </div>
-            <div v-if="item.region_label && item.region_label !== '全部区域'" class="snapshot-backfill-metric">
-              <dt>地区</dt>
-              <dd>{{ item.region_label }}</dd>
-            </div>
-            <div class="snapshot-backfill-metric" :class="rankMetricClass(item)">
-              <dt>排名</dt>
-              <dd>{{ formatMonitorSubtaskRank(item) }}</dd>
-            </div>
-            <div class="snapshot-backfill-metric">
-              <dt>批次</dt>
-              <dd>{{ detectTimeLabel(item) }}</dd>
-            </div>
-          </dl>
-          <p v-if="item.error_message" class="snapshot-backfill-card-error">{{ item.error_message }}</p>
-          <div v-if="canSubmitBackfill" class="snapshot-backfill-card-actions" @click.stop>
+          <div class="sb-todo-actions">
+            <button type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
             <button
+              v-if="canSubmitBackfill"
               type="button"
-              class="snapshot-backfill-card-action"
-              :class="{ 'is-overwrite': !item.needs_backfill }"
-              @click="openBackfill(item)"
+              class="sb-btn"
+              @click="openBackfillFromSlot(slot)"
             >
               <Upload :size="14" />
-              {{ actionLabel(item) }}
+              补录
             </button>
             <button
-              v-if="item.needs_backfill"
+              v-if="canSubmitBackfill && slot.needs_backfill"
               type="button"
-              class="snapshot-backfill-card-action is-dismiss"
-              @click="dismissItem(item)"
+              class="sb-btn ghost"
+              @click="dismissSlot(slot)"
             >
               <EyeOff :size="14" />
               忽略
             </button>
           </div>
-        </article>
+        </div>
+        <button type="button" class="sb-btn ghost" @click="closeCellDrawer">关闭</button>
       </div>
-      <div
-        v-if="hasMore"
-        ref="loadMoreSentinel"
-        class="snapshot-backfill-load-more"
-      >
-        <span v-if="loadingMore">加载更多…</span>
-        <span v-else>继续下滑加载更多</span>
-      </div>
-      <p v-else-if="items.length" class="snapshot-backfill-end">已加载全部 {{ totalCount }} 条</p>
-    </template>
+    </div>
 
     <SnapshotBackfillDetailDrawer
       v-model:visible="detailVisible"

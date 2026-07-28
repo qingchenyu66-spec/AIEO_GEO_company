@@ -331,9 +331,18 @@ async function loadPageData() {
         .then(async (data) => {
           dashboard.value = data
           await renderCharts()
+          const descErrs = data.parse?.description_errors || []
+          const sentErrs = data.parse?.errors || []
+          // 2026-07-28 - 补解析失败曾被静默吞掉，页面一直停在旧「1 组」
+          if (descErrs.length || sentErrs.length || data.parse?.error) {
+            notifyOperationError(
+              new Error(String(data.parse?.error || descErrs[0] || sentErrs[0] || '补解析失败')),
+              '品牌分析补解析未完成',
+            )
+          }
         })
-        .catch(() => {
-          /* 后台补解析失败不影响已展示数据 */
+        .catch((error: unknown) => {
+          notifyOperationError(error, '品牌分析补解析失败')
         })
     }
   } catch (error: unknown) {
@@ -439,6 +448,35 @@ const filteredDescriptions = computed(() => {
       || (row.platforms || []).some(platform => platform.code === platformFilter.value)
   })
 })
+
+/** 筛选条数字与 AI 描述「组」对齐（多样本一快照多要点后，不能再用样本数当筛选角标） */
+const descriptionFilterCounts = computed(() => {
+  const rows = dashboard.value?.ai_descriptions || []
+  const platform = platformFilter.value
+  const counts: Record<SentimentFilter, number> = {
+    all: 0,
+    正面: 0,
+    中性: 0,
+    负面: 0,
+  }
+  for (const row of rows) {
+    if (platform !== 'all') {
+      const hit = (row.answers || []).some(answer => answer.platform === platform)
+        || (row.platforms || []).some(platformRow => platformRow.code === platform)
+      if (!hit) continue
+    }
+    counts.all += 1
+    const label = row.sentiment
+    if (label === '正面' || label === '中性' || label === '负面') {
+      counts[label] += 1
+    }
+  }
+  return counts
+})
+
+function descriptionFilterCount(option: SentimentFilter) {
+  return Number(descriptionFilterCounts.value[option] || 0)
+}
 
 const DESC_PAGE_SIZE = 5
 const descPage = ref(1)
@@ -554,8 +592,7 @@ onBeforeUnmount(() => {
             @click="sentimentFilter = option.value"
           >
             {{ option.label }}
-            <em v-if="option.value === 'all'">{{ dashboard.sample_count ?? 0 }}</em>
-            <em v-else>{{ sentimentCount(option.value) }}</em>
+            <em>{{ descriptionFilterCount(option.value) }}</em>
           </button>
         </div>
         <span class="ba-filter-label">平台筛选</span>

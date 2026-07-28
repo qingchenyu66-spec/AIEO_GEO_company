@@ -1,9 +1,11 @@
 """展示位次读路径：mention_position 权威，矩阵不读 answer_content。"""
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services.monitor_service import (
     _read_display_brand_rank,
     _resolve_brand_rank_detail_matrix_light,
+    _structured_reconcile_override_ok,
 )
 
 
@@ -80,6 +82,63 @@ def test_light_path_trusts_non_suspicious_mention_without_reconcile():
         allow_full_parse=False,
     )
     assert detail.rank == 2
+    assert detail.source == "stored"
+
+
+def test_matrix_unloaded_raw_skips_reconcile_trusts_mention():
+    """A′：矩阵未 load raw_result_json 时不对账，避免补录第1被文末产品改成22。"""
+    item = _subtask(
+        all_rankings_json=[
+            {"name": "甲", "rank": 1},
+            {"name": "乙", "rank": 2},
+            {"name": "万唯《小四门速记手册》", "rank": 22},
+        ],
+        mention_position=1,
+        raw_result_json={"source": "manual_snapshot"},
+    )
+
+    def _loaded(obj, key):
+        if key == "raw_result_json":
+            return False
+        return True
+
+    with patch("app.services.monitor_service._orm_attr_loaded", side_effect=_loaded):
+        detail = _read_display_brand_rank(
+            item,
+            "教辅",
+            ["万唯"],
+            None,
+            allow_full_parse=False,
+        )
+    assert detail.rank == 1
+    assert detail.source == "stored"
+
+
+def test_structured_reconcile_rejects_late_product_jump():
+    """B：库内前列被对账拉到文末衍生品时拒覆盖。"""
+    assert _structured_reconcile_override_ok(1, 22) is False
+    assert _structured_reconcile_override_ok(1, 4) is True
+    assert _structured_reconcile_override_ok(2, 7) is False  # |Δ|>=5
+
+
+def test_reconcile_guard_keeps_mention_when_list_rank_jumps():
+    item = _subtask(
+        all_rankings_json=[
+            {"name": "甲", "rank": 1},
+            {"name": "乙", "rank": 2},
+            {"name": "万唯《大小卷》", "rank": 27},
+        ],
+        mention_position=1,
+        raw_result_json={},  # loaded but not manual → would reconcile without guard
+    )
+    detail = _read_display_brand_rank(
+        item,
+        "教辅",
+        ["万唯"],
+        None,
+        allow_full_parse=False,
+    )
+    assert detail.rank == 1
     assert detail.source == "stored"
 
 

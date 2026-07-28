@@ -47,8 +47,8 @@ def can_view_notification_category(
     if category == "snapshot_backfill":
         if not can_view_snapshot_backfill:
             return False
-        # 销售仅看归属自己的补录待办；运营/管理员看全部。
-        return None if snapshot_backfill_owner_only else True
+        # 2026-07-28 - 补录通知可见性 - 销售看名下；运营看无人认领+自己名下；均需读 payload
+        return None
     if category == "report_published":
         return can_view_customer_reports
     if category == "platform_service":
@@ -95,6 +95,74 @@ def _owner_user_id_expr():
     )
 
 
+def _payload_owner_user_id(payload: dict[str, Any]) -> int | None:
+    raw = payload.get("owner_user_id")
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _snapshot_backfill_visible_to_user(
+    payload: dict[str, Any],
+    *,
+    user_id: int,
+    owner_only: bool,
+) -> bool:
+    """销售只看自己客户；运营看无人认领 + 自己名下。"""
+    owner_id = _payload_owner_user_id(payload)
+    if owner_id is not None:
+        return owner_id == user_id
+    return not owner_only
+
+
+def _short_backfill_scope(scope: str) -> str:
+    text = str(scope or "").strip() or "监测任务"
+    for suffix in ("控股集团有限公司", "股份有限公司", "有限责任公司", "有限公司", "集团"):
+        if text.endswith(suffix) and len(text) > len(suffix) + 1:
+            return text[: -len(suffix)]
+    return text
+
+
+def _compose_batch_backfill_copy(
+    *,
+    scope: str,
+    period: str,
+    entries: list[dict[str, Any]],
+    owner_user_id: int | None,
+) -> tuple[str, str, dict[str, int]]:
+    """标题/正文/平台计数。A+B：公司×具体场次时刻一条。"""
+    platform_counts: dict[str, int] = {}
+    platform_labels: dict[str, str] = {}
+    for item in entries:
+        code = str(item.get("platform") or "unknown").strip() or "unknown"
+        label = str(item.get("platform_label") or code).strip() or code
+        platform_counts[code] = platform_counts.get(code, 0) + 1
+        platform_labels[code] = label
+    parts = [
+        f"{platform_labels[code]}{platform_counts[code]}"
+        for code, _n in sorted(platform_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    breakdown = " · ".join(parts)
+    short_scope = _short_backfill_scope(scope)
+    count = len(entries)
+    # 2026-07-28 - 标题写公司短名 - 「你的客户」扫铃铛分不清是哪家
+    if short_scope and short_scope != "监测任务":
+        title = f"待补录 · {short_scope}"
+    elif owner_user_id:
+        title = "待补录 · 你的客户"
+    else:
+        title = "待补录 · 无人认领"
+    if breakdown:
+        message = f"{short_scope} · {period} · 待补录{count}条（{breakdown}）"
+    else:
+        message = f"{short_scope} · {period} · 待补录{count}条"
+    return title, message[:500], platform_counts
+
+
 def _apply_notification_visibility_filter(
     stmt: Select[tuple[SystemNotification]],
     *,
@@ -122,15 +190,23 @@ def _apply_notification_visibility_filter(
     if can_view_ops_alerts:
         clauses.append(SystemNotification.category == "celery_queue")
     if can_view_snapshot_backfill:
+        owner_expr = _owner_user_id_expr()
         if snapshot_backfill_owner_only:
+            # 销售：仅自己的客户
             clauses.append(
                 and_(
                     SystemNotification.category == "snapshot_backfill",
-                    _owner_user_id_expr() == user_id,
+                    owner_expr == user_id,
                 )
             )
         else:
-            clauses.append(SystemNotification.category == "snapshot_backfill")
+            # 2026-07-28 - 运营不再收 99+ 全量 - 无人认领或自己名下
+            clauses.append(
+                and_(
+                    SystemNotification.category == "snapshot_backfill",
+                    or_(owner_expr.is_(None), owner_expr == user_id),
+                )
+            )
     if can_view_platform_service:
         clauses.append(SystemNotification.category == "platform_service")
     return stmt.where(or_(*clauses))
@@ -242,17 +318,21 @@ def _user_can_read_notification(
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
             can_view_platform_service=can_view_platform_service,
         )
-        if allowed is True:
-            return True
         if allowed is False:
             return False
+        if allowed is True:
+            return True
         if not row.payload_json:
             return False
         try:
             payload = json.loads(row.payload_json)
         except json.JSONDecodeError:
             return False
-        return int(payload.get("owner_user_id") or 0) == user_id
+        return _snapshot_backfill_visible_to_user(
+            payload,
+            user_id=user_id,
+            owner_only=snapshot_backfill_owner_only,
+        )
     allowed = can_view_notification_category(
         row.category,
         can_review_approvals=can_review_approvals,
@@ -431,6 +511,165 @@ def upsert_subtask_backfill_notification(
     return row
 
 
+def upsert_batch_backfill_notification(
+    db: Session,
+    *,
+    period: str,
+    detect_day: str,
+    scope: str,
+    owner_user_id: int | None,
+    tenant_id: int | None,
+    subtask_entries: list[dict[str, Any]] | None = None,
+    sample_payload: dict[str, Any] | None = None,
+    slot_key: str | None = None,
+    # 兼容旧按平台调用；写入公司×场次一条
+    platform: str | None = None,
+    platform_label: str | None = None,
+    subtask_ids: list[str] | None = None,
+) -> SystemNotification | None:
+    """公司×具体场次时刻 汇总一条（A+B）：同 key 合并/递减，N=0 删除。"""
+    # 2026-07-28 - 通知按场次时刻 - 不用早午晚；source_key 用 YYYYMMDD-HHMM
+    resolved_slot = str(slot_key or "").strip()
+    if not resolved_slot:
+        # 兼容旧调用把 period 当早/午/晚或已是展示时刻
+        compact = str(period or "").strip().replace(" ", "-").replace(":", "")
+        if len(compact) >= 13 and compact[8] == "-" and compact[:8].isdigit():
+            resolved_slot = f"{compact[:8]}-{compact[9:13]}"
+        elif detect_day and len(str(detect_day)) == 10:
+            resolved_slot = f"{str(detect_day).replace('-', '')}-0000"
+        else:
+            resolved_slot = "unknown"
+    scope_key = str(tenant_id) if tenant_id is not None else f"lead:{scope}"
+    source_key = f"backfill:batch:{scope_key}:{resolved_slot}"
+
+    incoming: list[dict[str, Any]] = []
+    for item in subtask_entries or []:
+        sid = str(item.get("subtask_id") or "").strip()
+        if not sid:
+            continue
+        code = str(item.get("platform") or platform or "unknown").strip() or "unknown"
+        label = str(item.get("platform_label") or platform_label or code).strip() or code
+        incoming.append({"subtask_id": sid, "platform": code, "platform_label": label})
+    if not incoming and subtask_ids:
+        code = str(platform or "unknown").strip() or "unknown"
+        label = str(platform_label or code).strip() or code
+        for sid_raw in subtask_ids:
+            sid = str(sid_raw or "").strip()
+            if sid:
+                incoming.append({"subtask_id": sid, "platform": code, "platform_label": label})
+
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+
+    by_id: dict[str, dict[str, Any]] = {}
+    if existing is not None:
+        try:
+            prev = json.loads(existing.payload_json or "{}")
+        except Exception:
+            prev = {}
+        for item in list(prev.get("entries") or []):
+            sid = str((item or {}).get("subtask_id") or "").strip()
+            if sid:
+                by_id[sid] = {
+                    "subtask_id": sid,
+                    "platform": str((item or {}).get("platform") or "unknown"),
+                    "platform_label": str((item or {}).get("platform_label") or (item or {}).get("platform") or "unknown"),
+                }
+        # 兼容旧 payload 仅有 subtask_ids
+        if not by_id:
+            old_platform = str(prev.get("platform") or "unknown")
+            old_label = str(prev.get("platform_label") or old_platform)
+            for sid in list(prev.get("subtask_ids") or []):
+                text = str(sid or "").strip()
+                if text:
+                    by_id[text] = {
+                        "subtask_id": text,
+                        "platform": old_platform,
+                        "platform_label": old_label,
+                    }
+
+    added_new = False
+    for item in incoming:
+        sid = item["subtask_id"]
+        if sid not in by_id:
+            added_new = True
+        by_id[sid] = item
+
+    merged = list(by_id.values())
+    count = len(merged)
+    title, message, platform_counts = _compose_batch_backfill_copy(
+        scope=scope,
+        period=period,
+        entries=merged,
+        owner_user_id=owner_user_id,
+    )
+    merged_ids = [str(item["subtask_id"]) for item in merged]
+    payload = dict(sample_payload or {})
+    payload.update(
+        {
+            "period": period,
+            "slot_key": resolved_slot,
+            "detect_day": detect_day,
+            "scope": scope,
+            "pending_count": count,
+            "entries": merged,
+            "platform_counts": platform_counts,
+            "subtask_ids": merged_ids,
+            "subtask_id": merged_ids[0] if merged_ids else None,
+            "owner_user_id": owner_user_id,
+            "tenant_id": tenant_id,
+            "menu_code": "platform.snapshot_backfill",
+            "batch": True,
+            "date_from": detect_day,
+            "date_to": detect_day,
+        }
+    )
+    payload_text = json.dumps(payload, ensure_ascii=False)
+
+    if existing is not None:
+        if count <= 0:
+            _delete_notification(db, existing)
+            return existing
+        existing.title = title
+        existing.message = message
+        existing.level = "warning"
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        # 新失败并入时清已读，重新响铃
+        if added_new:
+            db.execute(
+                delete(SystemNotificationRead).where(
+                    SystemNotificationRead.notification_id == existing.id
+                )
+            )
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    if count <= 0:
+        return None
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="snapshot_backfill",
+        level="warning",
+        title=title,
+        message=message,
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def upsert_approval_pending_notification(
     db: Session,
     *,
@@ -564,17 +803,81 @@ def upsert_approval_result_notification(
 
 
 def resolve_subtask_backfill_notification(db: Session, subtask_id: str) -> None:
-    """补录成功后移除待办通知。"""
-    source_key = f"subtask:backfill:{subtask_id}"
+    """补录成功后移除单条通知，并从汇总批中剔除该子任务（N 递减，0 删除）。"""
+    sid = str(subtask_id or "").strip()
+    if not sid:
+        return
+    source_key = f"subtask:backfill:{sid}"
     row = db.scalar(
         select(SystemNotification).where(
             SystemNotification.source_key == source_key,
             SystemNotification.audience_type == "PLATFORM",
         )
     )
-    if row is None:
-        return
-    _delete_notification(db, row)
+    if row is not None:
+        _delete_notification(db, row)
+
+    batch_rows = list(
+        db.scalars(
+            select(SystemNotification).where(
+                SystemNotification.audience_type == "PLATFORM",
+                SystemNotification.category == "snapshot_backfill",
+                SystemNotification.source_key.like("backfill:batch:%"),
+            )
+        )
+    )
+    for batch in batch_rows:
+        try:
+            payload = json.loads(batch.payload_json or "{}")
+        except Exception:
+            continue
+        entries = [
+            {
+                "subtask_id": str((item or {}).get("subtask_id") or "").strip(),
+                "platform": str((item or {}).get("platform") or "unknown"),
+                "platform_label": str(
+                    (item or {}).get("platform_label") or (item or {}).get("platform") or "unknown"
+                ),
+            }
+            for item in list(payload.get("entries") or [])
+            if str((item or {}).get("subtask_id") or "").strip()
+        ]
+        if not entries:
+            ids = [str(x) for x in (payload.get("subtask_ids") or []) if str(x or "").strip()]
+            if sid not in ids:
+                continue
+            old_platform = str(payload.get("platform") or "unknown")
+            old_label = str(payload.get("platform_label") or old_platform)
+            entries = [
+                {"subtask_id": x, "platform": old_platform, "platform_label": old_label}
+                for x in ids
+            ]
+        if sid not in {e["subtask_id"] for e in entries}:
+            continue
+        remain = [e for e in entries if e["subtask_id"] != sid]
+        if not remain:
+            _delete_notification(db, batch)
+            continue
+        period = str(payload.get("period") or "时段")
+        scope = str(payload.get("scope") or "监测任务")
+        owner_user_id = _payload_owner_user_id(payload)
+        title, message, platform_counts = _compose_batch_backfill_copy(
+            scope=scope,
+            period=period,
+            entries=remain,
+            owner_user_id=owner_user_id,
+        )
+        remain_ids = [e["subtask_id"] for e in remain]
+        payload["entries"] = remain
+        payload["subtask_ids"] = remain_ids
+        payload["pending_count"] = len(remain)
+        payload["subtask_id"] = remain_ids[0]
+        payload["platform_counts"] = platform_counts
+        batch.title = title
+        batch.message = message
+        batch.payload_json = json.dumps(payload, ensure_ascii=False)
+        batch.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.commit()
 
 
 def push_monitor_alert_notification(alert: dict[str, Any]) -> SystemNotification | None:

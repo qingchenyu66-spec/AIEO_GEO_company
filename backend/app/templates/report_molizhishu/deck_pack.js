@@ -9,6 +9,7 @@
  * - 2026-07-27 - 一两行仍误拆页 - 26px+仅缩10%收不回约78px；改：先软缩（字≥24 / pad≥0.70），失败再剥行
  * - 2026-07-27 - 页底表头+一两行孤儿 / 核心指标被剥成 2/2 - 短表尾整块下挪；核心页只软缩不 peel
  * - 2026-07-27 - 同页两个表头 - ①拆表时误克隆包着 table 的 wrap 导致整表+分组表并存；②短续页并回后合表只留一个 thead
+ * - 2026-07-27 - 核心页 KPI 被 maxHeight+overflow 裁切叠字 - 已弃用裁切；一两行仍软缩，太多则剥「核心结论」到续页
  */
 (() => {
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
@@ -84,9 +85,10 @@
 
   function keepTogetherSlide(slide) {
     if (!slide) return false;
-    if (slide.querySelector(".dark-panel--kpi")) return true;
+    // 必须本页仍有 KPI；结论续页只有 dark-block，不能再走「剥结论」死循环
+    if (!slide.querySelector(".dark-panel--kpi")) return false;
     const title = slide.querySelector(".slide-title")?.textContent || "";
-    return title.includes("核心指标");
+    return title.includes("核心指标") || !!slide.querySelector(".dark-panel--kpi");
   }
 
   function clampFont(px, factor, minPx) {
@@ -144,8 +146,6 @@
         pb: parseFloat(cs.paddingBottom) || 0,
         pl: parseFloat(cs.paddingLeft) || 0,
         mb: parseFloat(cs.marginBottom) || 0,
-        h: el.getBoundingClientRect().height,
-        isKpi: el.classList.contains("dark-panel--kpi"),
       };
     });
 
@@ -173,31 +173,16 @@
       panelOrig.forEach((o) => {
         o.el.style.padding = `${(o.pt * padFactor).toFixed(1)}px ${(o.pr * padFactor).toFixed(1)}px ${(o.pb * padFactor).toFixed(1)}px ${(o.pl * padFactor).toFixed(1)}px`;
         o.el.style.marginBottom = `${(o.mb * padFactor).toFixed(1)}px`;
-        if (keep && o.isKpi && o.h > 0) {
-          o.el.style.height = "auto";
-          o.el.style.maxHeight = `${Math.max(160, Math.floor(o.h * padFactor)).toFixed(0)}px`;
-          o.el.style.overflow = "hidden";
-        }
       });
       if (!needsFit(body)) {
-        return { fitted: true, step, fontFactor, padFactor };
+        return { fitted: true, step, fontFactor, padFactor, keep };
       }
       if (fontFactor <= minSoft + 0.001 && padFactor <= minPad + 0.001) break;
     }
 
-    // 缩到下限仍溢出
+    // 缩到下限仍溢出：核心页保留已软缩字号，交由 peel 把结论整块挪续页（禁止裁 KPI）
     if (keep) {
-      // 核心页禁止 peel：保留最强软缩，再压 KPI，尽量一页装下
-      panelOrig.forEach((o) => {
-        if (!o.isKpi) return;
-        o.el.style.height = "auto";
-        o.el.style.maxHeight = `${Math.max(140, Math.floor(body.clientHeight * 0.38))}px`;
-        o.el.style.overflow = "hidden";
-      });
-      if (!needsFit(body)) {
-        return { fitted: true, step: 99, keep: true };
-      }
-      return { fitted: false, reason: "shrink-failed" };
+      return { fitted: false, reason: "shrink-failed", keep: true };
     }
     body.style.fontSize = "";
     tableOrig.forEach((o) => {
@@ -236,12 +221,93 @@
     return String(title || "").replace(/\s*\(\d+\/\d+\)\s*$/, "").trim();
   }
 
+  /** 核心指标页：软缩不够时只剥「核心结论」面板，KPI 完整留本页 */
+  function peelCoreConclusion(slide) {
+    const body = bodyEl(slide);
+    if (!body || !needsFit(body) || !keepTogetherSlide(slide)) return 0;
+    const kpi = body.querySelector(":scope > .dark-panel--kpi, .dark-panel--kpi");
+    const block =
+      body.querySelector(":scope > .dark-block, :scope > .dark-panel.dark-block") ||
+      body.querySelector(".dark-block");
+    if (!kpi || !block) return 0;
+    const blank = slide.cloneNode(true);
+    const blankBody = bodyEl(blank);
+    if (!blankBody) return 0;
+    blankBody.innerHTML = "";
+    blank.querySelector(".analysis-time-pill")?.remove();
+    blank.setAttribute("data-pack", "1");
+    // 续页去掉 KPI 标记，避免 keepTogether 再剥一次造成空页风暴
+    blank.querySelectorAll(".dark-panel--kpi").forEach((el) => el.remove());
+    const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
+    const title = blank.querySelector(".slide-title");
+    if (title) title.textContent = base ? `${base}（续）` : "（续）";
+    blankBody.appendChild(block);
+    slide.after(blank);
+    softShrinkFit(blankBody, { keepTogether: false });
+    return 1;
+  }
+
+  /** 结论续页仍过高：按段落整段下挪，禁止半行 */
+  function peelConclusionParagraphs(slide) {
+    const body = bodyEl(slide);
+    if (!body || !needsFit(body)) return 0;
+    if (body.querySelector(".dark-panel--kpi")) return 0;
+    const root =
+      body.querySelector(".executive-summary") ||
+      body.querySelector(".dark-block") ||
+      body;
+    const paras = Array.from(root.querySelectorAll(":scope > p, :scope > li"));
+    if (paras.length < 2) return 0;
+    const moved = [];
+    while (needsFit(body) && paras.length - moved.length >= 1) {
+      const idx = paras.length - 1 - moved.length;
+      if (idx < 0) break;
+      // 至少留 1 段在本页
+      if (paras.length - moved.length <= 1) break;
+      const last = paras[idx];
+      moved.unshift(last);
+      last.remove();
+    }
+    if (!moved.length) return 0;
+    const blank = slide.cloneNode(true);
+    const blankBody = bodyEl(blank);
+    if (!blankBody) {
+      moved.forEach((p) => root.appendChild(p));
+      return 0;
+    }
+    blankBody.innerHTML = "";
+    blank.querySelector(".analysis-time-pill")?.remove();
+    blank.setAttribute("data-pack", "1");
+    const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "").replace(/（续）\s*$/, "");
+    const title = blank.querySelector(".slide-title");
+    if (title) title.textContent = base ? `${base}（续）` : "（续）";
+    const wrap = document.createElement("div");
+    wrap.className = "dark-panel dark-block";
+    const h = document.createElement("h3");
+    h.textContent = "核心结论";
+    wrap.appendChild(h);
+    const sum = document.createElement("div");
+    sum.className = "executive-summary";
+    moved.forEach((p) => sum.appendChild(p));
+    wrap.appendChild(sum);
+    blankBody.appendChild(wrap);
+    slide.after(blank);
+    softShrinkFit(blankBody, { keepTogether: false });
+    return 1;
+  }
+
   /**
    * 2026-07-27 - 软缩到下限仍裁半行 - 整行剥到续页；一次剥到本页合下为止，禁止半行、避免一页一行
    */
   function peelOverflow(slide) {
     const body = bodyEl(slide);
     if (!body || !needsFit(body)) return 0;
+
+    if (keepTogetherSlide(slide)) {
+      return peelCoreConclusion(slide);
+    }
+    const peeledParas = peelConclusionParagraphs(slide);
+    if (peeledParas) return peeledParas;
 
     const table = body.querySelector("table");
     const tbody = table && table.tBodies[0];

@@ -554,32 +554,32 @@ def test_deck_pack_no_orphan_header_one_row_at_page_bottom() -> None:
             assert p["lastItemRows"] == 0 or p["lastItemRows"] > 2, info
 
 
-def test_deck_pack_core_kpi_keeps_together() -> None:
-    """核心指标与结论：略超高时软缩留一页，禁止剥成 2/2。"""
+def test_deck_pack_core_kpi_soft_shrink_one_page() -> None:
+    """核心指标+结论：仅略超高时软缩留一页，且不得裁切 KPI。"""
     from playwright.sync_api import sync_playwright
 
     from app.services.report_molizhishu_pdf_service import _pack_js
 
     html = """<!DOCTYPE html><html><head><style>
     .slide{width:2520px;height:1417px;position:relative;overflow:hidden}
-    .dark-content{position:absolute;left:132px;top:210px;width:2260px;max-height:620px;overflow:hidden;color:#fff}
-    .dark-panel{padding:28px 32px;margin:0 0 24px;background:#123}
-    .dark-panel--kpi{height:280px}
-    .dark-block{padding:24px;font-size:36px;line-height:1.55}
-    .dark-block p{margin:0 0 10px;font-size:36px}
+    .dark-content{position:absolute;left:132px;top:210px;width:2260px;max-height:440px;overflow:hidden;color:#fff}
+    .dark-panel{padding:22px 28px;margin:0 0 18px;background:#123}
+    .dark-panel--kpi{min-height:140px}
+    .dark-block{padding:20px;font-size:32px;line-height:1.45}
+    .dark-block p{margin:0 0 6px;font-size:32px}
     .slide-title{position:absolute;left:140px;top:118px}
-    .kpi-value{font-size:44px}
+    .kpi-value{font-size:40px}
+    .executive-summary{font-size:32px}
     </style></head><body><main class="deck">
     <section class="slide slide--dark">
       <h2 class="slide-title">核心指标与结论</h2>
       <div class="dark-content">
-        <div class="dark-panel dark-panel--kpi"><div class="kpi-value">提及率 36%</div></div>
-        <div class="dark-panel dark-block pack-item">
+        <div class="dark-panel dark-panel--kpi"><div class="kpi-value">提及率 36%</div><div class="kpi-value">健康分 72</div></div>
+        <div class="dark-panel dark-block">
           <h3>核心结论</h3>
           <div class="executive-summary">
             <p>在监测周期内品牌表现稳定，分平台差异显著，建议强化垂直内容与引用布局。</p>
             <p>高铁广告语义词排名靠前，微博智搜提及率高于夸克与 DeepSeek。</p>
-            <p>整体口碑偏正向，需持续跟踪核心语义词波动。</p>
           </div>
         </div>
       </div>
@@ -602,10 +602,14 @@ def test_deck_pack_core_kpi_keeps_together() -> None:
                 """() => {
                   const slides = [...document.querySelectorAll('.slide')];
                   const b = document.querySelector('.dark-content');
+                  const kpi = document.querySelector('.dark-panel--kpi');
+                  const cs = kpi ? getComputedStyle(kpi) : null;
                   return {
                     slides: slides.length,
                     titles: slides.map((s) => (s.querySelector('.slide-title') || {}).textContent || ''),
                     over: b ? b.scrollHeight - b.clientHeight : -1,
+                    kpiMaxH: cs ? cs.maxHeight : '',
+                    kpiOverflow: cs ? cs.overflow : '',
                   };
                 }"""
             )
@@ -614,8 +618,84 @@ def test_deck_pack_core_kpi_keeps_together() -> None:
 
     assert before > 2, before
     assert after["slides"] == 1, after
-    assert not any("2/2" in t or "（续）" in t for t in after["titles"]), after
     assert after["over"] <= 2, after
+    assert after["kpiOverflow"] != "hidden" or after["kpiMaxH"] in ("none", ""), after
+    assert result.get("stillClipped", 0) == 0, result
+
+
+def test_deck_pack_core_kpi_peels_conclusion_when_too_tall() -> None:
+    """核心页内容过多：软缩不够则剥结论到续页，KPI 不被 overflow 裁切。"""
+    from playwright.sync_api import sync_playwright
+
+    from app.services.report_molizhishu_pdf_service import _pack_js
+
+    paras = "".join(
+        f"<p>结论段落{i}：分平台差异显著，建议强化垂直内容布局与引用信源建设，持续跟踪核心语义词。</p>"
+        for i in range(1, 12)
+    )
+    html = f"""<!DOCTYPE html><html><head><style>
+    .slide{{width:2520px;height:1417px;position:relative;overflow:hidden}}
+    .dark-content{{position:absolute;left:132px;top:210px;width:2260px;max-height:620px;overflow:hidden;color:#fff}}
+    .dark-panel{{padding:28px 32px;margin:0 0 24px;background:#123}}
+    .dark-panel--kpi{{min-height:260px}}
+    .dark-block{{padding:24px;font-size:36px;line-height:1.55}}
+    .dark-block p{{margin:0 0 10px;font-size:36px}}
+    .slide-title{{position:absolute;left:140px;top:118px}}
+    .kpi-value{{font-size:48px}}
+    </style></head><body><main class="deck">
+    <section class="slide slide--dark">
+      <h2 class="slide-title">核心指标与结论</h2>
+      <div class="dark-content">
+        <div class="dark-panel dark-panel--kpi"><div class="kpi-value">提及率 36.9%</div><div class="kpi-value">平均排名 4.1</div></div>
+        <div class="dark-panel dark-block">
+          <h3>核心结论</h3>
+          <div class="executive-summary">{paras}</div>
+        </div>
+      </div>
+    </section>
+    </main></body></html>"""
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 2520, "height": 1417}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            result = page.evaluate(_pack_js())
+            after = page.evaluate(
+                """() => {
+                  const slides = [...document.querySelectorAll('.slide')];
+                  return {
+                    slides: slides.length,
+                    titles: slides.map((s) => (s.querySelector('.slide-title') || {}).textContent || ''),
+                    pages: slides.map((s) => {
+                      const b = s.querySelector('.dark-content');
+                      const kpi = s.querySelector('.dark-panel--kpi');
+                      const block = s.querySelector('.dark-block');
+                      const cs = kpi ? getComputedStyle(kpi) : null;
+                      return {
+                        over: b ? b.scrollHeight - b.clientHeight : 0,
+                        hasKpi: !!kpi,
+                        hasBlock: !!block,
+                        kpiOverflow: cs ? cs.overflow : '',
+                        kpiMaxH: cs ? cs.maxHeight : '',
+                      };
+                    }),
+                  };
+                }"""
+            )
+        finally:
+            browser.close()
+
+    assert after["slides"] >= 2, after
+    assert after["slides"] <= 6, after  # 允许结论再按段拆，但禁止空页风暴
+    assert after["pages"][0]["hasKpi"] is True, after
+    assert after["pages"][0]["hasBlock"] is False, after
+    assert any(p["hasBlock"] for p in after["pages"][1:]), after
+    assert all(p["over"] <= 2 for p in after["pages"]), after
+    assert all(
+        (not p["hasKpi"]) or p["kpiOverflow"] != "hidden" or p["kpiMaxH"] in ("none", "")
+        for p in after["pages"]
+    ), after
     assert result.get("stillClipped", 0) == 0, result
 
 

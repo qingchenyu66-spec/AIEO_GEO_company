@@ -58,15 +58,22 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const selectedReportId = ref<number | null>(null)
   const reportDetail = ref<ReportDetail | null>(null)
   const previewHtmlBlobUrl = ref<string | null>(null)
+  /** 会话内按报告 id 复用 blob，避免反复下 30MB+ HTML */
+  const previewHtmlBlobById = new Map<number, string>()
   const typeFilter = ref<ReportTypeFilter>('all')
   const keywordFilter = ref('')
   const tenantFilter = ref<number | ''>('')
 
   function revokePreviewHtmlBlob() {
-    if (previewHtmlBlobUrl.value) {
-      URL.revokeObjectURL(previewHtmlBlobUrl.value)
-      previewHtmlBlobUrl.value = null
+    previewHtmlBlobUrl.value = null
+  }
+
+  function revokeAllPreviewHtmlBlobs() {
+    for (const url of previewHtmlBlobById.values()) {
+      URL.revokeObjectURL(url)
     }
+    previewHtmlBlobById.clear()
+    previewHtmlBlobUrl.value = null
   }
 
   const filteredReports = computed(() => {
@@ -151,11 +158,18 @@ export function useReportCenter(options: UseReportCenterOptions) {
       revokePreviewHtmlBlob()
       return
     }
+    const cachedUrl = previewHtmlBlobById.get(reportId)
+    if (cachedUrl) {
+      previewHtmlBlobUrl.value = cachedUrl
+      previewHtmlLoading.value = false
+      return
+    }
     previewHtmlLoading.value = true
     try {
       const html = await prepareReportPreviewHtml(await withRetry(() => fetchReportPreviewHtml(reportId)))
-      revokePreviewHtmlBlob()
-      previewHtmlBlobUrl.value = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+      previewHtmlBlobById.set(reportId, url)
+      previewHtmlBlobUrl.value = url
     } catch (error: unknown) {
       revokePreviewHtmlBlob()
       ElMessage.error(`报告预览加载失败：${errorMessage(error)}`)
@@ -264,8 +278,15 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   watch(selectedReportId, reportId => {
     if (reportId) {
-      void loadReportDetail(reportId)
-      void loadPreviewHtml(reportId)
+      const reportType = reports.value.find(item => item.id === reportId)?.report_type
+      if (isHtmlTemplateReportType(reportType)) {
+        // HTML 模板预览不依赖 detail JSON，免并行拖慢首屏
+        reportDetail.value = null
+        void loadPreviewHtml(reportId)
+      } else {
+        revokePreviewHtmlBlob()
+        void loadReportDetail(reportId)
+      }
     } else {
       reportDetail.value = null
       revokePreviewHtmlBlob()
@@ -298,7 +319,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
   })
 
   onUnmounted(() => {
-    revokePreviewHtmlBlob()
+    revokeAllPreviewHtmlBlobs()
   })
 
   return {

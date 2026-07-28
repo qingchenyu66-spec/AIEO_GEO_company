@@ -172,12 +172,15 @@ def test_notify_failed_subtasks_for_task_creates_single_notification(db_session)
     assert count == 1
     row = db_session.query(SystemNotification).one()
     assert row.category == "snapshot_backfill"
-    assert row.source_key == "subtask:backfill:st-fail-1"
-    assert "doubao_mobile" in row.message
+    assert row.source_key.startswith("backfill:batch:")
+    assert row.title.startswith("待补录 · ")
+    assert "待补录1条" in row.message
     import json
 
     payload = json.loads(row.payload_json or "{}")
     assert payload.get("owner_user_id") == 88
+    assert payload.get("period") not in {"早", "午", "晚"}
+    assert "st-fail-1" in (payload.get("subtask_ids") or [])
 
 
 def test_notify_weak_rank_uses_rank_title(db_session, monkeypatch) -> None:
@@ -232,14 +235,32 @@ def test_notify_weak_rank_uses_rank_title(db_session, monkeypatch) -> None:
     monkeypatch.setattr(svc, "build_snapshot_backfill_item", _fake_item)
     assert notify_failed_subtasks_for_task(db_session, task) == 1
     row = db_session.query(SystemNotification).one()
-    assert row.title == "排名落后待补录"
-    assert "第5名" in row.message
+    assert row.title == "待补录 · 测试企业"
+    assert "待补录1条" in row.message
     import json
 
     assert json.loads(row.payload_json or "{}").get("owner_user_id") == 9
 
 
-def test_subtask_backfill_eligible_includes_completed_with_answer() -> None:
+def test_matrix_cell_has_todo_rules() -> None:
+    from app.services.snapshot_backfill_service import matrix_cell_has_todo
+
+    assert matrix_cell_has_todo(ranks=[], sample_count=0) is False
+    assert matrix_cell_has_todo(ranks=[], sample_count=2) is True  # 算不出均值也标红
+    assert matrix_cell_has_todo(ranks=[1.0, 2.0, 3.0], sample_count=3) is False
+    assert matrix_cell_has_todo(ranks=[1.0, 5.0, 6.0], sample_count=3) is True
+    assert matrix_cell_has_todo(ranks=[4.0], sample_count=1) is True
+
+
+def test_schedule_period_bucket() -> None:
+    from app.services.snapshot_backfill_service import parse_schedule_slot, schedule_period_bucket
+
+    assert parse_schedule_slot("20260728-0430") == ("20260728-0430", "2026-07-28 04:30")
+    assert parse_schedule_slot("20260728-0930") == ("20260728-0930", "2026-07-28 09:30")
+    assert parse_schedule_slot("20260728-1430") == ("20260728-1430", "2026-07-28 14:30")
+    assert parse_schedule_slot(None, "2026-07-28 09:30") == ("20260728-0930", "2026-07-28 09:30")
+    # 兼容旧名：现返回具体时刻
+    assert schedule_period_bucket("20260728-0430") == "2026-07-28 04:30"
     subtask = GeoMonitorSubtask(
         subtask_id="st-done",
         task_id="task-1",
@@ -480,7 +501,8 @@ def test_list_snapshot_backfill_items_filters_by_tenant_and_date(db_session) -> 
         status="completed",
         answer_content="回答A",
         mention_position=2,
-        raw_result_json={},
+        # 无结构化榜时展示位次会被对账清空；锁住以模拟已确认 Top3
+        raw_result_json={"source": "manual_snapshot", "manual_rank_locked": True},
         updated_at=datetime(2026, 7, 2, 10, 0, 0),
     )
     failed = GeoMonitorSubtask(
