@@ -1,5 +1,8 @@
 /** 报告 blob 预览：同源静态资源 + 大画布幻灯片适配 iframe 宽度。 */
 
+/** 模力诊断/周期 HTML 母版固定宽（与 report_molizhishu/styles.css .deck 一致） */
+export const REPORT_SLIDE_WIDTH_PX = 2520
+
 /** 进入报告中心时预取母版图与 echarts，减轻客户首点预览等待。 */
 export function prefetchReportPreviewAssets(origin = typeof window !== 'undefined' ? window.location.origin : ''): void {
   if (!origin || typeof document === 'undefined') return
