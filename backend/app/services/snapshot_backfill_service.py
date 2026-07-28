@@ -305,6 +305,7 @@ def build_snapshot_backfill_matrix_sample(
         effective_rank=effective,
         use_effective_rank=True,
     )
+    dismissed = subtask_backfill_dismissed(subtask)
     updated = getattr(subtask, "updated_at", None)
     return {
         "subtask_id": subtask.subtask_id,
@@ -317,7 +318,9 @@ def build_snapshot_backfill_matrix_sample(
         "error_message": subtask.error_message,
         "monitor_keywords": task.monitor_keywords,
         "mention_position": effective,
-        "needs_backfill": bool(needs),
+        "needs_backfill": bool(needs) and not dismissed,
+        "needs_backfill_raw": bool(needs),
+        "backfill_dismissed": dismissed,
         "has_answer": has_answer,
         "status": subtask.status,
         "schedule_key": schedule_ctx.get("schedule_key"),
@@ -841,8 +844,12 @@ def _snapshot_backfill_log_description(
 
 
 def subtask_backfill_eligible(subtask: GeoMonitorSubtask, *, pending_only: bool = False) -> bool:
-    """待补录项，或已有回答可覆盖更正的子任务。已忽略的不进运营列表。"""
-    if subtask_backfill_dismissed(subtask):
+    """待补录项，或已有回答可覆盖更正的子任务。
+
+    pending_only：已忽略不进待补列表。
+    非 pending（矩阵）：已忽略仍保留，便于看排名/快照/继续补录，只是不再提醒。
+    """
+    if pending_only and subtask_backfill_dismissed(subtask):
         return False
     if pending_only:
         return subtask_needs_snapshot_backfill(subtask)
@@ -857,7 +864,7 @@ def dismiss_snapshot_backfill(
     subtask_id: str,
     current: CurrentSession,
 ) -> dict[str, Any]:
-    """永久忽略该子任务待补录：保留答案/排名，退出列表与提醒。"""
+    """忽略该子任务待补提醒：保留答案/排名，矩阵仍可见，只退出提醒与待补红点。"""
     if current.identity.identity_type != "PLATFORM":
         raise PermissionError("仅平台运营端可忽略快照补录")
 
@@ -1254,8 +1261,9 @@ def list_snapshot_backfill_page(
             )
         )
 
-    # 已忽略项不进运营列表（取消忽略仅靠 subtask_id 深链进详情）
-    stmt = stmt.where(GeoMonitorSubtask.backfill_dismissed_at.is_(None))
+    # 2026-07-28 - 忽略后矩阵丢排名/点不开 - 仅待补列表排除已忽略；矩阵仍保留场次
+    if pending_only:
+        stmt = stmt.where(GeoMonitorSubtask.backfill_dismissed_at.is_(None))
 
     no_answer = or_(GeoMonitorSubtask.answer_content.is_(None), GeoMonitorSubtask.answer_content == "")
     if pending_only:
@@ -1535,6 +1543,7 @@ def list_snapshot_backfill_matrix(
                     "schedule_window_key": sample.get("schedule_window_key"),
                     "mention_position": sample.get("mention_position"),
                     "needs_backfill": bool(sample.get("needs_backfill")),
+                    "backfill_dismissed": bool(sample.get("backfill_dismissed")),
                     "has_answer": bool(sample.get("has_answer")),
                     "status": sample.get("status"),
                     "error_message": sample.get("error_message"),
@@ -1550,7 +1559,8 @@ def list_snapshot_backfill_matrix(
                 }
             )
         avg = _average_mention_position(ranks)
-        has_todo = matrix_cell_has_todo(ranks=ranks, sample_count=len(samples))
+        # 2026-07-28 - 忽略=不提醒 - 红点跟 needs_backfill，已忽略场次不再撑红点
+        has_todo = any(bool(sample.get("needs_backfill")) for sample in samples)
         cells.append(
             {
                 "platform": plat,

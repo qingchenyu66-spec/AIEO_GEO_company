@@ -328,11 +328,9 @@ function averageRanks(ranks: number[]) {
   return Math.round((total / ranks.length) * 10) / 10
 }
 
-function cellHasTodo(ranks: number[], sampleCount: number) {
-  if (sampleCount <= 0) return false
-  if (!ranks.length) return true
-  const avg = averageRanks(ranks)
-  return avg == null ? true : avg > 3
+function cellHasTodo(slots: SnapshotBackfillMatrixSlot[]) {
+  // 2026-07-28 - 忽略后仍应保留排名 - 红点只跟仍需补录的场次，勿因忽略删格
+  return slots.some(slot => Boolean(slot.needs_backfill))
 }
 
 function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrixCell {
@@ -350,7 +348,7 @@ function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrix
     fail_count: failCount,
     sample_count: cell.slots.length,
     rank_sample_count: ranks.length,
-    has_todo: cellHasTodo(ranks, cell.slots.length),
+    has_todo: cellHasTodo(cell.slots),
   }
 }
 
@@ -369,33 +367,7 @@ function refreshPlatformStats(platformId: string) {
   }
 }
 
-/** 忽略/补录后只改本地格子，不整表重拉 */
-function removeSlotLocally(subtaskId: string) {
-  const nextCells: SnapshotBackfillMatrixCell[] = []
-  let touchedPlatform = ''
-  for (const cell of cells.value) {
-    if (!cell.slots.some(slot => slot.subtask_id === subtaskId)) {
-      nextCells.push(cell)
-      continue
-    }
-    touchedPlatform = cell.platform
-    const slots = cell.slots.filter(slot => slot.subtask_id !== subtaskId)
-    if (!slots.length) continue
-    nextCells.push(recomputeCell({ ...cell, slots }))
-  }
-  cells.value = nextCells
-  if (touchedPlatform) refreshPlatformStats(touchedPlatform)
-  // 词行若已无格子则从表头去掉
-  const liveWords = new Set(nextCells.filter(c => c.platform === activePlatform.value).map(c => c.word))
-  words.value = words.value.filter(word => liveWords.has(word) || nextCells.some(c => c.word === word))
-  if (cellDrawer.value) {
-    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date)
-    cellDrawer.value = refreshed
-    if (!refreshed || !refreshed.slots.length) closeCellDrawer()
-  }
-  ensureActivePlatform()
-}
-
+/** 补录/忽略后只改本地场次，不整表重拉 */
 function patchSlotLocally(
   subtaskId: string,
   patch: Partial<SnapshotBackfillMatrixSlot>,
@@ -523,8 +495,11 @@ async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
       )
     }
     await dismissSnapshotBackfill(slot.subtask_id)
-    // 2026-07-28 - 忽略后整表重拉不合理 - 本地剔除该场次并重算格子
-    removeSlotLocally(slot.subtask_id)
+    // 2026-07-28 - 忽略只消提醒 - 保留场次排名/快照，本地清 needs_backfill，勿 removeSlot
+    patchSlotLocally(slot.subtask_id, {
+      needs_backfill: false,
+      backfill_dismissed: true,
+    })
     ElMessage.success('已忽略，不再提醒')
     emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
   } catch (error: unknown) {

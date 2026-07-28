@@ -94,6 +94,7 @@ export interface SnapshotBackfillMatrixSlot {
   schedule_window_key?: string | null
   mention_position?: number | null
   needs_backfill?: boolean
+  backfill_dismissed?: boolean
   has_answer?: boolean
   status?: string | null
   error_message?: string | null

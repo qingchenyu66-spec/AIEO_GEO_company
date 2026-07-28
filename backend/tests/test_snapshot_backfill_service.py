@@ -785,12 +785,23 @@ def test_dismissed_subtask_excluded_from_eligible_and_list(db_session) -> None:
     assert subtask_backfill_dismissed(subtask) is True
     assert subtask_needs_snapshot_backfill(subtask) is True
     assert subtask_backfill_eligible(subtask, pending_only=True) is False
-    assert subtask_backfill_eligible(subtask, pending_only=False) is False
+    # 2026-07-28 - 忽略后矩阵仍保留 - 非 pending 仍可进矩阵看排名/补录
+    assert subtask_backfill_eligible(subtask, pending_only=False) is True
 
     page = list_snapshot_backfill_page(db_session, tenant_id=tenant.id, pending_only=True, limit=10)
     assert page["summary"]["pending"] == 0
     assert page["items"] == []
     assert notify_failed_subtasks_for_task(db_session, task) == 0
+
+    matrix_page = list_snapshot_backfill_page(
+        db_session, tenant_id=tenant.id, pending_only=False, limit=10, light=True,
+    )
+    assert any(item.get("subtask_id") == "st-dismiss" for item in matrix_page["items"])
+    hit = next(item for item in matrix_page["items"] if item.get("subtask_id") == "st-dismiss")
+    assert hit.get("needs_backfill") is False
+    assert hit.get("backfill_dismissed") is True
+    assert hit.get("mention_position") == 8
+    assert hit.get("has_answer") is True
 
 
 def test_dismiss_and_undismiss_snapshot_backfill(db_session, monkeypatch) -> None:
