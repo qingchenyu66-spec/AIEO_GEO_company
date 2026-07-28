@@ -21,4 +21,10 @@ const withFakeBody = injectReportPreviewFit(
 assert(withFakeBody.indexOf('geo-preview-fit-script') > withFakeBody.indexOf('var x='), 'fit after real body')
 assert((withFakeBody.match(/<\/script>/gi) || []).length >= 2, 'echarts script still closed')
 
+const withPack = injectReportPreviewFit(
+  '<html><body><main class="deck"></main><script id="geo-deck-pack">document.documentElement.dataset.geoDeckPacked="1";</script></body></html>',
+)
+assert(withPack.indexOf('geo-preview-fit-script') > withPack.indexOf('geo-deck-pack'), 'fit after pack script')
+assert(withPack.includes('geoDeckPacked'), 'fit waits for pack flag')
+
 console.log('reportPreviewHtml check ok')

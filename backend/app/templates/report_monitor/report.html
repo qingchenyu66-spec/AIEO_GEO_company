@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }}</title>
+    <style>
+    {{ font_face_css | safe }}
+    {% include 'styles.css' %}
+    </style>
+    {% if echarts_inline %}
+    <script>{{ echarts_inline | safe }}</script>
+    {% endif %}
+</head>
+<body class="report-theme-monitor" data-pipeline="{{ pipeline }}">
+    <main class="deck">
+        <section class="slide slide--cover">
+            <img class="master-bg" src="{{ monitor_assets.cover }}" alt="">
+            <div class="overlay cover-note">
+                <div class="note-kicker">{{ type_label }} · 专业版</div>
+                <div class="note-brand">{{ brand_name }}</div>
+                <div class="note-meta">
+                    <div class="note-meta-row note-meta-row--platforms">
+                        <span class="note-label">分析平台</span>
+                        <div class="platform-chip-wrap">
+                            {% for row in platform_chip_rows %}
+                            <div class="platform-chip-row">
+                                {% for name in row %}
+                                <span class="platform-chip">{{ name }}</span>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <div class="platform-chip-row">
+                                <span class="platform-chip">DeepSeek</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="note-meta-row">
+                        <span class="note-label">分析周期</span>
+                        <span class="note-value">{{ period_range }}</span>
+                    </div>
+                    <div class="note-meta-row">
+                        <span class="note-label">报告生成时间</span>
+                        <span class="note-value">{{ generated_at }}</span>
+                    </div>
+                </div>
+                <div class="note-competitors">
+                    <span class="note-label">竞品</span>
+                    <span class="note-competitor-list">{{ competitor_text }}</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide slide--dark">
+            <img class="master-bg" src="{{ monitor_assets.dark }}" alt="">
+            <h2 class="slide-title">核心指标 · 环比上一周期</h2>
+            <p class="slide-subtitle">本期核心表现</p>
+            <div class="overlay dark-content">
+                <div class="dark-panel dark-panel--kpi">
+                    {{ kpi_html | safe }}
+                    {{ sample_meta_html | safe }}
+                </div>
+                {% if conclusions_html %}
+                <div class="dark-panel dark-block">
+                    <h3>核心结论</h3>
+                    {{ conclusions_html | safe }}
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        {% if preface_html %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="preface">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">报告前言</h2>
+            <p class="slide-subtitle">{{ preface_subtitle }}</p>
+            <div class="overlay light-content pack-body">
+                <div class="pack-item preface-block">{{ preface_html | safe }}</div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if has_trend %}
+        <section class="slide slide--light-wide" data-pack="1" data-merge-group="trend">
+            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="">
+            <h2 class="slide-title">趋势分析</h2>
+            <p class="slide-subtitle">{{ trend_subtitle }}</p>
+            <div class="overlay light-content light-content--wide pack-body">
+                <div class="pack-item period-trend">{{ trend_head_html | safe }}</div>
+                {% if trend_table_html %}
+                <div class="pack-item period-trend">{{ trend_table_html | safe }}</div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if keyword_html %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="keywords">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">核心监测词表现</h2>
+            <p class="slide-subtitle">{{ keyword_subtitle }}</p>
+            <div class="overlay light-content pack-body slide-body--dense">
+                <div class="pack-item">{{ keyword_html | safe }}</div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if has_matrix %}
+        <section class="slide slide--light-wide" data-pack="1" data-merge-group="matrix">
+            <img class="master-bg" src="{{ monitor_assets.light_wide }}" alt="">
+            <h2 class="slide-title">短板词 × 平台矩阵</h2>
+            <p class="slide-subtitle">{{ matrix_subtitle }}</p>
+            <div class="overlay light-content light-content--wide pack-body slide-body--dense">
+                <div class="pack-item">{{ matrix_html | safe }}</div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if competitor_html %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="competitor">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">竞品对比分析</h2>
+            <p class="slide-subtitle">{{ competitor_subtitle }}</p>
+            <div class="overlay light-content pack-body slide-body--dense">
+                {% if competitor_head_html %}
+                <div class="pack-item">{{ competitor_head_html | safe }}</div>
+                {% endif %}
+                {% if competitor_actions_html %}
+                <div class="pack-item">{{ competitor_actions_html | safe }}</div>
+                {% endif %}
+                {% if competitor_table_html %}
+                <div class="pack-item">{{ competitor_table_html | safe }}</div>
+                {% elif not competitor_head_html %}
+                <div class="pack-item">{{ competitor_html | safe }}</div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="slide slide--light" data-pack="1" data-merge-group="platform">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">分平台排名与提及率</h2>
+            <p class="slide-subtitle">{{ platform_subtitle }}</p>
+            <div class="overlay light-content pack-body slide-body--dense">
+                <div class="pack-item">{{ platform_html | safe }}</div>
+            </div>
+        </section>
+
+        {% if has_tail %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="tail">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">{{ tail_title }}</h2>
+            <p class="slide-subtitle">{{ tail_subtitle }}</p>
+            <div class="overlay light-content pack-body">
+                <div class="pack-item">{{ tail_html | safe }}</div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if has_disclaimer %}
+        <section class="slide slide--light">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="">
+            <h2 class="slide-title">免责声明</h2>
+            <p class="slide-subtitle">{{ disclaimer_subtitle }}</p>
+            <div class="overlay light-content">
+                {{ disclaimer_html | safe }}
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="slide slide--thanks">
+            <img class="master-bg" src="{{ monitor_assets.thanks }}" alt="">
+        </section>
+    </main>
+    {# 2026-07-28 - 预览 iframe 也要跑 pack，否则 overflow:hidden 裁切、与 PDF 分页不一致 #}
+    <script id="geo-deck-pack">{% include 'deck_pack.js' %}</script>
+</body>
+</html>

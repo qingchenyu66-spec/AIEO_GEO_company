@@ -978,9 +978,10 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
     if report_type in PERIOD_COMPARISON_REPORT_TYPES:
         if tenant_id <= 0:
             raise ValueError("报告缺少 tenant_id")
-        from app.services.report_period_comparison_service import build_period_report_html_for_export
+        # 2026-07-28 - 周期预览改 0727 监测幻灯母版（与 PDF 同源）
+        from app.services.report_period_deck_pdf_service import build_period_deck_html
 
-        return build_period_report_html_for_export(db, payload, tenant_id=tenant_id)
+        return build_period_deck_html(db, payload, tenant_id=tenant_id)
 
     if report_type == "diagnosis":
         from app.services.report_molizhishu_html_service import build_molizhishu_html
@@ -1000,6 +1001,8 @@ def report_preview_html_path(report_id: int) -> Path:
 
 def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
     """预览与导出共用：报告更新时间 / 状态 / 主题变化即失效旧缓存。"""
+    from app.services.report_period_deck_context_service import PERIOD_DECK_PIPELINE
+
     raw = "|".join(
         [
             str(report.get("id") or ""),
@@ -1007,6 +1010,11 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
             str(report.get("status") or ""),
             str(report.get("content_hash") or ""),
             str(theme or "b"),
+            # 2026-07-28 - 周期改幻灯 / 预览内嵌 deck_pack 后刷缓存
+            PERIOD_DECK_PIPELINE
+            if str(report.get("report_type") or "")
+            in {"weekly", "monthly", "quarterly", "annual"}
+            else "diag-pack-v1",
         ]
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
@@ -1096,12 +1104,13 @@ def build_report_export(
     if export_format == "pdf" and report_type in PERIOD_COMPARISON_REPORT_TYPES:
         if db is None:
             raise ValueError("周期报告 PDF 导出需要数据库会话")
-        from app.services.report_period_pdf_service import build_period_report_pdf
+        # 2026-07-28 - 周期 PDF 改监测幻灯截图；旧 A4 build_period_report_pdf 保留未删
+        from app.services.report_period_deck_pdf_service import build_period_deck_pdf
 
         tenant_id = int(report.get("tenant_id") or 0)
         if tenant_id <= 0:
             raise ValueError("报告缺少 tenant_id")
-        content = build_period_report_pdf(db, payload, tenant_id=tenant_id)
+        content = build_period_deck_pdf(db, payload, tenant_id=tenant_id)
         mime = "application/pdf"
         suffix = "pdf"
     elif export_format == "pdf":

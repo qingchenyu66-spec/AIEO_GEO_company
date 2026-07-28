@@ -1,0 +1,1724 @@
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    font-family: 'GeoReportCJK', KaiTi, STKaiti, 'Microsoft YaHei', 'Segoe UI', system-ui, serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.deck,
+.slide {
+    width: 2520px;
+}
+
+.slide {
+    position: relative;
+    height: 1417px;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+    background: #0b1f3a;
+}
+
+.slide--light {
+    background: #eef4fb;
+}
+
+.slide--cover,
+.slide--section,
+.slide--thanks {
+    background: #071526;
+}
+
+.master-bg {
+    position: absolute;
+    inset: 0;
+    width: 2520px;
+    height: 1417px;
+    object-fit: cover;
+    object-position: center;
+    z-index: 0;
+}
+
+.overlay {
+    position: absolute;
+    z-index: 1;
+}
+
+/* 母版红框标题区：Logo 蓝线下方，正文上方 */
+.slide-title {
+    position: absolute;
+    left: 140px;
+    top: 118px;
+    z-index: 2;
+    margin: 0;
+    max-width: 1800px;
+    font-size: 54px;
+    line-height: 1.15;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+}
+
+.slide--dark .slide-title {
+    color: #ffffff;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.slide--light .slide-title {
+    color: #092b55;
+}
+
+.cover-note {
+    left: 110px;
+    bottom: 72px;
+    width: 1280px;
+    color: #ffffff;
+    font-size: 24px;
+    line-height: 1.55;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.72);
+}
+
+.note-kicker {
+    margin-bottom: 10px;
+    font-size: 22px;
+    letter-spacing: 0.04em;
+    color: rgba(220, 248, 255, 0.92);
+}
+
+.note-brand {
+    margin-bottom: 14px;
+    padding-left: 16px;
+    border-left: 7px solid #20dfff;
+    font-size: 36px;
+    font-weight: 800;
+}
+
+.note-meta {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.note-meta-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.note-label {
+    flex: 0 0 7.5em;
+    margin-right: 0;
+    color: rgba(180, 230, 255, 0.88);
+    font-weight: 600;
+    line-height: 1.6;
+}
+
+.note-value {
+    flex: 1;
+    line-height: 1.6;
+}
+
+.note-meta-row--platforms {
+    align-items: flex-start;
+}
+
+.platform-chip-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 1180px;
+    min-width: 0;
+}
+
+/* 2026-07-27 - 封面平台多且名长时 nowrap 横向叠字 - 允许换行，勿互压 */
+.platform-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    align-items: center;
+}
+
+.platform-chip {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 auto;
+    padding: 3px 11px;
+    border-radius: 999px;
+    background: rgba(20, 120, 200, 0.28);
+    border: 1px solid rgba(120, 220, 255, 0.35);
+    color: #eaf8ff;
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.3;
+    white-space: nowrap;
+    text-shadow: none;
+}
+
+.note-competitors {
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.28);
+    font-size: 23px;
+    line-height: 1.45;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.note-competitor-list {
+    color: #ffb36b;
+    font-weight: 700;
+    flex: 1;
+}
+
+.pack-body {
+    max-height: 1040px;
+}
+
+.para--short {
+    text-indent: 0;
+}
+
+.para--indent {
+    text-indent: 2em;
+}
+
+/* 分析/信源白卡内一律不缩进（覆盖上方更具体的 2em 选择器） */
+.analysis-slide-body > .analysis-block > p.para--indent,
+.analysis-slide-body .analysis-card > p,
+.analysis-slide-body .analysis-card > p.para--indent,
+.tip-slide-body .analysis-card > p,
+.tip-slide-body .tip-as-analysis > p,
+.tip-slide-body .tip-as-analysis > p.para--indent {
+    text-indent: 0;
+}
+
+.pack-item {
+    margin: 0 0 14px;
+}
+
+.pack-item:last-child {
+    margin-bottom: 0;
+}
+
+.insight-box {
+    margin: 0;
+    padding: 18px 22px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid rgba(0, 92, 180, 0.14);
+    font-size: 24px;
+    line-height: 1.5;
+    color: #163653;
+}
+
+.insight-box .insight-paragraph,
+.insight-box p {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.5;
+}
+
+.dark-content {
+    left: 132px;
+    top: 248px;
+    width: 2260px;
+    max-height: 1040px;
+    color: #ffffff;
+    overflow: hidden;
+}
+
+.dark-panel {
+    box-sizing: border-box;
+    padding: 28px 32px;
+    border-radius: 16px;
+    background: rgba(4, 14, 32, 0.88);
+    border: 1px solid rgba(64, 196, 255, 0.28);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.dark-panel--kpi {
+    width: 2180px;
+    margin: 0 0 28px;
+    padding: 26px 30px 18px;
+    background: rgba(4, 14, 32, 0.72);
+}
+
+.dark-panel--kpi .kpi-grid {
+    width: 100%;
+    margin: 0;
+}
+
+.light-content {
+    left: 132px;
+    top: 248px;
+    width: 2260px;
+    max-height: 1040px;
+    color: #092b55;
+    overflow: hidden;
+}
+
+.dark-content h2,
+.light-content h2 {
+    display: none;
+}
+
+.dark-content h3,
+.light-content h3,
+.dark-content h4,
+.light-content h4,
+.block-title {
+    margin: 28px 0 18px;
+    font-size: 34px;
+    line-height: 1.25;
+    font-weight: 800;
+}
+
+.dark-block {
+    margin-top: 0;
+    width: 1680px;
+    max-width: 100%;
+}
+
+.dark-block h3 {
+    margin-top: 0;
+}
+
+.hint--on-dark {
+    color: rgba(220, 248, 255, 0.9);
+}
+
+.chart-card {
+    padding: 14px 18px 36px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+    overflow: visible;
+}
+
+.chart-axis-caption {
+    margin: 12px 0 0;
+    text-align: center;
+    font-size: 22px;
+    line-height: 1.4;
+    font-weight: 700;
+    color: #0f2744;
+}
+
+.slide--dark .action-tip-list {
+    color: rgba(255, 255, 255, 0.94);
+    font-size: 24px;
+    line-height: 1.55;
+}
+
+.slide--dark .action-tip-list li {
+    margin: 0 0 14px;
+}
+
+.tip-list--dense li {
+    margin: 0 0 12px;
+}
+
+/* 信源建议：对齐分析页白卡（仍可放在 dark 母版上） */
+.tip-slide-body.tip-slide-body,
+.tip-slide-body {
+    max-height: 1040px;
+}
+
+.tip-analysis-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.tip-slide-body .analysis-card.tip-as-analysis {
+    margin: 0;
+    padding: 16px 20px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(0, 92, 180, 0.14);
+    box-shadow: 0 6px 18px rgba(0, 20, 40, 0.18);
+}
+
+.tip-slide-body .tip-as-analysis p {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.5;
+    color: #163653;
+    text-indent: 0;
+}
+
+.tip-slide-body .tip-as-analysis .tip-card-index {
+    display: inline-block;
+    min-width: 2.1em;
+    margin-right: 8px;
+    font-weight: 800;
+    color: #0b6bcb;
+}
+
+.tip-card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    width: 100%;
+}
+
+.tip-card {
+    box-sizing: border-box;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin: 0;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: rgba(4, 14, 32, 0.82);
+    border: 1px solid rgba(64, 196, 255, 0.26);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+.tip-card-index {
+    flex: 0 0 auto;
+    min-width: 2.2em;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.35;
+    color: #5cf5ff;
+    letter-spacing: 0.02em;
+}
+
+.tip-card-text {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.45;
+    color: rgba(236, 248, 255, 0.94);
+    text-indent: 0;
+}
+
+.priority-title {
+    font-weight: 800;
+    color: #092b55;
+    margin-bottom: 6px;
+}
+
+.priority-detail {
+    font-size: 0.88em;
+    color: #4a6b88;
+    line-height: 1.4;
+}
+
+.priority-action-table td {
+    padding-top: 18px;
+    padding-bottom: 18px;
+}
+
+.chart-image--full {
+    display: block;
+    width: 2180px;
+    max-width: 100%;
+    height: auto;
+    max-height: 860px;
+    object-fit: contain;
+    object-position: top center;
+    /* 禁止圆角裁切：否则 X 轴日期下半截会被 border-radius 切掉 */
+    border-radius: 0;
+    background: #ffffff;
+    box-shadow: none;
+}
+
+.chart-card-subtitle {
+    margin: 0 0 12px;
+    font-size: 24px;
+}
+
+/* 方案 C：上问法+KPI，下整宽图 */
+.chart-slide-body--stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 1040px;
+}
+
+.chart-prompt-panel {
+    flex: 0 0 auto;
+    padding: 16px 22px 14px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.chart-prompt-text {
+    margin: 0 0 12px;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.45;
+    color: #0f2744;
+}
+
+.chart-kpi-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+}
+
+.chart-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 120px;
+}
+
+.chart-kpi-label {
+    font-size: 28px;
+    line-height: 1.3;
+    color: #4a6b88;
+}
+
+.chart-kpi-value {
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1.25;
+    color: #0f2744;
+}
+
+.chart-slide-body--stack .chart-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 10px 14px 20px;
+}
+
+.chart-slide-body--stack .chart-image--full {
+    max-height: 760px;
+}
+
+.executive-summary.para--indent,
+.dark-block > p.para--indent,
+.competitor-summary-card p.para--indent,
+.insight-text p.para--indent,
+.prompt-comment.para--indent {
+    text-indent: 2em;
+}
+
+.executive-summary.para--short,
+.dark-block > p.para--short,
+.competitor-summary-card p.para--short,
+.analysis-slide-body > .analysis-block > p.para--short,
+.insight-text p.para--short,
+.prompt-comment.para--short {
+    text-indent: 0;
+}
+
+.executive-summary {
+    margin: 0 0 14px;
+}
+
+.highlight-list {
+    text-indent: 0;
+}
+
+.hint,
+.text-block,
+.executive-summary,
+.insight-paragraph,
+.prompt-comment,
+.analysis-content,
+.highlight-list,
+.tip-list {
+    font-size: 34px;
+    line-height: 1.5;
+}
+
+/* 图1：核心结论正文加大 */
+.dark-block .executive-summary,
+.dark-block .executive-summary p,
+.dark-content .executive-summary,
+.dark-content .executive-summary p {
+    font-size: 38px;
+    line-height: 1.58;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.dark-block .executive-summary p,
+.dark-content .executive-summary p,
+.dark-block .executive-summary p.para--indent,
+.dark-content .executive-summary p.para--indent,
+.dark-block .executive-summary p.para--short,
+.dark-content .executive-summary p.para--short {
+    margin: 0 0 12px;
+    text-indent: 2em;
+}
+
+.dark-block .highlight-list,
+.dark-content .highlight-list {
+    font-size: 36px;
+    line-height: 1.55;
+}
+
+.dark-block .highlight-list li {
+    margin: 0 0 12px;
+}
+
+.highlight-list,
+.tip-list {
+    margin: 12px 0 0;
+    padding-left: 1.2em;
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 36px 42px;
+    width: 2180px;
+    margin: 0 0 28px;
+}
+
+.kpi-card {
+    min-height: 120px;
+    padding-bottom: 14px;
+    border-bottom: 4px solid #1bdcff;
+    background: transparent !important;
+}
+
+.kpi-label {
+    margin-bottom: 10px;
+    font-size: 24px;
+    color: rgba(220, 248, 255, 0.92);
+}
+
+.kpi-value {
+    font-size: 54px;
+    line-height: 1.05;
+    font-weight: 900;
+    color: #5cf5ff;
+}
+
+.slide-body--dense .report-table,
+.slide-body--dense .RankTable,
+.slide-body--dense table {
+    font-size: 30px;
+}
+
+.slide-body--dense .report-table th,
+.slide-body--dense .report-table td,
+.slide-body--dense .RankTable th,
+.slide-body--dense .RankTable td,
+.slide-body--dense table th,
+.slide-body--dense table td {
+    padding: 11px 10px;
+}
+
+.report-table,
+.RankTable,
+table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 32px;
+    line-height: 1.35;
+    color: #143552;
+    background: #ffffff;
+    border: 1px solid rgba(15, 55, 100, 0.12);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 6px 18px rgba(9, 43, 85, 0.06);
+}
+
+.report-table th,
+.report-table td,
+.RankTable th,
+.RankTable td,
+table th,
+table td {
+    padding: 15px 16px;
+    border-bottom: 1px solid rgba(0, 92, 180, 0.10);
+    border-right: 1px solid rgba(0, 92, 180, 0.05);
+    vertical-align: middle;
+    word-break: break-word;
+}
+
+.report-table tr td:last-child,
+.report-table tr th:last-child,
+.RankTable tr td:last-child,
+.RankTable tr th:last-child,
+table tr td:last-child,
+table tr th:last-child {
+    border-right: none;
+}
+
+.report-table tbody tr:nth-child(even),
+.RankTable tbody tr:nth-child(even),
+table tbody tr:nth-child(even) {
+    background: #eef6ff;
+}
+
+.report-table tbody tr:nth-child(odd),
+.RankTable tbody tr:nth-child(odd),
+table tbody tr:nth-child(odd) {
+    background: #ffffff;
+}
+
+.report-table tbody tr[data-entity-color],
+.RankTable tbody tr[data-entity-color] {
+    box-shadow: inset 5px 0 0 var(--entity-color, #005fd4);
+}
+
+.report-table tbody tr:last-child td,
+.RankTable tbody tr:last-child td,
+table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* 全报告表头统一：浅底深字（对齐排名明细 A+B） */
+.report-table thead,
+.RankTable thead,
+table thead {
+    background: #e8f1fa !important;
+    color: #143552 !important;
+}
+
+.report-table thead th,
+.RankTable thead th,
+table thead th {
+    white-space: normal;
+    line-height: 1.25;
+    hyphens: auto;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    font-size: 26px;
+    text-shadow: none;
+    color: #143552 !important;
+    background: #e8f1fa !important;
+    border-bottom: 1px solid rgba(15, 55, 100, 0.12);
+}
+
+.report-table tbody td:first-child,
+.RankTable tbody td:first-child {
+    font-weight: 700;
+    color: #0b2f55;
+}
+
+/* 排名明细：四列收窄居中，避免拉满整页显空 */
+.ranking-detail-wrap {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.RankTable.ranking-detail-table {
+    width: 56%;
+    max-width: 1280px;
+    margin: 0 auto;
+    table-layout: fixed;
+}
+
+.RankTable.ranking-detail-table th,
+.RankTable.ranking-detail-table td {
+    padding: 16px 22px;
+}
+
+.RankTable.ranking-detail-table th.rank-col,
+.RankTable.ranking-detail-table td.rank-col {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    width: 18%;
+}
+
+.RankTable.ranking-detail-table th.date-col,
+.RankTable.ranking-detail-table td.date-col {
+    text-align: right;
+    width: 20%;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.RankTable.ranking-detail-table th.type-col,
+.RankTable.ranking-detail-table td:nth-child(2) {
+    width: 18%;
+    text-align: center;
+}
+
+.RankTable.ranking-detail-table th.name-col {
+    width: 44%;
+}
+
+.RankTable.ranking-detail-table tbody tr.rank-row--brand,
+.RankTable tbody tr.rank-row--brand {
+    background: #e7f0ff !important;
+}
+
+.RankTable.ranking-detail-table tbody tr.rank-row--brand td,
+.RankTable tbody tr.rank-row--brand td {
+    font-weight: 700;
+}
+
+.rank-type-tag {
+    display: inline-block;
+    min-width: 3.2em;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: center;
+}
+
+.rank-type-tag--recent {
+    color: #4a6078;
+    background: #e8eef5;
+}
+
+.rank-type-tag--best {
+    color: #1a7a45;
+    background: #e3f6ea;
+}
+
+.rank-type-tag--worst {
+    color: #b45309;
+    background: #fff1e0;
+}
+
+.rank-type-tag--muted {
+    opacity: 0.72;
+}
+
+.brand-highlight,
+.brand-row-outline,
+.prompt-accent {
+    color: #005fd4;
+    font-weight: 900;
+}
+
+.competitor-highlight {
+    color: #f28e2b;
+    font-weight: 800;
+}
+
+.competitor-strategy {
+    margin-top: 18px;
+}
+
+.competitor-summary-card,
+.competitor-action-card {
+    margin-top: 14px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: rgba(8, 56, 110, 0.04);
+    border: 1px solid rgba(8, 56, 110, 0.08);
+}
+
+.competitor-summary-card h4,
+.competitor-action-card h4 {
+    margin: 0 0 10px;
+    font-size: 28px;
+    color: #092b55;
+}
+
+.competitor-summary-card p {
+    margin: 0 0 8px;
+    font-size: 26px;
+    line-height: 1.55;
+    color: #163653;
+    display: block;
+    text-indent: 0;
+}
+
+.competitor-summary-card p:last-child {
+    margin-bottom: 0;
+}
+
+.competitor-summary-card p.para--indent {
+    text-indent: 0;
+}
+
+.competitor-action-list {
+    margin: 0;
+    padding-left: 1.25em;
+}
+
+.competitor-action-list li,
+.competitor-action-list--dense li {
+    margin: 0 0 8px;
+    font-size: 22px;
+    line-height: 1.45;
+    color: #163653;
+}
+
+.competitor-slide-body .competitor-summary-card p {
+    font-size: 22px;
+    line-height: 1.45;
+    text-indent: 0;
+    margin: 0 0 6px;
+}
+
+.competitor-slide-body .competitor-summary-card p:last-child {
+    margin-bottom: 0;
+}
+
+.competitor-slide-body .competitor-summary-card p.para--indent {
+    text-indent: 0;
+}
+
+.competitor-slide-body .competitor-summary-card h4,
+.competitor-slide-body .competitor-action-card h4 {
+    font-size: 24px;
+    margin-bottom: 6px;
+}
+
+.competitor-slide-body .competitor-summary-card,
+.competitor-slide-body .competitor-action-card {
+    margin-top: 10px;
+    padding: 12px 14px;
+}
+
+.progress-container {
+    height: 18px;
+    background: #dfeeff;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    background: var(--entity-color, #005fd4);
+}
+
+.progress-text {
+    font-weight: 800;
+}
+
+.status-tag,
+.rank-risk-good,
+.rank-risk-watch,
+.rank-risk-warning,
+.rank-risk-bad {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.rank-risk-good,
+.status-good {
+    background: #dcfce7;
+    color: #087a55;
+}
+
+.rank-risk-watch,
+.rank-risk-warning,
+.status-warn {
+    background: #fff3c4;
+    color: #a66300;
+}
+
+.rank-risk-bad,
+.status-bad {
+    background: #ffe0e0;
+    color: #b42318;
+}
+
+.chart-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+}
+
+.chart-slide-body .hint {
+    margin: 0 0 18px;
+}
+
+.chart-grid img,
+.chart-grid canvas,
+.chart-grid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.sentiment-kpi-summary {
+    margin: 0 0 18px;
+    font-size: 24px;
+    color: #31567a;
+}
+
+.sentiment-kpi {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 20px;
+    margin: 0 0 32px;
+}
+
+.sentiment-kpi-item {
+    padding: 18px 22px 16px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 92, 180, 0.12);
+    border-left: 8px solid #94a3b8;
+}
+
+.sentiment-kpi-item.is-positive {
+    border-left-color: #16a34a;
+}
+
+.sentiment-kpi-item.is-neutral {
+    border-left-color: #2563eb;
+}
+
+.sentiment-kpi-item.is-negative {
+    border-left-color: #dc2626;
+}
+
+.sentiment-kpi-item.is-unknown {
+    border-left-color: #94a3b8;
+}
+
+.sentiment-kpi-label {
+    font-size: 22px;
+    font-weight: 700;
+    color: #64748b;
+}
+
+.sentiment-kpi-value {
+    margin-top: 6px;
+    font-size: 44px;
+    line-height: 1.05;
+    font-weight: 900;
+    color: #0f2744;
+}
+
+.sentiment-kpi-pct {
+    margin-top: 4px;
+    font-size: 22px;
+    font-weight: 700;
+    color: #31567a;
+}
+
+.swot-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.swot-card {
+    padding: 16px 22px 14px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 92, 180, 0.12);
+    border-left: 8px solid #94a3b8;
+}
+
+.swot-card.swot-good {
+    border-left-color: #16a34a;
+}
+
+.swot-card.swot-warn {
+    border-left-color: #ea580c;
+}
+
+.swot-card.swot-tip {
+    border-left-color: #2563eb;
+}
+
+.swot-card h4 {
+    margin: 0 0 10px;
+    font-size: 26px;
+    font-weight: 800;
+    color: #092b55;
+}
+
+.swot-card p,
+.swot-card li,
+.swot-body {
+    margin: 0 0 8px;
+    font-size: 24px;
+    line-height: 1.5;
+    color: #163653;
+    text-indent: 0;
+}
+
+.swot-card p:last-child,
+.swot-card li:last-child {
+    margin-bottom: 0;
+}
+
+.swot-card p.para--indent {
+    text-indent: 0; /* SWOT 已是逐条短句，统一不缩进 */
+}
+
+.swot-body {
+    white-space: pre-line;
+}
+
+.swot-card ol,
+.swot-card ul {
+    margin: 0;
+    padding-left: 1.25em;
+}
+
+.swot-card li + li {
+    margin-top: 8px;
+}
+
+.analysis-time-pill {
+    left: auto;
+    right: 140px;
+    top: 118px;
+    z-index: 2;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid rgba(0, 92, 180, 0.16);
+    color: #31567a;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.analysis-slide-body {
+    top: 248px;
+    max-height: 1040px;
+}
+
+/* 参考图：一段一卡，白底圆角 + 轻边框 */
+.analysis-slide-body .analysis-block,
+.analysis-slide-body .analysis-card {
+    margin: 0 0 14px;
+    padding: 18px 22px;
+    border-radius: 10px;
+    background: #ffffff;
+    border: 1px solid rgba(15, 39, 68, 0.08);
+    box-shadow: 0 2px 10px rgba(9, 43, 85, 0.06);
+}
+
+.analysis-slide-body .analysis-block:last-child,
+.analysis-slide-body .analysis-card:last-child {
+    margin-bottom: 0;
+}
+
+.analysis-slide-body .analysis-h2 {
+    margin: 0 0 10px;
+    padding-left: 0;
+    border-left: none;
+    font-size: 32px;
+    font-weight: 800;
+    color: #092b55;
+}
+
+.analysis-priority-block .priority-action-table {
+    font-size: 24px;
+}
+
+.analysis-priority-block .priority-action-table td {
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.prompt-comment,
+.prompt-comment.para--short {
+    font-size: 32px !important;
+    line-height: 1.5;
+}
+
+.analysis-slide-body .analysis-card > p,
+.analysis-slide-body .analysis-card > ul,
+.analysis-slide-body .analysis-card > ol {
+    margin: 0;
+}
+
+.analysis-slide-body p,
+.analysis-slide-body li {
+    font-size: 32px;
+    line-height: 1.55;
+    color: #163653;
+}
+
+.analysis-slide-body p {
+    text-indent: 0;
+    margin: 0;
+}
+
+.analysis-slide-body p.para--indent {
+    text-indent: 0; /* 卡片内段落与参考图一致，不缩进 */
+}
+
+.analysis-slide-body ul,
+.analysis-slide-body ol {
+    margin: 0;
+    padding-left: 1.35em;
+    text-indent: 0;
+}
+
+.analysis-slide-body li {
+    text-indent: 0;
+    margin: 0 0 10px;
+}
+
+.analysis-slide-body li:last-child {
+    margin-bottom: 0;
+}
+
+.analysis-slide-body .analysis-card strong {
+    font-weight: 700;
+}
+
+.action-tip-list {
+    margin: 0;
+    padding-left: 1.2em;
+    font-size: 26px;
+    line-height: 1.55;
+    color: #163653;
+}
+
+.action-tip-list li {
+    margin: 0 0 12px;
+}
+
+.tip-list--dense li,
+.action-tip-list.tip-list--dense li {
+    margin: 0 0 10px;
+}
+
+.dark-content .tip-list li,
+.dark-panel .action-tip-list li,
+.dark-panel .tip-list li {
+    margin: 0 0 14px;
+    line-height: 1.55;
+}
+
+.domain-map-table thead,
+.RankTable.domain-map-table thead,
+.domain-map-table thead th,
+.RankTable.domain-map-table thead th {
+    background: #e8f1fa !important;
+    color: #143552 !important;
+}
+
+/* 映射表略收行高，减少「差几行就拆一页」 */
+.domain-map-table th,
+.domain-map-table td,
+.RankTable.domain-map-table th,
+.RankTable.domain-map-table td {
+    padding: 11px 14px;
+    font-size: 30px;
+    line-height: 1.3;
+}
+
+.priority-tag {
+    display: inline-block;
+    min-width: 52px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 20px;
+    font-weight: 800;
+    text-align: center;
+}
+
+.priority-tag.priority-p0 {
+    background: #ffe0e0;
+    color: #b42318;
+}
+
+.priority-tag.priority-p1 {
+    background: #fff3c4;
+    color: #a66300;
+}
+
+.priority-tag.priority-p2 {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+@page {
+    size: 2520px 1417px;
+    margin: 0;
+}
+
+/* 2026-07-28 - 0727 监测母版标题槽校准 + 去分节空页后的字号/落点 */
+/* 2026-07-28 - 前言 dt/dd 仍 16px：外层 .preface 被 strip，改绑 .preface-grid */
+/* 2026-07-28 - 深色/宽版标题浮在梯形上方：按母版像素槽改到 y≈192/258 */
+
+.slide--light-wide {
+    background: #eef4fb;
+}
+
+/* 2026-07-28 - 主标题+小标题并一行进蓝条；略右移；超长由 JS 缩字/换行 */
+/* 2026-07-28 - 标题与正文贴死 - 标题略下移，正文 top 再拉开 */
+.slide--light > .slide-title {
+    left: 240px;
+    top: 200px;
+    max-width: 1680px;
+    font-size: 40px;
+    line-height: 1.2;
+    color: #0b3a6e;
+    white-space: nowrap;
+}
+
+.slide--light > .slide-subtitle {
+    display: none;
+}
+
+/* 模版5：合并后的一行标题落入双层平行四边形槽心 */
+.slide--light-wide > .slide-title {
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    top: 208px;
+    max-width: 1600px;
+    font-size: 42px;
+    line-height: 1.2;
+    color: #092b55;
+    white-space: nowrap;
+}
+
+.slide--light-wide > .slide-subtitle {
+    display: none;
+}
+
+/* 模版4 深色：主标题上梯形、小标题下梯形（槽约 190–280，勿再顶到 78） */
+.slide--dark > .slide-title {
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    top: 192px;
+    max-width: 1500px;
+    font-size: 46px;
+    color: #ffffff;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+
+.slide--dark > .slide-subtitle {
+    position: absolute;
+    left: 50%;
+    top: 268px;
+    z-index: 2;
+    margin: 0;
+    transform: translateX(-50%);
+    text-align: center;
+    max-width: 900px;
+    font-size: 30px;
+    font-weight: 700;
+    color: rgba(220, 245, 255, 0.95);
+}
+
+/* 正文避开蓝条底边，避免表头/首行顶进标题栏 */
+.slide--light .light-content {
+    top: 350px;
+    max-height: 980px;
+}
+
+.light-content--wide {
+    top: 340px;
+    max-height: 960px;
+}
+
+.slide--dark .dark-content {
+    top: 330px;
+    max-height: 980px;
+}
+
+/* 封面：平台 chip / 周期字号放大（图1） */
+.report-theme-monitor .cover-note {
+    font-size: 30px;
+}
+
+.report-theme-monitor .note-kicker {
+    font-size: 28px;
+}
+
+.report-theme-monitor .note-brand {
+    font-size: 52px;
+}
+
+.report-theme-monitor .note-label {
+    flex-basis: 8em;
+    font-size: 28px;
+}
+
+.report-theme-monitor .note-value {
+    font-size: 30px;
+}
+
+.report-theme-monitor .platform-chip {
+    padding: 12px 24px;
+    font-size: 34px;
+}
+
+.report-theme-monitor .note-competitors {
+    font-size: 30px;
+}
+
+/* 前言元数据块放大（图4）——勿依赖已被 strip 的 .preface 包裹 */
+.report-theme-monitor .preface-lead {
+    font-size: 34px !important;
+    line-height: 1.6 !important;
+    margin: 0 0 28px !important;
+}
+
+.report-theme-monitor .preface-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 36px 48px;
+    padding: 32px 36px;
+    border: 1px solid rgba(0, 92, 180, 0.14);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.94);
+}
+
+.report-theme-monitor .preface-grid dt,
+.report-theme-monitor .preface dt,
+.report-theme-monitor .preface-meta-block dt {
+    font-size: 26px !important;
+    margin-top: 18px !important;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.report-theme-monitor .preface-grid dt:first-child,
+.report-theme-monitor .preface-meta-block dt:first-child {
+    margin-top: 0 !important;
+}
+
+.report-theme-monitor .preface-grid dd,
+.report-theme-monitor .preface dd,
+.report-theme-monitor .preface-meta-block dd {
+    /* 双栏同页：字号适中填满，避免再拆出半空白页 */
+    font-size: 34px !important;
+    font-weight: 700 !important;
+    line-height: 1.45 !important;
+    color: #0f172a;
+    margin: 6px 0 0 !important;
+}
+
+.report-theme-monitor .preface-side h3,
+.report-theme-monitor .preface-side-block h3 {
+    font-size: 30px !important;
+    margin: 0 0 12px !important;
+}
+
+.report-theme-monitor .preface-side h3:not(:first-child),
+.report-theme-monitor .preface-side-block h3:not(:first-child) {
+    margin-top: 22px !important;
+}
+
+.report-theme-monitor .preface-side p,
+.report-theme-monitor .preface-dims li,
+.report-theme-monitor .preface-side-block p,
+.report-theme-monitor .preface-side-block li {
+    font-size: 28px !important;
+    line-height: 1.55 !important;
+}
+
+.report-theme-monitor .preface-dims {
+    margin: 0;
+    padding-left: 1.2em;
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+}
+
+.kpi-card {
+    padding: 22px 24px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(64, 196, 255, 0.28);
+}
+
+.slide--light .kpi-card,
+.slide--light-wide .kpi-card {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 92, 180, 0.14);
+}
+
+.kpi-label {
+    display: block;
+    font-size: 24px;
+    opacity: 0.85;
+    margin-bottom: 8px;
+}
+
+.kpi-value {
+    display: block;
+    font-size: 52px;
+    font-weight: 900;
+    line-height: 1.15;
+}
+
+.kpi-prev {
+    display: block;
+    margin-top: 10px;
+    font-size: 22px;
+    opacity: 0.75;
+}
+
+.kpi-delta,
+.delta {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.kpi-delta.up,
+.delta.up {
+    color: #16a34a;
+    background: rgba(22, 163, 74, 0.16);
+}
+
+.kpi-delta.down,
+.delta.down {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.18);
+}
+
+.kpi-delta.flat,
+.delta.flat {
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.18);
+}
+
+.slide--light .kpi-delta.down,
+.slide--light .delta.down,
+.slide--light-wide .kpi-delta.down,
+.slide--light-wide .delta.down {
+    color: #dc2626;
+    background: #fef2f2;
+}
+
+.conclusion-list {
+    margin: 0;
+    padding-left: 36px;
+    font-size: 30px;
+    line-height: 1.55;
+}
+
+.conclusion-list li {
+    margin-bottom: 12px;
+}
+
+.period-table,
+.matrix-table,
+.period-trend table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 36px;
+}
+
+.period-table th,
+.period-table td,
+.matrix-table th,
+.matrix-table td,
+.period-trend th,
+.period-trend td {
+    padding: 18px 14px;
+    border-bottom: 1px solid rgba(9, 43, 85, 0.12);
+    text-align: left;
+    font-size: 34px;
+}
+
+.period-table th,
+.matrix-table th,
+.period-trend th {
+    background: rgba(45, 108, 223, 0.1);
+    color: #0b3a6e;
+    font-weight: 800;
+}
+
+.period-trend .trend-charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    /* 2026-07-28 - 折线与下表太挤 - 拉开间距 */
+    margin-bottom: 48px;
+}
+
+.period-trend .trend-chart-box {
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 92, 180, 0.12);
+}
+
+.period-trend .trend-chart-box h3 {
+    margin: 0 0 8px;
+    font-size: 26px;
+    color: #61748d;
+}
+
+.period-trend .echart-canvas {
+    width: 100%;
+    height: 360px;
+}
+
+.period-trend .note,
+.period-trend .trend-summary,
+.sample-meta,
+.warn,
+.hint,
+.kw-weak,
+.kw-weak li,
+.kw-weak p,
+.report-theme-monitor .note,
+.report-theme-monitor .preface-lead,
+.report-theme-monitor .preface-side p,
+.report-theme-monitor li,
+.report-theme-monitor .conclusion-list li {
+    font-size: 36px !important;
+    line-height: 1.55;
+}
+
+.kw-weak h3,
+.report-theme-monitor h3,
+.report-theme-monitor h4,
+.report-theme-monitor .dark-block h3,
+.report-theme-monitor .card-box h3,
+.report-theme-monitor .card-box h4 {
+    /* 2026-07-28 - 优化建议维度标题是 h4，未进 h3 规则时只剩默认十几像素像蚂蚁 */
+    font-size: 36px !important;
+    line-height: 1.35;
+    font-weight: 800;
+    color: #0b3a6e;
+}
+
+.conclusion-list {
+    margin: 0;
+    padding-left: 36px;
+    font-size: 32px;
+    line-height: 1.55;
+}
+
+.sample-meta,
+.period-trend .note,
+.hint {
+    color: rgba(255, 255, 255, 0.86);
+}
+
+.slide--light .sample-meta,
+.slide--light .note,
+.slide--light .hint,
+.slide--light-wide .sample-meta,
+.slide--light-wide .note,
+.slide--light-wide .hint {
+    color: #61748d;
+}
+
+.warn {
+    color: #fbbf24;
+}
+
+.slide--light .warn,
+.slide--light-wide .warn {
+    color: #92400e;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+.matrix-weak {
+    background: #fff7ed;
+    color: #c2410c;
+    font-weight: 700;
+}
+
+.matrix-sparse {
+    color: #94a3b8;
+}
+
+.status-tag {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.status-good { background: #ecfdf3; color: #15803d; }
+.status-ok { background: #eff6ff; color: #1d4ed8; }
+.status-warn { background: #fff7ed; color: #c2410c; }
+.status-bad { background: #fef2f2; color: #b91c1c; }
+
+/* 2026-07-28 - 竞品摘要/风险说明仍吃 A4 默认小字 - 强制幻灯字号 */
+.report-theme-monitor .comp-insights,
+.report-theme-monitor .comp-insights li,
+.report-theme-monitor .comp-strategy-card p,
+.report-theme-monitor .comp-strategy-card li,
+.report-theme-monitor .comp-action-card li,
+.report-theme-monitor .comp-risk-legend,
+.report-theme-monitor .comp-risk-legend strong {
+    font-size: 34px !important;
+    line-height: 1.55 !important;
+    color: #0f172a;
+}
+
+.report-theme-monitor .comp-risk-legend {
+    padding: 16px 20px !important;
+    margin: 18px 0 22px !important;
+}
+
+.report-theme-monitor .comp-risk {
+    font-size: 22px !important;
+    padding: 4px 12px !important;
+}
+
+/* 2026-07-28 - 原生 ol marker 被 overflow 裁成点 - 改盒内计数器序号 */
+.report-theme-monitor .light-content ol,
+.report-theme-monitor .disclaimer-section ol,
+.report-theme-monitor .plan-grid ol,
+.report-theme-monitor .comp-action-card ol {
+    list-style: none;
+    padding-left: 0;
+    margin-left: 0;
+    counter-reset: deck-ol;
+}
+
+.report-theme-monitor .light-content ol > li,
+.report-theme-monitor .disclaimer-section ol > li,
+.report-theme-monitor .plan-grid ol > li,
+.report-theme-monitor .comp-action-card ol > li {
+    position: relative;
+    padding-left: 1.55em;
+    counter-increment: deck-ol;
+}
+
+.report-theme-monitor .light-content ol > li::before,
+.report-theme-monitor .disclaimer-section ol > li::before,
+.report-theme-monitor .plan-grid ol > li::before,
+.report-theme-monitor .comp-action-card ol > li::before {
+    content: counter(deck-ol) ".";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: #0b3a6e;
+    font-weight: 800;
+    font-size: 1em;
+    line-height: inherit;
+}
+
+/* 幻灯不展示客户版「不作为承诺」提示句 */
+.report-theme-monitor .plan-note {
+    display: none !important;
+}
+
+/* 2026-07-28 - 竞品首列长名顶穿格线 - 允许换行并略缩字 */
+.report-theme-monitor .light-content table td:first-child,
+.report-theme-monitor .light-content table th:first-child {
+    white-space: normal;
+    word-break: break-word;
+    max-width: 460px;
+    line-height: 1.35;
+}
+
+.report-theme-monitor .slide-title.is-wrapped {
+    white-space: normal;
+}
+

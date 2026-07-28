@@ -258,5 +258,7 @@
             <img class="master-bg" src="{{ idea_assets.thanks }}" alt="">
         </section>
     </main>
+    {# 2026-07-28 - 预览 iframe 也要跑 pack，否则 overflow:hidden 裁切、与 PDF 分页不一致 #}
+    <script id="geo-deck-pack">{% include 'deck_pack.js' %}</script>
 </body>
 </html>

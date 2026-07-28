@@ -90,6 +90,10 @@ export function injectReportPreviewFit(html: string): string {
   function fit() {
     var deck = document.querySelector(".deck");
     if (!deck) return;
+    // 2026-07-28 - 先等 deck_pack 拆页再量高缩放，避免预览按裁切前高度算 spacer
+    if (document.getElementById("geo-deck-pack") && document.documentElement.dataset.geoDeckPacked !== "1") {
+      return;
+    }
     document.documentElement.classList.add("geo-preview-fit");
     var vw = document.documentElement.clientWidth || window.innerWidth || SLIDE_W;
     var scale = Math.min(1, vw / SLIDE_W);

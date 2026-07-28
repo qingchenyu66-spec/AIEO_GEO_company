@@ -12,6 +12,15 @@
  * - 2026-07-27 - 核心页 KPI 被 maxHeight+overflow 裁切叠字 - 已弃用裁切；一两行仍软缩，太多则剥「核心结论」到续页
  */
 (() => {
+  // 2026-07-28 - 预览与 PDF 共用本脚本；PDF 仍 evaluate 时防二次拆页
+  if (document.documentElement.dataset.geoDeckPacked === "1") {
+    return {
+      skipped: true,
+      slides: document.querySelectorAll(".slide").length,
+    };
+  }
+  document.documentElement.dataset.geoDeckPacked = "1";
+
   // 必须 ≤ .light-content/.dark-content 的 max-height(1060)，否则拆页后仍会被 overflow:hidden 裁切
   const BODY_MAX = 1000;
   const ANALYSIS_BODY_MAX = 1020;

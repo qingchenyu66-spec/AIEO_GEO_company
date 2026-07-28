@@ -2155,7 +2155,12 @@ def _embed_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
 
 
-def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) -> str:
+def render_trend_html(
+    trend: dict[str, Any],
+    *,
+    echarts_src: str = ECHARTS_CDN,
+    presentation: bool = False,
+) -> str:
     esc = html.escape
     points = trend.get("points") or []
     if not points:
@@ -2173,6 +2178,12 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         "sparse": len(points) <= 4,
         "label_rotate": -34 if need_slant else 0,
         "grid_bottom": 92 if need_slant else 56,
+        # 幻灯导出可读性：略放大点/线/字（A4 仍走默认）
+        # 2026-07-28 - 幻灯趋势轴/点标仍偏小 - presentation 提到 28/30
+        "label_font_size": 30 if presentation else 11,
+        "symbol_size": 18 if presentation else 8,
+        "line_width": 5 if presentation else 3,
+        "axis_font_size": 28 if presentation else 11,
     }
     chart_json = _embed_json(chart_data)
 
@@ -2267,14 +2278,16 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
           interval: 0,
           rotate: xRotate,
           color: '#64748b',
-          fontSize: 11,
+          fontSize: data.axis_font_size || 11,
           margin: xRotate ? 14 : 8,
         }};
         const mentionSeries = {{
           name: '提及率',
           type: sparse ? 'bar' : 'line',
           data: data.mention,
-          label: {{ show: true, formatter: sparse ? '{{c}}%' : '{{c}}%', color: '#1677ff', fontWeight: 600 }},
+          // 2026-07-28 - 周期折线只剩散点 - 空桶 null 默认断开，改为跨空值连线
+          connectNulls: true,
+          label: {{ show: true, formatter: sparse ? '{{c}}%' : '{{c}}%', color: '#1677ff', fontWeight: 600, fontSize: data.label_font_size || 12 }},
         }};
         if (sparse) {{
           mentionSeries.barMaxWidth = 56;
@@ -2282,8 +2295,8 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         }} else {{
           mentionSeries.smooth = true;
           mentionSeries.symbol = 'circle';
-          mentionSeries.symbolSize = 8;
-          mentionSeries.lineStyle = {{ width: 3 }};
+          mentionSeries.symbolSize = data.symbol_size || 8;
+          mentionSeries.lineStyle = {{ width: data.line_width || 3 }};
           mentionSeries.areaStyle = {{
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
               {{ offset: 0, color: 'rgba(22,119,255,0.35)' }},
@@ -2314,7 +2327,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
             min: minM,
             max: maxM,
             splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
-            axisLabel: {{ color: '#64748b' }},
+            axisLabel: {{ color: '#64748b', fontSize: data.axis_font_size || 11 }},
           }},
           series: [mentionSeries],
         }});
@@ -2331,6 +2344,7 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         const rankInverse = !sparse;
         const rankAxisLabel = {{
           color: '#64748b',
+          fontSize: data.axis_font_size || 11,
           formatter: (v) => {{
             const n = Number(v);
             if (!Number.isFinite(n) || n <= 0 || n > 50) return '';
@@ -2344,12 +2358,14 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
           name: '平均排名',
           type: sparse ? 'bar' : 'line',
           data: data.rank,
+          connectNulls: true,
           label: {{
             show: true,
             position: sparse ? 'top' : 'top',
             formatter: (p) => String(p.data),
             color: '#0e7490',
             fontWeight: 600,
+            fontSize: data.label_font_size || 12,
           }},
         }};
         if (sparse) {{
@@ -2358,8 +2374,8 @@ def render_trend_html(trend: dict[str, Any], *, echarts_src: str = ECHARTS_CDN) 
         }} else {{
           rankSeries.smooth = true;
           rankSeries.symbol = 'circle';
-          rankSeries.symbolSize = 8;
-          rankSeries.lineStyle = {{ width: 3 }};
+          rankSeries.symbolSize = data.symbol_size || 8;
+          rankSeries.lineStyle = {{ width: data.line_width || 3 }};
           rankSeries.label.position = 'top';
           rankSeries.label.distance = 10;
         }}
@@ -2776,7 +2792,7 @@ def _parse_report_date(value: Any) -> date | None:
         return None
 
 
-def compose_period_report_html(
+def assemble_period_report_bundle(
     db: Session,
     *,
     tenant_id: int,
@@ -2784,9 +2800,11 @@ def compose_period_report_html(
     period_start: date,
     period_end: date,
     generated: date | None = None,
-    echarts_src: str | None = None,
-) -> str:
-    """正式导出：V2 环比模板，仅使用真实监测数据（不注入演示增强）。"""
+) -> dict[str, Any]:
+    """正式导出共用数据包：V2 环比，仅真实监测数据（不注入演示增强）。
+
+    2026-07-28 - 周期报迁监测幻灯母版 - 抽出 bundle，供 A4 HTML 与 16:9 deck 共用。
+    """
     from app.services.report_service import build_tenant_monitor_snapshot
 
     if report_type not in PERIOD_EXPORT_TYPES:
@@ -2859,19 +2877,54 @@ def compose_period_report_html(
         prev_start=prev_start,
         prev_end=prev_end,
     )
+    return {
+        "brand_name": brand_name,
+        "report_type": report_type,
+        "period_lbl": lbl,
+        "comparison": comparison,
+        "snapshot": current,
+        "preface": preface,
+        "content_modules": content_modules,
+        "trend": trend,
+        "keyword_analytics": keyword_analytics,
+        "competitor_analytics": competitor_analytics,
+        "competitors": competitors,
+        "platform_codes": platform_codes,
+        "generated": generated or date.today(),
+    }
 
-    return render_html(
-        brand_name=brand_name,
+
+def compose_period_report_html(
+    db: Session,
+    *,
+    tenant_id: int,
+    report_type: str,
+    period_start: date,
+    period_end: date,
+    generated: date | None = None,
+    echarts_src: str | None = None,
+) -> str:
+    """正式导出：V2 环比模板，仅使用真实监测数据（不注入演示增强）。"""
+    bundle = assemble_period_report_bundle(
+        db,
+        tenant_id=tenant_id,
         report_type=report_type,
-        period_lbl=lbl,
-        comparison=comparison,
-        snapshot=current,
-        preface=preface,
-        content_modules=content_modules,
-        trend=trend,
-        keyword_analytics=keyword_analytics,
-        competitor_analytics=competitor_analytics,
-        generated=generated or date.today(),
+        period_start=period_start,
+        period_end=period_end,
+        generated=generated,
+    )
+    return render_html(
+        brand_name=bundle["brand_name"],
+        report_type=bundle["report_type"],
+        period_lbl=bundle["period_lbl"],
+        comparison=bundle["comparison"],
+        snapshot=bundle["snapshot"],
+        preface=bundle["preface"],
+        content_modules=bundle["content_modules"],
+        trend=bundle["trend"],
+        keyword_analytics=bundle["keyword_analytics"],
+        competitor_analytics=bundle["competitor_analytics"],
+        generated=bundle["generated"],
         v2=True,
         echarts_src=echarts_src or ECHARTS_PORTAL_SRC,
     )
