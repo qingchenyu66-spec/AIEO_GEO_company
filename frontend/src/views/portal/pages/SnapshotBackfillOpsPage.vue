@@ -122,12 +122,10 @@ const configuredPlatformAllow = computed(() => {
 })
 
 function platformInConfiguredAllow(code: string, allow: Set<string> | null) {
+  // 2026-07-28 - 补录侧栏历史移动端仍出现 - 只认配置精确码，不成对放宽
   if (!allow) return true
   const text = String(code || '').trim()
-  if (!text) return false
-  if (allow.has(text)) return true
-  const base = text.replace(/_mobile$/i, '')
-  return allow.has(base) || allow.has(`${base}_mobile`)
+  return Boolean(text) && allow.has(text)
 }
 
 const monitorKeywordOptions = computed(() => {
