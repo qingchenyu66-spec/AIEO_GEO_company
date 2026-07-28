@@ -775,8 +775,12 @@
 }
 
 .matrix-platform-tabs button:disabled {
-  opacity: .55;
+  /* 2026-07-28 - 空平台 tab 勿压到看不清 */
+  opacity: 1;
   cursor: not-allowed;
+  color: #7a90a8;
+  background: #eef3f8;
+  border-color: #dde6f0;
 }
 
 .matrix-platform-rail-head {
@@ -823,7 +827,7 @@
   background: var(--platform-color, #cbd5e1);
 }
 
-.matrix-rail-card:hover:not(.disabled) {
+.matrix-rail-card:hover:not(.is-empty):not(:disabled) {
   border-color: #b8d0ef;
   background: #fff;
   box-shadow: 0 4px 12px rgba(45, 108, 223, .08);
@@ -835,10 +839,18 @@
   box-shadow: 0 8px 20px color-mix(in srgb, var(--platform-color, #2d6cdf) 18%, transparent);
 }
 
-.matrix-rail-card.disabled {
-  opacity: .62;
+/* 2026-07-28 - 空平台卡勿用 opacity：浏览器 :disabled 再叠一层会像蚂蚁字 */
+.matrix-rail-card.is-empty,
+.matrix-rail-card:disabled {
   cursor: not-allowed;
   background: #f3f6fa;
+  opacity: 1;
+  color: inherit;
+}
+
+.matrix-rail-card.is-empty .matrix-rail-card-top b,
+.matrix-rail-card:disabled .matrix-rail-card-top b {
+  color: #5a7390;
 }
 
 .matrix-rail-card-top {
@@ -901,10 +913,16 @@
 }
 
 .matrix-rail-empty {
-  font-size: 11px;
-  color: #8aa0ba;
-  font-weight: 600;
-  padding: 4px 0 0;
+  margin-top: 2px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border: 1px dashed #d5e0ec;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #5a7390;
+  font-weight: 700;
+  text-align: center;
 }
 
 .matrix-keyword-rail-head {

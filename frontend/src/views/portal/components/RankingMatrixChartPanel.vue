@@ -7,7 +7,7 @@ import type {
   RankingMatrixRow,
 } from '../../../services/monitor'
 import { initChart, loadEchartsRuntime, type EchartsRuntime } from '../../../utils/echartsLoader'
-import { platformAccentColor } from '../platformMeta'
+import { platformAccentColor, getPlatformMeta } from '../platformMeta'
 import {
   buildKeywordDetailRows,
   buildMatrixBarOption,
@@ -87,7 +87,7 @@ const platformRailItems = computed(() => {
     const slice = props.matrix ? sliceMatrixByPlatform(props.matrix, code) : null
     return {
       code,
-      name: props.platformLabelMap[code] || code,
+      name: getPlatformMeta(code).name,
       color: platformAccentColor(code),
       columnCount: slice?.columns.length ?? 0,
       kpi: slice ? matrixPlatformKpi(slice, scope) : { top3: 0, avg: '—', none: 0 },
@@ -150,9 +150,11 @@ const cardHintExtra = computed(() => {
   return ' · 右侧可切换其他已购平台'
 })
 
-const platformName = computed(() => (
-  props.platformLabelMap[effectivePlatform.value] || effectivePlatform.value || '—'
-))
+const platformName = computed(() => {
+  const code = effectivePlatform.value
+  if (!code) return '—'
+  return getPlatformMeta(code).name
+})
 
 const platformColor = computed(() => platformAccentColor(effectivePlatform.value))
 
@@ -350,7 +352,7 @@ defineExpose({ resizeChart })
           @click="selectPlatform(code)"
         >
           <i />
-          {{ platformLabelMap[code] || code }}
+          {{ getPlatformMeta(code).name }}
         </button>
       </article>
 
@@ -442,7 +444,7 @@ defineExpose({ resizeChart })
               class="matrix-rail-card"
               :class="{
                 active: item.code === effectivePlatform,
-                disabled: !item.hasRows,
+                'is-empty': !item.hasRows,
               }"
               :style="{ '--platform-color': item.color }"
               :disabled="!item.hasRows"
@@ -452,7 +454,8 @@ defineExpose({ resizeChart })
                 <b><i class="matrix-rail-dot" />{{ item.name }}</b>
                 <span>{{ item.columnCount }} 词</span>
               </div>
-              <div class="matrix-rail-kpis">
+              <!-- 2026-07-28 - 空平台勿叠 0/—/暂无数据 + opacity 灰字；有数才出 KPI -->
+              <div v-if="item.hasRows" class="matrix-rail-kpis">
                 <div class="matrix-rail-kpi">
                   <label>进前三次数</label>
                   <strong>{{ item.kpi.top3 }}</strong>
@@ -466,7 +469,7 @@ defineExpose({ resizeChart })
                   <strong>{{ item.kpi.none }}</strong>
                 </div>
               </div>
-              <div v-if="!item.hasRows" class="matrix-rail-empty">暂无数据</div>
+              <div v-else class="matrix-rail-empty">暂无监测数据</div>
             </button>
           </div>
         </aside>

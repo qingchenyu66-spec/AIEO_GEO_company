@@ -128,6 +128,7 @@ export const supportedPlatforms = [
   'deepseek_mobile',
   'weibo_zhisou',
   'yuanbao',
+  'yuanbao_mobile',
   'qianwen',
   'qianwen_mobile',
   'quark',
