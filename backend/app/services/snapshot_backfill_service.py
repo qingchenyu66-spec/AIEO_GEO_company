@@ -1559,8 +1559,8 @@ def list_snapshot_backfill_matrix(
                 }
             )
         avg = _average_mention_position(ranks)
-        # 2026-07-28 - 忽略=不提醒 - 红点跟 needs_backfill，已忽略场次不再撑红点
-        has_todo = any(bool(sample.get("needs_backfill")) for sample in samples)
+        # 2026-07-28 - 红点只看日均位次>阈值（或算不出均值）；勿用单场 needs_backfill 误标 Top3
+        has_todo = matrix_cell_has_todo(ranks=ranks, sample_count=len(samples))
         cells.append(
             {
                 "platform": plat,

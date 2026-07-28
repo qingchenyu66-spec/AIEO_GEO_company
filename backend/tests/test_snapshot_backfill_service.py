@@ -248,8 +248,10 @@ def test_matrix_cell_has_todo_rules() -> None:
     assert matrix_cell_has_todo(ranks=[], sample_count=0) is False
     assert matrix_cell_has_todo(ranks=[], sample_count=2) is True  # 算不出均值也标红
     assert matrix_cell_has_todo(ranks=[1.0, 2.0, 3.0], sample_count=3) is False
+    assert matrix_cell_has_todo(ranks=[3.0], sample_count=1) is False  # 等于阈值不标
     assert matrix_cell_has_todo(ranks=[1.0, 5.0, 6.0], sample_count=3) is True
     assert matrix_cell_has_todo(ranks=[4.0], sample_count=1) is True
+    assert matrix_cell_has_todo(ranks=[1.0, 1.0, 1.0], sample_count=3) is False
 
 
 def test_matrix_platform_visible_hides_unpurchased() -> None:

@@ -328,9 +328,12 @@ function averageRanks(ranks: number[]) {
   return Math.round((total / ranks.length) * 10) / 10
 }
 
-function cellHasTodo(slots: SnapshotBackfillMatrixSlot[]) {
-  // 2026-07-28 - 忽略后仍应保留排名 - 红点只跟仍需补录的场次，勿因忽略删格
-  return slots.some(slot => Boolean(slot.needs_backfill))
+function cellHasTodo(ranks: number[], sampleCount: number) {
+  // 2026-07-28 - 红点口径：日均位次>3 或有场次但算不出均值；≤3 不标（含刚好=3）
+  if (sampleCount <= 0) return false
+  if (!ranks.length) return true
+  const avg = averageRanks(ranks)
+  return avg == null ? true : avg > 3
 }
 
 function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrixCell {
@@ -348,7 +351,7 @@ function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrix
     fail_count: failCount,
     sample_count: cell.slots.length,
     rank_sample_count: ranks.length,
-    has_todo: cellHasTodo(cell.slots),
+    has_todo: cellHasTodo(ranks, cell.slots.length),
   }
 }
 
