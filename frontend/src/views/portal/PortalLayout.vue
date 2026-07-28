@@ -198,14 +198,15 @@ function toggleSidebarPin() {
           </button>
         </div>
       </header>
-      <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
-        <div v-if="previewMode" class="ws-preview-banner portal-preview-banner">
-          <div>
-            <strong>只读预览</strong>
-            <span>正在预览「{{ previewTenantName || '客户' }}」门户全部菜单，不可代客户操作</span>
-          </div>
-          <button type="button" class="ws-campus-primary" @click="emit('exitPreview')">返回企业管理</button>
+      <!-- 2026-07-28 - 预览条 sticky 与页内筛选条抢 top:0 - 移出滚动区，不参与 sticky 叠层 -->
+      <div v-if="previewMode" class="ws-preview-banner portal-preview-banner">
+        <div>
+          <strong>只读预览</strong>
+          <span>正在预览「{{ previewTenantName || '客户' }}」门户全部菜单，不可代客户操作</span>
         </div>
+        <button type="button" class="ws-campus-primary" @click="emit('exitPreview')">返回企业管理</button>
+      </div>
+      <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
         <div v-if="!immersive" class="page-head">
           <div class="page-head-main">
             <h1>{{ pageTitle }}</h1>

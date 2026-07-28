@@ -49,14 +49,47 @@
   color: #1a3a66;
 }
 
+/* 2026-07-28 - 预览条 sticky 与页内 sticky 抢 top:0（已弃用 sticky，改出滚动区） */
+.portal-shell:has(.portal-preview-banner) .workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.portal-shell:has(.portal-preview-banner) .topbar {
+  flex-shrink: 0;
+}
+
+.portal-shell:has(.portal-preview-banner) .portal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 预览下 realtime 曾把 workspace 设为 height:auto，会让预览条跟着滚走 */
+.portal-shell:has(.portal-preview-banner):has(.realtime-monitor-page) .workspace {
+  height: 100dvh;
+  max-height: 100dvh;
+}
+
+/* 工作台 deck 高度原先只减 topbar；有预览条时改吃满主栏剩余高度 */
+.portal-shell:has(.portal-preview-banner) .customer-workspace-page.workspace-scroll-deck {
+  --workspace-deck-height: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+
 .portal-preview-banner {
-  /* 2026-07-28 - 预览条滚走找不到返回 - sticky 钉在内容区顶部 */
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  margin: 0 0 14px;
+  flex-shrink: 0;
+  margin: 12px 34px 0;
   border-radius: 12px;
   box-shadow: 0 8px 20px rgba(21, 48, 82, .06);
+}
+
+.portal-shell:has(.portal-content-immersive) .portal-preview-banner {
+  margin: 10px 18px 0;
 }
 
 .portal-preview-banner .ws-campus-primary,
