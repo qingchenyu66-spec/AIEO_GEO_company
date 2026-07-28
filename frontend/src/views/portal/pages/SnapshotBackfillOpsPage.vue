@@ -741,7 +741,7 @@ watch(
         <div class="snapshot-backfill-toolbar-actions">
           <span v-if="loading" class="snapshot-backfill-loading-dot">加载中…</span>
           <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
-          <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadMatrix">
+          <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="() => loadMatrix()">
             <RefreshCw :size="14" />
             刷新
           </button>
