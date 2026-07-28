@@ -252,6 +252,16 @@ def test_matrix_cell_has_todo_rules() -> None:
     assert matrix_cell_has_todo(ranks=[4.0], sample_count=1) is True
 
 
+def test_matrix_platform_visible_hides_unpurchased() -> None:
+    """快照补录侧栏与排名矩阵共用：未购/历史平台不可见，桌面/移动成对可见。"""
+    from app.services.monitor_service import matrix_platform_visible
+
+    assert matrix_platform_visible("kimi", ["doubao", "deepseek"]) is False
+    assert matrix_platform_visible("doubao", ["doubao", "deepseek"]) is True
+    assert matrix_platform_visible("deepseek_mobile", ["deepseek"]) is True
+    assert matrix_platform_visible("yuanbao", []) is True  # 无配置时不过滤
+
+
 def test_schedule_period_bucket() -> None:
     from app.services.snapshot_backfill_service import parse_schedule_slot, schedule_period_bucket
 

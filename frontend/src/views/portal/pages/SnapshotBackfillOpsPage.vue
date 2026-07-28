@@ -106,6 +106,30 @@ const platformFilterOptions = computed(() => {
   return supportedPlatforms.filter(platform => codes.has(platform.code))
 })
 
+/** 企业配置已购平台（词组∪monitored）；空=未配置，不过滤以免误伤旧数据 */
+const configuredPlatformAllow = computed(() => {
+  if (tenantFilter.value === '') return null
+  const codes = new Set<string>()
+  for (const group of keywordGroupOptions.value) {
+    for (const code of platformSelectionCodes(group.platforms)) {
+      if (code) codes.add(code)
+    }
+  }
+  for (const code of tenantMonitoredPlatforms.value) {
+    if (code) codes.add(code)
+  }
+  return codes.size ? codes : null
+})
+
+function platformInConfiguredAllow(code: string, allow: Set<string> | null) {
+  if (!allow) return true
+  const text = String(code || '').trim()
+  if (!text) return false
+  if (allow.has(text)) return true
+  const base = text.replace(/_mobile$/i, '')
+  return allow.has(base) || allow.has(`${base}_mobile`)
+}
+
 const monitorKeywordOptions = computed(() => {
   const seen = new Set<string>()
   const options: string[] = []
@@ -245,10 +269,15 @@ async function loadMatrix(options?: { quiet?: boolean }) {
       keyword_group: keywordGroupFilter.value || undefined,
     }, { signal: controller.signal })
     if (seq !== listRequestSeq) return
-    platforms.value = result.platforms || []
+    // 2026-07-28 - 全平台对比露出历史/未购 - 侧栏与格子只留配置平台
+    const allow = configuredPlatformAllow.value
+    const nextCells = (result.cells || []).filter(cell => platformInConfiguredAllow(cell.platform, allow))
+    const nextPlatforms = (result.platforms || []).filter(p => platformInConfiguredAllow(p.id, allow))
+    const liveWords = new Set(nextCells.map(cell => cell.word))
+    platforms.value = nextPlatforms
     dates.value = result.dates || []
-    words.value = result.words || []
-    cells.value = result.cells || []
+    words.value = (result.words || []).filter(word => !liveWords.size || liveWords.has(word))
+    cells.value = nextCells
     if (result.date_from && !filterDateFrom.value) filterDateFrom.value = result.date_from
     if (result.date_to && !filterDateTo.value) filterDateTo.value = result.date_to
     ensureActivePlatform()
@@ -654,7 +683,11 @@ watch(
 )
 
 watch(tenantFilter, () => {
-  void loadTenantKeywordGroups()
+  // 先拉词组/已购平台，再刷矩阵，避免侧栏过滤用到空配置
+  void loadTenantKeywordGroups().then(() => {
+    if (filterBootstrapping) return
+    scheduleLoadMatrix()
+  })
 })
 
 watch(platformFilterOptions, (options) => {
@@ -669,7 +702,7 @@ watch(todoOnly, () => {
 })
 
 watch(
-  [tenantFilter, filterDateFrom, filterDateTo, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter],
+  [filterDateFrom, filterDateTo, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter],
   () => {
     if (filterBootstrapping) return
     scheduleLoadMatrix()

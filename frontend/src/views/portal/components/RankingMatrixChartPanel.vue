@@ -14,13 +14,13 @@ import {
   buildMatrixHeatOption,
   buildMatrixRankScope,
   matrixChartHeight,
-  matrixDayKeys,
   matrixPlatformKpi,
   resolveMatrixBarLayoutHint,
   resolveColumnCell,
   resolveColumnRow,
   sliceMatrixByPlatform,
   type MatrixChartType,
+  type MatrixHeatDataItem,
   type MatrixLayoutMode,
   type MatrixRankScope,
 } from '../composables/rankingMatrixChartUtils'
@@ -256,19 +256,22 @@ async function renderChart() {
       return
     }
     if (props.chartType === 'heat' && event.seriesType === 'heatmap') {
-      const tuple = event.data as [number, number, number] | undefined
-      if (!tuple) return
-      const [xIndex, yIndex] = tuple
+      // 2026-07-28 - 点空日误开别日 / 修完后又点不开 - 用系列 data 上的 dayKey，有 cell 才开抽屉
+      const seriesData = (option.series as Array<{ data: MatrixHeatDataItem[] }>)[0]?.data || []
+      const point = seriesData[event.dataIndex ?? -1]
+        || (event.data as MatrixHeatDataItem | undefined)
+      if (!point?.dayKey || !point.prompt) return
+      const yIndex = point.value?.[1] ?? -1
       const column = slice.columns[yIndex]
+        || slice.columns.find(item => item.prompt === point.prompt)
       if (!column) return
-      const dayKeys = matrixDayKeys(slice.rows)
-      const dayKey = dayKeys[xIndex]
-      const row = resolveColumnRow(slice.rows, column, dayKey)
-      if (!row) return
+      const row = resolveColumnRow(slice.rows, column, point.dayKey)
+      const cell = resolveColumnCell(row, column)
+      if (!row || !cell) return
       emit('openCell', {
         row,
         prompt: column.prompt,
-        cell: resolveColumnCell(row, column),
+        cell,
       })
     }
   })

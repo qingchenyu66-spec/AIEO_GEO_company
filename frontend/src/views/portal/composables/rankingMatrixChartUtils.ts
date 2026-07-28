@@ -85,6 +85,16 @@ export function enumerateDateKeys(startDate: string, endDate: string, maxDays = 
   return out
 }
 
+/** 热力 x 轴：有筛选区间则铺满，否则仅有样本日。渲染与点击必须共用，否则 xIndex 会错位。 */
+export function matrixHeatDayKeys(
+  rows: RankingMatrixRow[],
+  range?: { startDate?: string; endDate?: string },
+) {
+  const dataDays = matrixDayKeys(rows).map(key => key.slice(0, 10))
+  const ranged = enumerateDateKeys(range?.startDate || '', range?.endDate || '')
+  return ranged.length ? ranged : dataDays
+}
+
 function platformCodeFamily(code: string) {
   return code.replace(/_mobile$/i, '').trim().toLowerCase()
 }
@@ -455,6 +465,16 @@ export function selfCheckMatrixRankScope() {
     }],
   }
   console.assert(matrixPlatformKpi(kpiSlice, buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01')).top3 === 2)
+  // 2026-07-28 - 热力铺满轴后点击 xIndex 错位 - 断言区间轴与稀疏轴不同，且 index0=区间首日
+  const heatDays = matrixHeatDayKeys(kpiSlice.rows, { startDate: '2026-06-01', endDate: '2026-06-03' })
+  console.assert(heatDays.length === 3 && heatDays[0] === '2026-06-01')
+  console.assert(matrixDayKeys(kpiSlice.rows).length === 1)
+  console.assert(matrixHeatDayKeys(kpiSlice.rows)[0] === '2026-06-01')
+  const heatOpt = buildMatrixHeatOption(kpiSlice, { startDate: '2026-06-01', endDate: '2026-06-03' })
+  const heatData = (heatOpt.series as Array<{ data: MatrixHeatDataItem[] }>)[0]?.data || []
+  console.assert(heatData.length === 3 && heatData[0]?.dayKey === '2026-06-01' && heatData[0]?.prompt === 'p1')
+  console.assert(heatData[0]?.value[2] > 0)
+  console.assert(heatData[1]?.value[2] === -1)
   const periodKpis = matrixScopedPeriodKpis(
     kpiSlice,
     buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01'),
@@ -906,24 +926,40 @@ export function buildMatrixBarOption(
   }
 }
 
+/** 热力点：value 供 ECharts，dayKey/prompt 供点击开抽屉（勿再靠 xIndex 反查稀疏轴） */
+export type MatrixHeatDataItem = {
+  value: [number, number, number]
+  dayKey: string
+  prompt: string
+}
+
+export function heatPointRank(data: MatrixHeatDataItem | [number, number, number] | undefined) {
+  if (!data) return -1
+  if (Array.isArray(data)) return data[2]
+  return data.value?.[2] ?? -1
+}
+
 export function buildMatrixHeatOption(
   slice: MatrixPlatformSlice,
   range?: { startDate?: string; endDate?: string },
 ) {
-  const dataDays = matrixDayKeys(slice.rows).map(key => key.slice(0, 10))
   // 2026-07-28 - 切「月」无体感 - 按筛选区间铺满日期轴，无样本日显示 —
-  const ranged = enumerateDateKeys(range?.startDate || '', range?.endDate || '')
-  const dayKeys = ranged.length ? ranged : dataDays
+  // 2026-07-28 - 悬停未提及但点击开出别日排名 - 点击须用同一 matrixHeatDayKeys，勿再用稀疏 matrixDayKeys
+  const dayKeys = matrixHeatDayKeys(slice.rows, range)
   const dates = dayKeys.map(dayKey => {
     const row = slice.rows.find(item => rowDayKey(item).slice(0, 10) === dayKey)
     return row?.schedule_label || dayKey.slice(5) || '—'
   })
   const keywords = slice.columns.map(labelMatrixPrompt)
-  const data: Array<[number, number, number]> = []
+  const data: MatrixHeatDataItem[] = []
   dayKeys.forEach((dayKey, xIndex) => {
     slice.columns.forEach((column, yIndex) => {
       const value = resolveColumnRank(slice.rows, column, dayKey)
-      data.push([xIndex, yIndex, value == null ? -1 : value])
+      data.push({
+        value: [xIndex, yIndex, value == null ? -1 : value],
+        dayKey,
+        prompt: column.prompt,
+      })
     })
   })
 
@@ -933,8 +969,8 @@ export function buildMatrixHeatOption(
       backgroundColor: 'rgba(21,48,82,.92)',
       borderWidth: 0,
       textStyle: { color: '#fff', fontSize: 12 },
-      formatter: (params: { data: [number, number, number] }) => {
-        const [xIndex, yIndex, value] = params.data
+      formatter: (params: { data: MatrixHeatDataItem }) => {
+        const [xIndex, yIndex, value] = params.data.value
         return `<b>${keywords[yIndex] || '—'}</b><br/>${dates[xIndex] || '—'} · ${value < 0 ? '未提及' : formatRank(value)}`
       },
     },
@@ -963,13 +999,13 @@ export function buildMatrixHeatOption(
       data,
       label: {
         show: true,
-        formatter: (params: { data: [number, number, number] }) => (
-          params.data[2] < 0 ? '—' : formatRank(params.data[2])
+        formatter: (params: { data: MatrixHeatDataItem }) => (
+          heatPointRank(params.data) < 0 ? '—' : formatRank(heatPointRank(params.data))
         ),
         fontSize: 12,
         fontWeight: 800,
-        color: (params: { data: [number, number, number] }) => {
-          const value = params.data[2]
+        color: (params: { data: MatrixHeatDataItem }) => {
+          const value = heatPointRank(params.data)
           if (value < 0) return '#8aa0ba'
           if (value === 1) return '#fff'
           if (value <= 3) return '#0a5c42'

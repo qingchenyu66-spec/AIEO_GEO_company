@@ -22,6 +22,7 @@ from app.services.brand_service import (
     keyword_group_name,
     keyword_group_to_dict,
     list_keyword_groups,
+    tenant_purchased_platforms,
 )
 from app.services.operation_log_service import write_operation_log
 from app.services.media_proxy_service import public_screenshot_url
@@ -37,6 +38,7 @@ from app.services.monitor_service import (
     _subtask_answer_plaintext,
     get_monitor_subtask,
     get_monitor_task,
+    matrix_platform_visible,
     recompute_subtask_rank_from_answer,
     serialize_subtask_for_display,
     subtask_needs_snapshot_backfill,
@@ -1463,6 +1465,10 @@ def list_snapshot_backfill_matrix(
     )
     items = payload.get("items") or []
     platform_names = _platform_display_names()
+    # 2026-07-28 - 全平台对比露出历史/未购平台 - 单企业时只保留配置已购（含端成对）
+    purchased_platforms: list[str] = []
+    if tenant_id is not None:
+        purchased_platforms = tenant_purchased_platforms(db, int(tenant_id))
 
     dates: list[str] = []
     cursor = d0
@@ -1480,6 +1486,8 @@ def list_snapshot_backfill_matrix(
     for item in items:
         plat = str(item.get("platform") or "").strip()
         if not plat:
+            continue
+        if not matrix_platform_visible(plat, purchased_platforms):
             continue
         word = str(item.get("prompt") or item.get("keyword_group") or item.get("monitor_keywords") or "").strip()
         if not word:
