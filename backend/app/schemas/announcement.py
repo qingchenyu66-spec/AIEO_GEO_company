@@ -9,7 +9,8 @@ AnnouncementStatus = Literal["draft", "scheduled", "published", "off"]
 
 class AnnouncementUpsertRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    body_html: str = Field(min_length=1, max_length=200000)
+    # 2026-07-28 - 粘贴带图公告超 20 万字保存失败 - 放宽到 1MB 级；图应走 media 上传
+    body_html: str = Field(min_length=1, max_length=1_000_000)
     targets: list[AudienceTarget] = Field(min_length=1)
     tenant_ids: list[int] = Field(default_factory=list)
     publish_at: datetime | None = None

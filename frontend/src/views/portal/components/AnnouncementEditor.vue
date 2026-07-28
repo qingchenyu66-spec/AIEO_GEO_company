@@ -184,6 +184,80 @@ async function uploadAndInsert(file: File) {
   }
 }
 
+function dataUrlToFile(dataUrl: string, fallbackName = 'paste.png'): File | null {
+  const match = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(dataUrl)
+  if (!match) return null
+  const mime = match[1].toLowerCase()
+  const ext = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+  try {
+    const binary = atob(match[2])
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return new File([bytes], fallbackName.replace(/\.\w+$/, `.${ext}`), { type: mime })
+  } catch {
+    return null
+  }
+}
+
+/** 2026-07-28 - 粘贴截图变 data:base64 撑爆 20 万字限制 - 改走媒体上传 */
+async function onPaste(event: ClipboardEvent) {
+  const clipboard = event.clipboardData
+  if (!clipboard) return
+
+  const imageFiles = Array.from(clipboard.items || [])
+    .filter((item) => item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => !!file)
+  if (imageFiles.length) {
+    event.preventDefault()
+    for (const file of imageFiles) {
+      await uploadAndInsert(file)
+    }
+    return
+  }
+
+  const html = clipboard.getData('text/html') || ''
+  if (!/data:image\//i.test(html)) return
+
+  event.preventDefault()
+  uploading.value = true
+  try {
+    const doc = new DOMParser().parseFromString(`<div id="root">${html}</div>`, 'text/html')
+    const root = doc.getElementById('root')
+    if (!root) return
+    const imgs = Array.from(root.querySelectorAll('img'))
+    let index = 0
+    for (const img of imgs) {
+      const src = img.getAttribute('src') || ''
+      if (!src.startsWith('data:image/')) continue
+      index += 1
+      const file = dataUrlToFile(src, `paste-${index}.png`)
+      if (!file) {
+        img.remove()
+        continue
+      }
+      try {
+        const uploaded = await uploadAnnouncementMedia(file, 'image')
+        const response = await http.get(`/v1/announcements/media/${uploaded.id}`, {
+          responseType: 'blob',
+          silentError: true,
+        } as GeoHttpRequestConfig)
+        const blobUrl = URL.createObjectURL(response.data as Blob)
+        img.setAttribute('src', blobUrl)
+        img.setAttribute('data-media-src', uploaded.url)
+        img.setAttribute('alt', uploaded.original_name.replace(/[<>"]/g, ''))
+        img.setAttribute('style', 'max-width:100%;border-radius:8px;')
+      } catch {
+        img.remove()
+      }
+    }
+    insertHtml(root.innerHTML)
+    if (index > 0) ElMessage.success('粘贴图片已上传')
+  } finally {
+    uploading.value = false
+  }
+}
+
 async function onPickImage(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -275,6 +349,7 @@ onBeforeUnmount(() => {
       contenteditable="true"
       data-placeholder="在此编辑公告正文，可直接拖拽图片或文件到此处…"
       @input="emitHtml"
+      @paste="onPaste"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"

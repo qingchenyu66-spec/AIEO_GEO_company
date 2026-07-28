@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -13,7 +14,12 @@ class Announcement(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="标题")
-    body_html: Mapped[str] = mapped_column(Text, nullable=False, comment="富文本 HTML")
+    # 2026-07-28 - 公告粘贴截图易超 TEXT 64KB - MySQL 用 MEDIUMTEXT
+    body_html: Mapped[str] = mapped_column(
+        Text().with_variant(MEDIUMTEXT(), "mysql"),
+        nullable=False,
+        comment="富文本 HTML",
+    )
     # targets: platform_all / customer_all / customer_tenants（可多选；后两者互斥）
     targets_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="受众目标列表")
     tenant_ids_json: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="指定企业 ID 列表")

@@ -129,6 +129,11 @@ async function save() {
   }
   // 确保持久化路径而非 blob:
   form.body_html = persistAnnouncementHtml(form.body_html)
+  // 2026-07-28 - 残留 data: 图会被消毒丢掉且曾撑爆字数上限
+  if (/data:image\//i.test(form.body_html)) {
+    ElMessage.warning('正文里还有未上传的粘贴图片，请删除后重新粘贴或用工具栏插入')
+    return
+  }
   if (!targets.length) {
     ElMessage.warning('请至少选择一个受众')
     return
