@@ -181,6 +181,8 @@
 
 .report-list-body {
   display: grid;
+  /* 2026-07-28 - 报告少时 grid 默认 stretch 把行高拉满面板，卡片被整体撑高 */
+  align-content: start;
   gap: 0;
   flex: 1 1 auto;
   min-height: 0;
@@ -223,8 +225,10 @@
 
 .report-card {
   display: grid;
+  align-content: start;
   gap: 8px;
   width: 100%;
+  height: auto;
   padding: 16px 18px;
   border: none;
   border-bottom: 1px solid #eef4fb;
