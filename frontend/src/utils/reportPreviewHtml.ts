@@ -128,8 +128,11 @@ export function injectReportPreviewFit(html: string): string {
 })();
 </script>`
 
-  if (/<\/body>/i.test(html)) {
-    return html.replace(/<\/body>/i, `${snippet}</body>`)
+  // 2026-07-28 - 周期预览整页变 echarts 源码 - 内联包里有 '</body>' 字符串，
+  // replace 首个会插进 <script> 中间、后续 JS 当正文；只认最后一个真 </body>
+  const closeAt = html.toLowerCase().lastIndexOf('</body>')
+  if (closeAt >= 0) {
+    return `${html.slice(0, closeAt)}${snippet}${html.slice(closeAt)}`
   }
   return `${html}${snippet}`
 }
