@@ -35,7 +35,7 @@ from app.services.report_period_comparison_service import (
 from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
-PERIOD_DECK_PIPELINE = "monitor-deck-v9"
+PERIOD_DECK_PIPELINE = "monitor-deck-v10"
 
 
 def _esc(value: Any) -> str:
@@ -174,7 +174,12 @@ def _sample_meta_html(comparison: dict[str, Any], snapshot: dict[str, Any]) -> s
     return "".join(parts)
 
 
-def build_period_deck_context(bundle: dict[str, Any], *, echarts_inline: str = "") -> dict[str, Any]:
+def build_period_deck_context(
+    bundle: dict[str, Any],
+    *,
+    echarts_inline: str = "",
+    echarts_src: str = "",
+) -> dict[str, Any]:
     report_type = str(bundle.get("report_type") or "")
     brand = str(bundle.get("brand_name") or "品牌")
     period_lbl = str(bundle.get("period_lbl") or "")
@@ -299,6 +304,7 @@ def build_period_deck_context(bundle: dict[str, Any], *, echarts_inline: str = "
         "trend_table_html": trend_table_html,
         "trend_subtitle": trend_subtitle,
         "echarts_inline": echarts_inline,
+        "echarts_src": echarts_src,
         "has_trend": bool(trend.get("points")),
         "keyword_html": keyword_body,
         "keyword_subtitle": "环比上一周期 · 监控词成绩单",

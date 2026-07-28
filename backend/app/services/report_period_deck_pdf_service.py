@@ -92,6 +92,18 @@ def _monitor_asset_urls() -> dict[str, str]:
     return _monitor_asset_urls_cached(_asset_stamp())
 
 
+def _monitor_asset_http_urls() -> dict[str, str]:
+    """预览用同源静态路径（勿 data URI）；由 frontend/public/report-assets/monitor 提供。"""
+    return {
+        "cover": "/report-assets/monitor/monitor-cover.jpg",
+        "section": "/report-assets/monitor/monitor-section.jpg",
+        "dark": "/report-assets/monitor/monitor-dark.jpg",
+        "light": "/report-assets/monitor/monitor-light.jpg",
+        "light_wide": "/report-assets/monitor/monitor-light-wide.jpg",
+        "thanks": "/report-assets/monitor/monitor-thanks.jpg",
+    }
+
+
 def _jinja_env() -> Environment:
     return Environment(
         loader=FileSystemLoader(str(_TEMPLATE_DIR)),
@@ -113,14 +125,35 @@ def _parse_report_date(value: Any):
         return None
 
 
-def render_period_deck_html_from_bundle(bundle: dict[str, Any]) -> str:
-    echarts = load_echarts_bundle_text().replace("</script", "<\\/script")
-    context = build_period_deck_context(bundle, echarts_inline=echarts)
-    context["monitor_assets"] = _monitor_asset_urls()
+def render_period_deck_html_from_bundle(
+    bundle: dict[str, Any],
+    *,
+    embed_assets: bool = True,
+) -> str:
+    # 2026-07-28 - 预览 11MB 卡死：外链母版图+echarts；PDF 仍内联保证 Playwright set_content 离线可截
+    if embed_assets:
+        echarts = load_echarts_bundle_text().replace("</script", "<\\/script")
+        assets = _monitor_asset_urls()
+        echarts_src = ""
+    else:
+        echarts = ""
+        assets = _monitor_asset_http_urls()
+        echarts_src = "/report-assets/echarts.min.js"
+    context = build_period_deck_context(bundle, echarts_inline=echarts, echarts_src=echarts_src)
+    if not embed_assets:
+        # 预览禁用 file:// @font-face（blob 加载不了，还会干扰缓存判定）
+        context["font_face_css"] = ""
+    context["monitor_assets"] = assets
     return _jinja_env().get_template("report.html").render(**context)
 
 
-def build_period_deck_html(db: Session, report: dict[str, Any], *, tenant_id: int) -> str:
+def build_period_deck_html(
+    db: Session,
+    report: dict[str, Any],
+    *,
+    tenant_id: int,
+    embed_assets: bool = True,
+) -> str:
     report_type = str(report.get("report_type") or "")
     if report_type not in PERIOD_COMPARISON_REPORT_TYPES:
         raise ValueError(f"unsupported period deck type: {report_type}")
@@ -137,7 +170,7 @@ def build_period_deck_html(db: Session, report: dict[str, Any], *, tenant_id: in
         period_end=period_end,
         generated=generated,
     )
-    return render_period_deck_html_from_bundle(bundle)
+    return render_period_deck_html_from_bundle(bundle, embed_assets=embed_assets)
 
 
 def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int) -> bytes:

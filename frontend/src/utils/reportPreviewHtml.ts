@@ -1,42 +1,7 @@
-/** 报告 blob 预览：echarts 内联 + 大画布幻灯片适配 iframe 宽度。 */
-
-let cachedEchartsSource: string | null = null
-let cachedEchartsPromise: Promise<string> | null = null
+/** 报告 blob 预览：同源静态资源 + 大画布幻灯片适配 iframe 宽度。 */
 
 /** 模力诊断/周期 HTML 母版固定宽（与 report_molizhishu/styles.css .deck 一致） */
 export const REPORT_SLIDE_WIDTH_PX = 2520
-
-function looksLikeEchartsBundle(text: string): boolean {
-  const head = text.slice(0, 400).toLowerCase()
-  if (head.includes('<!doctype') || head.includes('<html')) {
-    return false
-  }
-  // SPA fallback / 错误页常伪装 200；真包体量远大于 index.html
-  return text.includes('echarts') && text.length > 50_000
-}
-
-async function loadEchartsSourceText(): Promise<string> {
-  if (cachedEchartsSource) return cachedEchartsSource
-  if (!cachedEchartsPromise) {
-    cachedEchartsPromise = fetch(`${window.location.origin}/report-assets/echarts.min.js`, {
-      cache: 'no-cache',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`echarts asset ${res.status}`)
-        const text = await res.text()
-        if (!looksLikeEchartsBundle(text)) {
-          throw new Error('echarts asset is not a JS bundle (SPA fallback?)')
-        }
-        cachedEchartsSource = text
-        return text
-      })
-      .catch((err) => {
-        cachedEchartsPromise = null
-        throw err
-      })
-  }
-  return cachedEchartsPromise
-}
 
 /** 预览适配缩放：iframe 窄于母版时等比缩小，不放大。 */
 export function computePreviewFitScale(
@@ -45,6 +10,19 @@ export function computePreviewFitScale(
 ): number {
   if (!(viewportWidth > 0) || !(slideWidth > 0)) return 1
   return Math.min(1, viewportWidth / slideWidth)
+}
+
+/**
+ * blob 文档相对路径会解析到 blob: 源；注入 base 指向站点根，母版图/echarts 才能走缓存。
+ * 2026-07-28 - 预览外链资源依赖同源绝对解析
+ */
+export function injectReportPreviewBase(html: string, origin = typeof window !== 'undefined' ? window.location.origin : ''): string {
+  if (!html || !origin || html.includes('id="geo-preview-base"')) return html
+  const tag = `<base id="geo-preview-base" href="${origin}/">`
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1>${tag}`)
+  }
+  return `${tag}${html}`
 }
 
 /**
@@ -143,26 +121,18 @@ export function injectReportPreviewFit(html: string): string {
 
 export async function prepareReportPreviewHtml(html: string): Promise<string> {
   let next = html
-  // 诊断模力稿图表是 PNG data URI，无 echarts；避免每次点开白等 1MB+ 内联
-  const needsEcharts = /<script\b[^>]*echarts/i.test(html) || /echarts\.min\.js/i.test(html)
-  if (needsEcharts) {
-    const origin = window.location.origin
-    const localEcharts = `${origin}/report-assets/echarts.min.js`
-    next = next
-      .replace(/https?:\/\/cdn\.jsdelivr\.net\/npm\/echarts@[^"'\\s]+/g, localEcharts)
-      .replace(/src=(["'])assets\/echarts\.min\.js\1/g, `src=$1${localEcharts}$1`)
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const localEcharts = `${origin}/report-assets/echarts.min.js`
 
-    try {
-      const code = await loadEchartsSourceText()
-      const safe = code.replace(/<\/script/gi, '<\\/script')
-      next = next.replace(
-        /<script\b[^>]*\bsrc=["'][^"']*echarts[^"']*["'][^>]*>\s*<\/script>/gi,
-        `<script>${safe}</script>`,
-      )
-    } catch {
-      // 退化：保留同源 script src（需 dist/report-assets 真实存在）
-    }
-  }
+  // 2026-07-28 - 弃用把 1MB echarts 塞进 blob：改同源 script src + base，可缓存、预览从 11MB 降到百 KB 级
+  next = next
+    .replace(/https?:\/\/cdn\.jsdelivr\.net\/npm\/echarts@[^"'\s]+/g, localEcharts)
+    .replace(/src=(["'])assets\/echarts\.min\.js\1/g, `src=$1${localEcharts}$1`)
+    .replace(
+      /src=(["'])\/report-assets\/echarts\.min\.js\1/g,
+      `src=$1${localEcharts}$1`,
+    )
 
+  next = injectReportPreviewBase(next, origin)
   return injectReportPreviewFit(next)
 }

@@ -979,9 +979,10 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
         if tenant_id <= 0:
             raise ValueError("报告缺少 tenant_id")
         # 2026-07-28 - 周期预览改 0727 监测幻灯母版（与 PDF 同源）
+        # 2026-07-28 - 预览外链母版图/echarts，避免 11MB data URI 拖死加载
         from app.services.report_period_deck_pdf_service import build_period_deck_html
 
-        return build_period_deck_html(db, payload, tenant_id=tenant_id)
+        return build_period_deck_html(db, payload, tenant_id=tenant_id, embed_assets=False)
 
     if report_type == "diagnosis":
         from app.services.report_molizhishu_html_service import build_molizhishu_html

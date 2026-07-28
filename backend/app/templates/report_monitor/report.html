@@ -10,6 +10,8 @@
     </style>
     {% if echarts_inline %}
     <script>{{ echarts_inline | safe }}</script>
+    {% elif echarts_src %}
+    <script src="{{ echarts_src }}"></script>
     {% endif %}
 </head>
 <body class="report-theme-monitor" data-pipeline="{{ pipeline }}">

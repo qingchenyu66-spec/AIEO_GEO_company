@@ -1,5 +1,10 @@
 /** ponytail: 预览缩放算法自检（node 可跑） */
-import { computePreviewFitScale, injectReportPreviewFit, REPORT_SLIDE_WIDTH_PX } from './reportPreviewHtml'
+import {
+  computePreviewFitScale,
+  injectReportPreviewBase,
+  injectReportPreviewFit,
+  REPORT_SLIDE_WIDTH_PX,
+} from './reportPreviewHtml'
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg)
@@ -26,5 +31,10 @@ const withPack = injectReportPreviewFit(
 )
 assert(withPack.indexOf('geo-preview-fit-script') > withPack.indexOf('geo-deck-pack'), 'fit after pack script')
 assert(withPack.includes('geoDeckPacked'), 'fit waits for pack flag')
+
+const withBase = injectReportPreviewBase('<html><head></head><body></body></html>', 'https://example.com')
+assert(withBase.includes('id="geo-preview-base"'), 'base injected')
+assert(withBase.includes('href="https://example.com/"'), 'base href')
+assert(injectReportPreviewBase(withBase, 'https://example.com') === withBase, 'base idempotent')
 
 console.log('reportPreviewHtml check ok')
