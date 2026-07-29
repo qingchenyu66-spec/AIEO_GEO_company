@@ -5482,6 +5482,13 @@ def recompute_subtask_rank_from_answer(
         subtask.mention_position = override_mention_position
         return
 
+    # 2026-07-29 - 补录留空重算仍吃旧 mention_position/api 与旧 llm resolution，位次看似不变 - 自动解析前清掉再算
+    raw = dict(subtask.raw_result_json or {})
+    raw.pop("rank_resolution", None)
+    raw["manual_rank_locked"] = False
+    subtask.raw_result_json = raw
+    subtask.mention_position = None
+
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = (
         [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
