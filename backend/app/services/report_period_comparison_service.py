@@ -1440,7 +1440,7 @@ def render_source_influence_html(
                 fontSize: {label_fs},
                 color: '#0b3a6e',
                 fontWeight: 600,
-                lineHeight: {Math.max(label_fs + 4, 32) if presentation else 14},
+                lineHeight: {max(label_fs + 4, 32) if presentation else 14},
                 align: 'right',
                 margin: 16,
               }},
