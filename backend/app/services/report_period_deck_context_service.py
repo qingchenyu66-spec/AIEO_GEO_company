@@ -36,8 +36,8 @@ from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
-# 2026-07-29 - v17：信源 TOP 柱图 Y 轴字号/边距可读
-PERIOD_DECK_PIPELINE = "monitor-deck-v17"
+# 2026-07-29 - v18：矩阵页标题只留主标题，避免蓝条挤爆
+PERIOD_DECK_PIPELINE = "monitor-deck-v18"
 
 
 def _esc(value: Any) -> str:
@@ -329,8 +329,8 @@ def build_period_deck_context(
         "keyword_html": keyword_body,
         "keyword_subtitle": f"{ring_subtitle} · 监控词成绩单",
         "matrix_html": matrix_html,
-        # 2026-07-29 - 条目5：勿再用「短板监控词×平台表现」与主标题叠成双×
-        "matrix_subtitle": "本期最弱 TOP3 监控词",
+        # 2026-07-29 - 条目5：勿叠双×；副标题仍会长到挤蓝条 - 清空，说明留正文 note
+        "matrix_subtitle": "",
         "has_matrix": bool(matrix_html),
         "competitor_html": competitor_body,
         "competitor_head_html": competitor_head_html,

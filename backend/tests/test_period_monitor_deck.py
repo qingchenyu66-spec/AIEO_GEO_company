@@ -64,7 +64,7 @@ def test_period_deck_context_page_types() -> None:
     monthly = dict(bundle)
     monthly["report_type"] = "monthly"
     assert build_period_deck_context(monthly)["kpi_slide_title"] == "核心指标 · 环比上月"
-    assert build_period_deck_context(monthly)["matrix_subtitle"] == "本期最弱 TOP3 监控词"
+    assert build_period_deck_context(monthly)["matrix_subtitle"] == ""
 
 
 def test_period_deck_pdf_fast_knobs() -> None:
@@ -77,7 +77,7 @@ def test_period_deck_pdf_fast_knobs() -> None:
 
     assert _PDF_EXPORT_MODE == "page-pdf"
     assert _ECHARTS_READY_TIMEOUT_MS <= 4000
-    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v17")
+    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v18")
     # 最小自检：两页合并后仍是合法 PDF
     from pypdf import PdfWriter
     from io import BytesIO
