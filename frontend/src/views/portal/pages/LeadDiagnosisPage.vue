@@ -19,6 +19,7 @@ import {
 } from '@lucide/vue'
 import { initChart, type ECharts } from '../../../utils/echartsLoader'
 import { nextTick, onUnmounted, ref, watch } from 'vue'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
@@ -259,21 +260,26 @@ onUnmounted(() => {
             <span>监测地区</span>
             <RegionMultiSelect v-model="createForm.region_codes" />
           </label>
-          <div class="lead-field lead-field-wide">
+          <div class="lead-field lead-field-wide lead-platform-field">
             <span>诊断平台 *（已选 {{ createForm.platforms.length }}）</span>
-            <div class="lead-platform-pick">
+            <div class="platform-check-grid compact">
               <label
                 v-for="platform in diagnosisPlatformOptions"
                 :key="platform.code"
-                class="lead-platform-pick-item"
-                :class="{ active: createForm.platforms.includes(platform.code) }"
+                class="platform-check"
+                :class="{ 'is-selected': createForm.platforms.includes(platform.code) }"
+                @click.prevent="toggleCreatePlatform(platform.code)"
               >
                 <input
                   type="checkbox"
+                  tabindex="-1"
                   :checked="createForm.platforms.includes(platform.code)"
-                  @change="toggleCreatePlatform(platform.code)"
                 />
-                <b>{{ platform.name || platformLabelMap[platform.code] || platform.code }}</b>
+                <PlatformBadge
+                  :code="platform.code"
+                  size="sm"
+                  :label="platform.name || platformLabelMap[platform.code] || platform.code"
+                />
               </label>
             </div>
           </div>
