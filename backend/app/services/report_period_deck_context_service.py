@@ -36,7 +36,7 @@ from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
-PERIOD_DECK_PIPELINE = "monitor-deck-v13"
+PERIOD_DECK_PIPELINE = "monitor-deck-v14"
 
 
 def _esc(value: Any) -> str:

@@ -1,4 +1,4 @@
-"""周期监测报告 16:9 幻灯 PDF：0727 母版 + Playwright 截图拼页。
+"""周期监测报告 16:9 幻灯 PDF：0727 母版 + 逐页 page.pdf 合并。
 
 诊断仍走 report_molizhishu；本链路仅 weekly/monthly/quarterly/annual。
 """
@@ -10,13 +10,14 @@ import logging
 import re
 import threading
 from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy.orm import Session
 
-from app.services.report_molizhishu_pdf_service import pdf_from_slide_images
 from app.services.report_period_comparison_service import (
     assemble_period_report_bundle,
     load_echarts_bundle_text,
@@ -36,10 +37,8 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _PUBLIC_REPORT_ASSETS = _REPO_ROOT / "frontend" / "public" / "report-assets"
 _SLIDE_WIDTH_PX = 2520
 _SLIDE_HEIGHT_PX = 1417
-# 2026-07-29 - q90+全分辨率逐页截图过慢；q78 观感仍够投屏，体积与编码明显下降
-_JPEG_SCREENSHOT_QUALITY = 78
-# 2026-07-29 - 导出专用降采样（不改 CSS 母版）；0.75≈1890×1063，再拉回标准 PDF 页
-_PDF_RENDER_SCALE = 0.75
+# 2026-07-29 - A：逐页 Chromium page.pdf，弃用 element JPEG 截图（已弃用 scale/q 旋钮）
+_PDF_EXPORT_MODE = "page-pdf"
 _ECHARTS_READY_TIMEOUT_MS = 3000
 # Playwright set_content 用假源，配合 route 喂 /report-assets
 _PDF_ASSET_ORIGIN = "http://geo-report.local"
@@ -111,6 +110,20 @@ def _inject_pdf_base_href(html: str) -> str:
     if head:
         return f"{html[: head.end()]}\n{marker}{html[head.end() :]}"
     return f"{marker}\n{html}"
+
+
+def _merge_slide_pdfs(parts: list[bytes]) -> bytes:
+    """多页单页 PDF 合并为一份；空列表直接失败。"""
+    if not parts:
+        raise ValueError("empty slide pdf parts")
+    writer = PdfWriter()
+    for blob in parts:
+        reader = PdfReader(BytesIO(blob))
+        for page in reader.pages:
+            writer.add_page(page)
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 def _install_report_asset_routes(page) -> None:
@@ -274,6 +287,9 @@ def build_period_deck_pdf(
 
     2026-07-29 - 复用报告中心预览 HTML（落盘指纹缓存），避免导出再 embed+assemble 一套；
     Playwright 经 route 喂 /report-assets，不再灌 11MB data URI。
+
+    2026-07-29 - A：逐页只显示当前 slide → Chromium page.pdf → pypdf 合并；
+    已弃用 element JPEG 截图（全分辨率/降采样都过慢）。
     """
 
     def _progress(label: str, pct: int | None = None) -> None:
@@ -303,9 +319,10 @@ def build_period_deck_pdf(
         viewport={"width": _SLIDE_WIDTH_PX, "height": _SLIDE_HEIGHT_PX},
         device_scale_factor=1,
     )
-    page_images: list[bytes] = []
+    page_pdfs: list[bytes] = []
     try:
         _install_report_asset_routes(page)
+        page.emulate_media(media="screen")
         # domcontentloaded 后靠 images/fonts Promise；外链 echarts/母版由 route 提供
         page.set_content(html, wait_until="domcontentloaded", timeout=180_000)
         # 外链 echarts 需等全局就绪，再等图/canvas
@@ -351,37 +368,71 @@ def build_period_deck_pdf(
         pack_result = page.evaluate(_pack_js())
         logger.info("period monitor deck pack result=%s", pack_result)
 
-        # 2026-07-29 - 截图前降采样，缩短逐页 JPEG 编码；PDF 页尺寸仍按 2520 标准拉伸
-        if _PDF_RENDER_SCALE < 1:
-            page.evaluate(
-                f"document.documentElement.style.zoom = String({_PDF_RENDER_SCALE})"
-            )
+        # 收口 deck 边距，避免 page.pdf 多出空白页边
+        page.evaluate(
+            f"""() => {{
+                if (document.getElementById('geo-pdf-page-mode')) return;
+                const style = document.createElement('style');
+                style.id = 'geo-pdf-page-mode';
+                style.textContent = `
+                  html, body {{
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    overflow: hidden !important;
+                    width: {_SLIDE_WIDTH_PX}px !important;
+                    height: {_SLIDE_HEIGHT_PX}px !important;
+                  }}
+                  main.deck {{
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    gap: 0 !important;
+                    width: {_SLIDE_WIDTH_PX}px !important;
+                  }}
+                `;
+                document.head.appendChild(style);
+            }}"""
+        )
 
-        slides = page.locator("section.slide")
-        n = slides.count()
+        n = page.locator("section.slide").count()
         if n <= 0:
             raise RuntimeError("周期监测报告无可用幻灯片，无法生成 PDF")
         for i in range(n):
             pct = 70 + int(20 * (i / max(n, 1)))
             _progress(f"PDF渲染中（{i + 1}/{n}）…", pct)
-            page_images.append(
-                slides.nth(i).screenshot(
-                    type="jpeg",
-                    quality=_JPEG_SCREENSHOT_QUALITY,
-                    animations="disabled",
+            # 只留当前页，避免整份长文档被打进单页 PDF
+            page.evaluate(
+                """(idx) => {
+                    const slides = Array.from(document.querySelectorAll('section.slide'));
+                    slides.forEach((s, j) => {
+                        if (j === idx) s.style.removeProperty('display');
+                        else s.style.setProperty('display', 'none', 'important');
+                    });
+                    window.scrollTo(0, 0);
+                }""",
+                i,
+            )
+            page.evaluate(
+                "() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"
+            )
+            page_pdfs.append(
+                page.pdf(
+                    width=f"{_SLIDE_WIDTH_PX}px",
+                    height=f"{_SLIDE_HEIGHT_PX}px",
+                    print_background=True,
+                    margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
                 )
             )
         _progress("PDF生成中…", 90)
-        pdf_bytes = pdf_from_slide_images(page_images)
+        pdf_bytes = _merge_slide_pdfs(page_pdfs)
     finally:
         page.close()
 
     logger.info(
-        "period monitor deck PDF generated title=%s pages=%s pipeline=%s scale=%s bytes=%s",
+        "period monitor deck PDF generated title=%s pages=%s pipeline=%s mode=%s bytes=%s",
         report.get("report_title") or report.get("title"),
-        len(page_images),
+        len(page_pdfs),
         PERIOD_DECK_PIPELINE,
-        _PDF_RENDER_SCALE,
+        _PDF_EXPORT_MODE,
         len(pdf_bytes),
     )
     return pdf_bytes

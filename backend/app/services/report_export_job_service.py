@@ -174,12 +174,11 @@ def _report_fingerprint(db, report_id: int, export_format: str, theme: str) -> s
         # 2026-07-29 - 周期报指纹应跟监测母版/pipeline，勿误用诊断 IDEA 母版 stamp
         if report_type in PERIOD_COMPARISON_REPORT_TYPES:
             from app.services.report_period_deck_pdf_service import (
-                _JPEG_SCREENSHOT_QUALITY,
-                _PDF_RENDER_SCALE,
+                _PDF_EXPORT_MODE,
                 _asset_stamp,
             )
 
-            asset = f"{_asset_stamp()}|scale={_PDF_RENDER_SCALE}|q={_JPEG_SCREENSHOT_QUALITY}"
+            asset = f"{_asset_stamp()}|mode={_PDF_EXPORT_MODE}"
         else:
             asset = _molizhishu_asset_stamp()
     raw = f"report|{report_id}|{export_format}|{theme}|{stamp}|{asset}"

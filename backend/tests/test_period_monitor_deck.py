@@ -62,17 +62,30 @@ def test_period_deck_context_page_types() -> None:
 
 
 def test_period_deck_pdf_fast_knobs() -> None:
-    """ponytail: 导出加速旋钮勿回退到全分辨率/高质慢路径。"""
+    """ponytail: 周期导出走 page.pdf，勿回退到逐页 JPEG 截图。"""
     from app.services.report_period_deck_pdf_service import (
         _ECHARTS_READY_TIMEOUT_MS,
-        _JPEG_SCREENSHOT_QUALITY,
-        _PDF_RENDER_SCALE,
+        _PDF_EXPORT_MODE,
+        _merge_slide_pdfs,
     )
 
-    assert 0.5 <= _PDF_RENDER_SCALE < 1.0
-    assert 60 <= _JPEG_SCREENSHOT_QUALITY <= 85
+    assert _PDF_EXPORT_MODE == "page-pdf"
     assert _ECHARTS_READY_TIMEOUT_MS <= 4000
-    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v13")
+    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v14")
+    # 最小自检：两页合并后仍是合法 PDF
+    from pypdf import PdfWriter
+    from io import BytesIO
+
+    def _one_page() -> bytes:
+        w = PdfWriter()
+        w.add_blank_page(width=100, height=100)
+        buf = BytesIO()
+        w.write(buf)
+        return buf.getvalue()
+
+    merged = _merge_slide_pdfs([_one_page(), _one_page()])
+    assert merged[:4] == b"%PDF"
+    assert len(merged) > 100
 
 
 def test_resolve_report_asset_path_monitor_and_echarts() -> None:
