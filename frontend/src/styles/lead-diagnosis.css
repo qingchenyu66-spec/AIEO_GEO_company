@@ -953,15 +953,50 @@
   grid-column: 1 / -1;
 }
 
+/* 2026-07-29 - 诊断平台勾选被 .lead-field input 拉成大方块 - 覆盖宽高并加宽列 */
 .lead-platform-field .platform-check-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.lead-platform-field .platform-check {
+  min-height: 42px;
+  padding: 8px 12px;
   gap: 10px;
+  overflow: visible;
+}
+
+.lead-platform-field .platform-check input[type="checkbox"] {
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px;
+  max-width: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
+  accent-color: #2d6cdf;
+  pointer-events: none;
 }
 
 .lead-platform-field .platform-check.is-selected {
   border-color: #7db7f4;
   background: #eaf4ff;
   box-shadow: 0 8px 20px rgba(38, 106, 190, 0.12);
+}
+
+.lead-platform-field .platform-badge {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lead-platform-field .platform-badge__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .lead-field span {
