@@ -50,7 +50,8 @@ watch(
     } else {
       form.snapshot_url = isProxiedScreenshotUrl(shot) ? '' : shot
     }
-    form.mention_position = props.subtask?.mention_position != null ? String(props.subtask.mention_position) : ''
+    // 2026-07-29 - 预填旧名次导致粘贴链接仍锁定 manual_rank、位次看似未变 - 打开时不预填，有链接留空走自动解析
+    form.mention_position = ''
   },
 )
 
