@@ -130,14 +130,19 @@ def build_overview_heavy_rollup(
     source_count = int(db.scalar(source_count_stmt) or 0)
     mention_rate = round((mentioned_subtasks / max(1, total_subtasks)) * 100, 1)
 
-    backfill_summary = list_snapshot_backfill_page(
-        db,
-        tenant_ids=tenant_ids,
-        pending_only=True,
-        limit=1,
-        include_summary=True,
-    )
-    pending_backfill = int(backfill_summary.get("summary", {}).get("pending") or 0)
+    # 2026-07-29 - 补录扫描曾拖垮整页 overview(503) - 待补计数失败时降级为 0，其余 KPI 仍可出
+    try:
+        backfill_summary = list_snapshot_backfill_page(
+            db,
+            tenant_ids=tenant_ids,
+            pending_only=True,
+            limit=1,
+            include_summary=True,
+        )
+        pending_backfill = int(backfill_summary.get("summary", {}).get("pending") or 0)
+    except Exception:
+        logger.exception("overview pending_backfill rollup failed; degrade to 0")
+        pending_backfill = 0
 
     return {
         "platform_stats": platform_stats,

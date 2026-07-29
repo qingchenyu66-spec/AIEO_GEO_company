@@ -1301,7 +1301,18 @@ def list_snapshot_backfill_page(
     if scan_cap is not None:
         stmt = stmt.limit(scan_cap)
 
-    rows = list(db.scalars(stmt))
+    # 2026-07-29 - 运营总览 503「Out of sort memory」- ORDER BY 时 SELECT 全量子任务宽列（answer/raw JSON）撑爆 sort buffer；先只取 id 再按 id 装载
+    id_stmt = stmt.with_only_columns(GeoMonitorSubtask.id, maintain_column_froms=True)
+    ordered_ids = list(db.scalars(id_stmt))
+    rows: list[GeoMonitorSubtask] = []
+    if ordered_ids:
+        by_id = {
+            item.id: item
+            for item in db.scalars(
+                select(GeoMonitorSubtask).where(GeoMonitorSubtask.id.in_(ordered_ids))
+            )
+        }
+        rows = [by_id[i] for i in ordered_ids if i in by_id]
     task_ids = {item.task_id for item in rows}
     tasks = {
         item.task_id: item
