@@ -37,6 +37,12 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     accent: '#07c160',
     icon: '/platform-icons/yuanbao.svg',
   },
+  yuanbao_mobile: {
+    code: 'yuanbao_mobile',
+    name: '元宝移动端',
+    accent: '#07c160',
+    icon: '/platform-icons/yuanbao.svg',
+  },
   kimi: {
     code: 'kimi',
     name: 'Kimi',
