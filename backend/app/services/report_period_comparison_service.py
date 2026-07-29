@@ -683,7 +683,7 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
               type: 'value',
               name: '平均排名',
               nameLocation: 'end',
-              nameGap: 8,
+              nameGap: 22,
               inverse: true,
               min: 1,
               splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
@@ -2287,7 +2287,16 @@ def render_trend_html(
           data: data.mention,
           // 2026-07-28 - 周期折线只剩散点 - 空桶 null 默认断开，改为跨空值连线
           connectNulls: true,
-          label: {{ show: true, formatter: sparse ? '{{c}}%' : '{{c}}%', color: '#1677ff', fontWeight: 600, fontSize: data.label_font_size || 12 }},
+          // 2026-07-29 - 条目7：柱内 #1677ff 标签贴同色柱体不可读；改柱顶深色
+          label: {{
+            show: true,
+            position: 'top',
+            distance: 8,
+            formatter: sparse ? '{{c}}%' : '{{c}}%',
+            color: '#0b3a6e',
+            fontWeight: 700,
+            fontSize: data.label_font_size || 12,
+          }},
         }};
         if (sparse) {{
           mentionSeries.barMaxWidth = 56;
@@ -2314,7 +2323,7 @@ def render_trend_html(
               return `${{axisTitle(idx)}}<br/>提及率：<b>${{p.data}}%</b><br/>样本：${{data.completed[idx]}} 条`;
             }},
           }},
-          grid: {{ left: 58, right: 36, top: 42, bottom: gridBottom, containLabel: true }},
+          grid: {{ left: 58, right: 36, top: 52, bottom: gridBottom, containLabel: true }},
           xAxis: {{
             type: 'category',
             data: data.categories,
@@ -2332,8 +2341,13 @@ def render_trend_html(
           series: [mentionSeries],
         }});
 
-        const rankChart = echarts.init(rankEl);
         const ranks = data.rank.filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+        // 2026-07-29 - 条目10：全 null 仍画空轴；改为提示，避免 Q1–Q4 空柱
+        let rankChart = null;
+        if (!ranks.length) {{
+          rankEl.innerHTML = '<p class="note">本周期暂无有效平均排名样本，柱状图从略；明细见下方数据表。</p>';
+        }} else {{
+        rankChart = echarts.init(rankEl);
         let minR = 1;
         let maxR = 10;
         if (ranks.length) {{
@@ -2362,7 +2376,7 @@ def render_trend_html(
           label: {{
             show: true,
             position: sparse ? 'top' : 'top',
-            formatter: (p) => String(p.data),
+            formatter: (p) => (p.data == null ? '' : String(p.data)),
             color: '#0e7490',
             fontWeight: 600,
             fontSize: data.label_font_size || 12,
@@ -2389,7 +2403,8 @@ def render_trend_html(
               return `${{axisTitle(idx)}}<br/>平均排名：<b>${{p.data}}</b><br/>Top3率：${{data.top3[idx] ?? '—'}}%`;
             }},
           }},
-          grid: {{ left: 58, right: 36, top: 42, bottom: gridBottom, containLabel: true }},
+          // 2026-07-29 - 条目11：长 name + nameGap:8 压住顶刻度「10」
+          grid: {{ left: 72, right: 36, top: 56, bottom: gridBottom, containLabel: true }},
           xAxis: {{
             type: 'category',
             data: data.categories,
@@ -2398,9 +2413,9 @@ def render_trend_html(
           }},
           yAxis: {{
             type: 'value',
-            name: sparse ? '排名（越低越好）' : '排名',
+            name: '排名',
             nameLocation: 'end',
-            nameGap: 8,
+            nameGap: 22,
             min: minR,
             max: maxR,
             inverse: rankInverse,
@@ -2410,10 +2425,11 @@ def render_trend_html(
           }},
           series: [rankSeries],
         }});
+        }}
 
         window.addEventListener('resize', () => {{
           mentionChart.resize();
-          rankChart.resize();
+          if (rankChart) rankChart.resize();
         }});
         }}
 

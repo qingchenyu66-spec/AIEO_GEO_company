@@ -36,7 +36,8 @@ from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
-PERIOD_DECK_PIPELINE = "monitor-deck-v14"
+# 2026-07-29 - v15：周期 PDF 视觉 11 条（字号/裁切/空图/标题/标签等）
+PERIOD_DECK_PIPELINE = "monitor-deck-v15"
 
 
 def _esc(value: Any) -> str:
@@ -79,11 +80,21 @@ def _split_before_table(fragment: str) -> tuple[str, str]:
     return text[: match.start()].strip(), text[match.start() :].strip()
 
 
-def _platform_chip_rows(codes: list[str], *, per_row: int = 5) -> list[list[str]]:
+def _platform_chip_rows(codes: list[str], *, per_row: int = 4) -> list[list[str]]:
+    # 2026-07-29 - 封面 5 枚/行+34px 易叠行；改 4 列并配合 CSS 行距
     names = [PLATFORM_LABELS.get(code, code) for code in codes if code]
     if not names:
         names = ["DeepSeek"]
     return [names[i : i + per_row] for i in range(0, len(names), per_row)]
+
+
+def _prev_period_scope(report_type: str) -> str:
+    return {
+        "weekly": "上周",
+        "monthly": "上月",
+        "quarterly": "上季度",
+        "annual": "上年度",
+    }.get(report_type, "上一周期")
 
 
 def _kpi_cards_html(comparison: dict[str, Any]) -> str:
@@ -197,6 +208,10 @@ def build_period_deck_context(
 
     type_label = TYPE_LABELS.get(report_type, "GEO 监测报告")
     generated_at = generated.strftime("%Y-%m-%d")
+    prev_scope = _prev_period_scope(report_type)
+    # 2026-07-29 - 条目8：KPI/词/竞品/平台副标题按周月季年换「上周/上月…」
+    kpi_slide_title = f"核心指标 · 环比{prev_scope}"
+    ring_subtitle = f"环比{prev_scope}"
 
     trend_raw = (
         render_trend_html(trend, echarts_src="", presentation=True) if (trend.get("points")) else ""
@@ -254,27 +269,28 @@ def build_period_deck_context(
     preface_side_html = ""
     preface_grid_html = preface_body
 
+    # 2026-07-29 - 条目2：tail 拆多 pack-item，避免整块超高被 overflow 裁切
+    tail_parts: list[str] = []
     if report_type == "weekly":
-        tail_html = _drop_echarts_src(
+        weekly_html = _drop_echarts_src(
             _strip_h2(_strip_outer_section(render_weekly_focus_html(content_modules, client=True)))
         )
-        # 2026-07-28 - 幻灯不要「不作为承诺」句；圆点改有序序号
-        tail_html = re.sub(r'<p\s+class="note plan-note">.*?</p>\s*', "", tail_html, flags=re.I | re.S)
-        tail_html = tail_html.replace("<ul>", "<ol>").replace("</ul>", "</ol>")
+        weekly_html = re.sub(r'<p\s+class="note plan-note">.*?</p>\s*', "", weekly_html, flags=re.I | re.S)
+        weekly_html = weekly_html.replace("<ul>", "<ol>").replace("</ul>", "</ol>")
+        if weekly_html.strip():
+            tail_parts.append(weekly_html)
         tail_title = "本周关注"
     else:
-        tail_html = _drop_echarts_src(
-            _strip_h2(_strip_outer_section(render_source_influence_html(content_modules.get("source_influence") or {})))
-            + _strip_h2(
-                _strip_outer_section(
-                    render_risk_strategy_html(content_modules.get("risk_and_strategy") or {}, client=True)
-                )
-            )
-            + _strip_h2(
-                _strip_outer_section(render_action_plan_html(content_modules.get("action_plan"), client=True))
-            )
-        )
+        for frag in (
+            render_source_influence_html(content_modules.get("source_influence") or {}),
+            render_risk_strategy_html(content_modules.get("risk_and_strategy") or {}, client=True),
+            render_action_plan_html(content_modules.get("action_plan"), client=True),
+        ):
+            cleaned = _drop_echarts_src(_strip_h2(_strip_outer_section(frag)))
+            if cleaned.strip():
+                tail_parts.append(cleaned)
         tail_title = "信源与优化建议"
+    tail_html = "".join(tail_parts)
 
     disclaimer_html = _strip_h2(
         _strip_outer_section(render_disclaimer_html(content_modules.get("disclaimer") or {}))
@@ -291,6 +307,7 @@ def build_period_deck_context(
         "competitor_text": "、".join(competitors) if competitors else "—",
         "platform_chip_rows": _platform_chip_rows(platform_codes),
         "section_title": "监测分析",
+        "kpi_slide_title": kpi_slide_title,
         "kpi_html": _kpi_cards_html(comparison),
         "conclusions_html": _conclusions_html(comparison, keyword_analytics, competitor_analytics),
         "sample_meta_html": _sample_meta_html(comparison, snapshot),
@@ -308,21 +325,23 @@ def build_period_deck_context(
         "echarts_src": echarts_src,
         "has_trend": bool(trend.get("points")),
         "keyword_html": keyword_body,
-        "keyword_subtitle": "环比上一周期 · 监控词成绩单",
+        "keyword_subtitle": f"{ring_subtitle} · 监控词成绩单",
         "matrix_html": matrix_html,
-        "matrix_subtitle": "短板监控词 × 平台表现",
+        # 2026-07-29 - 条目5：勿再用「短板监控词×平台表现」与主标题叠成双×
+        "matrix_subtitle": "本期最弱 TOP3 监控词",
         "has_matrix": bool(matrix_html),
         "competitor_html": competitor_body,
         "competitor_head_html": competitor_head_html,
         "competitor_actions_html": competitor_actions_html,
         "competitor_table_html": competitor_table_html,
-        "competitor_subtitle": "环比上一周期",
+        "competitor_subtitle": ring_subtitle,
         "platform_html": _platform_table_html(comparison),
-        "platform_subtitle": "环比上一周期",
+        "platform_subtitle": ring_subtitle,
         "tail_title": tail_title,
         "tail_subtitle": "落地建议",
         "tail_html": tail_html,
-        "has_tail": bool(tail_html.strip()),
+        "tail_parts": tail_parts,
+        "has_tail": bool(tail_parts),
         "disclaimer_html": disclaimer_html,
         "disclaimer_subtitle": "数据口径说明",
         "has_disclaimer": bool(disclaimer_html.strip()),

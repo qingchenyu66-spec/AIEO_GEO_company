@@ -444,6 +444,25 @@
       });
       tipGrid.remove();
     }
+    // 2026-07-29 - 条目2/4：策略/信源整块超高被裁；拆成 body 级 pack-item 才能 peel
+    const promote = (el) => {
+      if (!el || !body.contains(el)) return;
+      el.classList.add("pack-item");
+      let anchor = el.parentElement;
+      while (anchor && anchor !== body && !anchor.classList.contains("pack-item")) {
+        anchor = anchor.parentElement;
+      }
+      if (anchor && anchor.parentElement === body) {
+        body.insertBefore(el, anchor.nextSibling);
+      } else if (el.parentElement !== body) {
+        body.appendChild(el);
+      }
+    };
+    Array.from(body.querySelectorAll(".strategy-problems, .comp-trend-box")).forEach(promote);
+    Array.from(body.querySelectorAll(".strategy-grid > *, .source-grid > *, .plan-grid > *")).forEach(promote);
+    body.querySelectorAll(".strategy-grid, .source-grid, .plan-grid").forEach((grid) => {
+      if (!grid.children.length) grid.remove();
+    });
     const kids = Array.from(body.children);
     const hasMarked = kids.some(
       (k) =>
@@ -918,6 +937,17 @@
   renumberPackedTitles();
   mergeTitleSubtitle();
   fitSlideTitles();
+  // 2026-07-29 - 条目3/4：pack 改变布局后 canvas 仍按旧尺寸，空图/大空白
+  if (window.echarts) {
+    document.querySelectorAll(".echart-canvas").forEach((el) => {
+      try {
+        const inst = window.echarts.getInstanceByDom(el);
+        if (inst) inst.resize();
+      } catch (_e) {
+        /* ignore */
+      }
+    });
+  }
   const stillBad = Array.from(
     document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
   ).filter((body) => needsFit(body)).length;

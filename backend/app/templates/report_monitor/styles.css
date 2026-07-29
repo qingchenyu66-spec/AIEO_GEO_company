@@ -132,16 +132,17 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 14px;
     max-width: 1180px;
     min-width: 0;
 }
 
 /* 2026-07-27 - 封面平台多且名长时 nowrap 横向叠字 - 允许换行，勿互压 */
+/* 2026-07-29 - 条目9：行距加大，避免多行 chip 垂直重叠 */
 .platform-chip-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 10px;
+    gap: 14px 12px;
     align-items: center;
 }
 
@@ -1344,8 +1345,11 @@ table thead th {
 }
 
 .report-theme-monitor .platform-chip {
-    padding: 12px 24px;
-    font-size: 34px;
+    /* 2026-07-29 - 条目9：34px+紧行距叠压；略缩小并保证行盒高度 */
+    padding: 10px 18px;
+    font-size: 28px;
+    line-height: 1.4;
+    box-sizing: border-box;
 }
 
 .report-theme-monitor .note-competitors {
@@ -1533,6 +1537,32 @@ table thead th {
     font-weight: 800;
 }
 
+/* 2026-07-29 - 条目6：多平台列挤成「DeepSe」；表头允许换行并略缩字 */
+.matrix-table th {
+    font-size: 22px !important;
+    line-height: 1.25;
+    white-space: normal;
+    word-break: break-word;
+    vertical-align: bottom;
+    padding: 12px 6px;
+    text-align: center;
+}
+
+.matrix-table td {
+    font-size: 26px !important;
+    line-height: 1.35;
+    padding: 12px 6px;
+    text-align: center;
+}
+
+.matrix-table th:first-child,
+.matrix-table td:first-child {
+    text-align: left;
+    white-space: nowrap;
+    min-width: 7em;
+    font-size: 28px !important;
+}
+
 .period-trend .trend-charts {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1557,6 +1587,58 @@ table thead th {
 .period-trend .echart-canvas {
     width: 100%;
     height: 360px;
+}
+
+/* 2026-07-29 - 条目3：竞品宽图无高度 → echarts.init 空画布 */
+.echart-canvas {
+    width: 100%;
+    min-height: 280px;
+}
+
+.echart-canvas-wide,
+.comp-trend-box .echart-canvas {
+    width: 100%;
+    height: 420px;
+    min-height: 420px;
+}
+
+.comp-trend-box {
+    margin: 18px 0 28px;
+}
+
+.source-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 24px 28px;
+    align-items: start;
+}
+
+.strategy-grid,
+.plan-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px 24px;
+    margin-top: 20px;
+}
+
+/* 2026-07-29 - 条目1：.source-conclusion 未进放大规则，默认十几像素像蚂蚁 */
+.report-theme-monitor .source-conclusion,
+.report-theme-monitor .card-box > p,
+.report-theme-monitor .source-section p,
+.report-theme-monitor .strategy-section p,
+.report-theme-monitor .comp-trend-box + p {
+    font-size: 32px !important;
+    line-height: 1.55 !important;
+    color: #334155;
+}
+
+.report-theme-monitor .card-box ul,
+.report-theme-monitor .card-box ol,
+.report-theme-monitor .strategy-problems ul,
+.report-theme-monitor .strategy-problems li,
+.report-theme-monitor .strategy-grid li {
+    font-size: 32px !important;
+    line-height: 1.5 !important;
 }
 
 .period-trend .note,

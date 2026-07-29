@@ -56,7 +56,7 @@
 
         <section class="slide slide--dark">
             <img class="master-bg" src="{{ monitor_assets.dark }}" alt="" loading="lazy" decoding="async">
-            <h2 class="slide-title">核心指标 · 环比上一周期</h2>
+            <h2 class="slide-title">{{ kpi_slide_title }}</h2>
             <p class="slide-subtitle">本期核心表现</p>
             <div class="overlay dark-content">
                 <div class="dark-panel dark-panel--kpi">
@@ -155,7 +155,11 @@
             <h2 class="slide-title">{{ tail_title }}</h2>
             <p class="slide-subtitle">{{ tail_subtitle }}</p>
             <div class="overlay light-content pack-body">
+                {% for part in tail_parts %}
+                <div class="pack-item">{{ part | safe }}</div>
+                {% else %}
                 <div class="pack-item">{{ tail_html | safe }}</div>
+                {% endfor %}
             </div>
         </section>
         {% endif %}
