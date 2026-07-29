@@ -2805,6 +2805,52 @@ def _appearance_order_rank(
     return None
 
 
+def _preferred_column_table_rank(answer_text: str, brand_terms: list[str]) -> int | None:
+    """选型表「首选推荐」列：品牌首次出现在首选列的数据行序（1-based）。
+
+    2026-07-29 - Kimi 选型表首选第一行被 LLM 判成第4 - 规则直接读首选列，不依赖 LLM
+    """
+    if not answer_text or not brand_terms:
+        return None
+    lines = [str(line or "").strip() for line in answer_text.splitlines()]
+    for idx, header in enumerate(lines):
+        if "首选" not in header:
+            continue
+        # 表头需同时能分出首选列；常见「首选推荐」「首选」+「备选」
+        if "\t" in header:
+            cols = [c.strip() for c in header.split("\t")]
+        elif re.search(r"\s{2,}", header):
+            cols = [c.strip() for c in re.split(r"\s{2,}", header) if c.strip()]
+        else:
+            continue
+        preferred_idx = next(
+            (i for i, c in enumerate(cols) if "首选" in c),
+            None,
+        )
+        if preferred_idx is None:
+            continue
+        row_no = 0
+        for data in lines[idx + 1 :]:
+            if not data:
+                if row_no:
+                    break
+                continue
+            if data.startswith(("一、", "二、", "三、", "四、", "五、", "##", "关键提醒")):
+                break
+            if "\t" in data:
+                cells = [c.strip() for c in data.split("\t")]
+            elif re.search(r"\s{2,}", data):
+                cells = [c.strip() for c in re.split(r"\s{2,}", data) if c.strip()]
+            else:
+                continue
+            if len(cells) <= preferred_idx:
+                continue
+            row_no += 1
+            if _brand_appears_in_text(cells[preferred_idx], brand_terms):
+                return row_no
+    return None
+
+
 def _is_category_header_line(line: str) -> bool:
     from app.services.ranking_parser import _is_category_header
     return _is_category_header(line)
@@ -2955,6 +3001,19 @@ def _resolve_brand_rank_detail(
         )
         mentioned = True
     elif has_brand_in_text and in_ranking_list:
+        mentioned = True
+
+    preferred_rank = _preferred_column_table_rank(answer_text, brand_terms) if has_brand_in_text else None
+    if preferred_rank is not None:
+        candidates.append(
+            BrandRankResolution(
+                rank=preferred_rank,
+                mentioned=True,
+                source="structured",
+                confidence=0.95,
+                rank_basis="preferred_column",
+            )
+        )
         mentioned = True
 
     if has_brand_in_text:

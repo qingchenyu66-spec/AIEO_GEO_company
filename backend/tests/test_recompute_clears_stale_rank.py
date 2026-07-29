@@ -55,3 +55,28 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     assert seen["raw"].get("manual_rank_locked") is False
     assert subtask.mention_position == 1
     assert subtask.raw_result_json.get("rank_resolution", {}).get("rank") == 1
+
+
+def test_preferred_column_table_rank_first_row() -> None:
+    from app.services.monitor_service import _preferred_column_table_rank, _resolve_brand_rank_detail
+
+    answer = (
+        "二、按企业需求场景的选型建议\n"
+        "企业发展阶段\t核心品牌目标\t首选推荐\t备选\n"
+        "行业龙头/千亿级企业\t巩固领导地位\t大国品牌（国家级平台型）+ 奥美（国际4A）\t君智\n"
+        "成长型头部企业（10-100亿）\t突破区域限制\t君智战略咨询\t华与华 / 松鼠跃动\n"
+        "细分领域隐形冠军（B2B）\t从B端走向大众\t中网B2B战略咨询\t大国品牌\n"
+    )
+    assert _preferred_column_table_rank(answer, ["大国品牌"]) == 1
+
+    subtask = SimpleNamespace(
+        prompt="打造头部品牌的服务商推荐",
+        answer_content=answer,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=None,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(subtask, "大国品牌（kimi）", ["大国品牌"], asset=None)
+    assert detail.rank == 1
+    assert detail.rank_basis == "preferred_column"
