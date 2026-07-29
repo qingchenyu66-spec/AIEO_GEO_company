@@ -1338,10 +1338,6 @@ def render_source_influence_html(
         return ""
 
     body = ""
-    chart_labels: list[str] = []
-    chart_values: list[int] = []
-    # 2026-07-29 - 长标题换行后视觉上像「4 条对 8 柱」；图用单行截断，表仍全文
-    label_max = 22 if presentation else 18
     for row in rows:
         title = str(row.get("title") or "—")
         count = int(row.get("count") or 0)
@@ -1352,31 +1348,57 @@ def render_source_influence_html(
           <td>{count}次</td>
           <td class="val-cell">{esc(str(row.get('value_analysis') or '—'))}</td>
         </tr>"""
-        short = title if len(title) <= label_max else (title[: label_max - 1] + "…")
-        chart_labels.append(short)
-        chart_values.append(count)
 
-    chart_payload = _embed_json({"labels": chart_labels, "values": chart_values})
     conclusion = esc(str(source_influence.get("conclusion") or ""))
-    # 2026-07-29 - 幻灯 2520 宽仍用 A4 的 11px/left:120，Y 轴「2026年…」糊成一条；presentation 放大+containLabel
-    # 2026-07-29 - overflow:none 长标换行导致标签数≠柱数；改 truncate 单行 + 加大字号
-    # 2026-07-29 - 8 条+结论同页把 canvas 压扁后标签互叠；结论外置、字号随条数收一点
-    n_bars = max(len(rows), 1)
-    label_fs = 34 if presentation else 11
-    if presentation and n_bars >= 7:
-        label_fs = 28
-    value_fs = 32 if presentation else 12
-    if presentation and n_bars >= 7:
-        value_fs = 28
-    axis_fs = 28 if presentation else 11
-    bar_max = 48 if presentation else 18
-    grid_left = 8 if presentation else 12
-    grid_right = 120 if presentation else 36
-    label_width = 360 if presentation else 140
+    max_count = max((int(r.get("count") or 0) for r in rows), default=1) or 1
+
+    # 2026-07-29 - ECharts 左轴截断/叠字太丑；幻灯改 HTML 条形榜：全文露出 + 渐变圆角柱
+    if presentation:
+        items_html = []
+        for idx, row in enumerate(rows, start=1):
+            title = esc(str(row.get("title") or "—"))
+            count = int(row.get("count") or 0)
+            pct = max(8.0, round(count / max_count * 100, 1))
+            items_html.append(
+                f"""
+            <li class="source-bar-item">
+              <div class="source-bar-meta">
+                <span class="source-bar-rank">{idx:02d}</span>
+                <span class="source-bar-title">{title}</span>
+                <span class="source-bar-count">{count}次</span>
+              </div>
+              <div class="source-bar-track" aria-hidden="true">
+                <div class="source-bar-fill" style="width:{pct}%"></div>
+              </div>
+            </li>"""
+            )
+        return f"""
+      <section class="source-section" id="sources">
+        <h2>核心信源传播影响力分析</h2>
+        <div class="source-grid source-grid-deck">
+          <div class="card-box source-table-box">
+            <table>
+              <thead>
+                <tr><th>#</th><th>信源渠道</th><th>引用</th><th>渠道价值拆解</th></tr>
+              </thead>
+              <tbody>{body}</tbody>
+            </table>
+          </div>
+          <div class="card-box source-chart-box">
+            <h3>TOP 信源引用次数</h3>
+            <ul class="source-bar-list">{''.join(items_html)}</ul>
+          </div>
+        </div>
+        <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
+      </section>"""
+
+    chart_labels = [str(row.get("title") or "—") for row in rows]
+    chart_values = [int(row.get("count") or 0) for row in rows]
+    chart_payload = _embed_json({"labels": chart_labels, "values": chart_values})
     return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
-        <div class="source-grid{' source-grid-deck' if presentation else ''}">
+        <div class="source-grid">
           <div class="card-box source-table-box">
             <table>
               <thead>
@@ -1400,68 +1422,48 @@ def render_source_influence_html(
           const maxVal = Math.max(1, ...(payload.values || [0]).map(Number));
           chart.setOption({{
             color: ['#1677ff'],
-            tooltip: {{
-              trigger: 'axis',
-              axisPointer: {{ type: 'shadow' }},
-              formatter: (items) => {{
-                const p = items && items[0];
-                if (!p) return '';
-                return `${{p.name}}<br/>引用：<b>${{p.value}}次</b>`;
-              }},
-            }},
-            grid: {{
-              left: {grid_left},
-              right: {grid_right},
-              top: 16,
-              bottom: 28,
-              containLabel: true,
-            }},
+            grid: {{ left: 12, right: 36, top: 16, bottom: 28, containLabel: true }},
             xAxis: {{
               type: 'value',
               min: 0,
               max: Math.max(maxVal + 2, Math.ceil(maxVal * 1.08)),
               minInterval: 1,
               splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
-              axisLabel: {{
-                color: '#64748b',
-                fontSize: {axis_fs},
-                formatter: (v) => String(Math.round(Number(v))),
-              }},
+              axisLabel: {{ color: '#64748b', fontSize: 11 }},
             }},
             yAxis: {{
               type: 'category',
               data: [...payload.labels].reverse(),
-              axisTick: {{ alignWithLabel: true }},
               axisLabel: {{
-                interval: 0,
-                width: {label_width},
+                width: 140,
                 overflow: 'truncate',
                 ellipsis: '…',
-                fontSize: {label_fs},
+                fontSize: 11,
                 color: '#0b3a6e',
-                fontWeight: 600,
-                lineHeight: {max(label_fs + 4, 32) if presentation else 14},
-                align: 'right',
-                margin: 16,
               }},
             }},
             series: [{{
               type: 'bar',
-              barMaxWidth: {bar_max},
-              barCategoryGap: '32%',
+              barMaxWidth: 18,
+              itemStyle: {{
+                borderRadius: [0, 8, 8, 0],
+                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                  {{ offset: 0, color: '#3b82f6' }},
+                  {{ offset: 1, color: '#0ea5e9' }},
+                ]),
+              }},
               label: {{
                 show: true,
                 position: 'right',
                 formatter: '{{c}}次',
                 color: '#0b3a6e',
-                fontSize: {value_fs},
+                fontSize: 12,
                 fontWeight: 700,
               }},
               data: [...payload.values].reverse(),
             }}],
           }});
           window.addEventListener('resize', () => chart.resize());
-          requestAnimationFrame(() => chart.resize());
         }})();
         </script>
       </section>"""

@@ -45,25 +45,22 @@ def test_trend_y_axis_uses_integer_ticks() -> None:
 
 
 def test_source_chart_deck_full_width_class() -> None:
+    long_title = "2026年地铁广告投放指南：五大优质地铁广告公司推荐与投放策略完整解读"
     html = render_source_influence_html(
         {
             "conclusion": "测试",
             "rows": [
-                {"index": 1, "title": "2026年地铁广告投放指南超级长标题用来验证截断单行对齐柱条", "count": 57, "value_analysis": "—"},
+                {"index": 1, "title": long_title, "count": 57, "value_analysis": "—"},
                 {"index": 2, "title": "赋能品牌高空声量", "count": 36, "value_analysis": "—"},
             ],
         },
         presentation=True,
     )
     assert "source-grid-deck" in html
-    assert "overflow: 'truncate'" in html
-    assert "interval: 0" in html
-    assert "width: 360" in html
-    assert "fontSize: 28" in html or "fontSize: 34" in html
+    assert "source-bar-list" in html
+    assert long_title in html
+    assert "sourceBarChart" not in html
     assert "source-conclusion" in html
-    # 结论在 grid 外，避免与柱图同 pack 互压
-    assert html.index("source-grid") < html.index("source-conclusion")
-    assert html.index("</div>\n        <p class=\"source-conclusion\"") > 0 or 'source-conclusion">' in html
 
 
 def test_trim_rank_trend_empty_edges() -> None:

@@ -1633,6 +1633,76 @@ table thead th {
     min-width: 0;
 }
 
+/* 2026-07-29 - 信源 TOP：HTML 条形榜，标题全文换行，渐变圆角柱 */
+.report-theme-monitor .source-bar-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    counter-reset: none;
+}
+
+.report-theme-monitor .source-bar-list > li {
+    list-style: none;
+}
+
+.report-theme-monitor .source-bar-item {
+    margin: 0;
+    padding: 0;
+}
+
+.report-theme-monitor .source-bar-meta {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    gap: 14px 22px;
+    align-items: start;
+    margin-bottom: 12px;
+}
+
+.report-theme-monitor .source-bar-rank {
+    font-size: 32px !important;
+    font-weight: 800;
+    line-height: 1.2 !important;
+    color: #94a3b8;
+    letter-spacing: 0.04em;
+}
+
+.report-theme-monitor .source-bar-title {
+    font-size: 34px !important;
+    line-height: 1.38 !important;
+    font-weight: 650;
+    color: #0b3a6e;
+    white-space: normal;
+    overflow: visible;
+    word-break: break-word;
+}
+
+.report-theme-monitor .source-bar-count {
+    font-size: 34px !important;
+    line-height: 1.2 !important;
+    font-weight: 800;
+    color: #0369a1;
+    white-space: nowrap;
+}
+
+.report-theme-monitor .source-bar-track {
+    height: 34px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(14, 165, 233, 0.08), rgba(59, 130, 246, 0.12));
+    overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.12);
+}
+
+.report-theme-monitor .source-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1d4ed8 0%, #0284c7 48%, #38bdf8 100%);
+    box-shadow: 0 8px 18px rgba(2, 132, 199, 0.28);
+    min-width: 34px;
+}
+
 .comp-trend-box {
     margin: 18px 0 28px;
 }
