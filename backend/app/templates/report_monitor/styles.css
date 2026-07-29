@@ -1609,6 +1609,23 @@ table thead th {
     min-height: 480px;
 }
 
+/* 2026-07-29 - 幻灯半栏左右不齐：表/图纵向铺满，图用满宽 */
+.report-theme-monitor .source-grid.source-grid-deck {
+    grid-template-columns: 1fr;
+    gap: 28px;
+}
+
+.report-theme-monitor .source-section .echart-canvas-source {
+    width: 100%;
+    height: 560px;
+    min-height: 560px;
+}
+
+.report-theme-monitor .source-chart-box {
+    width: 100%;
+    min-width: 0;
+}
+
 .comp-trend-box {
     margin: 18px 0 28px;
 }

@@ -66,12 +66,41 @@ PLATFORM_LABELS = {
     "deepseek": "DeepSeek",
     "deepseek_mobile": "DeepSeek移动端",
     "yuanbao": "元宝",
+    # 2026-07-29 - 分平台表露出 yuanbao_mobile/qianwen_mobile 裸 code - 补齐静态名并走 catalog
+    "yuanbao_mobile": "元宝移动端",
     "qianwen": "通义千问",
+    "qianwen_mobile": "通义千问移动端",
     "kimi": "Kimi",
     "quark": "夸克",
     "baiduai": "百度AI+",
     "weibo_zhisou": "微博智搜",
+    "antafu": "蚂蚁阿福",
 }
+
+
+def platform_display_name(code: str | None) -> str:
+    """平台 code → 中文名；静态表优先，再查官方目录，*_mobile 可回落「基座名+移动端」。"""
+    text = str(code or "").strip()
+    if not text:
+        return "—"
+    if text in PLATFORM_LABELS:
+        return PLATFORM_LABELS[text]
+    try:
+        from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+
+        for item in get_supported_platform_catalog():
+            if str(item.get("code") or "") == text:
+                name = str(item.get("name") or "").strip()
+                if name:
+                    return name
+                break
+    except Exception:
+        pass
+    if text.endswith("_mobile"):
+        base = text[: -len("_mobile")]
+        base_name = PLATFORM_LABELS.get(base) or base
+        return f"{base_name}移动端"
+    return text
 
 # 上一周期演示 KPI（库内无上期样本时 fallback，保证样例可预览环比 UI）
 _DEMO_PREVIOUS_PROFILE: dict[str, dict[str, float]] = {
@@ -261,7 +290,7 @@ def _demo_keyword_metrics(keyword: str, platform_codes: list[str], *, report_typ
         breakdown.append(
             {
                 "platform": code,
-                "name": PLATFORM_LABELS.get(code, code),
+                "name": platform_display_name(code),
                 "completed": per_platform,
                 "mention_rate": mention,
                 "avg_rank": avg_rank,
@@ -307,7 +336,7 @@ def build_matrix_from_breakdown(
             cells.append({"text": text, "is_weak": is_weak, "sparse": sparse})
         rows.append({"keyword": keyword, "cells": cells})
     return {
-        "platforms": [PLATFORM_LABELS.get(code, code) for code in platform_codes],
+        "platforms": [platform_display_name(code) for code in platform_codes],
         "rows": rows,
     }
 
@@ -731,12 +760,14 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
               nameGap: 22,
               inverse: true,
               min: 1,
+              minInterval: 1,
               splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
               axisLabel: {{
                 formatter: (v) => {{
                   const n = Number(v);
-                  if (!Number.isFinite(n) || n <= 0 || n > 50) return '';
-                  return String(Math.round(n * 10) / 10);
+                  if (!Number.isFinite(n) || n < 1 || n > 50) return '';
+                  if (Math.abs(n - Math.round(n)) > 1e-6) return '';
+                  return String(Math.round(n));
                 }},
               }},
             }},
@@ -1258,15 +1289,19 @@ def render_source_influence_html(
     chart_payload = _embed_json({"labels": chart_labels, "values": chart_values})
     conclusion = esc(str(source_influence.get("conclusion") or ""))
     # 2026-07-29 - 幻灯 2520 宽仍用 A4 的 11px/left:120，Y 轴「2026年…」糊成一条；presentation 放大+containLabel
+    # 2026-07-29 - 加高后左右仍偏：半栏太窄+截断；presentation 拉满宽、少截断、右留值标
     label_fs = 26 if presentation else 11
     value_fs = 24 if presentation else 12
     axis_fs = 22 if presentation else 11
-    bar_max = 28 if presentation else 18
-    grid_right = 64 if presentation else 24
+    bar_max = 34 if presentation else 18
+    grid_left = 8 if presentation else 12
+    grid_right = 88 if presentation else 36
+    label_width = 680 if presentation else 140
+    label_overflow = "none" if presentation else "truncate"
     return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
-        <div class="source-grid">
+        <div class="source-grid{' source-grid-deck' if presentation else ''}">
           <div class="card-box source-table-box">
             <table>
               <thead>
@@ -1275,7 +1310,7 @@ def render_source_influence_html(
               <tbody>{body}</tbody>
             </table>
           </div>
-          <div class="card-box">
+          <div class="card-box source-chart-box">
             <h3>TOP 信源引用次数</h3>
             <div id="sourceBarChart" class="echart-canvas echart-canvas-source"></div>
             <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
@@ -1287,6 +1322,7 @@ def render_source_influence_html(
           const el = document.getElementById('sourceBarChart');
           if (!el || !window.echarts) return;
           const chart = echarts.init(el);
+          const maxVal = Math.max(1, ...(payload.values || [0]).map(Number));
           chart.setOption({{
             color: ['#1677ff'],
             tooltip: {{
@@ -1299,28 +1335,37 @@ def render_source_influence_html(
               }},
             }},
             grid: {{
-              left: 12,
+              left: {grid_left},
               right: {grid_right},
-              top: 16,
-              bottom: 28,
+              top: 12,
+              bottom: 24,
               containLabel: true,
             }},
             xAxis: {{
               type: 'value',
+              min: 0,
+              max: Math.max(maxVal + 2, Math.ceil(maxVal * 1.08)),
+              minInterval: 1,
               splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
-              axisLabel: {{ color: '#64748b', fontSize: {axis_fs} }},
+              axisLabel: {{
+                color: '#64748b',
+                fontSize: {axis_fs},
+                formatter: (v) => String(Math.round(Number(v))),
+              }},
             }},
             yAxis: {{
               type: 'category',
               data: [...payload.labels].reverse(),
               axisLabel: {{
-                width: {280 if presentation else 110},
-                overflow: 'truncate',
+                width: {label_width},
+                overflow: '{label_overflow}',
                 ellipsis: '…',
                 fontSize: {label_fs},
                 color: '#0b3a6e',
                 fontWeight: 600,
                 lineHeight: {32 if presentation else 14},
+                align: 'right',
+                margin: 12,
               }},
             }},
             series: [{{
@@ -1338,6 +1383,7 @@ def render_source_influence_html(
             }}],
           }});
           window.addEventListener('resize', () => chart.resize());
+          requestAnimationFrame(() => chart.resize());
         }})();
         </script>
       </section>"""
@@ -1576,7 +1622,7 @@ def build_comparison(
         platform_rows.append(
             {
                 "platform": code,
-                "name": PLATFORM_LABELS.get(code, code),
+                "name": platform_display_name(code),
                 "mention_rate": _metric_delta(row.get("mention_rate"), prev_row.get("mention_rate")),
                 "avg_rank": _metric_delta(row.get("avg_rank"), prev_row.get("avg_rank"), lower_is_better=True),
                 "completed": int(row.get("completed") or 0),
@@ -1740,47 +1786,55 @@ def _trend_bucket_slots(report_type: str, start: date, end: date) -> list[dict[s
             )
         return slots
     if report_type == "quarterly":
-        cursor = date(start.year, start.month, 1)
-        while cursor <= end:
-            if cursor.month == 12:
-                month_end = date(cursor.year, 12, 31)
+        # 2026-07-29 - 季报 MTD 只吐当前月轴；改为整季 3 个月槽位，无样本填 0
+        q_month = ((start.month - 1) // 3) * 3 + 1
+        year = start.year
+        for offset in range(3):
+            month = q_month + offset
+            cursor = date(year, month, 1)
+            if month == 12:
+                month_end = date(year, 12, 31)
             else:
-                month_end = date(cursor.year, cursor.month + 1, 1) - timedelta(days=1)
-            month_end = min(month_end, end)
+                month_end = date(year, month + 1, 1) - timedelta(days=1)
+            vis_start = max(cursor, start)
+            vis_end = min(month_end, end)
+            if vis_start > vis_end:
+                sub = f"{cursor:%m-%d}~{month_end:%m-%d}"
+            else:
+                sub = f"{vis_start:%m-%d}~{vis_end:%m-%d}"
             slots.append(
                 {
-                    "key": f"{cursor.year}-{cursor.month:02d}",
-                    "label": f"{cursor.month}月",
-                    "sub": f"{max(cursor, start):%m-%d}~{month_end:%m-%d}",
-                    "start": max(cursor, start),
+                    "key": f"{year}-{month:02d}",
+                    "label": f"{month}月",
+                    "sub": sub,
+                    "start": cursor,
                     "end": month_end,
                 }
             )
-            if cursor.month == 12:
-                cursor = date(cursor.year + 1, 1, 1)
-            else:
-                cursor = date(cursor.year, cursor.month + 1, 1)
         return slots
     if report_type == "annual":
+        year = start.year
         for quarter in range(1, 5):
             start_month = (quarter - 1) * 3 + 1
-            q_start = date(start.year, start_month, 1)
+            natural_start = date(year, start_month, 1)
             if start_month == 10:
-                q_end = date(start.year, 12, 31)
+                natural_end = date(year, 12, 31)
             else:
-                q_end = date(start.year, start_month + 3, 1) - timedelta(days=1)
-            q_start = max(q_start, start)
-            q_end = min(q_end, end)
-            # 2026-07-29 - YTD 未到的季度（如 7 月看 Q4）会变成 start>end 空轴脏点，直接跳过
+                natural_end = date(year, start_month + 3, 1) - timedelta(days=1)
+            q_start = max(natural_start, start)
+            q_end = min(natural_end, end)
+            # 2026-07-29 - YTD 未到的季度仍占轴，展示 0，勿跳过致 Q 轴残缺
             if q_start > q_end:
-                continue
+                sub = f"{natural_start:%m-%d}~{natural_end:%m-%d}"
+            else:
+                sub = f"{q_start:%m-%d}~{q_end:%m-%d}"
             slots.append(
                 {
-                    "key": f"{start.year}-Q{quarter}",
+                    "key": f"{year}-Q{quarter}",
                     "label": f"Q{quarter}",
-                    "sub": f"{q_start:%m-%d}~{q_end:%m-%d}",
-                    "start": q_start,
-                    "end": q_end,
+                    "sub": sub,
+                    "start": natural_start,
+                    "end": natural_end,
                 }
             )
         return slots
@@ -1850,6 +1904,9 @@ def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: d
             bucket_stats[key].append(row)
         for slot in slots:
             agg = period_bucket_from_stat_rows(bucket_stats.get(slot["key"], []))
+            # 2026-07-29 - 空月/空季轴要显式 0，勿丢成 null 导致柱/点消失
+            if int(agg.get("completed") or 0) <= 0:
+                agg = {"completed": 0, "mention_rate": 0, "avg_rank": None, "top3_rate": 0}
             points.append({**slot, **agg})
     else:
         rows, day_by_id = _load_completed_subtasks(db, tenant_id, start, end)
@@ -1864,6 +1921,8 @@ def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: d
             bucket_rows[key].append(row)
         for slot in slots:
             agg = _aggregate_bucket(bucket_rows.get(slot["key"], []))
+            if int(agg.get("completed") or 0) <= 0:
+                agg = {"completed": 0, "mention_rate": 0, "avg_rank": None, "top3_rate": 0}
             points.append({**slot, **agg})
 
     valid_mr = [p["mention_rate"] for p in points if p["mention_rate"] is not None]
@@ -1925,7 +1984,7 @@ def _platform_stats_for_subtasks(rows: list[GeoMonitorSubtask]) -> list[dict[str
         stats.append(
             {
                 "platform": platform,
-                "name": PLATFORM_LABELS.get(platform, platform),
+                "name": platform_display_name(platform),
                 **agg,
             }
         )
@@ -1994,7 +2053,7 @@ def build_weak_keyword_platform_matrix(
         rows.append({"keyword": keyword, "cells": cells})
 
     return {
-        "platforms": [PLATFORM_LABELS.get(code, code) for code in platform_codes],
+        "platforms": [platform_display_name(code) for code in platform_codes],
         "rows": rows,
     }
 
@@ -2354,12 +2413,13 @@ def render_trend_html(
         const sparse = !!data.sparse;
         const mentionVals = data.mention.filter(v => v != null && Number.isFinite(Number(v))).map(Number);
         // ponytail: 全 null 时 Math.min(...[])=Infinity 会让坐标轴炸掉、柱子不画
+        // 2026-07-29 - 自适应 min 出现 25.299999…；改整数刻度且提及率从 0 起
         let minM = 0;
         let maxM = 100;
         if (mentionVals.length) {{
-          minM = Math.max(0, Math.min(...mentionVals) - 8);
-          maxM = Math.min(100, Math.max(...mentionVals) + (sparse ? 8 : 6));
-          if (minM >= maxM) {{ maxM = Math.min(100, minM + 10); }}
+          minM = 0;
+          maxM = Math.max(10, Math.ceil(Math.max(...mentionVals) / 5) * 5);
+          if (maxM > 100) maxM = 100;
         }}
         const xRotate = data.label_rotate || 0;
         const gridBottom = data.grid_bottom || 56;
@@ -2426,8 +2486,14 @@ def render_trend_html(
             name: '提及率 %',
             min: minM,
             max: maxM,
+            minInterval: 1,
+            splitNumber: 5,
             splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
-            axisLabel: {{ color: '#64748b', fontSize: data.axis_font_size || 11 }},
+            axisLabel: {{
+              color: '#64748b',
+              fontSize: data.axis_font_size || 11,
+              formatter: (v) => String(Math.round(Number(v))),
+            }},
           }},
           series: [mentionSeries],
         }});
@@ -2439,24 +2505,20 @@ def render_trend_html(
           rankEl.innerHTML = '<p class="note">本周期暂无有效平均排名样本，柱状图从略；明细见下方数据表。</p>';
         }} else {{
         rankChart = echarts.init(rankEl);
+        // 2026-07-29 - 排名轴从 1 起、整数刻度，去掉 1.8/2.1 小数台阶
         let minR = 1;
-        let maxR = 10;
-        if (ranks.length) {{
-          minR = Math.max(1, Math.min(...ranks) - 0.45);
-          maxR = Math.max(...ranks) + 0.45;
-          if (minR >= maxR) {{ maxR = minR + 1; }}
-        }}
+        let maxR = Math.max(3, Math.ceil(Math.max(...ranks)));
+        if (minR >= maxR) {{ maxR = minR + 1; }}
         const rankInverse = !sparse;
         const rankAxisLabel = {{
           color: '#64748b',
           fontSize: data.axis_font_size || 11,
           formatter: (v) => {{
             const n = Number(v);
-            if (!Number.isFinite(n) || n <= 0 || n > 50) return '';
-            // ponytail: inverse+bar 会生成轴外垃圾刻度（如 #999997），按可视区间滤掉
-            if (n < minR - 0.15 || n > maxR + 0.15) return '';
-            const text = (Math.round(n * 10) / 10).toString();
-            return text;
+            if (!Number.isFinite(n) || n < 1 || n > 50) return '';
+            if (Math.abs(n - Math.round(n)) > 1e-6) return '';
+            if (n < minR - 0.05 || n > maxR + 0.05) return '';
+            return String(Math.round(n));
           }},
         }};
         const rankSeries = {{
@@ -2509,8 +2571,9 @@ def render_trend_html(
             nameGap: 22,
             min: minR,
             max: maxR,
+            minInterval: 1,
             inverse: rankInverse,
-            splitNumber: sparse ? Math.min(4, ranks.length + 1) : 5,
+            splitNumber: Math.min(6, Math.max(3, maxR - minR)),
             splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
             axisLabel: rankAxisLabel,
           }},

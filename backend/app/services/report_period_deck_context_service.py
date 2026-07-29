@@ -14,13 +14,13 @@ from datetime import date
 from typing import Any
 
 from app.services.report_period_comparison_service import (
-    PLATFORM_LABELS,
     TYPE_LABELS,
     _RANK_TREND_TYPES,
     _delta_class,
     _fmt_pct,
     _fmt_rank,
     build_v2_conclusions,
+    platform_display_name,
     render_action_plan_html,
     render_competitor_html,
     render_disclaimer_html,
@@ -37,7 +37,8 @@ from app.services.report_premium_font_service import build_font_face_css
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
 # 2026-07-29 - v18：矩阵页标题只留主标题，避免蓝条挤爆
-PERIOD_DECK_PIPELINE = "monitor-deck-v18"
+# 2026-07-29 - v19：平台中文名 / 季年轴补 0 / Y 轴整数 / 信源图满宽
+PERIOD_DECK_PIPELINE = "monitor-deck-v19"
 
 
 def _esc(value: Any) -> str:
@@ -82,7 +83,7 @@ def _split_before_table(fragment: str) -> tuple[str, str]:
 
 def _platform_chip_rows(codes: list[str], *, per_row: int = 4) -> list[list[str]]:
     # 2026-07-29 - 封面 5 枚/行+34px 易叠行；改 4 列并配合 CSS 行距
-    names = [PLATFORM_LABELS.get(code, code) for code in codes if code]
+    names = [platform_display_name(code) for code in codes if code]
     if not names:
         names = ["DeepSeek"]
     return [names[i : i + per_row] for i in range(0, len(names), per_row)]
