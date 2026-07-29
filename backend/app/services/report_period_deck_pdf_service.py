@@ -32,7 +32,20 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "report_moni
 _ASSET_DIR = _TEMPLATE_DIR / "assets"
 _SLIDE_WIDTH_PX = 2520
 _SLIDE_HEIGHT_PX = 1417
-_JPEG_SCREENSHOT_QUALITY = 90
+# 2026-07-29 - q90+全分辨率逐页截图过慢；q78 观感仍够投屏，体积与编码明显下降
+_JPEG_SCREENSHOT_QUALITY = 78
+# 2026-07-29 - 导出专用降采样（不改 CSS 母版）；0.75≈1890×1063，再拉回标准 PDF 页
+_PDF_RENDER_SCALE = 0.75
+_ECHARTS_READY_TIMEOUT_MS = 3000
+_CHROMIUM_LAUNCH_ARGS = (
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--font-render-hinting=none",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--mute-audio",
+)
 
 _tls = threading.local()
 
@@ -42,6 +55,25 @@ def _playwright_local():
         _tls.browser = None
         _tls.playwright = None
     return _tls
+
+
+def _ensure_chromium(sync_playwright):
+    """复用线程内 Chromium；挂掉则重启。"""
+    local = _playwright_local()
+    if local.browser is not None and local.browser.is_connected():
+        return local.browser
+    if local.playwright is not None:
+        try:
+            local.playwright.stop()
+        except Exception:
+            pass
+    local.playwright = sync_playwright().start()
+    # 2026-07-29 - 无头加速参数；ceiling：无 GPU 时个别字体 hint 略糙，可调回默认 launch
+    local.browser = local.playwright.chromium.launch(
+        headless=True,
+        args=list(_CHROMIUM_LAUNCH_ARGS),
+    )
+    return local.browser
 
 
 def _pack_js() -> str:
@@ -198,23 +230,16 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
         raise RuntimeError("Playwright 未安装，无法生成周期监测报告 PDF") from exc
 
     _progress("PDF渲染中…", 35)
-    local = _playwright_local()
-    if local.browser is None or not local.browser.is_connected():
-        if local.playwright is not None:
-            try:
-                local.playwright.stop()
-            except Exception:
-                pass
-        local.playwright = sync_playwright().start()
-        local.browser = local.playwright.chromium.launch(headless=True)
+    browser = _ensure_chromium(sync_playwright)
 
-    page = local.browser.new_page(
+    page = browser.new_page(
         viewport={"width": _SLIDE_WIDTH_PX, "height": _SLIDE_HEIGHT_PX},
         device_scale_factor=1,
     )
     page_images: list[bytes] = []
     try:
-        page.set_content(html, wait_until="load", timeout=180_000)
+        # domcontentloaded 后靠 images/fonts Promise；避免 load 空等无关子资源
+        page.set_content(html, wait_until="domcontentloaded", timeout=180_000)
         page.evaluate(
             """() => Promise.all([
                 document.fonts.ready,
@@ -230,29 +255,34 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
         )
         # 等趋势 echarts 画完（无图则立刻 resolve）
         page.evaluate(
-            """() => new Promise((resolve) => {
+            f"""() => new Promise((resolve) => {{
                 const nodes = [...document.querySelectorAll('.echart-canvas')];
-                if (!nodes.length) { resolve(); return; }
+                if (!nodes.length) {{ resolve(); return; }}
                 const start = Date.now();
-                const tick = () => {
+                const tick = () => {{
                     const ready = nodes.every((el) => el.querySelector('canvas'));
-                    if (ready || Date.now() - start > 8000) resolve();
+                    if (ready || Date.now() - start > {_ECHARTS_READY_TIMEOUT_MS}) resolve();
                     else requestAnimationFrame(tick);
-                };
+                }};
                 tick();
-            })"""
+            }})"""
         )
-        page.wait_for_timeout(200)
         pack_result = page.evaluate(_pack_js())
         logger.info("period monitor deck pack result=%s", pack_result)
-        page.wait_for_timeout(150)
+
+        # 2026-07-29 - 截图前降采样，缩短逐页 JPEG 编码；PDF 页尺寸仍按 2520 标准拉伸
+        if _PDF_RENDER_SCALE < 1:
+            page.evaluate(
+                f"document.documentElement.style.zoom = String({_PDF_RENDER_SCALE})"
+            )
 
         slides = page.locator("section.slide")
         n = slides.count()
         if n <= 0:
             raise RuntimeError("周期监测报告无可用幻灯片，无法生成 PDF")
-        _progress("PDF渲染中…", 70)
         for i in range(n):
+            pct = 70 + int(20 * (i / max(n, 1)))
+            _progress(f"PDF渲染中（{i + 1}/{n}）…", pct)
             page_images.append(
                 slides.nth(i).screenshot(
                     type="jpeg",
@@ -266,10 +296,11 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
         page.close()
 
     logger.info(
-        "period monitor deck PDF generated title=%s pages=%s pipeline=%s bytes=%s",
+        "period monitor deck PDF generated title=%s pages=%s pipeline=%s scale=%s bytes=%s",
         report.get("title"),
         len(page_images),
         PERIOD_DECK_PIPELINE,
+        _PDF_RENDER_SCALE,
         len(pdf_bytes),
     )
     return pdf_bytes

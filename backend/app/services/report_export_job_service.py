@@ -161,12 +161,27 @@ def _lead_fingerprint(db, lead_id: int, export_format: str, theme: str) -> str:
 
 def _report_fingerprint(db, report_id: int, export_format: str, theme: str) -> str:
     from app.models.report import GeoReport
+    from app.services.report_period_service import PERIOD_COMPARISON_REPORT_TYPES
 
     row = db.get(GeoReport, report_id)
     stamp = ""
+    report_type = ""
     if row is not None:
         stamp = f"{row.updated_at}|{row.status}|{row.report_type}"
-    asset = _molizhishu_asset_stamp() if export_format == "pdf" else ""
+        report_type = str(row.report_type or "")
+    asset = ""
+    if export_format == "pdf":
+        # 2026-07-29 - 周期报指纹应跟监测母版/pipeline，勿误用诊断 IDEA 母版 stamp
+        if report_type in PERIOD_COMPARISON_REPORT_TYPES:
+            from app.services.report_period_deck_pdf_service import (
+                _JPEG_SCREENSHOT_QUALITY,
+                _PDF_RENDER_SCALE,
+                _asset_stamp,
+            )
+
+            asset = f"{_asset_stamp()}|scale={_PDF_RENDER_SCALE}|q={_JPEG_SCREENSHOT_QUALITY}"
+        else:
+            asset = _molizhishu_asset_stamp()
     raw = f"report|{report_id}|{export_format}|{theme}|{stamp}|{asset}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 

@@ -59,3 +59,17 @@ def test_period_deck_context_page_types() -> None:
     assert ctx["pipeline"] == PERIOD_DECK_PIPELINE
     assert "kpi-grid" in ctx["kpi_html"]
     assert (_TEMPLATE_DIR / "report.html").is_file()
+
+
+def test_period_deck_pdf_fast_knobs() -> None:
+    """ponytail: 导出加速旋钮勿回退到全分辨率/高质慢路径。"""
+    from app.services.report_period_deck_pdf_service import (
+        _ECHARTS_READY_TIMEOUT_MS,
+        _JPEG_SCREENSHOT_QUALITY,
+        _PDF_RENDER_SCALE,
+    )
+
+    assert 0.5 <= _PDF_RENDER_SCALE < 1.0
+    assert 60 <= _JPEG_SCREENSHOT_QUALITY <= 85
+    assert _ECHARTS_READY_TIMEOUT_MS <= 4000
+    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v12")
