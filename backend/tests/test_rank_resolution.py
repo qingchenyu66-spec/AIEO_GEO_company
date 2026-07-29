@@ -154,7 +154,8 @@ def test_resolve_manual_lock_not_overridden_by_frontmost(monkeypatch) -> None:
     assert detail.rank == 8
 
 
-def test_resolve_brand_rank_detail_prefers_persisted_llm() -> None:
+def test_resolve_brand_rank_detail_persisted_llm_competes_not_exclusive() -> None:
+    """已存 LLM 不再短路；无更好规则时仍可用 LLM 位次。"""
     subtask = SimpleNamespace(
         prompt="LED广告公司推荐",
         answer_content="1. 竞品A\n2. 竞品B",
@@ -179,6 +180,34 @@ def test_resolve_brand_rank_detail_prefers_persisted_llm() -> None:
     assert detail.category == "区域优质工程商"
 
 
+def test_resolve_preferred_column_beats_worse_stored_llm() -> None:
+    """2026-07-29 - 任何情况取最优 - 首选列第1 应压过已存 LLM 第4。"""
+    answer = (
+        "二、按企业需求场景的选型建议\n"
+        "企业发展阶段\t核心品牌目标\t首选推荐\t备选\n"
+        "行业龙头/千亿级企业\t巩固领导地位\t大国品牌（国家级平台型）+ 奥美\t君智\n"
+        "细分领域隐形冠军（B2B）\t大众认知\t中网B2B\t大国品牌\n"
+    )
+    subtask = SimpleNamespace(
+        prompt="打造头部品牌的服务商推荐",
+        answer_content=answer,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=4,
+        raw_result_json={
+            "rank_resolution": {
+                "source": "llm",
+                "rank": 4,
+                "mentioned": True,
+                "confidence": 0.95,
+            }
+        },
+    )
+    detail = _resolve_brand_rank_detail(subtask, "大国品牌（kimi）", ["大国品牌"], asset=None)
+    assert detail.rank == 1
+    assert detail.rank_basis == "preferred_column"
+
+
 def test_should_trigger_llm_fallback_for_null_rank_with_mention() -> None:
     resolution = BrandRankResolution(rank=None, mentioned=True, source="none", confidence=0.3)
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
@@ -197,6 +226,22 @@ def test_apply_llm_rank_fallback_replaces_appearance_rank() -> None:
     merged = apply_llm_rank_fallback(resolution, llm)
     assert merged.source == "llm"
     assert merged.rank == 4
+
+
+def test_apply_llm_rank_fallback_keeps_better_rule_over_worse_llm() -> None:
+    """LLM 更差时不得覆盖更好的规则位次。"""
+    resolution = BrandRankResolution(rank=2, mentioned=True, source="appearance", confidence=0.55)
+    llm = LlmBrandRankResult(
+        rank=5,
+        mentioned=True,
+        category="其他",
+        rank_basis="section_list",
+        confidence=0.9,
+        evidence="...",
+    )
+    merged = apply_llm_rank_fallback(resolution, llm)
+    assert merged.source == "appearance"
+    assert merged.rank == 2
 
 
 def test_apply_llm_rank_fallback_keeps_high_confidence_structured_rank() -> None:

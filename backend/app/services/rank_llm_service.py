@@ -115,6 +115,10 @@ def apply_llm_rank_fallback(
     *,
     min_confidence: float = 0.65,
 ) -> BrandRankResolution:
+    """合并规则结果与 LLM：有多个位次时取最靠前（数字最小）。
+
+    2026-07-29 - 任何情况取最优 - LLM 不再无条件覆盖 appearance；与规则比 min
+    """
     if llm_result is None or llm_result.confidence < min_confidence:
         return resolution
     if not llm_result.mentioned:
@@ -122,28 +126,25 @@ def apply_llm_rank_fallback(
             return replace(resolution, mentioned=False, source="none", confidence=llm_result.confidence)
         return resolution
 
+    llm_resolution = BrandRankResolution(
+        rank=llm_result.rank,
+        mentioned=True,
+        source="llm",
+        confidence=llm_result.confidence,
+        category=llm_result.category,
+        rank_basis=llm_result.rank_basis,
+        evidence=llm_result.evidence,
+    )
     if resolution.rank is None:
-        return BrandRankResolution(
-            rank=llm_result.rank,
-            mentioned=True,
-            source="llm",
-            confidence=llm_result.confidence,
-            category=llm_result.category,
-            rank_basis=llm_result.rank_basis,
-            evidence=llm_result.evidence,
-        )
+        return llm_resolution
 
-    if resolution.source == "appearance" or (resolution.rank is not None and resolution.rank > 10):
-        return BrandRankResolution(
-            rank=llm_result.rank,
-            mentioned=True,
-            source="llm",
-            confidence=llm_result.confidence,
-            category=llm_result.category,
-            rank_basis=llm_result.rank_basis,
-            evidence=llm_result.evidence,
-        )
-    return resolution
+    # 两边都有位次：取更靠前的一条（与方案 X 规则池一致）
+    try:
+        rule_key = float(resolution.rank)
+        llm_key = float(llm_result.rank) if llm_result.rank is not None else float("inf")
+    except (TypeError, ValueError):
+        return llm_resolution
+    return resolution if rule_key <= llm_key else llm_resolution
 
 
 def rank_resolution_to_json(resolution: BrandRankResolution) -> dict[str, Any]:

@@ -2947,6 +2947,8 @@ def _resolve_brand_rank_detail(
                 confidence=1.0,
             )
 
+    # 2026-07-29 - 任何情况取最优 - 已存 LLM 结果改为候选，不再短路挡住更好的规则位次
+    stored_llm_candidate: BrandRankResolution | None = None
     stored_resolution = raw.get("rank_resolution")
     if isinstance(stored_resolution, dict) and stored_resolution.get("source") == "llm":
         rank_raw = stored_resolution.get("rank")
@@ -2963,7 +2965,7 @@ def _resolve_brand_rank_detail(
             confidence = float(stored_resolution.get("confidence", 0.0))
         except (TypeError, ValueError):
             confidence = 0.0
-        return BrandRankResolution(
+        stored_llm_candidate = BrandRankResolution(
             rank=rank_value,
             mentioned=bool(stored_resolution.get("mentioned")),
             source="llm",
@@ -2978,6 +2980,9 @@ def _resolve_brand_rank_detail(
     answer_text = _subtask_answer_plaintext(subtask)
     candidates: list[BrandRankResolution] = []
     mentioned = has_brand_in_text
+    if stored_llm_candidate is not None:
+        candidates.append(stored_llm_candidate)
+        mentioned = mentioned or stored_llm_candidate.mentioned
 
     rank_from_list, in_ranking_list, list_category = _find_brand_in_rankings(
         subtask,
