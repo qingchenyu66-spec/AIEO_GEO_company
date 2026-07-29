@@ -103,14 +103,22 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
     rows: list[dict[str, str]] = []
     pairs = [
         ("company_full_name", "企业全称"),
+        ("brand_name", "品牌名"),
+        ("brand_short_name", "品牌简称"),
         ("official_url", "官网"),
         ("description", "品牌说明"),
+        ("schedule_type", "调度类型"),
     ]
     for key, label in pairs:
         old_val = str(before.get(key) or "").strip()
         new_val = str(body.get(key) or "").strip()
         if old_val != new_val:
             rows.append(_change(label, before=old_val or "（空）", after=new_val or "（空）"))
+
+    old_freq = before.get("schedule_frequency")
+    new_freq = body.get("schedule_frequency")
+    if old_freq is not None and new_freq is not None and int(old_freq or 0) != int(new_freq or 0):
+        rows.append(_change("每日执行次数", before=str(old_freq), after=str(new_freq)))
 
     old_regions = region_display_labels(before.get("region_codes"))
     new_regions = region_display_labels(body.get("region_codes"))
@@ -121,6 +129,21 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
     new_times = _join_list(body.get("schedule_times"))
     if old_times != new_times:
         rows.append(_change("监测时段", before=old_times, after=new_times))
+
+    old_weekdays = _join_list(before.get("schedule_weekdays"))
+    new_weekdays = _join_list(body.get("schedule_weekdays"))
+    if old_weekdays != new_weekdays:
+        rows.append(_change("每周执行日", before=old_weekdays, after=new_weekdays))
+
+    old_month_days = _join_list(before.get("schedule_month_days"))
+    new_month_days = _join_list(body.get("schedule_month_days"))
+    if old_month_days != new_month_days:
+        rows.append(_change("每月执行日", before=old_month_days, after=new_month_days))
+
+    old_aliases = _join_list(before.get("aliases"))
+    new_aliases = _join_list(body.get("aliases"))
+    if old_aliases != new_aliases:
+        rows.append(_change("露出词/别名", before=old_aliases, after=new_aliases))
 
     old_groups = before.get("keyword_groups") or []
     new_groups = body.get("keyword_groups") or []
@@ -177,6 +200,10 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         new_kw = _join_list(_group_keywords(new_group), limit=8)
         if old_kw != new_kw:
             rows.append(_change(f"词组「{name}」监测词", before=old_kw, after=new_kw))
+        old_exp = _join_list(old_group.get("exposure_terms"), limit=8)
+        new_exp = _join_list(new_group.get("exposure_terms"), limit=8)
+        if old_exp != new_exp:
+            rows.append(_change(f"词组「{name}」露出词", before=old_exp, after=new_exp))
         old_plat = _join_list(_platform_labels(old_group.get("platforms")), limit=6)
         new_plat = _join_list(_platform_labels(new_group.get("platforms")), limit=6)
         if old_plat != new_plat:
@@ -185,6 +212,16 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         new_name = str(new_group.get("name") or "").strip()
         if old_name and new_name and old_name != new_name:
             rows.append(_change("词组名称", before=old_name, after=new_name))
+        old_status = bool(old_group.get("status", True))
+        new_status = bool(new_group.get("status", True))
+        if old_status != new_status:
+            rows.append(
+                _change(
+                    f"词组「{name}」状态",
+                    before="启用" if old_status else "停用",
+                    after="启用" if new_status else "停用",
+                )
+            )
 
     old_codes: set[str] = set()
     new_codes: set[str] = set()
@@ -202,6 +239,17 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
     if not rows:
         rows.append(_change("变更说明", after="提交内容与当前生效配置一致或差异未识别", kind="info"))
     return rows
+
+
+def brand_asset_has_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> bool:
+    """是否存在可识别的企业配置变更（用于无变更时跳过销售审批）。"""
+    # 2026-07-29 - 无差异仍进审批制造空单：先用完整 diff 判定，确认无变更再短路
+    rows = _brand_changes(db, tenant_id, body)
+    for row in rows:
+        if row.get("field") == "变更说明" and row.get("kind") == "info":
+            continue
+        return True
+    return False
 
 
 def _user_create_changes(db: Session, body: dict[str, Any]) -> list[dict[str, str]]:

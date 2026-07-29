@@ -22,12 +22,27 @@ from app.services.brand_service import (
     save_brand_word_groups,
     save_competitor,
 )
-from app.services.approval_service import queue_or_run
+from app.services.approval_preview_service import brand_asset_has_changes
+from app.services.approval_service import queue_or_run, requires_sales_approval
 from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
 from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
 from app.core.config import settings
 
 router = APIRouter(prefix="/brand")
+
+
+def _brand_asset_response(db: Session, tenant_id: int) -> dict:
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        return {"tenant_id": tenant_id, "asset": None, "competitors": []}
+    keyword_groups = editable_keyword_groups(db, tenant_id)
+    brand_word_groups = list_brand_word_groups(db, tenant_id)
+    competitors = list_competitors(db, tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
+        "competitors": [competitor_to_dict(item) for item in competitors],
+    }
 
 
 def require_any_update_permission(current: CurrentSession, db: Session, menu_codes: list[str]) -> None:
@@ -98,6 +113,14 @@ def upsert_brand_asset(
         }
 
     try:
+        body = payload.model_dump(mode="json")
+        # 2026-07-29 - 销售无变更仍进空审批单：完整 diff 确认无变化后直接成功返回
+        if (
+            tenant_id is not None
+            and requires_sales_approval(db, current)
+            and not brand_asset_has_changes(db, tenant_id, body)
+        ):
+            return ApiResponse(data=_brand_asset_response(db, tenant_id))
         pending, result = queue_or_run(
             db,
             current,
@@ -105,7 +128,7 @@ def upsert_brand_asset(
             module="brand",
             action="update",
             summary=f"保存企业配置：{payload.company_full_name or payload.brand_name}",
-            payload={"body": payload.model_dump(mode="json")},
+            payload={"body": body},
             tenant_id=tenant_id,
             executor=_execute,
         )
