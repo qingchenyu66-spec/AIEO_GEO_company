@@ -68,6 +68,19 @@
   max-width: 320px;
 }
 
+.report-sticky-filters .report-tenant-select {
+  width: 220px;
+}
+
+.report-sticky-filters .report-tenant-select .el-select__wrapper {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #d9e8f6 inset;
+  background: #fff;
+  font-size: 13px;
+}
+
 .report-sticky-actions {
   display: inline-flex;
   align-items: center;

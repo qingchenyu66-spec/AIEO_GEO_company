@@ -106,12 +106,22 @@ function diagnosisTitleText(title: string | null | undefined) {
           />
 
           <div v-if="isPlatform" class="report-sticky-filters">
-            <select v-model="tenantFilter">
-              <option value="">全部企业</option>
-              <option v-for="tenant in filterTenants" :key="tenant.id" :value="tenant.id">
-                {{ tenant.name }}
-              </option>
-            </select>
+            <!-- 2026-07-29 - 企业筛选不可输入检索 - 改 el-select filterable，清空=全部企业 -->
+            <el-select
+              v-model="tenantFilter"
+              class="report-tenant-select"
+              filterable
+              clearable
+              :value-on-clear="''"
+              placeholder="全部企业"
+            >
+              <el-option
+                v-for="tenant in filterTenants"
+                :key="tenant.id"
+                :label="tenant.name"
+                :value="tenant.id"
+              />
+            </el-select>
           </div>
 
           <div class="report-sticky-actions">
