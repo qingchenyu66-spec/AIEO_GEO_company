@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed } from 'vue'
 import {
   ArrowRight,
   Download,
@@ -11,7 +11,6 @@ import {
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useAuthStore } from '../../../stores/auth'
-import { PlatformAdminKey } from '../injectionKeys'
 import { useReportCenter } from '../composables/useReportCenter'
 import { platformLabelMap } from '../portalMaps'
 import { formatDateTime, externalLink } from '../portalUtils'
@@ -19,7 +18,6 @@ import '../../../styles/report-center.css'
 
 const props = defineProps<{ isPlatform: boolean }>()
 
-const platformAdmin = inject(PlatformAdminKey, null)
 const auth = useAuthStore()
 
 const pageMenuName = computed(() => (
@@ -40,6 +38,7 @@ const {
   typeFilter,
   keywordFilter,
   tenantFilter,
+  filterTenants,
   reportTypeOptions,
   heroMetrics,
   heroTitle,
@@ -60,7 +59,6 @@ const {
   exportReport,
 } = useReportCenter({
   isPlatform: () => props.isPlatform,
-  tenants: () => platformAdmin?.tenants.value || [],
 })
 
 function formatRank(value: number | null | undefined) {
@@ -110,7 +108,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           <div v-if="isPlatform" class="report-sticky-filters">
             <select v-model="tenantFilter">
               <option value="">全部企业</option>
-              <option v-for="tenant in platformAdmin?.tenants.value || []" :key="tenant.id" :value="tenant.id">
+              <option v-for="tenant in filterTenants" :key="tenant.id" :value="tenant.id">
                 {{ tenant.name }}
               </option>
             </select>

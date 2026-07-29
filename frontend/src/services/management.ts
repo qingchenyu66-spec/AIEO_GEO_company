@@ -47,6 +47,23 @@ export interface TenantInfo {
   schedule_frequency?: number | null
 }
 
+/** 与企业管理「服务中」口径一致：启用、非人工停服/取消，且在服务期内 */
+export function isTenantInService(tenant: TenantInfo): boolean {
+  if (!tenant.status) return false
+  if (tenant.stop_reason === 'manual' || tenant.stop_reason === 'canceled') return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  if (tenant.service_start_date) {
+    const startDate = new Date(`${tenant.service_start_date} 00:00:00`)
+    if (startDate.getTime() > today.getTime()) return false
+  }
+  if (tenant.service_end_date) {
+    const endDate = new Date(`${tenant.service_end_date} 23:59:59`)
+    if (endDate.getTime() < today.getTime()) return false
+  }
+  return true
+}
+
 export interface TenantSalesOwner {
   id: number
   username: string

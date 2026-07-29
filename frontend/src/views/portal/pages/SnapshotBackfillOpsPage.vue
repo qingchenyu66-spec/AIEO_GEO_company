@@ -16,7 +16,7 @@ import {
   type SnapshotBackfillPendingItem,
 } from '../../../services/snapshotBackfill'
 import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
-import { getTenants, type TenantInfo } from '../../../services/management'
+import { getTenants, isTenantInService, type TenantInfo } from '../../../services/management'
 import {
   getBrandAsset,
   formatKeywordGroupDetailHint,
@@ -185,22 +185,6 @@ function rankText(rank: number | null | undefined) {
 
 function getCell(word: string, date: string) {
   return cellMap.value.get(`${word}||${date}`) || null
-}
-
-function isTenantInService(tenant: TenantInfo) {
-  if (!tenant.status) return false
-  if (tenant.stop_reason === 'manual' || tenant.stop_reason === 'canceled') return false
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  if (tenant.service_start_date) {
-    const startDate = new Date(`${tenant.service_start_date} 00:00:00`)
-    if (startDate.getTime() > today.getTime()) return false
-  }
-  if (tenant.service_end_date) {
-    const endDate = new Date(`${tenant.service_end_date} 23:59:59`)
-    if (endDate.getTime() < today.getTime()) return false
-  }
-  return true
 }
 
 async function loadTenants() {

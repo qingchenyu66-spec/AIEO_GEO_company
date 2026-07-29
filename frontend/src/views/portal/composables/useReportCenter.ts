@@ -14,7 +14,7 @@ import {
   type ReportType,
   type ReportExportFormat,
 } from '../../../services/reports'
-import type { TenantInfo } from '../../../services/management'
+import { getTenants, isTenantInService, type TenantInfo } from '../../../services/management'
 import { formatReportDisplayTitle } from '../portalUtils'
 import { prepareReportPreviewHtml, prefetchReportPreviewAssets } from '../../../utils/reportPreviewHtml'
 import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
@@ -38,7 +38,6 @@ const CUSTOMER_PORTAL_REPORT_TYPES = new Set(['weekly', 'monthly', 'quarterly', 
 
 type UseReportCenterOptions = {
   isPlatform: () => boolean
-  tenants: () => TenantInfo[]
 }
 
 export function useReportCenter(options: UseReportCenterOptions) {
@@ -63,6 +62,27 @@ export function useReportCenter(options: UseReportCenterOptions) {
   const typeFilter = ref<ReportTypeFilter>('all')
   const keywordFilter = ref('')
   const tenantFilter = ref<number | ''>('')
+  // 2026-07-29 - 报告中心企业筛选项为空：不依赖 platformAdmin.tenants（仅用户管理页加载），本页自拉服务中企业
+  const filterTenants = ref<TenantInfo[]>([])
+
+  async function loadFilterTenants() {
+    if (!options.isPlatform() || isPreviewMode.value) {
+      filterTenants.value = []
+      return
+    }
+    try {
+      const rows = await withRetry(() => getTenants())
+      filterTenants.value = rows.filter(isTenantInService)
+    } catch {
+      filterTenants.value = []
+    }
+    if (
+      tenantFilter.value !== ''
+      && !filterTenants.value.some(tenant => tenant.id === tenantFilter.value)
+    ) {
+      tenantFilter.value = ''
+    }
+  }
 
   function revokePreviewHtmlBlob() {
     previewHtmlBlobUrl.value = null
@@ -307,11 +327,16 @@ export function useReportCenter(options: UseReportCenterOptions) {
     // 2026-07-28 - 客户门户首点周报慢：进页先预取母版图/echarts（平台端常已有缓存）
     prefetchReportPreviewAssets()
     applyInitialRouteQuery()
-    if (options.isPlatform() && !isPreviewMode.value && options.tenants().length && tenantFilter.value === '') {
-      tenantFilter.value = options.tenants()[0].id
+    await loadFilterTenants()
+    applyInitialRouteQuery()
+    // 2026-07-29 - 深链 tenantId 可能指向非服务中企业；筛选项只含服务中，需再次钳制
+    if (
+      tenantFilter.value !== ''
+      && !filterTenants.value.some(tenant => tenant.id === tenantFilter.value)
+    ) {
+      tenantFilter.value = ''
     }
     await loadReports()
-    applyInitialRouteQuery()
     if (selectedReportId.value) {
       await Promise.all([
         loadReportDetail(selectedReportId.value),
@@ -339,6 +364,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
     typeFilter,
     keywordFilter,
     tenantFilter,
+    filterTenants,
     reportTypeOptions: visibleReportTypeOptions,
     heroMetrics,
     canGenerateReport,
