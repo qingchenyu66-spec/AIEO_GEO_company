@@ -911,6 +911,18 @@ def generate_scheduled_report_for_tenant(
     db.refresh(report)
     _notify_report_published(db, report)
     _materialize_report_preview_html(db, report)
+    # 2026-07-29 - 周期报渠道拆解预热 - 生成后入队深抓，供后续导出命中缓存
+    try:
+        from app.services.source_value_analysis_service import enqueue_source_value_pregenerate
+
+        snap = (bundle.get("content") or {}).get("monitor_snapshot") or {}
+        enqueue_source_value_pregenerate(
+            brand_name=str((bundle.get("content") or {}).get("brand_name") or ""),
+            period_label=str((bundle.get("content") or {}).get("period_label") or ""),
+            sources=list(snap.get("top_sources") or []),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("source_value enqueue after scheduled report failed: %s", exc)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 

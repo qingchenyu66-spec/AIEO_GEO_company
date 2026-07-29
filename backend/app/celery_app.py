@@ -40,6 +40,8 @@ celery_app.conf.update(
         "app.tasks.monitor.sync_announcement_lifecycle": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
+        "app.tasks.report_source_value.pregenerate_source_value_task": {"queue": "default"},
+        "app.tasks.report_source_value.scan_source_value_pregenerate": {"queue": "default"},
     },
     beat_schedule={
         "scan-due-schedules": {
@@ -97,6 +99,12 @@ celery_app.conf.update(
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",
             "schedule": crontab(minute="*/5"),
         },
+        "scan-source-value-pregenerate": {
+            "task": "app.tasks.report_source_value.scan_source_value_pregenerate",
+            # 每日 22:00 预热，赶在 00:05 周期报生成前
+            "schedule": crontab(hour=22, minute=0),
+            "kwargs": {"max_tenants": 40},
+        },
         "refresh-ops-overview-rollup": {
             "task": "app.tasks.monitor.refresh_ops_overview_rollup",
             "schedule": crontab(minute="*/5"),
@@ -113,3 +121,4 @@ celery_app.autodiscover_tasks(["app.tasks"])
 import app.tasks.monitor  # noqa: E402, F401
 import app.tasks.monitoring  # noqa: E402, F401
 import app.tasks.knowledge  # noqa: E402, F401
+import app.tasks.report_source_value  # noqa: E402, F401

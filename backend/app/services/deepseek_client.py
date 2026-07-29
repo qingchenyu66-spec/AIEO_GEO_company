@@ -753,6 +753,114 @@ class DeepseekClient:
             "priority_actions": priority_actions,
         }
 
+    def generate_source_value_analyses(
+        self,
+        *,
+        brand_name: str,
+        period_label: str,
+        sources: list[dict[str, Any]],
+    ) -> list[str]:
+        """根据信源正文摘录批量生成「渠道价值拆解」；禁止无正文编造细节。"""
+        # 2026-07-29 - 渠道价值拆解敷衍同句 - 按链接正文写「定性+GEO价值+一条动作」
+        cleaned: list[dict[str, Any]] = []
+        for index, raw in enumerate(sources[:8], start=1):
+            title = str((raw or {}).get("title") or (raw or {}).get("url") or "").strip()
+            excerpt = re.sub(r"\s+", " ", str((raw or {}).get("excerpt") or "").strip())
+            if not title or not excerpt:
+                continue
+            platforms = (raw or {}).get("platforms") or []
+            if isinstance(platforms, (list, tuple, set)):
+                plat_text = "、".join(str(p).strip() for p in platforms if str(p).strip())
+            else:
+                plat_text = str(platforms or "").strip()
+            cleaned.append(
+                {
+                    "index": index,
+                    "title": title[:180],
+                    "url": str((raw or {}).get("url") or "").strip()[:240],
+                    "count": int((raw or {}).get("count") or 0),
+                    "platforms": plat_text or "—",
+                    "excerpt": excerpt[:3200],
+                }
+            )
+        if not cleaned:
+            return []
+        if not self.report_enabled:
+            raise DeepseekApiError("未开启 deepseek_report_enabled")
+
+        blocks = []
+        for row in cleaned:
+            blocks.append(
+                f"[{row['index']}] 标题={row['title']}\n"
+                f"url={row['url'] or '—'}\n"
+                f"引用次数={row['count']}；出现平台={row['platforms']}\n"
+                f"正文摘录：\n{row['excerpt']}"
+            )
+        system_prompt = (
+            "你是 GEO（生成式引擎优化）信源顾问。必须依据「正文摘录」评价该文章/页面对品牌 AI 引用的价值。"
+            "每条 value_analysis 用 40~90 字写满三要素："
+            "①内容定性（主题/场景/体裁）；②对 AI 引用或选型决策的价值；③一条可执行建议。"
+            "禁止「累计引用 N 次的高权重渠道…」万能套话；禁止编造摘录未出现的数据/合作事实。"
+            "只输出 JSON。"
+        )
+        user_prompt = (
+            f"品牌：{brand_name or '—'}\n"
+            f"周期：{period_label or '—'}\n\n"
+            "信源材料：\n\n"
+            f"{chr(10).join(blocks)}\n\n"
+            "请输出 JSON：\n"
+            "{\n"
+            '  "items": [\n'
+            '    {"index": 1, "value_analysis": "40~90字，含定性+GEO价值+一条动作"}\n'
+            "  ]\n"
+            "}\n"
+            f"要求：items 恰好 {len(cleaned)} 条，index 与输入一一对应；纯中文，勿 markdown。"
+        )
+        content = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.35,
+            max_tokens=1800,
+            source="source-value-analysis",
+        )
+        payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            raise DeepseekApiError("信源价值拆解 JSON 格式错误")
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise DeepseekApiError("信源价值拆解缺少 items")
+
+        by_index: dict[int, str] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            text = re.sub(r"\s+", " ", str(item.get("value_analysis") or "").strip())
+            if not text:
+                continue
+            if "累计引用" in text and "高权重渠道" in text:
+                continue
+            if len(text) > 120:
+                text = text[:119].rstrip("，,；; ") + "…"
+            if not text.endswith(("。", "！", "？", "…")):
+                text += "。"
+            by_index[idx] = text
+
+        out: list[str] = []
+        for row in cleaned:
+            text = by_index.get(int(row["index"]))
+            if not text:
+                raise DeepseekApiError(f"信源价值拆解缺少 index={row['index']}")
+            out.append(text)
+        if len(out) >= 3 and len({t[:18] for t in out}) <= 1:
+            raise DeepseekApiError("信源价值拆解同质化过高")
+        return out
+
     def resolve_domain_site_labels(
         self,
         items: list[dict[str, Any]],

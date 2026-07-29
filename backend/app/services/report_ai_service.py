@@ -12,6 +12,7 @@ from app.services.report_period_content_service import (
     build_periodic_report_sections,
     build_premium_content,
     build_report_modules,
+    enrich_source_influence_with_llm,
     merge_report_modules,
     merge_report_sections,
 )
@@ -123,6 +124,15 @@ def enrich_report_narrative(
 
     if report_modules and ai_report_modules:
         report_modules = merge_report_modules(rule_modules=report_modules, ai_modules=ai_report_modules)
+
+    if report_modules:
+        # 2026-07-29 - 渠道价值拆解敷衍 - Premium/诊断路径同样用 LLM 覆盖拆解列
+        report_modules = enrich_source_influence_with_llm(
+            report_modules,
+            brand_name=brand_name,
+            period_label=period_label,
+            top_sources=top_sources,
+        )
 
     report_sections = merge_report_sections(ai_sections=ai_report_sections, rule_sections=rule_sections)
     if report_modules:

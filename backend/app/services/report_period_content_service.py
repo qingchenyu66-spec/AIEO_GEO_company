@@ -280,18 +280,99 @@ def _platform_rows_with_positioning(
     return rows, conclusion
 
 
-def _source_value_analysis(title: str, count: int) -> str:
-    text = str(title or "")
+def _source_value_analysis(title: str, count: int, *, rank: int = 1, max_count: int = 0) -> str:
+    """按信源标题与引用档位写差异化解读；勿用「累计引用 N 次…」万能句糊弄。"""
+    text = str(title or "").strip() or "该渠道"
+    # 2026-07-29 - 除知乎/官网外全落同句模板，8 行像复制粘贴；按场景词+档位拆解
+    top = max(int(max_count or count or 1), 1)
+    share = count / top
+    if share >= 0.75 or rank == 1:
+        tier = "头部引用"
+    elif share >= 0.45 or rank <= 3:
+        tier = "腰部引用"
+    else:
+        tier = "长尾引用"
+
     if "知乎" in text:
         return (
-            "长效专业流量渠道，行业用户决策核心参考；"
-            "若负面舆情集中于此，应作为整改与正向对冲的核心阵地。"
+            f"{tier}：知乎决策讨论场，用户选型时高频翻看；"
+            "宜持续补权威答主与案例，并盯负面帖对冲。"
         )
-    if "官网" in text or "官方" in text:
-        return "品牌权威背书源头，所有外部渠道引用基础；可持续丰富案例、报价与服务板块内容。"
-    if "媒体" in text or "评测" in text:
-        return "行业精准人群渠道，公信力强，适合投放专业测评与合作案例提升正面声量。"
-    return f"累计引用 {count} 次的高权重渠道，具备持续曝光与背书价值，建议保持内容更新频率。"
+    if "官网" in text or "官方" in text or "公众号" in text:
+        return (
+            f"{tier}：品牌自有信源，是外部媒体转引底座；"
+            "建议补齐案例、点位与服务闭环页，降低被竞品材料挤占。"
+        )
+    if "白皮书" in text or "研报" in text or "行业报告" in text:
+        return (
+            f"{tier}：白皮书/研报类信源公信力强，适合沉淀行业话语权；"
+            "可围绕结论页做二次传播与销售话术复用。"
+        )
+    if "指南" in text or "攻略" in text or "怎么投" in text or "如何" in text:
+        return (
+            f"{tier}：实操指南类内容易被 AI 当「可执行答案」引用；"
+            "适合植入选型标准与品牌差异点，拉动询盘转化。"
+        )
+    if "排名" in text or "哪家" in text or "推荐榜" in text or "推荐" in text or "盘点" in text:
+        return (
+            f"{tier}：榜单/比稿语境，直接影响「被写进推荐列表」的概率；"
+            "需确保品牌卖点、覆盖城市与案例可核验。"
+        )
+    if "地铁" in text or "高铁" in text or "机场" in text or "公交" in text:
+        return (
+            f"{tier}：交通场景垂类信源，和户外投放决策高度同频；"
+            "建议补场景案例与线路/枢纽覆盖证据。"
+        )
+    if "电梯" in text or "楼宇" in text or "LED" in text or "户外" in text:
+        return (
+            f"{tier}：户外/楼宇场景内容，利于补齐全场景叙事短板；"
+            "可与电梯/LED 监控词联动投放，提高跨平台一致露出。"
+        )
+    if "媒体" in text or "评测" in text or "深度" in text:
+        return (
+            f"{tier}：媒体评测向信源，专业人群 denser；"
+            "适合投放深度测评与合作案例抬升正面声量。"
+        )
+    if "GEO" in text.upper() or "搜索优化" in text:
+        return (
+            f"{tier}：GEO/搜索优化相关内容，直接服务 AI 引用链路；"
+            "建议固化品牌别名、场景词与权威外链。"
+        )
+    # 兜底也要吃标题关键词，避免 8 行同句
+    short = text if len(text) <= 18 else text[:17] + "…"
+    if tier == "头部引用":
+        return (
+            f"「{short}」为本期头部引用源，对跨平台露出拉动明显；"
+            "宜锁定更新节奏并扩写可引用证据块。"
+        )
+    if tier == "腰部引用":
+        return (
+            f"「{short}」属稳定腰部信源，有持续曝光价值；"
+            "可围绕核心卖点做专题加更，冲击更高引用位。"
+        )
+    return (
+        f"「{short}」引用频次靠后但仍可进入答案池；"
+        "适合作为补充背书，观察是否随内容补给爬升。"
+    )
+
+
+def enrich_source_influence_with_llm(
+    modules: dict[str, Any],
+    *,
+    brand_name: str,
+    period_label: str = "",
+    top_sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """渠道价值拆解：读异步预生成缓存；miss 入队 Playwright+LLM，导出不阻塞。"""
+    from app.services.source_value_analysis_service import enrich_source_influence_with_cached_llm
+
+    return enrich_source_influence_with_cached_llm(
+        modules,
+        brand_name=brand_name,
+        period_label=period_label,
+        top_sources=top_sources,
+        enqueue_misses=True,
+    )
 
 
 def _action_plan_for_type(
@@ -571,7 +652,9 @@ def build_report_modules(
     )
 
     source_rows = []
-    for index, item in enumerate(top_sources[:8], start=1):
+    top_sources_slice = list(top_sources[:8])
+    max_source_count = max((int(item.get("count") or 0) for item in top_sources_slice), default=0)
+    for index, item in enumerate(top_sources_slice, start=1):
         title = str(item.get("title") or item.get("url") or "—")
         count = int(item.get("count") or 0)
         source_rows.append(
@@ -579,7 +662,9 @@ def build_report_modules(
                 "index": index,
                 "title": title,
                 "count": count,
-                "value_analysis": _source_value_analysis(title, count),
+                "value_analysis": _source_value_analysis(
+                    title, count, rank=index, max_count=max_source_count
+                ),
                 "platforms": item.get("platforms") or [],
             }
         )

@@ -27,7 +27,10 @@ from app.services.monitor_service import (
     _matrix_group_monitor_label,
     _resolve_prompt_monitor_keyword,
 )
-from app.services.report_period_content_service import build_report_modules
+from app.services.report_period_content_service import (
+    build_report_modules,
+    enrich_source_influence_with_llm,
+)
 from app.services.report_period_service import PERIOD_COMPARISON_REPORT_TYPES, period_bounds, period_label
 from app.services.report_competitor_visuals import (
     build_competitor_analysis,
@@ -1269,6 +1272,7 @@ def build_sample_content_modules(
     kpis = dict(snapshot.get("kpis") or {})
     if "health_score" not in kpis:
         kpis["health_score"] = _health_score(kpis)
+    top_sources = list(snapshot.get("top_sources") or [])
     raw = build_report_modules(
         brand_name=brand_name,
         company_name=snapshot.get("company_name"),
@@ -1279,9 +1283,16 @@ def build_sample_content_modules(
         kpis=kpis,
         platform_stats=snapshot.get("platform_stats") or [],
         sentiment_counts=snapshot.get("sentiment_counts") or {},
-        top_sources=snapshot.get("top_sources") or [],
+        top_sources=top_sources,
         competitor_names=competitor_names,
         highlights=snapshot.get("highlights"),
+    )
+    # 2026-07-29 - 周期报渠道拆解敷衍 - 组装前用 LLM 覆盖 value_analysis
+    raw = enrich_source_influence_with_llm(
+        raw,
+        brand_name=brand_name,
+        period_label=period_lbl,
+        top_sources=top_sources,
     )
     cleaned = strip_sentiment_from_modules(raw, report_type=report_type)
     cleaned["toc"] = build_period_sample_toc(cleaned, v2=v2, report_type=report_type)
