@@ -188,13 +188,13 @@ const exposureStats = computed(() => {
 const exposureDonutRef = ref<HTMLDivElement | null>(null)
 let exposureDonutChart: ECharts | null = null
 
-// 2026-07-29 - 各平台提及率是独立指标，不能当饼图份额；改横向柱 + 中文平台名
+// 2026-07-29 - 用户要保留环图；只修平台中文名（勿改成柱图）
 const exposureDonutRows = computed(() => (
   [...platformRankList.value.filter(row => row.sample_count > 0)]
-    .sort((a, b) => a.mention_rate - b.mention_rate)
+    .sort((a, b) => b.mention_rate - a.mention_rate)
     .map(row => ({
       name: getPlatformMeta(row.platform).name,
-      value: Math.max(0, Number(row.mention_rate) || 0),
+      value: Math.max(0, row.mention_rate),
       color: platformBarColor(row.platform),
     }))
 ))
@@ -208,78 +208,82 @@ async function renderExposureDonut() {
   const runtime = await loadEchartsRuntime('portal')
   exposureDonutChart = runtime.getInstanceByDom(el) || runtime.init(el)
   const mentionRate = brief.value?.kpis.brand_mention_rate ?? 0
-  const rows = exposureDonutRows.value
-  const maxRate = Math.min(100, Math.max(10, Math.ceil(Math.max(...rows.map(r => r.value)) / 5) * 5))
+  const centerMain = `${Number(mentionRate).toFixed(1)}%`
   exposureDonutChart.setOption({
     animation: false,
-    title: {
-      text: `综合露出 ${Number(mentionRate).toFixed(1)}%`,
-      left: 0,
-      top: 0,
-      textStyle: {
-        color: '#64748b',
-        fontSize: 13,
-        fontWeight: 600,
-      },
-    },
+    color: exposureDonutRows.value.map(row => row.color),
     tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (items: Array<{ name: string; value: number; marker: string }>) => {
-        const p = items?.[0]
-        if (!p) return ''
-        return `${p.marker}${p.name}<br/>露出率 <b>${Number(p.value).toFixed(1)}%</b>`
-      },
-    },
-    grid: {
-      left: 8,
-      right: 48,
-      top: 36,
-      bottom: 8,
-      containLabel: true,
-    },
-    xAxis: {
-      type: 'value',
-      min: 0,
-      max: maxRate,
-      minInterval: 1,
-      axisLabel: {
-        color: '#94a3b8',
-        fontSize: 11,
-        formatter: (v: number) => `${Math.round(Number(v))}%`,
-      },
-      splitLine: { lineStyle: { type: 'dashed', color: '#e2e8f0' } },
-    },
-    yAxis: {
-      type: 'category',
-      data: rows.map(row => row.name),
-      axisTick: { show: false },
-      axisLine: { show: false },
-      axisLabel: {
-        color: '#334155',
-        fontSize: 12,
-        fontWeight: 600,
-      },
+      trigger: 'item',
+      formatter: (params: { name: string; value: number; marker: string }) => (
+        `${params.marker}${params.name}<br/>露出率 ${Number(params.value).toFixed(1)}%`
+      ),
     },
     series: [{
-      type: 'bar',
-      barMaxWidth: 18,
-      data: rows.map(row => ({
-        value: row.value,
-        itemStyle: {
-          color: row.color,
-          borderRadius: [0, 8, 8, 0],
-        },
-      })),
+      type: 'pie',
+      radius: ['46%', '70%'],
+      center: ['50%', '50%'],
+      padAngle: 1.2,
+      minShowLabelAngle: 4,
+      itemStyle: {
+        borderRadius: 5,
+        borderColor: '#fff',
+        borderWidth: 2,
+      },
       label: {
         show: true,
-        position: 'right',
-        formatter: (p: { value: number }) => `${Number(p.value).toFixed(1)}%`,
-        color: '#0f172a',
+        formatter: (params: { name: string; value: number }) => (
+          `${params.name}  ${Number(params.value).toFixed(1)}%`
+        ),
+        color: '#475569',
         fontSize: 12,
-        fontWeight: 650,
+        lineHeight: 16,
       },
+      labelLine: {
+        show: true,
+        length: 16,
+        length2: 12,
+        smooth: 0.2,
+        lineStyle: { width: 1, color: '#cbd5e1' },
+      },
+      emphasis: {
+        scale: true,
+        scaleSize: 6,
+        label: {
+          fontWeight: 650,
+          color: '#0f172a',
+        },
+      },
+      data: exposureDonutRows.value.map(row => ({
+        name: row.name,
+        value: row.value,
+        itemStyle: { color: row.color },
+      })),
     }],
+    graphic: [
+      {
+        type: 'text',
+        left: 'center',
+        top: '44%',
+        style: {
+          text: centerMain,
+          fill: '#0f172a',
+          fontSize: 26,
+          fontWeight: 700,
+          textAlign: 'center',
+        },
+      },
+      {
+        type: 'text',
+        left: 'center',
+        top: '56%',
+        style: {
+          text: '综合露出',
+          fill: '#94a3b8',
+          fontSize: 12,
+          textAlign: 'center',
+        },
+      },
+    ],
   }, true)
   exposureDonutChart.resize()
 }
@@ -618,7 +622,7 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <div ref="exposureDonutRef" class="ws-board-chart-donut ws-board-chart-exposure-bars" />
+          <div ref="exposureDonutRef" class="ws-board-chart-donut" />
         </div>
         <p v-else class="ws-board-mini-empty">暂无平台数据</p>
       </article>

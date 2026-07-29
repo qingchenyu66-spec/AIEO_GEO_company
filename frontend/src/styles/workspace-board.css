@@ -923,12 +923,6 @@
   min-height: 340px;
 }
 
-/* 2026-07-29 - 平台露出改柱图后略增高，避免 8～10 平台挤扁 */
-.ws-board-chart-exposure-bars {
-  height: 440px;
-  min-height: 380px;
-}
-
 @media (max-width: 960px) {
   .ws-board-exposure-body {
     grid-template-columns: 1fr;
