@@ -1360,13 +1360,19 @@ def render_source_influence_html(
     conclusion = esc(str(source_influence.get("conclusion") or ""))
     # 2026-07-29 - 幻灯 2520 宽仍用 A4 的 11px/left:120，Y 轴「2026年…」糊成一条；presentation 放大+containLabel
     # 2026-07-29 - overflow:none 长标换行导致标签数≠柱数；改 truncate 单行 + 加大字号
+    # 2026-07-29 - 8 条+结论同页把 canvas 压扁后标签互叠；结论外置、字号随条数收一点
+    n_bars = max(len(rows), 1)
     label_fs = 34 if presentation else 11
+    if presentation and n_bars >= 7:
+        label_fs = 28
     value_fs = 32 if presentation else 12
+    if presentation and n_bars >= 7:
+        value_fs = 28
     axis_fs = 28 if presentation else 11
     bar_max = 48 if presentation else 18
     grid_left = 8 if presentation else 12
     grid_right = 120 if presentation else 36
-    label_width = 380 if presentation else 140
+    label_width = 360 if presentation else 140
     return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
@@ -1382,9 +1388,9 @@ def render_source_influence_html(
           <div class="card-box source-chart-box">
             <h3>TOP 信源引用次数</h3>
             <div id="sourceBarChart" class="echart-canvas echart-canvas-source"></div>
-            <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
           </div>
         </div>
+        <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
         <script>
         (function () {{
           const payload = {chart_payload};
@@ -1434,7 +1440,7 @@ def render_source_influence_html(
                 fontSize: {label_fs},
                 color: '#0b3a6e',
                 fontWeight: 600,
-                lineHeight: {36 if presentation else 14},
+                lineHeight: {Math.max(label_fs + 4, 32) if presentation else 14},
                 align: 'right',
                 margin: 16,
               }},
@@ -1442,7 +1448,7 @@ def render_source_influence_html(
             series: [{{
               type: 'bar',
               barMaxWidth: {bar_max},
-              barCategoryGap: '28%',
+              barCategoryGap: '32%',
               label: {{
                 show: true,
                 position: 'right',

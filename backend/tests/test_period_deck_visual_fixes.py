@@ -58,8 +58,12 @@ def test_source_chart_deck_full_width_class() -> None:
     assert "source-grid-deck" in html
     assert "overflow: 'truncate'" in html
     assert "interval: 0" in html
-    assert "width: 380" in html
-    assert "fontSize: 34" in html
+    assert "width: 360" in html
+    assert "fontSize: 28" in html or "fontSize: 34" in html
+    assert "source-conclusion" in html
+    # 结论在 grid 外，避免与柱图同 pack 互压
+    assert html.index("source-grid") < html.index("source-conclusion")
+    assert html.index("</div>\n        <p class=\"source-conclusion\"") > 0 or 'source-conclusion">' in html
 
 
 def test_trim_rank_trend_empty_edges() -> None:

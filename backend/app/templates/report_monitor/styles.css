@@ -1617,8 +1617,9 @@ table thead th {
 
 .report-theme-monitor .source-section .echart-canvas-source {
     width: 100%;
-    height: 640px;
-    min-height: 640px;
+    /* 2026-07-29 - 640 过高会和结论同页互压，标签叠死；给满宽柱图留足行距 */
+    height: 520px;
+    min-height: 520px;
 }
 
 .report-theme-monitor .comp-trend-box .echart-canvas-wide,

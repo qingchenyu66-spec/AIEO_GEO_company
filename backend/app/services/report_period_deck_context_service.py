@@ -39,7 +39,8 @@ from app.services.report_premium_font_service import build_font_face_css
 # 2026-07-29 - v18：矩阵页标题只留主标题，避免蓝条挤爆
 # 2026-07-29 - v19：平台中文名 / 季年轴补 0 / Y 轴整数 / 信源图满宽
 # 2026-07-29 - v20：竞品趋势放大字号+裁空周；信源 1 标对 1 柱
-PERIOD_DECK_PIPELINE = "monitor-deck-v20"
+# 2026-07-29 - v21：信源结论外置防压扁叠标
+PERIOD_DECK_PIPELINE = "monitor-deck-v21"
 
 
 def _esc(value: Any) -> str:
