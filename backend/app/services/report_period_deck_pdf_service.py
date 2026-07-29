@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "report_monitor"
 _ASSET_DIR = _TEMPLATE_DIR / "assets"
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = _BACKEND_ROOT.parent
+_PUBLIC_REPORT_ASSETS = _REPO_ROOT / "frontend" / "public" / "report-assets"
 _SLIDE_WIDTH_PX = 2520
 _SLIDE_HEIGHT_PX = 1417
 # 2026-07-29 - q90+全分辨率逐页截图过慢；q78 观感仍够投屏，体积与编码明显下降
@@ -37,6 +41,8 @@ _JPEG_SCREENSHOT_QUALITY = 78
 # 2026-07-29 - 导出专用降采样（不改 CSS 母版）；0.75≈1890×1063，再拉回标准 PDF 页
 _PDF_RENDER_SCALE = 0.75
 _ECHARTS_READY_TIMEOUT_MS = 3000
+# Playwright set_content 用假源，配合 route 喂 /report-assets
+_PDF_ASSET_ORIGIN = "http://geo-report.local"
 _CHROMIUM_LAUNCH_ARGS = (
     "--disable-dev-shm-usage",
     "--disable-gpu",
@@ -74,6 +80,52 @@ def _ensure_chromium(sync_playwright):
         args=list(_CHROMIUM_LAUNCH_ARGS),
     )
     return local.browser
+
+
+def _resolve_report_asset_path(url_path: str) -> Path | None:
+    """把 /report-assets/... 映射到仓库静态文件或模板母版目录。"""
+    from urllib.parse import unquote, urlparse
+
+    path = unquote(urlparse(url_path).path if "://" in url_path else url_path)
+    path = path.split("?", 1)[0]
+    if not path.startswith("/report-assets/"):
+        return None
+    rel = path[len("/report-assets/") :].lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return None
+    candidates: list[Path] = [_PUBLIC_REPORT_ASSETS / rel]
+    if rel.startswith("monitor/"):
+        candidates.append(_ASSET_DIR / rel.split("/", 1)[1])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _inject_pdf_base_href(html: str) -> str:
+    """预览 HTML 用根路径资源；set_content 需 base，才能被 route 接到。"""
+    if re.search(r"<base\b", html, flags=re.I):
+        return html
+    marker = f'<base href="{_PDF_ASSET_ORIGIN}/">'
+    head = re.search(r"(<head[^>]*>)", html, flags=re.I)
+    if head:
+        return f"{html[: head.end()]}\n{marker}{html[head.end() :]}"
+    return f"{marker}\n{html}"
+
+
+def _install_report_asset_routes(page) -> None:
+    import mimetypes
+
+    def _on_route(route) -> None:
+        request_url = route.request.url
+        asset = _resolve_report_asset_path(request_url)
+        if asset is None:
+            route.fulfill(status=404, body=b"missing report asset")
+            return
+        mime = mimetypes.guess_type(str(asset))[0] or "application/octet-stream"
+        route.fulfill(path=str(asset), content_type=mime)
+
+    page.route(f"{_PDF_ASSET_ORIGIN}/report-assets/**", _on_route)
 
 
 def _pack_js() -> str:
@@ -211,8 +263,18 @@ def build_period_deck_html(
     return render_period_deck_html_from_bundle(bundle, embed_assets=embed_assets)
 
 
-def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int) -> bytes:
-    """2026-07-28 - 周期 PDF 改监测幻灯截图，弃用 A4 page.pdf（本函数替代 build_period_report_pdf）。"""
+def build_period_deck_pdf(
+    db: Session,
+    report: dict[str, Any],
+    *,
+    tenant_id: int,
+    theme: str = "b",
+) -> bytes:
+    """2026-07-28 - 周期 PDF 改监测幻灯截图，弃用 A4 page.pdf（本函数替代 build_period_report_pdf）。
+
+    2026-07-29 - 复用报告中心预览 HTML（落盘指纹缓存），避免导出再 embed+assemble 一套；
+    Playwright 经 route 喂 /report-assets，不再灌 11MB data URI。
+    """
 
     def _progress(label: str, pct: int | None = None) -> None:
         try:
@@ -222,8 +284,13 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
         except Exception:
             pass
 
+    del tenant_id  # 预览链路从 report.tenant_id 解析；保留形参兼容旧调用
     _progress("内容写入中…", 20)
-    html = build_period_deck_html(db, report, tenant_id=tenant_id)
+    # 懒导入避免与 report_export_service 循环依赖
+    from app.services.report_export_service import read_or_build_report_html_preview
+
+    html = read_or_build_report_html_preview(db, report, theme=theme)
+    html = _inject_pdf_base_href(html)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -238,8 +305,21 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
     )
     page_images: list[bytes] = []
     try:
-        # domcontentloaded 后靠 images/fonts Promise；避免 load 空等无关子资源
+        _install_report_asset_routes(page)
+        # domcontentloaded 后靠 images/fonts Promise；外链 echarts/母版由 route 提供
         page.set_content(html, wait_until="domcontentloaded", timeout=180_000)
+        # 外链 echarts 需等全局就绪，再等图/canvas
+        page.evaluate(
+            """() => new Promise((resolve) => {
+                if (window.echarts) { resolve(); return; }
+                const start = Date.now();
+                const tick = () => {
+                    if (window.echarts || Date.now() - start > 8000) resolve();
+                    else requestAnimationFrame(tick);
+                };
+                tick();
+            })"""
+        )
         page.evaluate(
             """() => Promise.all([
                 document.fonts.ready,
@@ -267,6 +347,7 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
                 tick();
             }})"""
         )
+        # 预览 HTML 已内嵌 deck_pack；evaluate 再跑一次会被 dataset 短路
         pack_result = page.evaluate(_pack_js())
         logger.info("period monitor deck pack result=%s", pack_result)
 
@@ -297,7 +378,7 @@ def build_period_deck_pdf(db: Session, report: dict[str, Any], *, tenant_id: int
 
     logger.info(
         "period monitor deck PDF generated title=%s pages=%s pipeline=%s scale=%s bytes=%s",
-        report.get("title"),
+        report.get("report_title") or report.get("title"),
         len(page_images),
         PERIOD_DECK_PIPELINE,
         _PDF_RENDER_SCALE,

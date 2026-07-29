@@ -72,4 +72,26 @@ def test_period_deck_pdf_fast_knobs() -> None:
     assert 0.5 <= _PDF_RENDER_SCALE < 1.0
     assert 60 <= _JPEG_SCREENSHOT_QUALITY <= 85
     assert _ECHARTS_READY_TIMEOUT_MS <= 4000
-    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v12")
+    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v13")
+
+
+def test_resolve_report_asset_path_monitor_and_echarts() -> None:
+    from app.services.report_period_deck_pdf_service import _resolve_report_asset_path
+
+    cover = _resolve_report_asset_path("/report-assets/monitor/monitor-cover.jpg?v=1")
+    assert cover is not None and cover.is_file()
+    assert cover.name == "monitor-cover.jpg"
+    # echarts 可能在 public；没有也不应抛错
+    _resolve_report_asset_path("/report-assets/echarts.min.js")
+    assert _resolve_report_asset_path("/other/x.jpg") is None
+    assert _resolve_report_asset_path("/report-assets/../secrets.txt") is None
+
+
+def test_inject_pdf_base_href() -> None:
+    from app.services.report_period_deck_pdf_service import _PDF_ASSET_ORIGIN, _inject_pdf_base_href
+
+    html = "<html><head><title>t</title></head><body></body></html>"
+    out = _inject_pdf_base_href(html)
+    assert f'href="{_PDF_ASSET_ORIGIN}/"' in out
+    assert out.count("<base") == 1
+    assert _inject_pdf_base_href(out).count("<base") == 1

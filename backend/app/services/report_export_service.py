@@ -1106,12 +1106,13 @@ def build_report_export(
         if db is None:
             raise ValueError("周期报告 PDF 导出需要数据库会话")
         # 2026-07-28 - 周期 PDF 改监测幻灯截图；旧 A4 build_period_report_pdf 保留未删
+        # 2026-07-29 - 传入原始 report（含 id/updated_at），复用预览 HTML 落盘缓存
         from app.services.report_period_deck_pdf_service import build_period_deck_pdf
 
         tenant_id = int(report.get("tenant_id") or 0)
         if tenant_id <= 0:
             raise ValueError("报告缺少 tenant_id")
-        content = build_period_deck_pdf(db, payload, tenant_id=tenant_id)
+        content = build_period_deck_pdf(db, report, tenant_id=tenant_id, theme=theme)
         mime = "application/pdf"
         suffix = "pdf"
     elif export_format == "pdf":
