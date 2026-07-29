@@ -129,7 +129,7 @@ def _merge_slide_pdfs(parts: list[bytes]) -> bytes:
 def _install_report_asset_routes(page) -> None:
     import mimetypes
 
-    def _on_route(route) -> None:
+    def _on_asset(route) -> None:
         request_url = route.request.url
         asset = _resolve_report_asset_path(request_url)
         if asset is None:
@@ -138,7 +138,13 @@ def _install_report_asset_routes(page) -> None:
         mime = mimetypes.guess_type(str(asset))[0] or "application/octet-stream"
         route.fulfill(path=str(asset), content_type=mime)
 
-    page.route(f"{_PDF_ASSET_ORIGIN}/report-assets/**", _on_route)
+    def _on_other(route) -> None:
+        # 2026-07-29 - 假源未路由的请求会挂死 fonts/images wait；立刻 404
+        route.fulfill(status=404, body=b"")
+
+    # Playwright 后注册优先：先兜底，再挂 /report-assets
+    page.route(f"{_PDF_ASSET_ORIGIN}/**", _on_other)
+    page.route(f"{_PDF_ASSET_ORIGIN}/report-assets/**", _on_asset)
 
 
 def _pack_js() -> str:
@@ -337,17 +343,21 @@ def build_period_deck_pdf(
                 tick();
             })"""
         )
+        # 2026-07-29 - fonts/images 无超时会卡死导出；8s 封顶
         page.evaluate(
-            """() => Promise.all([
-                document.fonts.ready,
-                ...[...document.images].map((img) =>
-                    img.complete
-                        ? Promise.resolve()
-                        : new Promise((resolve) => {
-                            img.addEventListener('load', resolve, { once: true });
-                            img.addEventListener('error', resolve, { once: true });
-                          })
-                ),
+            """() => Promise.race([
+                Promise.all([
+                    document.fonts.ready,
+                    ...[...document.images].map((img) =>
+                        img.complete
+                            ? Promise.resolve()
+                            : new Promise((resolve) => {
+                                img.addEventListener('load', resolve, { once: true });
+                                img.addEventListener('error', resolve, { once: true });
+                              })
+                    ),
+                ]),
+                new Promise((resolve) => setTimeout(resolve, 8000)),
             ])"""
         )
         # 等趋势 echarts 画完（无图则立刻 resolve）
