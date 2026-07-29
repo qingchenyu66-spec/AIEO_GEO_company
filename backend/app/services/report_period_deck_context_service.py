@@ -335,7 +335,8 @@ def build_period_deck_context(
         "echarts_src": echarts_src,
         "has_trend": bool(trend.get("points")),
         "keyword_html": keyword_body,
-        "keyword_subtitle": f"{ring_subtitle} · 监控词成绩单",
+        # 2026-07-29 - 「· 监控词成绩单」与主标题重复啰嗦 - 副标题只留环比口径
+        "keyword_subtitle": ring_subtitle,
         "matrix_html": matrix_html,
         # 2026-07-29 - 条目5：勿叠双×；副标题仍会长到挤蓝条 - 清空，说明留正文 note
         "matrix_subtitle": "",

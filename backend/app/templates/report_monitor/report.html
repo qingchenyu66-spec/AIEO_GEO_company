@@ -56,8 +56,8 @@
 
         <section class="slide slide--dark">
             <img class="master-bg" src="{{ monitor_assets.dark }}" alt="" loading="lazy" decoding="async">
+            {# 2026-07-29 - 核心指标页「本期核心表现」冗余 - 去掉副标题，只留环比主标题 #}
             <h2 class="slide-title">{{ kpi_slide_title }}</h2>
-            <p class="slide-subtitle">本期核心表现</p>
             <div class="overlay dark-content">
                 <div class="dark-panel dark-panel--kpi">
                     {{ kpi_html | safe }}
