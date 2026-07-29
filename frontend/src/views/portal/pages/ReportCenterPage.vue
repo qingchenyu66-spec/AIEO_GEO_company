@@ -9,6 +9,9 @@ import {
   Printer,
   RefreshCw,
 } from '@lucide/vue'
+import { ElOption, ElSelect } from 'element-plus'
+import 'element-plus/es/components/select/style/css'
+import 'element-plus/es/components/option/style/css'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useReportCenter } from '../composables/useReportCenter'
@@ -106,8 +109,7 @@ function diagnosisTitleText(title: string | null | undefined) {
           />
 
           <div v-if="isPlatform" class="report-sticky-filters">
-            <!-- 2026-07-29 - 企业筛选不可输入检索 - 改 el-select filterable，清空=全部企业 -->
-            <el-select
+            <ElSelect
               v-model="tenantFilter"
               class="report-tenant-select"
               filterable
@@ -115,13 +117,13 @@ function diagnosisTitleText(title: string | null | undefined) {
               :value-on-clear="''"
               placeholder="全部企业"
             >
-              <el-option
+              <ElOption
                 v-for="tenant in filterTenants"
                 :key="tenant.id"
                 :label="tenant.name"
                 :value="tenant.id"
               />
-            </el-select>
+            </ElSelect>
           </div>
 
           <div class="report-sticky-actions">

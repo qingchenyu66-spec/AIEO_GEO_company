@@ -176,7 +176,8 @@
         {% endif %}
 
         <section class="slide slide--thanks">
-            <img class="master-bg" src="{{ monitor_assets.thanks }}" alt="" loading="lazy" decoding="async">
+            {# 2026-07-29 - 尾页纯黑：lazy 在 PDF 单页显示时未加载母版图 - 改 eager #}
+            <img class="master-bg" src="{{ monitor_assets.thanks }}" alt="" loading="eager" decoding="async">
         </section>
     </main>
     {# 2026-07-28 - 预览 iframe 也要跑 pack，否则 overflow:hidden 裁切、与 PDF 分页不一致 #}

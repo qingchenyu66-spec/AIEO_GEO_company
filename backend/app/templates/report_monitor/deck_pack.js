@@ -116,9 +116,12 @@
   function softShrinkFit(body, opts) {
     if (!needsFit(body)) return { fitted: false, reason: "ok" };
     const keep = !!(opts && opts.keepTogether);
-    const minSoft = keep ? KEEP_MIN_SOFT_FACTOR : MIN_SOFT_FACTOR;
-    const minPad = keep ? KEEP_MIN_PAD_FACTOR : MIN_PAD_FACTOR;
-    const minFont = keep ? KEEP_MIN_FONT_PX : MIN_FONT_PX;
+    // 2026-07-29 - 竞品页压挤难看：优先拆页，少软缩
+    const preferPeel = !!(opts && opts.preferPeel);
+    const minSoft = preferPeel ? 0.97 : keep ? KEEP_MIN_SOFT_FACTOR : MIN_SOFT_FACTOR;
+    const minPad = preferPeel ? 0.92 : keep ? KEEP_MIN_PAD_FACTOR : MIN_PAD_FACTOR;
+    const minFont = preferPeel ? MIN_FONT_PX : keep ? KEEP_MIN_FONT_PX : MIN_FONT_PX;
+    const maxStep = preferPeel ? 3 : 12;
 
     const cells = Array.from(body.querySelectorAll("th, td"));
     const textNodes = Array.from(
@@ -163,7 +166,7 @@
     });
 
     // 字号步进慢、padding 步进快：一两行优先靠行距收，字号尽量留大
-    for (let step = 1; step <= 12; step += 1) {
+    for (let step = 1; step <= maxStep; step += 1) {
       const fontFactor = Math.max(minSoft, 1 - step * 0.012);
       const padFactor = Math.max(minPad, 1 - step * 0.03);
       if (bodyFs > 0) body.style.fontSize = `${clampFont(bodyFs, fontFactor, minFont).toFixed(2)}px`;
@@ -223,7 +226,11 @@
       .querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
       .forEach((body) => {
         const slide = body.closest(".slide");
-        const r = softShrinkFit(body, { keepTogether: keepTogetherSlide(slide) });
+        const preferPeel = slide?.getAttribute("data-merge-group") === "competitor";
+        const r = softShrinkFit(body, {
+          keepTogether: keepTogetherSlide(slide),
+          preferPeel,
+        });
         if (r.fitted) fitted += 1;
         else if (r.reason === "shrink-failed") shrinkFailed += 1;
       });

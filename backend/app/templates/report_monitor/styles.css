@@ -1280,12 +1280,13 @@ table thead th {
     display: none;
 }
 
-/* 模版4 深色：主标题上梯形、小标题下梯形（槽约 190–280，勿再顶到 78） */
+/* 模版4 深色：去掉副标题后主标题落槽垂直居中（槽约 190–280） */
+/* 2026-07-29 - 去掉「本期核心表现」后标题偏上 - top 下移对齐槽心 */
 .slide--dark > .slide-title {
     left: 50%;
     transform: translateX(-50%);
     text-align: center;
-    top: 192px;
+    top: 218px;
     max-width: 1500px;
     font-size: 46px;
     color: #ffffff;
@@ -1633,14 +1634,14 @@ table thead th {
     min-width: 0;
 }
 
-/* 2026-07-29 - 信源 TOP：HTML 条形榜，标题全文换行，渐变圆角柱 */
+/* 2026-07-29 - 信源 TOP：字号/间距收紧，标题两行截断，柱更醒目 */
 .report-theme-monitor .source-bar-list {
     list-style: none;
-    margin: 8px 0 0;
+    margin: 4px 0 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 26px;
+    gap: 18px;
     counter-reset: none;
 }
 
@@ -1650,19 +1651,22 @@ table thead th {
 
 .report-theme-monitor .source-bar-item {
     margin: 0;
-    padding: 0;
+    padding: 14px 18px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.08);
 }
 
 .report-theme-monitor .source-bar-meta {
     display: grid;
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    gap: 14px 22px;
-    align-items: start;
-    margin-bottom: 12px;
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    gap: 10px 16px;
+    align-items: center;
+    margin-bottom: 10px;
 }
 
 .report-theme-monitor .source-bar-rank {
-    font-size: 32px !important;
+    font-size: 26px !important;
     font-weight: 800;
     line-height: 1.2 !important;
     color: #94a3b8;
@@ -1670,17 +1674,19 @@ table thead th {
 }
 
 .report-theme-monitor .source-bar-title {
-    font-size: 34px !important;
-    line-height: 1.38 !important;
+    font-size: 26px !important;
+    line-height: 1.35 !important;
     font-weight: 650;
     color: #0b3a6e;
-    white-space: normal;
-    overflow: visible;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
     word-break: break-word;
 }
 
 .report-theme-monitor .source-bar-count {
-    font-size: 34px !important;
+    font-size: 28px !important;
     line-height: 1.2 !important;
     font-weight: 800;
     color: #0369a1;
@@ -1688,7 +1694,7 @@ table thead th {
 }
 
 .report-theme-monitor .source-bar-track {
-    height: 34px;
+    height: 22px;
     border-radius: 999px;
     background: linear-gradient(90deg, rgba(14, 165, 233, 0.08), rgba(59, 130, 246, 0.12));
     overflow: hidden;
@@ -1699,8 +1705,8 @@ table thead th {
     height: 100%;
     border-radius: 999px;
     background: linear-gradient(90deg, #1d4ed8 0%, #0284c7 48%, #38bdf8 100%);
-    box-shadow: 0 8px 18px rgba(2, 132, 199, 0.28);
-    min-width: 34px;
+    box-shadow: 0 6px 14px rgba(2, 132, 199, 0.22);
+    min-width: 22px;
 }
 
 .comp-trend-box {
@@ -1871,6 +1877,8 @@ table thead th {
     position: relative;
     padding-left: 1.55em;
     counter-increment: deck-ol;
+    /* 2026-07-29 - 竞品建议过挤 - 拉高条目间距，促拆页而非压字 */
+    margin-bottom: 0.55em;
 }
 
 .report-theme-monitor .light-content ol > li::before,
