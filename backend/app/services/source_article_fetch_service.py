@@ -79,7 +79,13 @@ def fetch_source_article_text(
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page(user_agent=_DEFAULT_UA, viewport={"width": 1280, "height": 900})
+                # 2026-07-29 - 部分信源站证书过期(ERR_CERT_DATE_INVALID) - 忽略 HTTPS 错误继续抽正文
+                context = browser.new_context(
+                    user_agent=_DEFAULT_UA,
+                    viewport={"width": 1280, "height": 900},
+                    ignore_https_errors=True,
+                )
+                page = context.new_page()
                 page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(settle_ms)
                 body_text = page.inner_text("body") or ""
@@ -126,8 +132,14 @@ def fetch_source_articles_batch(
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page(user_agent=_DEFAULT_UA, viewport={"width": 1280, "height": 900})
+                # 2026-07-29 - 批量抓取同样忽略过期证书，并每条新开 page 避免导航互相打断
+                context = browser.new_context(
+                    user_agent=_DEFAULT_UA,
+                    viewport={"width": 1280, "height": 900},
+                    ignore_https_errors=True,
+                )
                 for value in cleaned:
+                    page = context.new_page()
                     try:
                         page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
                         page.wait_for_timeout(settle_ms)
@@ -144,6 +156,8 @@ def fetch_source_articles_batch(
                         out[value] = text
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("信源批量抓取单条失败 url=%s err=%s", value[:160], exc)
+                    finally:
+                        page.close()
             finally:
                 browser.close()
     except Exception as exc:  # noqa: BLE001
