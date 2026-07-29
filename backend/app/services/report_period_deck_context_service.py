@@ -36,8 +36,8 @@ from app.services.report_premium_font_service import build_font_face_css
 
 # 2026-07-28 - 周期报迁监测幻灯 - 预览/导出指纹用，改版式时 bump
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
-# 2026-07-29 - v16：竞品趋势图补真实 TOP3 序列（勿只画本品牌）
-PERIOD_DECK_PIPELINE = "monitor-deck-v16"
+# 2026-07-29 - v17：信源 TOP 柱图 Y 轴字号/边距可读
+PERIOD_DECK_PIPELINE = "monitor-deck-v17"
 
 
 def _esc(value: Any) -> str:
@@ -282,7 +282,9 @@ def build_period_deck_context(
         tail_title = "本周关注"
     else:
         for frag in (
-            render_source_influence_html(content_modules.get("source_influence") or {}),
+            render_source_influence_html(
+                content_modules.get("source_influence") or {}, presentation=True
+            ),
             render_risk_strategy_html(content_modules.get("risk_and_strategy") or {}, client=True),
             render_action_plan_html(content_modules.get("action_plan"), client=True),
         ):

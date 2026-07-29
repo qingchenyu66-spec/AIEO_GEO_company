@@ -1602,6 +1602,13 @@ table thead th {
     min-height: 420px;
 }
 
+/* 2026-07-29 - 信源横向柱 8 条需要更高画布，避免 Y 轴挤成蚂蚁字 */
+.source-section .echart-canvas-source {
+    width: 100%;
+    height: 480px;
+    min-height: 480px;
+}
+
 .comp-trend-box {
     margin: 18px 0 28px;
 }

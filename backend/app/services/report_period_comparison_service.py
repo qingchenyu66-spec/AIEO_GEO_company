@@ -1229,7 +1229,11 @@ def render_toc_html(toc: list[dict[str, str]]) -> str:
       </section>"""
 
 
-def render_source_influence_html(source_influence: dict[str, Any]) -> str:
+def render_source_influence_html(
+    source_influence: dict[str, Any],
+    *,
+    presentation: bool = False,
+) -> str:
     esc = html.escape
     rows = list(source_influence.get("rows") or [])[:8]
     if not rows:
@@ -1253,6 +1257,12 @@ def render_source_influence_html(source_influence: dict[str, Any]) -> str:
 
     chart_payload = _embed_json({"labels": chart_labels, "values": chart_values})
     conclusion = esc(str(source_influence.get("conclusion") or ""))
+    # 2026-07-29 - 幻灯 2520 宽仍用 A4 的 11px/left:120，Y 轴「2026年…」糊成一条；presentation 放大+containLabel
+    label_fs = 26 if presentation else 11
+    value_fs = 24 if presentation else 12
+    axis_fs = 22 if presentation else 11
+    bar_max = 28 if presentation else 18
+    grid_right = 64 if presentation else 24
     return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
@@ -1267,7 +1277,7 @@ def render_source_influence_html(source_influence: dict[str, Any]) -> str:
           </div>
           <div class="card-box">
             <h3>TOP 信源引用次数</h3>
-            <div id="sourceBarChart" class="echart-canvas"></div>
+            <div id="sourceBarChart" class="echart-canvas echart-canvas-source"></div>
             <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
           </div>
         </div>
@@ -1279,18 +1289,51 @@ def render_source_influence_html(source_influence: dict[str, Any]) -> str:
           const chart = echarts.init(el);
           chart.setOption({{
             color: ['#1677ff'],
-            tooltip: {{ trigger: 'axis', axisPointer: {{ type: 'shadow' }} }},
-            grid: {{ left: 120, right: 24, top: 12, bottom: 24 }},
-            xAxis: {{ type: 'value', splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }} }},
+            tooltip: {{
+              trigger: 'axis',
+              axisPointer: {{ type: 'shadow' }},
+              formatter: (items) => {{
+                const p = items && items[0];
+                if (!p) return '';
+                return `${{p.name}}<br/>引用：<b>${{p.value}}次</b>`;
+              }},
+            }},
+            grid: {{
+              left: 12,
+              right: {grid_right},
+              top: 16,
+              bottom: 28,
+              containLabel: true,
+            }},
+            xAxis: {{
+              type: 'value',
+              splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
+              axisLabel: {{ color: '#64748b', fontSize: {axis_fs} }},
+            }},
             yAxis: {{
               type: 'category',
               data: [...payload.labels].reverse(),
-              axisLabel: {{ width: 110, overflow: 'truncate', fontSize: 11, color: '#64748b' }},
+              axisLabel: {{
+                width: {280 if presentation else 110},
+                overflow: 'truncate',
+                ellipsis: '…',
+                fontSize: {label_fs},
+                color: '#0b3a6e',
+                fontWeight: 600,
+                lineHeight: {32 if presentation else 14},
+              }},
             }},
             series: [{{
               type: 'bar',
-              barMaxWidth: 18,
-              label: {{ show: true, position: 'right', formatter: '{{c}}次' }},
+              barMaxWidth: {bar_max},
+              label: {{
+                show: true,
+                position: 'right',
+                formatter: '{{c}}次',
+                color: '#0b3a6e',
+                fontSize: {value_fs},
+                fontWeight: 700,
+              }},
               data: [...payload.values].reverse(),
             }}],
           }});
