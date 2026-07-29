@@ -240,7 +240,8 @@ class DeepseekClient:
             "规则：\n"
             "1. 只看该品牌在文中的评价口径，忽略无关竞品褒贬\n"
             "2. neutral：纯客观百科罗列（成立时间/产能数字/资质名录堆砌），几乎无优劣评价\n"
-            "3. negative：明确批评、风险、投诉、不推荐、负面对比占主导\n"
+            "3. negative：明确批评、风险、投诉、不推荐、负面对比占主导；"
+            "吊销/注销/经营异常/处罚/失信等工商合规硬风险即使是客观陈述也判 negative\n"
             "4. positive：推荐、优势、好评、认可、领先/王牌/开创、口碑与实力背书等；"
             "专精特新/高新等若作为优势亮点写出（而非冷冰冰名录）也可 positive\n"
             "5. 正负都有时看主导倾向；主导正面 → positive，主导负面 → negative，难分主次 → neutral\n"
@@ -281,9 +282,9 @@ class DeepseekClient:
         brand_name: str,
         items: list[dict[str, str]],
     ) -> list[dict[str, Any]]:
-        """抽取每条回答中对该品牌的有用独立要点（可多条）。
+        """抽取每条回答中对该品牌的有用独立要点（可多条），并附要点级情感。
 
-        items: [{id, text}]，返回 [{id, descriptions: [str, ...]}]。
+        items: [{id, text}]，返回 [{id, descriptions: [{text, sentiment}, ...]}]。
         软上限约 8；确有更多独立有用信息可到 16。
         """
         rows = [
@@ -302,22 +303,26 @@ class DeepseekClient:
             for index, row in enumerate(rows, start=1)
         )
         system_prompt = (
-            "你是品牌监测文案助手。根据 AI 回答原文，抽取关于指定品牌的全部有用独立要点。"
-            "只输出合法 JSON（双引号、无注释、无尾逗号），不要解释。"
+            "你是品牌监测文案助手。根据 AI 回答原文，抽取关于指定品牌的全部有用独立要点，"
+            "并为每条要点单独判定情感。只输出合法 JSON（双引号、无注释、无尾逗号），不要解释。"
         )
         user_prompt = (
             f"品牌名称：{brand_name}\n"
-            "请对下列编号摘录各写若干条中文短描述（每条 12～36 字）。\n"
+            "请对下列编号摘录各写若干条中文短描述（每条 12～36 字），并给每条 sentiment。\n"
             "规则：\n"
             "1. 只写与该品牌相关的内容，忽略无关竞品与导航/套话\n"
             "2. 客观陈述，不要加「我认为」\n"
-            "3. 一个要点一条：企业属性、资质称号、产品线、代表工程、产能等必须拆开，"
+            "3. 一个要点一条：企业属性、资质称号、产品线、代表工程、产能、风险事实等必须拆开，"
             "禁止合并成一句长话\n"
             "4. 通常 3～8 条；确有更多独立有用信息时可超过，最多 16 条；"
             "正文若明显含多段信息，不得只返回 1 条\n"
             "5. 文中未实质提及该品牌 → descriptions 用空数组\n"
-            '6. 严格输出：{"items":[{"id":"...","descriptions":["要点1","要点2"]}]}\n'
-            "7. 必须覆盖全部输入 id；description 字符串内不要使用双引号\n\n"
+            "6. 每条必须带 sentiment：positive|neutral|negative；"
+            "吊销/注销/经营异常/处罚/失信/不具备合法经营等硬风险 → 必须 negative；"
+            "纯成立时间/地址/注册资本罗列 → neutral；优势/推荐/认可 → positive\n"
+            '7. 严格输出：{"items":[{"id":"...","descriptions":'
+            '[{"text":"要点1","sentiment":"negative"}]}]}\n'
+            "8. 必须覆盖全部输入 id；text 字符串内不要使用双引号\n\n"
             f"{numbered}"
         )
         content = self.chat_completion(
@@ -351,6 +356,7 @@ class DeepseekClient:
         if not isinstance(raw_items, list):
             raise DeepseekApiError("DeepSeek JSON 缺少 items 数组")
         known_ids = {row["id"] for row in rows}
+        allowed = {"positive", "neutral", "negative"}
         results: list[dict[str, Any]] = []
         for item in raw_items:
             if not isinstance(item, dict):
@@ -363,10 +369,16 @@ class DeepseekClient:
                 # 兼容旧单句字段
                 single = str(item.get("description") or "").strip()
                 raw_descs = [single] if single else []
-            cleaned: list[str] = []
+            cleaned: list[dict[str, str]] = []
             seen: set[str] = set()
             for desc in raw_descs:
-                text = re.sub(r"\s+", "", str(desc or "").strip())
+                sentiment = ""
+                if isinstance(desc, dict):
+                    text = str(desc.get("text") or desc.get("description") or "").strip()
+                    sentiment = str(desc.get("sentiment") or "").strip().lower()
+                else:
+                    text = str(desc or "").strip()
+                text = re.sub(r"\s+", "", text)
                 if len(text) < 4:
                     continue
                 if len(text) > 60:
@@ -375,7 +387,9 @@ class DeepseekClient:
                 if key in seen:
                     continue
                 seen.add(key)
-                cleaned.append(text)
+                if sentiment not in allowed:
+                    sentiment = "neutral"
+                cleaned.append({"text": text, "sentiment": sentiment})
                 if len(cleaned) >= 16:
                     break
             results.append({"id": item_id, "descriptions": cleaned})

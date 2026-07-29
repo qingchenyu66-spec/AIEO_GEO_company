@@ -183,6 +183,75 @@ def test_descriptions_similar_merges_paraphrase_not_different_biz():
     )
 
 
+def test_descriptions_similar_keeps_risk_away_from_founding():
+    """2026-07-29 - 同主体「吊销」不得与「成立」因长前缀误并。"""
+    from app.services.brand_analysis_service import _brand_aliases, _descriptions_similar
+
+    aliases = _brand_aliases("艾迪亚控股集团有限公司", "艾迪亚")
+    assert not _descriptions_similar(
+        "艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日",
+        "艾迪亚（北京）控股集团有限公司成立于2021年",
+        brand_aliases=aliases,
+    )
+    assert not _descriptions_similar(
+        "艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日",
+        "艾迪亚控股集团有限公司2008年成立",
+        brand_aliases=aliases,
+    )
+
+
+def test_group_risk_point_negative_even_if_parent_positive():
+    """整段正面、要点含吊销 → 该组必须负面，且不与成立类并组。"""
+    from app.services.brand_analysis_service import _brand_aliases
+
+    a = GeoMonitorSubtask(
+        subtask_id="r1",
+        task_id="t1",
+        platform="deepseek",
+        mode="standard",
+        prompt="q1",
+        status="completed",
+        sentiment="positive",
+        answer_content="长文含吊销",
+        raw_result_json={},
+    )
+    b = GeoMonitorSubtask(
+        subtask_id="r2",
+        task_id="t1",
+        platform="doubao",
+        mode="standard",
+        prompt="q2",
+        status="completed",
+        sentiment="positive",
+        answer_content="长文成立",
+        raw_result_json={},
+    )
+    _mark_deepseek_descriptions(
+        a,
+        [
+            {"text": "艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日", "sentiment": "negative"},
+            {"text": "1998年起深耕营销传播领域", "sentiment": "positive"},
+        ],
+    )
+    _mark_deepseek_descriptions(
+        b,
+        [{"text": "艾迪亚（北京）控股集团有限公司成立于2021年", "sentiment": "neutral"}],
+    )
+    rows = _group_ai_descriptions(
+        [a, b],
+        platform_names={"deepseek": "DeepSeek", "doubao": "豆包"},
+        brand_aliases=_brand_aliases("艾迪亚控股集团有限公司", "艾迪亚"),
+    )
+    by_desc = {r["description"]: r for r in rows}
+    risk = next(r for r in rows if "吊销" in r["description"])
+    assert risk["sentiment"] == "负面"
+    assert risk["sample_count"] == 1
+    founding = next(r for r in rows if "成立于2021" in r["description"])
+    assert founding["sentiment"] != "负面" or "吊销" not in founding["description"]
+    assert risk["description"] != founding["description"]
+    assert len(by_desc) >= 3
+
+
 def test_group_merges_near_paraphrase_across_snapshots():
     a = GeoMonitorSubtask(
         subtask_id="e1",
@@ -238,6 +307,33 @@ def test_ba_descriptions_compat_single_field():
         },
     )
     assert _ba_descriptions(subtask) == ["防火涂料为核心优势"]
+
+
+def test_legacy_risk_string_falls_back_negative():
+    """旧 v2 仅字符串列表、父情感正面时，含吊销要点读路径仍回退负面。"""
+    from app.services.brand_analysis_service import _ba_description_items
+
+    subtask = GeoMonitorSubtask(
+        subtask_id="legacy1",
+        task_id="t1",
+        platform="deepseek",
+        mode="standard",
+        prompt="q",
+        status="completed",
+        sentiment="positive",
+        answer_content="正文",
+        raw_result_json={
+            "_ba_description_source": "deepseek-v2",
+            "_ba_descriptions": [
+                "艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日",
+                "1998年起深耕营销传播领域",
+            ],
+        },
+    )
+    items = _ba_description_items(subtask)
+    by_text = {row["text"]: row["sentiment"] for row in items}
+    assert by_text["艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日"] == "negative"
+    assert by_text["1998年起深耕营销传播领域"] == "positive"
 
 
 def test_group_ai_descriptions_one_snapshot_many_points():

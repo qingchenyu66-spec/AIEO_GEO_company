@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 
 # 2026-07-28 - 正负面：v2 过严正面归零；v3 适中口径，打开页会重判
 BA_SENTIMENT_SOURCE = "deepseek-v3"
-# 2026-07-27 - 一快照多要点：bump source，旧单句视为未抽，仪表盘会重抽
-BA_DESC_SOURCE = "deepseek-v2"
+# 2026-07-29 - 要点级情感 deepseek-v3；旧 v2 无 sentiment 字段视为未抽，打开页 parse 会重抽
+# （已弃用 v2 仅字符串列表：组标签继承整段情感，吊销要点会被并进正面）
+BA_DESC_SOURCE = "deepseek-v3"
 BA_SENTIMENT_BATCH = 12
 BA_SENTIMENT_MAX_PER_REQUEST = 24
 BA_DESC_BATCH = 10
@@ -44,6 +45,11 @@ BA_DESC_HARD_MAX = 16
 # Ceiling: 仍可能漏并换词大的近义；upgrade path: embedding / DeepSeek cluster.
 BA_DESC_SIMILARITY = 0.60
 _DESC_PUNCT_RE = re.compile(r"[\s、。，；：！？\"'“”‘’（）()\[\]【】《》·\-—_/\\|＋+]+")
+# 2026-07-29 - 工商/合规硬风险：归并禁与非风险并，旧数据无要点情感时回退为负面
+_RISK_DESC_RE = re.compile(
+    r"吊销|注销|撤销登记|经营异常|列入异常|行政处罚|严重违法|失信被执行|"
+    r"强制清算|不具备合法经营|风险极高|被处罚|弄虚作假|营业执照被"
+)
 
 
 def _platform_name_map() -> dict[str, str]:
@@ -80,10 +86,43 @@ def _has_deepseek_description(subtask: GeoMonitorSubtask) -> bool:
 
 def _normalize_description_list(items: list[Any] | None) -> list[str]:
     """清洗要点列表：去空、截断、去重；硬上限 BA_DESC_HARD_MAX。"""
-    out: list[str] = []
+    return [row["text"] for row in _normalize_description_items(items)]
+
+
+def _sentiment_key_from_any(raw: str | None) -> str:
+    label = _normalize_sentiment_label(raw)
+    return {
+        "正面": "positive",
+        "中性": "neutral",
+        "负面": "negative",
+    }.get(label, "unknown")
+
+
+def _is_risk_description(text: str) -> bool:
+    return bool(_RISK_DESC_RE.search(str(text or "")))
+
+
+def _normalize_description_items(
+    items: list[Any] | None,
+    *,
+    fallback_sentiment: str | None = None,
+) -> list[dict[str, str]]:
+    """清洗要点：支持 str 或 {text/description, sentiment}；硬上限 BA_DESC_HARD_MAX。"""
+    out: list[dict[str, str]] = []
     seen: set[str] = set()
+    fallback = (fallback_sentiment or "").strip().lower()
+    if fallback not in SENTIMENT_KEYS:
+        fallback = "unknown"
     for item in items or []:
-        text = re.sub(r"\s+", "", str(item or "").strip())
+        sentiment = fallback
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("description") or "").strip()
+            raw_sent = str(item.get("sentiment") or "").strip().lower()
+            if raw_sent in SENTIMENT_KEYS:
+                sentiment = raw_sent
+        else:
+            text = str(item or "").strip()
+        text = re.sub(r"\s+", "", text)
         if len(text) < 4:
             continue
         if len(text) > 60:
@@ -91,8 +130,11 @@ def _normalize_description_list(items: list[Any] | None) -> list[str]:
         key = _normalize_description_key(text)
         if not key or key in seen:
             continue
+        # 2026-07-29 - 风险要点强制负面，避免整段正面污染单条标签
+        if _is_risk_description(text):
+            sentiment = "negative"
         seen.add(key)
-        out.append(text)
+        out.append({"text": text, "sentiment": sentiment})
         if len(out) >= BA_DESC_HARD_MAX:
             break
     return out
@@ -100,30 +142,44 @@ def _normalize_description_list(items: list[Any] | None) -> list[str]:
 
 def _ba_descriptions(subtask: GeoMonitorSubtask) -> list[str]:
     """读多条要点；兼容旧字段单句 _ba_description。"""
+    return [row["text"] for row in _ba_description_items(subtask)]
+
+
+def _ba_description_items(subtask: GeoMonitorSubtask) -> list[dict[str, str]]:
+    """读要点+情感；无 _ba_description_items 时用旧字符串列表 + 父情感/风险回退。"""
     raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    parent = _sentiment_key_from_any(
+        str(raw.get("_ba_sentiment") or subtask.sentiment or "") or None
+    )
+    stored = raw.get("_ba_description_items")
+    if isinstance(stored, list) and stored:
+        return _normalize_description_items(stored, fallback_sentiment=parent)
     multi = raw.get("_ba_descriptions")
-    if isinstance(multi, list):
-        return _normalize_description_list(multi)
+    if isinstance(multi, list) and multi:
+        return _normalize_description_items(multi, fallback_sentiment=parent)
     single = str(raw.get("_ba_description") or "").strip()
-    return _normalize_description_list([single] if single else [])
+    return _normalize_description_items([single] if single else [], fallback_sentiment=parent)
 
 
 def _ba_description(subtask: GeoMonitorSubtask) -> str:
-    rows = _ba_descriptions(subtask)
-    return rows[0] if rows else ""
+    rows = _ba_description_items(subtask)
+    return rows[0]["text"] if rows else ""
 
 
 def _mark_deepseek_description(subtask: GeoMonitorSubtask, description: str) -> None:
     _mark_deepseek_descriptions(subtask, [description] if description else [])
 
 
-def _mark_deepseek_descriptions(subtask: GeoMonitorSubtask, descriptions: list[str]) -> None:
-    cleaned = _normalize_description_list(descriptions)
+def _mark_deepseek_descriptions(subtask: GeoMonitorSubtask, descriptions: list[Any]) -> None:
+    parent = _sentiment_key_from_any(subtask.sentiment)
+    cleaned = _normalize_description_items(descriptions, fallback_sentiment=parent)
     raw = dict(subtask.raw_result_json) if isinstance(subtask.raw_result_json, dict) else {}
+    texts = [row["text"] for row in cleaned]
     raw["_ba_description_source"] = BA_DESC_SOURCE
-    raw["_ba_descriptions"] = cleaned
+    raw["_ba_descriptions"] = texts
+    raw["_ba_description_items"] = cleaned
     # 兼容旧读者：首条仍写单字段
-    raw["_ba_description"] = cleaned[0] if cleaned else ""
+    raw["_ba_description"] = texts[0] if texts else ""
     subtask.raw_result_json = raw
     flag_modified(subtask, "raw_result_json")
 
@@ -131,6 +187,49 @@ def _mark_deepseek_descriptions(subtask: GeoMonitorSubtask, descriptions: list[s
 def _normalize_description_key(text: str) -> str:
     s = _DESC_PUNCT_RE.sub("", str(text or "").strip().lower())
     s = s.replace("全媒体", "全媒")
+    return s
+
+
+def _brand_aliases(*names: str | None) -> list[str]:
+    """品牌/公司名变体，供去主体后再比相似。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        text = str(name or "").strip()
+        if not text:
+            continue
+        variants = [text]
+        for suf in ("股份有限公司", "有限责任公司", "有限公司", "集团有限公司", "集团"):
+            if text.endswith(suf) and len(text) > len(suf) + 1:
+                variants.append(text[: -len(suf)])
+        for item in variants:
+            key = _normalize_description_key(item)
+            if len(key) < 2 or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+    out.sort(key=lambda x: len(_normalize_description_key(x)), reverse=True)
+    return out
+
+
+def _core_description_key(text: str, brand_aliases: list[str] | None = None) -> str:
+    """去掉主体名壳后再比相似，避免「同公司不同事实」靠长前缀误并。"""
+    s = _normalize_description_key(text)
+    if not s:
+        return ""
+    for alias in brand_aliases or []:
+        na = _normalize_description_key(alias)
+        if len(na) >= 4 and na in s:
+            s = s.replace(na, "")
+            continue
+        # 艾迪亚控股集团有限公司 ↔ 艾迪亚北京控股集团有限公司
+        m = re.match(
+            r"^(.+?)((?:控股)?集团有限公司|股份有限公司|有限责任公司|有限公司)$",
+            na,
+        )
+        if m and len(m.group(1)) >= 2:
+            pat = re.compile(re.escape(m.group(1)) + r".{0,6}" + re.escape(m.group(2)))
+            s = pat.sub("", s)
     return s
 
 
@@ -161,30 +260,47 @@ def _lcs_run_len(a: str, b: str) -> int:
     return best
 
 
-def _descriptions_similar(a: str, b: str, *, threshold: float = BA_DESC_SIMILARITY) -> bool:
-    """近义合并判定：全等/包含/高相似直接并；中段相似须 LCS≥6，避免不同业务点误并。"""
+def _descriptions_similar(
+    a: str,
+    b: str,
+    *,
+    threshold: float = BA_DESC_SIMILARITY,
+    brand_aliases: list[str] | None = None,
+) -> bool:
+    """近义合并：全等直接并；其余在去主体名后比；风险/非风险互不并。"""
     na = _normalize_description_key(a)
     nb = _normalize_description_key(b)
     if not na or not nb:
         return False
     if na == nb:
         return True
-    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    # 2026-07-29 - 吊销等硬风险不得与成立/资质类非风险并成一组
+    if _is_risk_description(a) != _is_risk_description(b):
+        return False
+    ca = _core_description_key(a, brand_aliases)
+    cb = _core_description_key(b, brand_aliases)
+    # 去主体后过短：只靠公司名撞车，不并
+    if len(ca) < 4 or len(cb) < 4:
+        return False
+    shorter, longer = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
     # 2026-07-28 - 「总部位于北京」vs「2008年成立总部位于北京」类包含句应合并
     if len(shorter) >= 6 and shorter in longer:
         return True
-    ratio = SequenceMatcher(None, na, nb).ratio()
+    ratio = SequenceMatcher(None, ca, cb).ratio()
     if ratio >= 0.85:
         return True
     if ratio < threshold:
         return False
     # 2026-07-28 - 0.60~0.85 易把短视频/户外等不同要点并掉 - 加连续公共子串门闩
-    return _lcs_run_len(na, nb) >= 6
+    return _lcs_run_len(ca, cb) >= 6
 
 
 def _dominant_sent_key(tally: dict[str, int]) -> str:
     if not tally:
         return "unknown"
+    # 2026-07-29 - 组内有负面则优先负面，避免多数正面样本盖住风险要点
+    if int(tally.get("negative") or 0) > 0:
+        return "negative"
     return max(tally.items(), key=lambda kv: (kv[1], kv[0] != "unknown"))[0]
 
 
@@ -200,6 +316,7 @@ def _merge_similar_description_buckets(
     buckets: list[dict[str, Any]],
     *,
     threshold: float = BA_DESC_SIMILARITY,
+    brand_aliases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     if len(buckets) <= 1:
         return buckets
@@ -227,6 +344,7 @@ def _merge_similar_description_buckets(
                 buckets[i]["description"],
                 buckets[j]["description"],
                 threshold=threshold,
+                brand_aliases=brand_aliases,
             ):
                 union(i, j)
 
@@ -288,10 +406,30 @@ def preserve_brand_analysis_sentiment_on_upsert(
         raw["_ba_description_source"] = BA_DESC_SOURCE
         raw["_ba_description"] = str(prev.get("_ba_description") or "").strip()
         prev_multi = prev.get("_ba_descriptions")
-        if isinstance(prev_multi, list):
-            raw["_ba_descriptions"] = _normalize_description_list(prev_multi)
+        prev_items = prev.get("_ba_description_items")
+        if isinstance(prev_items, list) and prev_items:
+            cleaned_items = _normalize_description_items(
+                prev_items,
+                fallback_sentiment=kept_value if keep else None,
+            )
+            raw["_ba_description_items"] = cleaned_items
+            raw["_ba_descriptions"] = [row["text"] for row in cleaned_items]
+            if cleaned_items:
+                raw["_ba_description"] = cleaned_items[0]["text"]
+        elif isinstance(prev_multi, list):
+            cleaned_items = _normalize_description_items(
+                prev_multi,
+                fallback_sentiment=kept_value if keep else None,
+            )
+            raw["_ba_descriptions"] = [row["text"] for row in cleaned_items]
+            raw["_ba_description_items"] = cleaned_items
         elif raw["_ba_description"]:
-            raw["_ba_descriptions"] = [raw["_ba_description"]]
+            cleaned_items = _normalize_description_items(
+                [raw["_ba_description"]],
+                fallback_sentiment=kept_value if keep else None,
+            )
+            raw["_ba_descriptions"] = [row["text"] for row in cleaned_items]
+            raw["_ba_description_items"] = cleaned_items
     return sentiment_out, raw
 
 
@@ -409,21 +547,27 @@ def _group_ai_descriptions(
     subtasks: list[GeoMonitorSubtask],
     *,
     platform_names: dict[str, str],
+    brand_aliases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """相同/语义相近短描述归并；空描述跳过。一快照可贡献多条要点。点击卡片看组内全部快照。"""
+    label_of = {
+        "positive": "正面",
+        "neutral": "中性",
+        "negative": "负面",
+        "unknown": "未知",
+    }
     groups: dict[str, dict[str, Any]] = {}
     for item in subtasks:
-        for desc in _ba_descriptions(item):
+        for point in _ba_description_items(item):
+            desc = point["text"]
             key = _normalize_description_key(desc)
             if not key:
                 continue
             code = str(item.platform or "").strip()
-            label = _normalize_sentiment_label(item.sentiment)
-            sent_key = {
-                "正面": "positive",
-                "中性": "neutral",
-                "负面": "negative",
-            }.get(label, "unknown")
+            sent_key = point.get("sentiment") or "unknown"
+            if sent_key not in SENTIMENT_KEYS:
+                sent_key = "unknown"
+            label = label_of.get(sent_key, "未知")
             excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
             answer = {
                 "subtask_id": item.subtask_id,
@@ -455,14 +599,11 @@ def _group_ai_descriptions(
             if len(desc) > len(str(bucket.get("description") or "")):
                 bucket["description"] = desc
 
-    buckets = _merge_similar_description_buckets(list(groups.values()))
+    buckets = _merge_similar_description_buckets(
+        list(groups.values()),
+        brand_aliases=brand_aliases,
+    )
 
-    label_of = {
-        "positive": "正面",
-        "neutral": "中性",
-        "negative": "负面",
-        "unknown": "未知",
-    }
     rows: list[dict[str, Any]] = []
     for bucket in buckets:
         tally: dict[str, int] = bucket.pop("_sent_tally")
@@ -700,7 +841,16 @@ def build_brand_analysis_dashboard(
         if platform_counts.get(code, 0) > 0
     ]
 
-    ai_descriptions = _group_ai_descriptions(subtasks, platform_names=names)
+    aliases = _brand_aliases(
+        str(brand_name),
+        str(asset.brand_name) if asset and asset.brand_name else None,
+        str(asset.company_full_name) if asset and asset.company_full_name else None,
+    )
+    ai_descriptions = _group_ai_descriptions(
+        subtasks,
+        platform_names=names,
+        brand_aliases=aliases,
+    )
 
     period_label = f"{trend_start.date().isoformat()} ~ {range_end.date().isoformat()}"
     return {
