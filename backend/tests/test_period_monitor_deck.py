@@ -77,7 +77,7 @@ def test_period_deck_pdf_fast_knobs() -> None:
 
     assert _PDF_EXPORT_MODE == "page-pdf"
     assert _ECHARTS_READY_TIMEOUT_MS <= 4000
-    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v19")
+    assert PERIOD_DECK_PIPELINE.startswith("monitor-deck-v20")
     # 最小自检：两页合并后仍是合法 PDF
     from pypdf import PdfWriter
     from io import BytesIO

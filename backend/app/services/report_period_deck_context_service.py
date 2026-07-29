@@ -38,7 +38,8 @@ from app.services.report_premium_font_service import build_font_face_css
 # 2026-07-29 - v12：PDF 截图降采样；v13：PDF 复用预览 HTML（外链资源+route）
 # 2026-07-29 - v18：矩阵页标题只留主标题，避免蓝条挤爆
 # 2026-07-29 - v19：平台中文名 / 季年轴补 0 / Y 轴整数 / 信源图满宽
-PERIOD_DECK_PIPELINE = "monitor-deck-v19"
+# 2026-07-29 - v20：竞品趋势放大字号+裁空周；信源 1 标对 1 柱
+PERIOD_DECK_PIPELINE = "monitor-deck-v20"
 
 
 def _esc(value: Any) -> str:
@@ -245,7 +246,11 @@ def build_period_deck_context(
 
     competitor_body = _drop_echarts_src(
         _strip_h2(
-            _strip_outer_section(render_competitor_html(competitor_analytics, report_type=report_type, client=True))
+            _strip_outer_section(
+                render_competitor_html(
+                    competitor_analytics, report_type=report_type, client=True, presentation=True
+                )
+            )
         )
     )
     # 2026-07-28 - 竞品摘要占满页后表头孤儿 - 表前/表后拆开，对齐诊断分页

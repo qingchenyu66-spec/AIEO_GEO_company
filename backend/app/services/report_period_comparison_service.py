@@ -628,7 +628,48 @@ def _build_real_competitor_rank_trend(
         )
     if not series:
         return None
-    return {"categories": short_cats, "fullCategories": full_cats, "series": series}
+    # 2026-07-29 - 前导空周把折线挤到最右；裁掉两端全空桶再出图
+    return _trim_rank_trend_empty_edges(
+        {"categories": short_cats, "fullCategories": full_cats, "series": series}
+    )
+
+
+def _trim_rank_trend_empty_edges(rank_trend: dict[str, Any]) -> dict[str, Any]:
+    """去掉两端「所有序列均为 null」的时间桶，避免宽轴只剩右角两点。"""
+    categories = list(rank_trend.get("categories") or [])
+    full_categories = list(rank_trend.get("fullCategories") or categories)
+    series = list(rank_trend.get("series") or [])
+    if not categories or not series:
+        return rank_trend
+    n = len(categories)
+
+    def _has_data(idx: int) -> bool:
+        for item in series:
+            data = item.get("data") or []
+            if idx < len(data) and data[idx] is not None:
+                return True
+        return False
+
+    start = 0
+    while start < n and not _has_data(start):
+        start += 1
+    end = n - 1
+    while end >= start and not _has_data(end):
+        end -= 1
+    if start == 0 and end == n - 1:
+        return rank_trend
+    if start > end:
+        return rank_trend
+    sliced_series = []
+    for item in series:
+        data = list(item.get("data") or [])
+        sliced_series.append({**item, "data": data[start : end + 1]})
+    return {
+        **rank_trend,
+        "categories": categories[start : end + 1],
+        "fullCategories": full_categories[start : end + 1],
+        "series": sliced_series,
+    }
 
 
 def enrich_competitor_analytics(
@@ -674,7 +715,13 @@ def enrich_competitor_analytics(
     )
 
 
-def render_competitor_html(competitor: dict[str, Any], *, report_type: str, client: bool = False) -> str:
+def render_competitor_html(
+    competitor: dict[str, Any],
+    *,
+    report_type: str,
+    client: bool = False,
+    presentation: bool = False,
+) -> str:
     esc = html.escape
     rows = competitor.get("rows") or []
     if not rows:
@@ -721,6 +768,14 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
     trend_block = ""
     rank_trend = competitor.get("rank_trend")
     if rank_trend and report_type in _RANK_TREND_TYPES:
+        # 2026-07-29 - 竞品趋势仍用 A4 11px，幻灯上像蚂蚁；presentation 对齐趋势图字号
+        axis_fs = 34 if presentation else 11
+        legend_fs = 30 if presentation else 12
+        symbol_brand = 18 if presentation else 9
+        symbol_comp = 14 if presentation else 7
+        line_brand = 6 if presentation else 3.5
+        line_comp = 4 if presentation else 2.2
+        grid_top = 72 if presentation else 48
         trend_json = _embed_json(rank_trend)
         trend_block = f"""
         <div class="comp-trend-box">
@@ -746,23 +801,33 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
                 return `${{title}}<br/>${{lines}}`;
               }},
             }},
-            legend: {{ top: 4, data: payload.series.map(s => s.name) }},
-            grid: {{ left: 58, right: 36, top: 48, bottom: xRotate ? 92 : 56, containLabel: true }},
+            legend: {{
+              top: 4,
+              data: payload.series.map(s => s.name),
+              textStyle: {{ fontSize: {legend_fs}, color: '#0b3a6e', fontWeight: 600 }},
+              itemWidth: {22 if presentation else 14},
+              itemHeight: {14 if presentation else 10},
+            }},
+            grid: {{ left: 58, right: 36, top: {grid_top}, bottom: xRotate ? 92 : 56, containLabel: true }},
             xAxis: {{
               type: 'category',
               data: payload.categories,
-              axisLabel: {{ interval: 0, rotate: xRotate, color: '#64748b', fontSize: 11, margin: 14 }},
+              axisLabel: {{ interval: 0, rotate: xRotate, color: '#64748b', fontSize: {axis_fs}, margin: 14 }},
             }},
             yAxis: {{
               type: 'value',
-              name: '平均排名',
-              nameLocation: 'end',
-              nameGap: 22,
+              name: '排名',
+              nameLocation: 'middle',
+              nameGap: {48 if presentation else 36},
+              nameRotate: 90,
+              nameTextStyle: {{ fontSize: {axis_fs}, color: '#64748b' }},
               inverse: true,
               min: 1,
               minInterval: 1,
               splitLine: {{ lineStyle: {{ type: 'dashed', color: '#e2e8f0' }} }},
               axisLabel: {{
+                fontSize: {axis_fs},
+                color: '#64748b',
                 formatter: (v) => {{
                   const n = Number(v);
                   if (!Number.isFinite(n) || n < 1 || n > 50) return '';
@@ -775,14 +840,16 @@ def render_competitor_html(competitor: dict[str, Any], *, report_type: str, clie
               name: s.name,
               type: 'line',
               smooth: true,
+              connectNulls: true,
               symbol: s.style.symbol,
-              symbolSize: s.is_brand ? 9 : 7,
-              lineStyle: {{ width: s.is_brand ? 3.5 : 2.2, type: s.style.line_type, color: s.style.color }},
+              symbolSize: s.is_brand ? {symbol_brand} : {symbol_comp},
+              lineStyle: {{ width: s.is_brand ? {line_brand} : {line_comp}, type: s.style.line_type, color: s.style.color }},
               itemStyle: {{ color: s.style.color }},
               data: s.data,
             }})),
           }});
           window.addEventListener('resize', () => chart.resize());
+          requestAnimationFrame(() => chart.resize());
         }})();
         </script>"""
 
@@ -1273,6 +1340,8 @@ def render_source_influence_html(
     body = ""
     chart_labels: list[str] = []
     chart_values: list[int] = []
+    # 2026-07-29 - 长标题换行后视觉上像「4 条对 8 柱」；图用单行截断，表仍全文
+    label_max = 22 if presentation else 18
     for row in rows:
         title = str(row.get("title") or "—")
         count = int(row.get("count") or 0)
@@ -1283,21 +1352,21 @@ def render_source_influence_html(
           <td>{count}次</td>
           <td class="val-cell">{esc(str(row.get('value_analysis') or '—'))}</td>
         </tr>"""
-        chart_labels.append(title)
+        short = title if len(title) <= label_max else (title[: label_max - 1] + "…")
+        chart_labels.append(short)
         chart_values.append(count)
 
     chart_payload = _embed_json({"labels": chart_labels, "values": chart_values})
     conclusion = esc(str(source_influence.get("conclusion") or ""))
     # 2026-07-29 - 幻灯 2520 宽仍用 A4 的 11px/left:120，Y 轴「2026年…」糊成一条；presentation 放大+containLabel
-    # 2026-07-29 - 加高后左右仍偏：半栏太窄+截断；presentation 拉满宽、少截断、右留值标
-    label_fs = 26 if presentation else 11
-    value_fs = 24 if presentation else 12
-    axis_fs = 22 if presentation else 11
-    bar_max = 34 if presentation else 18
+    # 2026-07-29 - overflow:none 长标换行导致标签数≠柱数；改 truncate 单行 + 加大字号
+    label_fs = 34 if presentation else 11
+    value_fs = 32 if presentation else 12
+    axis_fs = 28 if presentation else 11
+    bar_max = 48 if presentation else 18
     grid_left = 8 if presentation else 12
-    grid_right = 88 if presentation else 36
-    label_width = 680 if presentation else 140
-    label_overflow = "none" if presentation else "truncate"
+    grid_right = 120 if presentation else 36
+    label_width = 380 if presentation else 140
     return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
@@ -1337,8 +1406,8 @@ def render_source_influence_html(
             grid: {{
               left: {grid_left},
               right: {grid_right},
-              top: 12,
-              bottom: 24,
+              top: 16,
+              bottom: 28,
               containLabel: true,
             }},
             xAxis: {{
@@ -1356,21 +1425,24 @@ def render_source_influence_html(
             yAxis: {{
               type: 'category',
               data: [...payload.labels].reverse(),
+              axisTick: {{ alignWithLabel: true }},
               axisLabel: {{
+                interval: 0,
                 width: {label_width},
-                overflow: '{label_overflow}',
+                overflow: 'truncate',
                 ellipsis: '…',
                 fontSize: {label_fs},
                 color: '#0b3a6e',
                 fontWeight: 600,
-                lineHeight: {32 if presentation else 14},
+                lineHeight: {36 if presentation else 14},
                 align: 'right',
-                margin: 12,
+                margin: 16,
               }},
             }},
             series: [{{
               type: 'bar',
               barMaxWidth: {bar_max},
+              barCategoryGap: '28%',
               label: {{
                 show: true,
                 position: 'right',

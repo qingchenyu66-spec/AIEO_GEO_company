@@ -49,12 +49,71 @@ def test_source_chart_deck_full_width_class() -> None:
         {
             "conclusion": "测试",
             "rows": [
-                {"index": 1, "title": "2026年地铁广告投放指南", "count": 57, "value_analysis": "—"},
+                {"index": 1, "title": "2026年地铁广告投放指南超级长标题用来验证截断单行对齐柱条", "count": 57, "value_analysis": "—"},
                 {"index": 2, "title": "赋能品牌高空声量", "count": 36, "value_analysis": "—"},
             ],
         },
         presentation=True,
     )
     assert "source-grid-deck" in html
-    assert "width: 680" in html
-    assert "overflow: 'none'" in html
+    assert "overflow: 'truncate'" in html
+    assert "interval: 0" in html
+    assert "width: 380" in html
+    assert "fontSize: 34" in html
+
+
+def test_trim_rank_trend_empty_edges() -> None:
+    from app.services.report_period_comparison_service import _trim_rank_trend_empty_edges
+
+    trimmed = _trim_rank_trend_empty_edges(
+        {
+            "categories": ["第1周", "第2周", "第3周", "第4周", "第5周"],
+            "fullCategories": ["1", "2", "3", "4", "5"],
+            "series": [
+                {"name": "品牌", "data": [None, None, None, 2.1, 2.3]},
+                {"name": "竞品", "data": [None, None, None, 3.0, 2.8]},
+            ],
+        }
+    )
+    assert trimmed["categories"] == ["第4周", "第5周"]
+    assert trimmed["series"][0]["data"] == [2.1, 2.3]
+
+
+def test_competitor_trend_presentation_fonts() -> None:
+    from app.services.report_period_comparison_service import render_competitor_html
+
+    metric = {"current": 2.1, "previous": 2.2, "direction": "up", "text": "↑"}
+    html = render_competitor_html(
+        {
+            "rows": [
+                {
+                    "name": "品牌",
+                    "is_brand": True,
+                    "mention_rate": metric,
+                    "avg_rank": metric,
+                    "style": {"color": "#1677ff"},
+                    "risk": {"level": "good", "label": "达标"},
+                    "gap_mention_text": "—",
+                    "gap_rank_text": "—",
+                }
+            ],
+            "highlights": [],
+            "analysis": {"management_summary": "x", "actions": []},
+            "rank_trend": {
+                "categories": ["第4周", "第5周"],
+                "fullCategories": ["4", "5"],
+                "series": [
+                    {
+                        "name": "品牌",
+                        "is_brand": True,
+                        "data": [2.1, 2.3],
+                        "style": {"symbol": "circle", "line_type": "solid", "color": "#1677ff"},
+                    }
+                ],
+            },
+        },
+        report_type="monthly",
+        presentation=True,
+    )
+    assert "fontSize: 34" in html
+    assert "fontSize: 30" in html
