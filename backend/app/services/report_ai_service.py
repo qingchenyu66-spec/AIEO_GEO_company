@@ -132,6 +132,7 @@ def enrich_report_narrative(
             brand_name=brand_name,
             period_label=period_label,
             top_sources=top_sources,
+            report_type=report_type,
         )
 
     report_sections = merge_report_sections(ai_sections=ai_report_sections, rule_sections=rule_sections)

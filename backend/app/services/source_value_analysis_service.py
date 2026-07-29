@@ -26,7 +26,44 @@ _inflight_lock = threading.Lock()
 
 
 def _normalize_url(url: str) -> str:
-    return str(url or "").strip().split("#", 1)[0]
+    value = str(url or "").strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    return value
+
+
+def _url_lookup_aliases(url: str) -> list[str]:
+    """同一文章常见变体：http/https、www 有无。"""
+    base = _normalize_url(url)
+    if not is_http_url(base):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        text = _normalize_url(value)
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+
+    _add(base)
+    if base.startswith("https://"):
+        _add("http://" + base[len("https://") :])
+    elif base.startswith("http://"):
+        _add("https://" + base[len("http://") :])
+
+    expanded: list[str] = []
+    for item in list(out):
+        expanded.append(item)
+        for scheme in ("https://", "http://"):
+            if not item.startswith(scheme):
+                continue
+            rest = item[len(scheme) :]
+            if rest.startswith("www."):
+                expanded.append(scheme + rest[4:])
+            else:
+                expanded.append(scheme + "www." + rest)
+    for item in expanded:
+        _add(item)
+    return out
 
 
 def source_cache_key(url: str) -> str:
@@ -40,25 +77,25 @@ def _disk_path(url: str) -> Path:
 
 
 def get_cached_source_value(url: str) -> str | None:
-    value = _normalize_url(url)
-    if not is_http_url(value):
-        return None
-    cached = get_json_cache(source_cache_key(value))
-    if isinstance(cached, dict):
-        text = str(cached.get("value_analysis") or "").strip()
+    for candidate in _url_lookup_aliases(url):
+        cached = get_json_cache(source_cache_key(candidate))
+        if isinstance(cached, dict):
+            text = str(cached.get("value_analysis") or "").strip()
+            if text:
+                return text
+        path = _disk_path(candidate)
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        text = str(payload.get("value_analysis") or "").strip()
         if text:
             return text
-    path = _disk_path(value)
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    text = str(payload.get("value_analysis") or "").strip()
-    return text or None
+    return None
 
 
 def set_cached_source_value(
@@ -93,27 +130,26 @@ def _sources_payload(
     rows: list[dict[str, Any]],
     top_sources: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    url_by_title: dict[str, str] = {}
-    platforms_by_title: dict[str, Any] = {}
-    for item in top_sources or []:
-        title = str(item.get("title") or item.get("url") or "").strip()
-        if not title:
-            continue
-        url_by_title[title] = _normalize_url(str(item.get("url") or ""))
-        platforms_by_title[title] = item.get("platforms") or []
-
+    # 2026-07-29 - 同标题多 URL 时按 title 映射会串链 - 优先行内 url / top_sources 同下标
+    tops = list(top_sources or [])
     out: list[dict[str, Any]] = []
-    for row in rows[:8]:
+    for index, row in enumerate(rows[:8]):
         title = str(row.get("title") or "").strip()
-        url = url_by_title.get(title) or _normalize_url(str(row.get("url") or ""))
-        if not url and is_http_url(title):
+        src = tops[index] if index < len(tops) else {}
+        url = _normalize_url(str(row.get("url") or ""))
+        if not is_http_url(url):
+            url = _normalize_url(str((src or {}).get("url") or ""))
+        if not is_http_url(url) and is_http_url(title):
             url = title
+        platforms = row.get("platforms")
+        if not platforms:
+            platforms = (src or {}).get("platforms") or []
         out.append(
             {
-                "title": title,
+                "title": title or str((src or {}).get("title") or url or ""),
                 "url": url,
-                "count": int(row.get("count") or 0),
-                "platforms": row.get("platforms") or platforms_by_title.get(title) or [],
+                "count": int(row.get("count") or (src or {}).get("count") or 0),
+                "platforms": platforms,
             }
         )
     return out
@@ -297,10 +333,21 @@ def enrich_source_influence_with_cached_llm(
     period_label: str = "",
     top_sources: list[dict[str, Any]] | None = None,
     enqueue_misses: bool = True,
+    sync_fill_misses: bool = False,
 ) -> dict[str, Any]:
-    """导出/组装时：只套缓存；未命中保留规则文案并异步预生成。"""
-    # 2026-07-29 - 渠道拆解敷衍 + 勿同步深抓 - 读缓存；miss 入队 Playwright+LLM
+    """导出/组装时：套缓存；月季年可同步补 miss，周报仅异步预热。"""
+    # 2026-07-29 - 渠道拆解仍大量同句 - 月季年 miss 同步深抓+LLM，避免只剩规则套话
     updated, misses = apply_cached_source_value_analyses(modules, top_sources=top_sources)
+    if sync_fill_misses and misses:
+        try:
+            pregenerate_source_value_analyses(
+                brand_name=brand_name,
+                period_label=period_label,
+                sources=misses,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("信源价值同步补齐失败：%s", exc)
+        updated, misses = apply_cached_source_value_analyses(updated, top_sources=top_sources)
     if enqueue_misses and misses:
         enqueue_source_value_pregenerate(
             brand_name=brand_name,

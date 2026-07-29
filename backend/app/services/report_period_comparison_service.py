@@ -1287,12 +1287,13 @@ def build_sample_content_modules(
         competitor_names=competitor_names,
         highlights=snapshot.get("highlights"),
     )
-    # 2026-07-29 - 周期报渠道拆解敷衍 - 组装前用 LLM 覆盖 value_analysis
+    # 2026-07-29 - 周期报渠道拆解敷衍 - 月季年同步补正文评价；周报只异步
     raw = enrich_source_influence_with_llm(
         raw,
         brand_name=brand_name,
         period_label=period_lbl,
         top_sources=top_sources,
+        report_type=report_type,
     )
     cleaned = strip_sentiment_from_modules(raw, report_type=report_type)
     cleaned["toc"] = build_period_sample_toc(cleaned, v2=v2, report_type=report_type)

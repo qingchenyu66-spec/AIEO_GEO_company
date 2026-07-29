@@ -77,3 +77,27 @@ def test_apply_cached_overwrites_rule_text(tmp_path, monkeypatch) -> None:
     assert misses == []
     assert "白皮书" in updated["source_influence"]["rows"][0]["value_analysis"]
     assert "累计引用" not in updated["source_influence"]["rows"][0]["value_analysis"]
+
+
+def test_source_value_rule_templates_include_title() -> None:
+    from app.services.report_period_content_service import _source_value_analysis
+
+    a = _source_value_analysis("2026年电梯广告如何投放指南", 4, rank=1, max_count=4)
+    b = _source_value_analysis("2026年地铁广告怎么投攻略", 4, rank=2, max_count=4)
+    assert "电梯" in a and "地铁" in b
+    assert a != b
+
+
+def test_url_alias_cache_hit(tmp_path, monkeypatch) -> None:
+    from app.services import source_value_analysis_service as svc
+
+    monkeypatch.setattr(svc, "_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(svc, "get_json_cache", lambda key: None)
+    monkeypatch.setattr(svc, "set_json_cache", lambda *args, **kwargs: None)
+
+    svc.set_cached_source_value(
+        "https://www.example.com/a",
+        value_analysis="别名命中测试文案。",
+        title="a",
+    )
+    assert svc.get_cached_source_value("http://example.com/a") == "别名命中测试文案。"

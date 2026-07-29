@@ -284,6 +284,7 @@ def _source_value_analysis(title: str, count: int, *, rank: int = 1, max_count: 
     """按信源标题与引用档位写差异化解读；勿用「累计引用 N 次…」万能句糊弄。"""
     text = str(title or "").strip() or "该渠道"
     # 2026-07-29 - 除知乎/官网外全落同句模板，8 行像复制粘贴；按场景词+档位拆解
+    # 2026-07-29 - 「如何/指南」多条仍撞同一句 - 所有分支带短标题，避免表内复制粘贴感
     top = max(int(max_count or count or 1), 1)
     share = count / top
     if share >= 0.75 or rank == 1:
@@ -292,54 +293,53 @@ def _source_value_analysis(title: str, count: int, *, rank: int = 1, max_count: 
         tier = "腰部引用"
     else:
         tier = "长尾引用"
+    short = text if len(text) <= 18 else text[:17] + "…"
 
     if "知乎" in text:
         return (
-            f"{tier}：知乎决策讨论场，用户选型时高频翻看；"
+            f"「{short}」属{tier}·知乎决策讨论场，用户选型时高频翻看；"
             "宜持续补权威答主与案例，并盯负面帖对冲。"
         )
     if "官网" in text or "官方" in text or "公众号" in text:
         return (
-            f"{tier}：品牌自有信源，是外部媒体转引底座；"
+            f"「{short}」属{tier}·品牌自有信源，是外部媒体转引底座；"
             "建议补齐案例、点位与服务闭环页，降低被竞品材料挤占。"
         )
     if "白皮书" in text or "研报" in text or "行业报告" in text:
         return (
-            f"{tier}：白皮书/研报类信源公信力强，适合沉淀行业话语权；"
+            f"「{short}」属{tier}·白皮书/研报类，公信力强，适合沉淀行业话语权；"
             "可围绕结论页做二次传播与销售话术复用。"
         )
     if "指南" in text or "攻略" in text or "怎么投" in text or "如何" in text:
         return (
-            f"{tier}：实操指南类内容易被 AI 当「可执行答案」引用；"
+            f"「{short}」属{tier}·实操指南向内容，易被 AI 当「可执行答案」引用；"
             "适合植入选型标准与品牌差异点，拉动询盘转化。"
         )
     if "排名" in text or "哪家" in text or "推荐榜" in text or "推荐" in text or "盘点" in text:
         return (
-            f"{tier}：榜单/比稿语境，直接影响「被写进推荐列表」的概率；"
+            f"「{short}」属{tier}·榜单/比稿语境，直接影响「被写进推荐列表」的概率；"
             "需确保品牌卖点、覆盖城市与案例可核验。"
         )
     if "地铁" in text or "高铁" in text or "机场" in text or "公交" in text:
         return (
-            f"{tier}：交通场景垂类信源，和户外投放决策高度同频；"
+            f"「{short}」属{tier}·交通场景垂类信源，和户外投放决策高度同频；"
             "建议补场景案例与线路/枢纽覆盖证据。"
         )
     if "电梯" in text or "楼宇" in text or "LED" in text or "户外" in text:
         return (
-            f"{tier}：户外/楼宇场景内容，利于补齐全场景叙事短板；"
+            f"「{short}」属{tier}·户外/楼宇场景内容，利于补齐全场景叙事短板；"
             "可与电梯/LED 监控词联动投放，提高跨平台一致露出。"
         )
     if "媒体" in text or "评测" in text or "深度" in text:
         return (
-            f"{tier}：媒体评测向信源，专业人群 denser；"
+            f"「{short}」属{tier}·媒体评测向信源，利于专业人群背书；"
             "适合投放深度测评与合作案例抬升正面声量。"
         )
     if "GEO" in text.upper() or "搜索优化" in text:
         return (
-            f"{tier}：GEO/搜索优化相关内容，直接服务 AI 引用链路；"
+            f"「{short}」属{tier}·GEO/搜索优化相关内容，直接服务 AI 引用链路；"
             "建议固化品牌别名、场景词与权威外链。"
         )
-    # 兜底也要吃标题关键词，避免 8 行同句
-    short = text if len(text) <= 18 else text[:17] + "…"
     if tier == "头部引用":
         return (
             f"「{short}」为本期头部引用源，对跨平台露出拉动明显；"
@@ -362,16 +362,20 @@ def enrich_source_influence_with_llm(
     brand_name: str,
     period_label: str = "",
     top_sources: list[dict[str, Any]] | None = None,
+    report_type: str = "",
 ) -> dict[str, Any]:
-    """渠道价值拆解：读异步预生成缓存；miss 入队 Playwright+LLM，导出不阻塞。"""
+    """渠道价值拆解：读缓存；月/季/年 miss 同步补正文 LLM。"""
     from app.services.source_value_analysis_service import enrich_source_influence_with_cached_llm
 
+    # 周报不展示完整拆解表，只异步预热；月季年同步补齐避免表内同句
+    sync_fill = str(report_type or "") in {"monthly", "quarterly", "annual"}
     return enrich_source_influence_with_cached_llm(
         modules,
         brand_name=brand_name,
         period_label=period_label,
         top_sources=top_sources,
         enqueue_misses=True,
+        sync_fill_misses=sync_fill,
     )
 
 
@@ -661,6 +665,7 @@ def build_report_modules(
             {
                 "index": index,
                 "title": title,
+                "url": str(item.get("url") or "").strip(),
                 "count": count,
                 "value_analysis": _source_value_analysis(
                     title, count, rank=index, max_count=max_source_count
