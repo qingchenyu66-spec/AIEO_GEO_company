@@ -57,6 +57,7 @@ const {
   executiveSummary,
   hasReportSections,
   regionLabels,
+  diagnosisPlatformOptions,
   promptTemplates,
   scheduleSlots,
   scheduleDays,
@@ -76,6 +77,7 @@ const {
   selectRecord,
   openCreatePanel,
   closeCreatePanel,
+  toggleCreatePlatform,
   applyPromptTemplate,
   nextCreateStep,
   handleRefresh,
@@ -257,6 +259,24 @@ onUnmounted(() => {
             <span>监测地区</span>
             <RegionMultiSelect v-model="createForm.region_codes" />
           </label>
+          <div class="lead-field lead-field-wide">
+            <span>诊断平台 *（已选 {{ createForm.platforms.length }}）</span>
+            <div class="lead-platform-pick">
+              <label
+                v-for="platform in diagnosisPlatformOptions"
+                :key="platform.code"
+                class="lead-platform-pick-item"
+                :class="{ active: createForm.platforms.includes(platform.code) }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="createForm.platforms.includes(platform.code)"
+                  @change="toggleCreatePlatform(platform.code)"
+                />
+                <b>{{ platform.name || platformLabelMap[platform.code] || platform.code }}</b>
+              </label>
+            </div>
+          </div>
           <label class="lead-field lead-field-wide">
             <span>销售备注</span>
             <textarea v-model="createForm.contact_note" rows="3" placeholder="客户来源、行业背景、意向度、重点关注点" />
@@ -734,6 +754,7 @@ onUnmounted(() => {
                 <h4>检测配置</h4>
                 <div class="lead-config-list">
                   <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
+                  <div><strong>诊断平台</strong><span>{{ (detail.platforms || []).map(code => platformLabelMap[code] || code).join('、') || '未指定（兼容旧单按全量可提交平台）' }}</span></div>
                   <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
                   <div><strong>监测地区</strong><span>{{ regionLabels(detail.region_codes) }}</span></div>
                   <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>

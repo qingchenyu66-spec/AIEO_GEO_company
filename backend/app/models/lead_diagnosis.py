@@ -21,6 +21,14 @@ class LeadDiagnosis(Base):
     contact_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="销售备注")
     prompts_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="检测问题列表，最多5条")
     competitors_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="竞品名称列表")
+    # 2026-07-29 - 新建诊断需指定平台 - 落库所选可提交平台码，提交时不再隐式全目录
+    platforms_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="诊断平台码列表；空则提交时回退全量可提交目录（兼容旧单）",
+    )
     region_codes_json: Mapped[list] = mapped_column(
         JSON,
         nullable=False,

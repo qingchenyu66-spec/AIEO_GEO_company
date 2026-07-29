@@ -16,6 +16,7 @@ import {
 } from '../../../services/leadDiagnosis'
 import { notifyOperationError } from '../../../utils/requestError'
 import { platformLabelMap } from '../portalMaps'
+import { supportedPlatforms } from '../platformMeta'
 import { formatDateTime } from '../portalUtils'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
@@ -97,10 +98,13 @@ export function useLeadDiagnosis() {
     brand_name: '',
     prompts: ['', '', '', '', ''],
     competitors: '',
+    platforms: [] as string[],
     region_codes: [] as string[],
     contact_note: '',
     start_immediately: true,
   })
+
+  const diagnosisPlatformOptions = supportedPlatforms
 
   const pageMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'platform.lead_diagnosis')?.menu_name || '售前诊断'
@@ -310,6 +314,7 @@ export function useLeadDiagnosis() {
       brand_name: '',
       prompts: ['', '', '', '', ''],
       competitors: '',
+      platforms: [],
       region_codes: [],
       contact_note: '',
       start_immediately: true,
@@ -320,6 +325,13 @@ export function useLeadDiagnosis() {
   function closeCreatePanel() {
     showCreatePanel.value = false
     createStep.value = 1
+  }
+
+  function toggleCreatePlatform(code: string) {
+    const list = createForm.value.platforms
+    const idx = list.indexOf(code)
+    if (idx >= 0) list.splice(idx, 1)
+    else list.push(code)
   }
 
   function applyPromptTemplate(index: number) {
@@ -334,6 +346,10 @@ export function useLeadDiagnosis() {
         ElMessage.warning('请填写品牌名称')
         return
       }
+      if (!createForm.value.platforms.length) {
+        ElMessage.warning('请至少勾选一个诊断平台')
+        return
+      }
       createStep.value = 2
       return
     }
@@ -343,8 +359,14 @@ export function useLeadDiagnosis() {
   async function submitCreate() {
     const brand = createForm.value.brand_name.trim()
     const prompts = createForm.value.prompts.map(item => item.trim()).filter(Boolean)
+    const platforms = [...createForm.value.platforms]
     if (!brand) {
       ElMessage.warning('请填写品牌名称')
+      createStep.value = 1
+      return
+    }
+    if (!platforms.length) {
+      ElMessage.warning('请至少勾选一个诊断平台')
       createStep.value = 1
       return
     }
@@ -367,6 +389,7 @@ export function useLeadDiagnosis() {
         brand_name: brand,
         prompts,
         competitors,
+        platforms,
         region_codes: [...createForm.value.region_codes],
         contact_note: createForm.value.contact_note.trim() || undefined,
         start_immediately: createForm.value.start_immediately,
@@ -496,6 +519,7 @@ export function useLeadDiagnosis() {
     selectableRegionOptions,
     regionLabels,
     regionLabel,
+    diagnosisPlatformOptions,
     promptTemplates: PROMPT_TEMPLATES,
     scheduleSlots: SCHEDULE_SLOTS,
     scheduleDays: SCHEDULE_DAYS,
@@ -516,6 +540,7 @@ export function useLeadDiagnosis() {
     selectRecord,
     openCreatePanel,
     closeCreatePanel,
+    toggleCreatePlatform,
     applyPromptTemplate,
     nextCreateStep,
     submitCreate,

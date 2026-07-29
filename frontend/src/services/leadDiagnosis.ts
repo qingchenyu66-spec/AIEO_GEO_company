@@ -37,6 +37,7 @@ export interface LeadDiagnosisItem {
   contact_note?: string | null
   prompts: string[]
   competitors: string[]
+  platforms?: string[]
   region_codes?: string[]
   schedule_times: string[]
   schedule_days?: number
@@ -66,6 +67,7 @@ export interface CreateLeadDiagnosisPayload {
   brand_name: string
   prompts: string[]
   competitors?: string[]
+  platforms: string[]
   region_codes?: string[]
   contact_name?: string
   contact_phone?: string

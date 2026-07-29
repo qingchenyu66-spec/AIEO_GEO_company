@@ -953,6 +953,40 @@
   grid-column: 1 / -1;
 }
 
+.lead-platform-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.lead-platform-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d6e5f6;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lead-platform-pick-item.active {
+  border-color: #93c5fd;
+  background: #eaf4ff;
+}
+
+.lead-platform-pick-item b {
+  font-size: 13px;
+  font-weight: 700;
+  color: #10233f;
+}
+
+.lead-platform-pick-item input {
+  width: auto;
+  margin: 0;
+}
+
 .lead-field span {
   color: #4f6682;
   font-size: 13px;

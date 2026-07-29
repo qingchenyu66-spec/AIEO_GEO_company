@@ -420,6 +420,16 @@ def _all_platform_configs() -> list[PlatformConfig]:
     return [PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1) for code in codes]
 
 
+def _platform_configs_for_lead(lead: LeadDiagnosis) -> list[PlatformConfig]:
+    # 2026-07-29 - 新建可指定诊断平台 - 有落库列表则按指定提交；旧单空列表回退全量
+    selected = filter_submittable_platforms(
+        [str(item or "").strip() for item in (lead.platforms_json or [])]
+    )
+    if selected:
+        return [PlatformConfig(platform=code, mode=FAST_MONITOR_MODE, screenshot=1) for code in selected]
+    return _all_platform_configs()
+
+
 def _competitor_payload(names: list[str]) -> list[CompetitorBrand]:
     return [CompetitorBrand(name=name) for name in names if name.strip()]
 
@@ -504,6 +514,7 @@ def _serialize_lead(
         "contact_note": lead.contact_note,
         "prompts": lead.prompts_json or [],
         "competitors": lead.competitors_json or [],
+        "platforms": list(lead.platforms_json or []),
         "region_codes": normalize_region_codes(lead.region_codes_json or []),
         "schedule_times": _schedule_slots(lead),
         "schedule_days": LEAD_SCHEDULE_DAYS,
@@ -663,6 +674,7 @@ def create_lead_diagnosis(
         contact_note=(payload.contact_note or "").strip() or None,
         prompts_json=payload.prompts,
         competitors_json=payload.competitors,
+        platforms_json=list(payload.platforms),
         region_codes_json=normalize_region_codes(payload.region_codes),
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
         diagnosis_date=diagnosis_date,
@@ -835,7 +847,7 @@ def submit_due_lead_run(
     if existing_run is not None and lead_run_blocks_due(existing_run):
         return {"status": "skipped", "message": "该时段已提交"}
 
-    platforms = _all_platform_configs()
+    platforms = _platform_configs_for_lead(lead)
     request = MonitorTaskCreateRequest(
         monitor_keywords=lead.brand_name,
         competitors=_competitor_payload(lead.competitors_json or []),
@@ -1464,11 +1476,26 @@ def _build_ephemeral_lead_from_tenant_tasks(
         )
         if row.name
     ]
+    platform_codes = filter_submittable_platforms(
+        [str(item or "").strip() for item in (asset.monitored_platforms_json or [])]
+    )
+    if not platform_codes:
+        platform_codes = filter_submittable_platforms(
+            [
+                str(code or "").strip()
+                for task in tasks
+                for item in (task.platforms_json or [])
+                for code in (
+                    [item.get("platform") if isinstance(item, dict) else item]
+                )
+            ]
+        )
     lead = LeadDiagnosis(
         brand_name=(asset.brand_name or asset.company_full_name or tenant.name).strip(),
         contact_note=f"基于 {tenant.name} 历史监测数据（{len(tasks)} 轮已完成任务）",
         prompts_json=prompts,
         competitors_json=competitors[:10],
+        platforms_json=platform_codes,
         region_codes_json=list(asset.region_codes_json or []),
         schedule_times_json=list(asset.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES),
         diagnosis_date=(tasks[0].created_at or datetime.now()).date(),
@@ -1597,11 +1624,27 @@ def import_tenant_lead_diagnosis(
         if row.name
     ]
 
+    platform_codes = filter_submittable_platforms(
+        [str(item or "").strip() for item in (asset.monitored_platforms_json or [])]
+    )
+    if not platform_codes:
+        platform_codes = filter_submittable_platforms(
+            [
+                str(code or "").strip()
+                for task in tasks
+                for item in (task.platforms_json or [])
+                for code in (
+                    [item.get("platform") if isinstance(item, dict) else item]
+                )
+            ]
+        )
+
     lead = LeadDiagnosis(
         brand_name=(asset.brand_name or asset.company_full_name or tenant.name).strip(),
         contact_note=contact_note or f"基于 {tenant.name} 历史监测数据（{len(tasks)} 轮已完成任务）自动生成",
         prompts_json=prompts,
         competitors_json=competitors[:10],
+        platforms_json=platform_codes,
         region_codes_json=list(asset.region_codes_json or []),
         schedule_times_json=list(asset.schedule_times_json or DEFAULT_LEAD_SCHEDULE_TIMES),
         diagnosis_date=tasks[0].created_at.date(),
