@@ -532,29 +532,74 @@ def build_competitor_analytics_from_periods(
         demo_enriched=False,
     )
     if report_type in _RANK_TREND_TYPES and not result.get("rank_trend"):
-        points = trend.get("points") or []
-        if len(points) >= 2:
-            short_cats, full_cats = _trend_axis_labels(points)
-            brand_series_row = next((row for row in result["rows"] if row["is_brand"]), None)
-            if brand_series_row:
-                values = [
-                    round(float(point["avg_rank"]), 1) if point.get("avg_rank") is not None else None
-                    for point in points
-                ]
-                if any(value is not None for value in values):
-                    result["rank_trend"] = {
-                        "categories": short_cats,
-                        "fullCategories": full_cats,
-                        "series": [
-                            {
-                                "name": brand_series_row["name"],
-                                "is_brand": True,
-                                "data": values,
-                                "style": brand_series_row.get("style") or {},
-                            }
-                        ],
-                    }
+        # 2026-07-29 - 真实数据回退曾只画本品牌，标题写 TOP3 竞品却无线；按趋势桶聚合品牌+TOP3
+        result["rank_trend"] = _build_real_competitor_rank_trend(
+            db,
+            tenant_id=tenant_id,
+            trend=trend,
+            rows=result.get("rows") or [],
+        )
     return result
+
+
+def _build_real_competitor_rank_trend(
+    db: Session,
+    *,
+    tenant_id: int,
+    trend: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """按趋势桶拉竞品均排，组成「品牌 vs TOP3」折线（仅真实数据，无演示抖动）。"""
+    points = trend.get("points") or []
+    if len(points) < 2 or not rows:
+        return None
+    brand_row = next((row for row in rows if row.get("is_brand")), None)
+    # rows 已按提及率排序；取本品牌 + 前 3 家竞品
+    top_comps = [row for row in rows if not row.get("is_brand")][:3]
+    tracked = ([brand_row] if brand_row else []) + top_comps
+    if not tracked:
+        return None
+
+    short_cats, full_cats = _trend_axis_labels(points)
+    values_by_name: dict[str, list[float | None]] = {str(row["name"]): [] for row in tracked}
+    for point in points:
+        p_start = point.get("start")
+        p_end = point.get("end")
+        completed = int(point.get("completed") or 0)
+        if (
+            not isinstance(p_start, date)
+            or not isinstance(p_end, date)
+            or p_start > p_end
+            or completed <= 0
+        ):
+            for name in values_by_name:
+                values_by_name[name].append(None)
+            continue
+        bucket = aggregate_competitor_period_stats(
+            db, tenant_id, start_date=p_start, end_date=p_end
+        )
+        by_name = {str(item.get("name") or ""): item for item in (bucket.get("rows") or [])}
+        for name in values_by_name:
+            raw = (by_name.get(name) or {}).get("avg_rank")
+            values_by_name[name].append(round(float(raw), 1) if raw is not None else None)
+
+    series: list[dict[str, Any]] = []
+    for row in tracked:
+        name = str(row["name"])
+        data = values_by_name.get(name) or []
+        if not any(value is not None for value in data):
+            continue
+        series.append(
+            {
+                "name": name,
+                "is_brand": bool(row.get("is_brand")),
+                "data": data,
+                "style": row.get("style") or {},
+            }
+        )
+    if not series:
+        return None
+    return {"categories": short_cats, "fullCategories": full_cats, "series": series}
 
 
 def enrich_competitor_analytics(
@@ -1683,6 +1728,9 @@ def _trend_bucket_slots(report_type: str, start: date, end: date) -> list[dict[s
                 q_end = date(start.year, start_month + 3, 1) - timedelta(days=1)
             q_start = max(q_start, start)
             q_end = min(q_end, end)
+            # 2026-07-29 - YTD 未到的季度（如 7 月看 Q4）会变成 start>end 空轴脏点，直接跳过
+            if q_start > q_end:
+                continue
             slots.append(
                 {
                     "key": f"{start.year}-Q{quarter}",
