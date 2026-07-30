@@ -90,4 +90,4 @@ def test_competitor_analysis_does_not_invent_missing_dimensions() -> None:
 
     assert analysis["head_competitor"] is None
     assert analysis["nearest_competitor"] is None
-    assert any("需结合平台明细确认" in action for action in analysis["actions"])
+    assert any("补齐分平台明细" in action for action in analysis["actions"])

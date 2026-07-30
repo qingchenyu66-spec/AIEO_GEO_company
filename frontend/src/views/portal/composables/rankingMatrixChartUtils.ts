@@ -475,6 +475,9 @@ export function selfCheckMatrixRankScope() {
   console.assert(heatData.length === 3 && heatData[0]?.dayKey === '2026-06-01' && heatData[0]?.prompt === 'p1')
   console.assert(heatData[0]?.value[2] > 0)
   console.assert(heatData[1]?.value[2] === -1)
+  const heatAxis = (heatOpt.xAxis as { data?: string[]; axisLabel?: { interval?: number } }).data || []
+  console.assert(heatAxis.length === 3 && heatAxis[0] === '06-01' && heatAxis[1] === '06-02' && heatAxis[2] === '06-03')
+  console.assert((heatOpt.xAxis as { axisLabel?: { interval?: number } }).axisLabel?.interval === 0)
   const periodKpis = matrixScopedPeriodKpis(
     kpiSlice,
     buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01'),
@@ -739,7 +742,8 @@ const BAR_GRID_MIN_TOP = 18
 const BAR_GRID_MIN_BOTTOM = 12
 const BAR_AXIS_RESERVE = 24
 const HEAT_ROW_PITCH = 28
-const HEAT_CHART_PAD = 64
+// 2026-07-30 - 热力横轴全量日期+旋转 - 略加底边留给 axisLabel
+const HEAT_CHART_PAD = 88
 const HEAT_CHART_MIN = 360
 
 export function matrixBarChartHeight(itemCount: number) {
@@ -939,6 +943,18 @@ export function heatPointRank(data: MatrixHeatDataItem | [number, number, number
   return data.value?.[2] ?? -1
 }
 
+/** 热力横轴日期：只用 dayKey，去掉后端「N次均值」后缀；轴上用 MM-DD 减挤。 */
+function heatAxisDateLabel(dayKey: string): string {
+  const iso = String(dayKey || '').slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso.slice(5)
+  return iso || '—'
+}
+
+function heatTooltipDateLabel(dayKey: string): string {
+  const iso = String(dayKey || '').slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : (iso || '—')
+}
+
 export function buildMatrixHeatOption(
   slice: MatrixPlatformSlice,
   range?: { startDate?: string; endDate?: string },
@@ -946,10 +962,12 @@ export function buildMatrixHeatOption(
   // 2026-07-28 - 切「月」无体感 - 按筛选区间铺满日期轴，无样本日显示 —
   // 2026-07-28 - 悬停未提及但点击开出别日排名 - 点击须用同一 matrixHeatDayKeys，勿再用稀疏 matrixDayKeys
   const dayKeys = matrixHeatDayKeys(slice.rows, range)
-  const dates = dayKeys.map(dayKey => {
-    const row = slice.rows.find(item => rowDayKey(item).slice(0, 10) === dayKey)
-    return row?.schedule_label || dayKey.slice(5) || '—'
-  })
+  // 2026-07-30 - 热力横轴「3次均值」挤掉隔日标签 - 轴只用 MM-DD、interval:0、按天数旋转字号
+  const axisDates = dayKeys.map(heatAxisDateLabel)
+  const tipDates = dayKeys.map(heatTooltipDateLabel)
+  const dayCount = dayKeys.length
+  const axisRotate = dayCount > 7 ? 48 : dayCount > 4 ? 36 : 0
+  const axisFontSize = dayCount > 10 ? 10 : dayCount > 6 ? 11 : 12
   const keywords = slice.columns.map(labelMatrixPrompt)
   const data: MatrixHeatDataItem[] = []
   dayKeys.forEach((dayKey, xIndex) => {
@@ -964,22 +982,37 @@ export function buildMatrixHeatOption(
   })
 
   return {
-    grid: { left: 12, right: 48, top: 12, bottom: 12, containLabel: true },
+    grid: {
+      left: 12,
+      right: 48,
+      top: 12,
+      bottom: axisRotate ? 8 : 12,
+      containLabel: true,
+    },
     tooltip: {
       backgroundColor: 'rgba(21,48,82,.92)',
       borderWidth: 0,
       textStyle: { color: '#fff', fontSize: 12 },
       formatter: (params: { data: MatrixHeatDataItem }) => {
         const [xIndex, yIndex, value] = params.data.value
-        return `<b>${keywords[yIndex] || '—'}</b><br/>${dates[xIndex] || '—'} · ${value < 0 ? '未提及' : formatRank(value)}`
+        return `<b>${keywords[yIndex] || '—'}</b><br/>${tipDates[xIndex] || '—'} · ${value < 0 ? '未提及' : formatRank(value)}`
       },
     },
     xAxis: {
       type: 'category',
-      data: dates,
+      data: axisDates,
       axisLine: { lineStyle: { color: '#e8f0f8' } },
       axisTick: { show: false },
-      axisLabel: { color: '#58708f', fontSize: 12, fontWeight: 700 },
+      axisLabel: {
+        show: true,
+        interval: 0,
+        hideOverlap: false,
+        rotate: axisRotate,
+        color: '#58708f',
+        fontSize: axisFontSize,
+        fontWeight: 700,
+        margin: axisRotate ? 14 : 10,
+      },
     },
     yAxis: {
       type: 'category',

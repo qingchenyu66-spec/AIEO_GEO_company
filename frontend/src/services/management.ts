@@ -19,6 +19,7 @@ export interface PositionInfo {
   description: string | null
   menu_ids: number[]
   menu_grants?: MenuGrantInfo[]
+  allowed_monitor_platforms?: string[]
 }
 
 export interface MenuGrantInfo {
@@ -45,6 +46,8 @@ export interface TenantInfo {
   service_end_date: string | null
   /** 与监测计划联动的每日执行次数；无品牌资产时为 null */
   schedule_frequency?: number | null
+  /** 创建时：名称命中软删企业，已允许新建 */
+  name_was_purged?: boolean
 }
 
 /** 与企业管理「服务中」口径一致：启用、非人工停服/取消，且在服务期内 */
@@ -233,6 +236,7 @@ export interface PositionPayload {
   description?: string | null
   menu_ids?: number[]
   menu_grants?: MenuGrantInfo[]
+  allowed_monitor_platforms?: string[]
   status: boolean
 }
 
@@ -315,6 +319,12 @@ export async function updateTenant(tenantId: number, payload: { name: string; co
 export async function deleteTenant(tenantId: number): Promise<void> {
   await http.delete(`/v1/management/tenants/${tenantId}`)
   invalidateCache('/v1/management/tenants')
+}
+
+export async function purgeTenant(tenantId: number, confirmName: string): Promise<Record<string, unknown>> {
+  const response = await http.post(`/v1/management/tenants/${tenantId}/purge`, { confirm_name: confirmName })
+  invalidateCache('/v1/management/tenants')
+  return response.data.data
 }
 
 export async function restoreTenant(tenantId: number): Promise<TenantInfo> {

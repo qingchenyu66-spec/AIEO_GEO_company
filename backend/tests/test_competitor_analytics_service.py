@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from app.services.competitor_analytics_service import (
     _competitor_aliases,
@@ -9,8 +10,26 @@ from app.services.competitor_analytics_service import (
     _inclusive_day_keys,
     _include_in_sentiment_leaderboard,
     _names_match,
+    _platform_tab_counts_for_task_ids,
     _tracked_entities,
 )
+
+
+def test_platform_tab_counts_empty_task_ids():
+    assert _platform_tab_counts_for_task_ids(MagicMock(), []) == {}
+
+
+def test_platform_tab_counts_groups_by_platform():
+    db = MagicMock()
+    db.execute.return_value.all.return_value = [
+        ("doubao", 10),
+        ("doubao_mobile", 78),
+        ("deepseek", 5),
+        ("", 3),
+    ]
+    out = _platform_tab_counts_for_task_ids(db, ["t1", "t2"], prompt_filter="q")
+    assert out == {"doubao": 10, "doubao_mobile": 78, "deepseek": 5}
+    db.execute.assert_called_once()
 
 
 def test_tracked_entities_handles_orm_competitor_with_empty_aliases():

@@ -1,7 +1,7 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
-import type { MonitorSummary } from '../../../services/monitor'
+import { getSourceStats, type SourceAnalysisSummary, type SourceStatRow } from '../../../services/analytics'
 import { useAuthStore } from '../../../stores/auth'
 import {
   customerDisplayDateRange,
@@ -20,7 +20,7 @@ import {
   sourceCategoryLabels,
   type SourceCategory,
 } from '../sourceCategory'
-import { isCustomerPreviewActive } from '../customerPreview'
+import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
 import { useRoute } from 'vue-router'
 
 export type { SourceCategory }
@@ -29,7 +29,7 @@ export { sourceCategoryLabels, sourceCategory, sourceCategoryLabel }
 export type SourceDatePreset = '7' | '30' | 'all'
 export type SourceRankTab = 'branded' | 'all'
 
-export type SourceRow = MonitorSummary['source_stats'][number] & {
+export type SourceRow = SourceStatRow & {
   category: SourceCategory
   has_exposure: boolean
 }
@@ -191,7 +191,7 @@ function sliceTrendPoints<T extends { label: string; value: number }>(points: T[
 }
 
 function mapSourceRows(
-  rows: MonitorSummary['source_stats'],
+  rows: SourceStatRow[],
   brandOfficialHost: string | null | undefined,
   brandKnownHosts: string[],
 ): SourceRow[] {
@@ -299,7 +299,8 @@ export function useSourceAnalysis(options?: {
   const brandAsset = analytics.brandAsset
 
   const loading = ref(false)
-  const monitorSummary = analytics.monitorSummary
+  // 2026-07-30 - 信源页勿等整包 monitor/summary - 独立轻接口
+  const sourceSummary = ref<SourceAnalysisSummary | null>(null)
   // 客户/运营共用周期；运营默认近 30 天，客户默认近 7 天
   const datePreset = ref<SourceDatePreset>('7')
   if (!isCustomerView.value) datePreset.value = '30'
@@ -338,7 +339,7 @@ export function useSourceAnalysis(options?: {
 
   const brandedSources = computed<SourceRow[]>(() => (
     mapSourceRows(
-      (monitorSummary.value?.source_stats || []).filter(item => (item.exposure_terms || []).length > 0),
+      (sourceSummary.value?.source_stats || []).filter(item => (item.exposure_terms || []).length > 0),
       brandAsset.value?.official_url,
       brandKnownHosts.value,
     )
@@ -346,7 +347,7 @@ export function useSourceAnalysis(options?: {
 
   const allCitationSources = computed<SourceRow[]>(() => (
     mapSourceRows(
-      monitorSummary.value?.source_stats_all || monitorSummary.value?.source_stats || [],
+      sourceSummary.value?.source_stats_all || sourceSummary.value?.source_stats || [],
       brandAsset.value?.official_url,
       brandKnownHosts.value,
     )
@@ -355,7 +356,7 @@ export function useSourceAnalysis(options?: {
   // 图表 / Hero / 平台 chips 仍用品牌相关口径
   const allSources = brandedSources
 
-  const platformRanking = computed(() => sortPlatformRows(monitorSummary.value?.platform_stats || []))
+  const platformRanking = computed(() => sortPlatformRows(sourceSummary.value?.platform_stats || []))
 
   const structurePlatformCodes = computed(() => resolvePurchasedPlatformCodes(
     brandAsset.value?.monitored_platforms,
@@ -569,11 +570,11 @@ export function useSourceAnalysis(options?: {
   })
 
   const sourceTrendRows = computed(() => {
-    const trendByPlatform = monitorSummary.value?.source_citation_trend_by_platform
+    const trendByPlatform = sourceSummary.value?.source_citation_trend_by_platform
     const selected = platformFilter.value !== 'all' ? platformFilter.value : null
     const backendTrend = selected
       ? trendByPlatform?.[selected]
-      : monitorSummary.value?.source_citation_trend
+      : sourceSummary.value?.source_citation_trend
     const backendPoints = backendTrend?.points || []
     if (backendPoints.length) {
       const points = datePreset.value === 'all'
@@ -621,17 +622,23 @@ export function useSourceAnalysis(options?: {
         body: '当前筛选下没有可展示的 AI 引用。请完成更多监测或放宽筛选条件。',
       }
     }
-    return {
-      level: 'ok' as const,
-      title: '数据口径说明',
-      body: '图表按含露出词的引用文章统计；左侧「引用网站」按域名聚合，点击后右侧「信源明细」仅展示该站文章；可用 Tab 切换品牌相关 / 全部引用。',
-    }
+    // 2026-07-30 - 有数据时「数据口径说明」无必要 - 不再展示 ok 提示条
+    return null
   })
 
   async function loadSummary(force = false) {
     loading.value = true
     try {
-      await analytics.loadMonitorSummary(force)
+      const previewId = parsePreviewTenantId(route)
+      const rawTenant = route.query.tenant_id
+      const tenantText = Array.isArray(rawTenant) ? rawTenant[0] : rawTenant
+      const queryTenant = Number(tenantText)
+      const tenantId = previewId
+        ?? (Number.isFinite(queryTenant) ? queryTenant : undefined)
+      sourceSummary.value = await getSourceStats(
+        tenantId != null ? { tenant_id: tenantId } : undefined,
+      )
+      void force
     } catch (error: unknown) {
       ElMessage.error(`信源数据加载失败：${errorMessage(error)}`)
     } finally {
@@ -677,34 +684,7 @@ export function useSourceAnalysis(options?: {
     articlePage.value = 1
   }
 
-  function exportCsv() {
-    const rows = activeRankWebsites.value
-    if (!rows.length) {
-      ElMessage.warning('暂无可导出数据')
-      return
-    }
-    const tabLabel = rankTab.value === 'all' ? '全部网站' : '品牌相关网站'
-    const lines = [
-      ['网站', '引用次数', '文章数', '类型', '露出词', '含露出词', '平台'].join(','),
-      ...rows.map(site => [
-        `"${site.domain.replace(/"/g, '""')}"`,
-        site.count,
-        site.articleCount,
-        `"${sourceCategoryLabels[site.category] || site.category}"`,
-        `"${site.exposure_terms.join('、')}"`,
-        site.has_exposure ? '是' : '否',
-        `"${site.platforms.map(code => platformLabelMap[code] || code).join('、')}"`,
-      ].join(',')),
-    ]
-    const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${brandAsset.value?.brand_name || '信源'}-${tabLabel}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('已导出 CSV')
-  }
+  // 2026-07-30 - 信源导出意义不大 - 下线 CSV 导出
 
   watch([filteredSources, structureChartRows, sourceTrendRows, activeSourceCategoryLabels, hasStructurePanel, loading], () => { void refreshCharts() }, { deep: true })
   watch([platformFilter, categoryFilter, keywordFilter, datePreset, rankTab], () => {
@@ -779,7 +759,6 @@ export function useSourceAnalysis(options?: {
     loadSummary,
     resetFilters,
     setRankTab,
-    exportCsv,
     platformLabelMap,
     sourceCategoryLabels,
     sourceCategoryLabel,

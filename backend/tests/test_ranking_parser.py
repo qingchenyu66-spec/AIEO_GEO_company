@@ -828,3 +828,24 @@ def test_rankings_for_storage_falls_back_to_remote_without_answer():
     stored = rankings_for_storage("", remote)
     assert stored is not None
     assert [row["rank"] for row in stored] == [1, 2]
+
+
+def test_parse_markdown_table_keeps_br_cells_on_same_row():
+    """2026-07-30 - 表内 <br> 不得拆断 | 行，否则霍尼韦尔等后续行进不了榜。"""
+    text = """
+### 主流品牌速览与定位
+| 品牌类型 | 代表品牌与系列 | 核心特点 |
+| --- | --- | --- |
+| 日系综合派 | **松下 (Panasonic)** <br>尤其是 ZDP-2C | 稳定 |
+| 欧美专业派 | **霍尼韦尔 (Honeywell)** | 性价比 |
+| 国产精研派 | **格力 (GREE)** 除霾系列 | 除霾 |
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "松下" in names
+    assert "霍尼韦尔" in names
+    assert "格力" in names
+    assert names.index("霍尼韦尔") == names.index("松下") + 1
+    rank, matched = find_best_brand_rank(entries, lambda name: "霍尼韦尔" in name)
+    assert matched is True
+    assert rank == 2

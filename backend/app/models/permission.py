@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -69,6 +69,13 @@ class Position(Base):
     identity_type: Mapped[str] = mapped_column(String(20), index=True, nullable=False, comment="适用身份：PLATFORM/CUSTOMER")
     role_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="默认角色编码")
     description: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="职位说明")
+    # 2026-07-30 - 平台范围细到单端 - 多选下拉存码；空且有编辑权=全不能勾
+    allowed_monitor_platforms_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        comment="可配置监测平台码列表",
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序")
     status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="创建时间")

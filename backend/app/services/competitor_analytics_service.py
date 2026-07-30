@@ -6,7 +6,7 @@ import re
 from datetime import date, datetime, timedelta, time
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
@@ -24,6 +24,9 @@ from app.services.monitor_stats_service import _detect_stat_date
 from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
+from app.services.brand_analysis_service import (
+    effective_monitor_sentiment,
+)
 from app.services.ranking_parser import (
     normalize_structured_rankings,
     ranking_entry_explicit_rank,
@@ -70,14 +73,48 @@ def _schedule_task_day_map(
 
 
 _SUBTASK_LIGHT_COLS = (
+    GeoMonitorSubtask.subtask_id,
     GeoMonitorSubtask.task_id,
     GeoMonitorSubtask.platform,
     GeoMonitorSubtask.prompt,
     GeoMonitorSubtask.mention_position,
     GeoMonitorSubtask.all_rankings_json,
     GeoMonitorSubtask.sentiment,
+    GeoMonitorSubtask.answer_content,
+    GeoMonitorSubtask.mention_context,
+    GeoMonitorSubtask.raw_result_json,
     GeoMonitorSubtask.updated_at,
 )
+
+
+def _platform_tab_counts_for_task_ids(
+    db: Session,
+    task_ids: list[str],
+    *,
+    prompt_filter: str = "",
+) -> dict[str, int]:
+    """平台 Tab 样本数：只跟时间窗/问题走，不受当前选中平台过滤影响。"""
+    if not task_ids:
+        return {}
+    stmt = (
+        select(GeoMonitorSubtask.platform, func.count())
+        .where(
+            GeoMonitorSubtask.task_id.in_(task_ids),
+            GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
+        )
+        .group_by(GeoMonitorSubtask.platform)
+    )
+    if prompt_filter:
+        stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
+    out: dict[str, int] = {}
+    for platform, count in db.execute(stmt).all():
+        code = str(platform or "").strip()
+        if not code:
+            continue
+        out[code] = int(count or 0)
+    return out
+
+
 def _find_entity_rank(entries: list[dict[str, Any]], entity_name: str) -> float | None:
     for entry in entries:
         if _names_match(ranking_entry_name(entry), entity_name):
@@ -354,6 +391,7 @@ def build_competitor_compare_summary(
         platform_filters=platform_filters,
         prompt_filter=prompt_filter,
         subtask_limit=subtask_limit,
+        parse_sentiments=True,
     )
     payload["prompt_options"] = _configured_prompt_options(db, resolved_tenant_id)
     return payload
@@ -378,7 +416,88 @@ def aggregate_competitor_period_stats(
         platform_filters=[],
         prompt_filter="",
         subtask_limit=subtask_limit,
+        parse_sentiments=False,
     )
+
+
+def _build_mention_trend_series(
+    *,
+    configured_names: list[str],
+    name_is_brand: dict[str, bool],
+    sorted_days: list[str],
+    daily_samples: dict[str, int],
+    daily_mentions: dict[str, dict[str, int]],
+) -> list[dict[str, Any]]:
+    series: list[dict[str, Any]] = []
+    for name in configured_names:
+        values: list[float] = []
+        for day in sorted_days:
+            day_total = daily_samples.get(day, 0)
+            if not day_total:
+                values.append(0.0)
+                continue
+            day_count = daily_mentions.get(day, {}).get(name, 0)
+            values.append(round(day_count / day_total * 100, 1))
+        series.append({
+            "name": name,
+            "is_brand": bool(name_is_brand.get(name)),
+            "values": values,
+        })
+    return series
+
+
+def _build_sentiment_trend_lists(
+    *,
+    sorted_days: list[str],
+    daily_samples: dict[str, int],
+    daily_sentiment: dict[str, dict[str, int]],
+) -> tuple[list[float], list[float], list[float]]:
+    positive: list[float] = []
+    neutral: list[float] = []
+    negative: list[float] = []
+    for day in sorted_days:
+        day_total = daily_samples.get(day, 0)
+        counts = daily_sentiment.get(day, {})
+        if not day_total:
+            positive.append(0.0)
+            neutral.append(0.0)
+            negative.append(0.0)
+            continue
+        positive.append(round(counts.get("positive", 0) / day_total * 100, 1))
+        neutral.append(round(counts.get("neutral", 0) / day_total * 100, 1))
+        negative.append(round(counts.get("negative", 0) / day_total * 100, 1))
+    return positive, neutral, negative
+
+
+def _build_sentiment_leaderboard_rows(
+    rows: list[dict[str, Any]],
+    brand_display: str,
+) -> list[dict[str, Any]]:
+    sentiment_rows = sorted(
+        [
+            {
+                "name": row["name"],
+                "is_brand": row["is_brand"],
+                "positive_rate": row["positive_rate"],
+                "negative_rate": row["negative_rate"],
+                "sentiment_sample": row["sentiment_sample"],
+            }
+            for row in rows
+            if _include_in_sentiment_leaderboard(row)
+        ],
+        key=lambda item: (-item["positive_rate"], -int(item["is_brand"])),
+    )
+    if not sentiment_rows and brand_display:
+        brand_row = next((row for row in rows if row["is_brand"]), None)
+        if brand_row:
+            sentiment_rows = [{
+                "name": brand_row["name"],
+                "is_brand": True,
+                "positive_rate": brand_row["positive_rate"],
+                "negative_rate": brand_row["negative_rate"],
+                "sentiment_sample": brand_row["sentiment_sample"],
+            }]
+    return sentiment_rows
 
 
 def _aggregate_competitor_stats(
@@ -390,6 +509,7 @@ def _aggregate_competitor_stats(
     platform_filters: list[str],
     prompt_filter: str,
     subtask_limit: int,
+    parse_sentiments: bool = False,
 ) -> dict[str, Any]:
     asset = get_brand_asset(db, tenant_id)
     competitors = list_competitors(db, tenant_id)
@@ -409,8 +529,15 @@ def _aggregate_competitor_stats(
     )
     subtasks: list[GeoMonitorSubtask] = []
     subtask_day_keys: dict[int, str] = {}
+    # 2026-07-30 - 点选平台后 Tab 其它端变 0 - Tab 计数独立于 platform_filters
+    platform_tab_count_map: dict[str, int] = {}
 
     if task_day_map:
+        platform_tab_count_map = _platform_tab_counts_for_task_ids(
+            db,
+            list(task_day_map.keys()),
+            prompt_filter=prompt_filter,
+        )
         stmt = (
             select(GeoMonitorSubtask)
             .options(load_only(*_SUBTASK_LIGHT_COLS))
@@ -454,8 +581,7 @@ def _aggregate_competitor_stats(
                 GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
             )
         )
-        if platform_filters:
-            stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
+        # 回退路径：SQL 不按平台过滤，便于 Tab 计数；聚合再在内存里收窄
         if prompt_filter:
             stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
 
@@ -463,6 +589,7 @@ def _aggregate_competitor_stats(
         task_ids = list({item.task_id for item in fetched if item.task_id})
         schedule_runs_map = schedule_runs_for_tasks(db, task_ids) if task_ids else {}
         lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids) if task_ids else {}
+        in_range: list[GeoMonitorSubtask] = []
         for item in fetched:
             task = item.task
             if task is None:
@@ -476,8 +603,55 @@ def _aggregate_competitor_stats(
             )
             if detect_day is None or detect_day < range_start_day or detect_day > range_end_day:
                 continue
-            subtasks.append(item)
+            in_range.append(item)
             subtask_day_keys[id(item)] = detect_day.isoformat()
+            code = str(item.platform or "").strip()
+            if code:
+                platform_tab_count_map[code] = platform_tab_count_map.get(code, 0) + 1
+        if platform_filters:
+            allowed = set(platform_filters)
+            subtasks = [item for item in in_range if str(item.platform or "") in allowed]
+        else:
+            subtasks = in_range
+
+    sentiment_parse: dict[str, Any] = {
+        "parsed": 0,
+        "pending_left": 0,
+        "errors": [],
+        "source": "none",
+    }
+    if parse_sentiments and subtasks:
+        from app.services.brand_analysis_service import (
+            _has_secondary_sentiment,
+            _mark_rule_sentiment,
+            _subtask_answer_plaintext,
+            rule_classify_brand_sentiment,
+        )
+
+        brand_name = (
+            (asset.company_full_name if asset else None)
+            or (asset.brand_name if asset else None)
+            or brand_display
+        )
+        # 2026-07-30 - 竞品页读路径禁止同步打 DeepSeek（曾卡十几秒）- 仅规则秒级铺标；LLM 留同步后任务
+        ruled = 0
+        for item in subtasks:
+            if _has_secondary_sentiment(item):
+                continue
+            text = _subtask_answer_plaintext(item)
+            if not str(text or "").strip():
+                continue
+            _mark_rule_sentiment(item, rule_classify_brand_sentiment(text, str(brand_name)))
+            ruled += 1
+        if ruled:
+            db.commit()
+        sentiment_parse = {
+            "parsed": 0,
+            "pending_left": 0,
+            "errors": [],
+            "source": "rule-v1",
+            "rule_seeded": ruled,
+        }
 
     sample_total = len(subtasks)
 
@@ -486,6 +660,9 @@ def _aggregate_competitor_stats(
     daily_samples: dict[str, int] = {}
     daily_mentions: dict[str, dict[str, int]] = {}
     daily_sentiment: dict[str, dict[str, int]] = {}
+    daily_samples_by_plat: dict[str, dict[str, int]] = {}
+    daily_mentions_by_plat: dict[str, dict[str, dict[str, int]]] = {}
+    daily_sentiment_by_plat: dict[str, dict[str, dict[str, int]]] = {}
 
     def bucket_for(platform_code: str | None, entity_name: str, is_brand: bool) -> dict[str, Any]:
         if platform_code:
@@ -504,14 +681,22 @@ def _aggregate_competitor_stats(
             for entry in entries
         ]
         day_key = subtask_day_keys.get(id(item))
+        plat_code = str(item.platform or "").strip()
+        # 2026-07-30 - 竞品情绪用二次标（DeepSeek/规则），勿只信模力 sentiment
+        sentiment_label = effective_monitor_sentiment(item)
         if day_key:
             daily_samples[day_key] = daily_samples.get(day_key, 0) + 1
-            sentiment_label = _normalize_sentiment_label(item.sentiment)
+            if plat_code:
+                plat_samples = daily_samples_by_plat.setdefault(plat_code, {})
+                plat_samples[day_key] = plat_samples.get(day_key, 0) + 1
             if sentiment_label:
                 day_sentiment = daily_sentiment.setdefault(day_key, {"positive": 0, "neutral": 0, "negative": 0})
                 day_sentiment[sentiment_label] += 1
-
-        sentiment_label = _normalize_sentiment_label(item.sentiment)
+                if plat_code:
+                    plat_day_sentiment = daily_sentiment_by_plat.setdefault(plat_code, {}).setdefault(
+                        day_key, {"positive": 0, "neutral": 0, "negative": 0},
+                    )
+                    plat_day_sentiment[sentiment_label] += 1
 
         for entity in entities:
             is_brand = entity["is_brand"]
@@ -538,6 +723,9 @@ def _aggregate_competitor_stats(
             if day_key:
                 day_map = daily_mentions.setdefault(day_key, {})
                 day_map[display_name] = day_map.get(display_name, 0) + 1
+                if plat_code:
+                    plat_day_map = daily_mentions_by_plat.setdefault(plat_code, {}).setdefault(day_key, {})
+                    plat_day_map[display_name] = plat_day_map.get(display_name, 0) + 1
 
             global_bucket = bucket_for(None, display_name, is_brand)
             platform_bucket = bucket_for(item.platform, display_name, is_brand)
@@ -548,13 +736,14 @@ def _aggregate_competitor_stats(
                     bucket["rank_count"] += 1
 
             if sentiment_label and mentioned:
-                global_bucket["sentiment_sample"] += 1
-                if sentiment_label == "positive":
-                    global_bucket["sentiment_positive"] += 1
-                elif sentiment_label == "negative":
-                    global_bucket["sentiment_negative"] += 1
-                else:
-                    global_bucket["sentiment_neutral"] += 1
+                for bucket in (global_bucket, platform_bucket):
+                    bucket["sentiment_sample"] += 1
+                    if sentiment_label == "positive":
+                        bucket["sentiment_positive"] += 1
+                    elif sentiment_label == "negative":
+                        bucket["sentiment_negative"] += 1
+                    else:
+                        bucket["sentiment_neutral"] += 1
 
     configured_names = _dedupe_preserve_order(
         [brand_display] + [competitor.name for competitor in competitors],
@@ -588,6 +777,12 @@ def _aggregate_competitor_stats(
     rows.sort(key=lambda row: (-row["mention_rate"], row["avg_rank"] if row["avg_rank"] is not None else 999))
 
     platform_rows = []
+    name_is_brand = {name: name == brand_display for name in configured_names}
+    sorted_days = _inclusive_day_keys(range_start, range_end)
+    trend_labels = [
+        datetime.fromisoformat(day).strftime("%m-%d")
+        for day in sorted_days
+    ]
     for item in sort_platform_items(
         [{"platform": code, "entity_map": entity_map} for code, entity_map in platform_buckets.items()],
         key="platform",
@@ -595,7 +790,7 @@ def _aggregate_competitor_stats(
         platform_code = item["platform"]
         entity_map = item["entity_map"]
         platform_sample = sum(
-            1 for item in subtasks if item.platform == platform_code
+            1 for sub in subtasks if sub.platform == platform_code
         )
         merged_platform: dict[str, dict[str, Any]] = {}
         for bucket in entity_map.values():
@@ -610,90 +805,86 @@ def _aggregate_competitor_stats(
             target["first_mention_count"] += bucket["first_mention_count"]
             target["rank_total"] += bucket["rank_total"]
             target["rank_count"] += bucket["rank_count"]
+            target["sentiment_positive"] += bucket["sentiment_positive"]
+            target["sentiment_neutral"] += bucket["sentiment_neutral"]
+            target["sentiment_negative"] += bucket["sentiment_negative"]
+            target["sentiment_sample"] += bucket["sentiment_sample"]
         for name in configured_names:
             if name not in merged_platform:
                 merged_platform[name] = _init_bucket(name, is_brand=name == brand_display)
+        plat_rows = [
+            _finalize_bucket(merged_platform[name], platform_sample)
+            for name in configured_names
+        ]
+        plat_rows.sort(
+            key=lambda row: (-row["mention_rate"], row["avg_rank"] if row["avg_rank"] is not None else 999),
+        )
+        plat_mention = _build_mention_trend_series(
+            configured_names=configured_names,
+            name_is_brand=name_is_brand,
+            sorted_days=sorted_days,
+            daily_samples=daily_samples_by_plat.get(platform_code, {}),
+            daily_mentions=daily_mentions_by_plat.get(platform_code, {}),
+        )
+        plat_pos, plat_neu, plat_neg = _build_sentiment_trend_lists(
+            sorted_days=sorted_days,
+            daily_samples=daily_samples_by_plat.get(platform_code, {}),
+            daily_sentiment=daily_sentiment_by_plat.get(platform_code, {}),
+        )
         platform_rows.append({
             "platform": platform_code,
             "sample_count": platform_sample,
-            "rows": [
-                _finalize_bucket(merged_platform[name], platform_sample)
-                for name in configured_names
-            ],
+            "rows": plat_rows,
+            # 2026-07-30 - 点平台勿重打接口 - 各端预计算趋势/情绪供前端本地切换
+            "mention_trends": {"labels": trend_labels, "series": plat_mention},
+            "sentiment_trends": {
+                "labels": trend_labels,
+                "positive": plat_pos,
+                "neutral": plat_neu,
+                "negative": plat_neg,
+            },
+            "sentiment_rows": _build_sentiment_leaderboard_rows(plat_rows, brand_display),
         })
 
-    sorted_days = _inclusive_day_keys(range_start, range_end)
-    trend_labels = [
-        datetime.fromisoformat(day).strftime("%m-%d")
-        for day in sorted_days
-    ]
-    trend_entities = [merged_global[name] for name in configured_names]
-    mention_trend_series = []
-    for bucket in trend_entities:
-        name = bucket["name"]
-        values: list[float] = []
-        for day in sorted_days:
-            day_total = daily_samples.get(day, 0)
-            if not day_total:
-                values.append(0.0)
-                continue
-            day_count = daily_mentions.get(day, {}).get(name, 0)
-            values.append(round(day_count / day_total * 100, 1))
-        mention_trend_series.append({
-            "name": name,
-            "is_brand": bucket["is_brand"],
-            "values": values,
-        })
-
-    sentiment_positive: list[float] = []
-    sentiment_neutral: list[float] = []
-    sentiment_negative: list[float] = []
-    for day in sorted_days:
-        day_total = daily_samples.get(day, 0)
-        counts = daily_sentiment.get(day, {})
-        if not day_total:
-            sentiment_positive.append(0.0)
-            sentiment_neutral.append(0.0)
-            sentiment_negative.append(0.0)
-            continue
-        sentiment_positive.append(round(counts.get("positive", 0) / day_total * 100, 1))
-        sentiment_neutral.append(round(counts.get("neutral", 0) / day_total * 100, 1))
-        sentiment_negative.append(round(counts.get("negative", 0) / day_total * 100, 1))
-
-    sentiment_rows = sorted(
-        [
-            {
-                "name": row["name"],
-                "is_brand": row["is_brand"],
-                "positive_rate": row["positive_rate"],
-                "negative_rate": row["negative_rate"],
-                "sentiment_sample": row["sentiment_sample"],
-            }
-            for row in rows
-            if _include_in_sentiment_leaderboard(row)
-        ],
-        key=lambda item: (-item["positive_rate"], -int(item["is_brand"])),
+    mention_trend_series = _build_mention_trend_series(
+        configured_names=configured_names,
+        name_is_brand=name_is_brand,
+        sorted_days=sorted_days,
+        daily_samples=daily_samples,
+        daily_mentions=daily_mentions,
     )
-    if not sentiment_rows and brand_display:
-        brand_row = next((row for row in rows if row["is_brand"]), None)
-        if brand_row:
-            sentiment_rows = [{
-                "name": brand_row["name"],
-                "is_brand": True,
-                "positive_rate": brand_row["positive_rate"],
-                "negative_rate": brand_row["negative_rate"],
-                "sentiment_sample": brand_row["sentiment_sample"],
-            }]
+    sentiment_positive, sentiment_neutral, sentiment_negative = _build_sentiment_trend_lists(
+        sorted_days=sorted_days,
+        daily_samples=daily_samples,
+        daily_sentiment=daily_sentiment,
+    )
+    sentiment_rows = _build_sentiment_leaderboard_rows(rows, brand_display)
+
+    if not platform_tab_count_map:
+        for row in platform_rows:
+            code = str(row.get("platform") or "").strip()
+            if code:
+                platform_tab_count_map[code] = int(row.get("sample_count") or 0)
+    platform_tab_counts = sort_platform_items(
+        [
+            {"platform": code, "sample_count": count}
+            for code, count in platform_tab_count_map.items()
+        ],
+        key="platform",
+    )
+    tab_sample_total = int(sum(platform_tab_count_map.values()))
 
     return {
         "brand_name": brand_display,
         "competitor_count": len(competitors),
         "sample_total": sample_total,
+        "tab_sample_total": tab_sample_total,
         "start_at": range_start.isoformat(),
         "end_at": range_end.isoformat(),
         "trend_day_keys": sorted_days,
         "rows": rows,
         "platform_rows": platform_rows,
+        "platform_tab_counts": platform_tab_counts,
         "mention_trends": {
             "labels": trend_labels,
             "series": mention_trend_series,
@@ -705,4 +896,5 @@ def _aggregate_competitor_stats(
             "negative": sentiment_negative,
         },
         "sentiment_rows": sentiment_rows,
+        "sentiment_parse": sentiment_parse,
     }

@@ -419,8 +419,10 @@ def monitor_inclusion_snapshots(
     end_date: date | None = Query(default=None),
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
     platform: str | None = Query(default=None, description="平台 code；空或 all 表示全部已购平台"),
-    limit: int = Query(default=48, ge=1, le=100),
-    rank_scope: str = Query(default="ranked", description="ranked=有排名；all=全部（含未提及）"),
+    keyword: str | None = Query(default=None, description="关键词本地筛（监控词/问题/信源标题）"),
+    page: int = Query(default=1, ge=1, le=500),
+    limit: int = Query(default=10, ge=1, le=50, description="每页条数"),
+    rank_scope: str = Query(default="ranked", description="ranked=有位次；all=含未提及"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -456,6 +458,8 @@ def monitor_inclusion_snapshots(
             end_date=end_date,
             tenant_id=resolved_tenant_id,
             platform=platform,
+            keyword=keyword,
+            page=page,
             limit=limit,
             rank_scope=scope,
         )

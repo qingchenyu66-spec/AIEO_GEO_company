@@ -18,6 +18,7 @@ from app.services.brand_service import (
     get_brand_asset,
     list_brand_word_groups,
     list_competitors,
+    sanitize_brand_asset_payload_for_grants,
     save_brand_asset,
     save_brand_word_groups,
     save_competitor,
@@ -96,9 +97,13 @@ def upsert_brand_asset(
     require_any_update_permission(current, db, [
         "platform.audit",
         "platform.audit.profile",
+        "platform.audit.regions",
         "platform.audit.keywords",
+        "platform.audit.models",
         "platform.audit.schedule",
     ])
+    # 2026-07-30 - 无地区/平台权勿进审批假 diff - 先按授权回填库内原值
+    payload = sanitize_brand_asset_payload_for_grants(db, current, payload)
     tenant_id = payload.tenant_id
 
     def _execute():

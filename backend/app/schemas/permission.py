@@ -65,6 +65,7 @@ class PositionInfo(BaseModel):
     description: str | None = None
     menu_ids: list[int] = Field(default_factory=list)
     menu_grants: list[MenuGrantItem] = Field(default_factory=list)
+    allowed_monitor_platforms: list[str] = Field(default_factory=list)
 
 
 class PositionSaveRequest(BaseModel):
@@ -74,6 +75,7 @@ class PositionSaveRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     menu_ids: list[int] = Field(default_factory=list)
     menu_grants: list[MenuGrantItem] = Field(default_factory=list)
+    allowed_monitor_platforms: list[str] = Field(default_factory=list)
     status: bool = True
 
 
@@ -139,6 +141,12 @@ class TenantTransferOwnerRequest(BaseModel):
     """平台运营/管理员将企业归属转移给销售。"""
 
     owner_user_id: int = Field(ge=1, description="目标销售用户 ID")
+
+
+class TenantPurgeRequest(BaseModel):
+    """彻底删除企业：须原样输入企业名称确认。"""
+
+    confirm_name: str = Field(min_length=1, max_length=100)
 
 
 class ManagedUserInfo(BaseModel):

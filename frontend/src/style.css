@@ -2276,6 +2276,17 @@ button:disabled {
   border-top:1px solid #e6eef8;
 }
 .permission-action-row:first-of-type { border-top:none; }
+/* 2026-07-30 - 平台范围多选下拉 - 独占一行 */
+.permission-platform-allow {
+  grid-column: 1 / -1;
+  display:grid;
+  gap:6px;
+  padding:2px 0 4px;
+}
+.permission-platform-allow-label {
+  font-size:12px;
+  color:#64748b;
+}
 .permission-action-title {
   display:inline-flex;
   align-items:center;
@@ -3001,11 +3012,17 @@ button:disabled {
 .status-pill.dark { color:#475569 !important; background:#e2e8f0; }
 .enterprise-actions {
   display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:8px;
+  min-width:0;
+}
+.enterprise-actions-row {
+  display:flex;
+  flex-wrap:wrap;
   justify-content:flex-end;
   gap:8px;
   align-items:center;
-  min-width:0;
-  flex-wrap:wrap;
 }
 .enterprise-actions .filter-search-btn,
 .enterprise-actions .filter-reset-btn,
@@ -3788,7 +3805,8 @@ button:disabled {
   .schedule-type-grid,
   .competitor-table-head,
   .competitor-row { grid-template-columns:1fr; }
-  .enterprise-actions { justify-content:flex-start; min-width:0; flex-wrap:wrap; }
+  .enterprise-actions { align-items:flex-start; min-width:0; }
+  .enterprise-actions-row { justify-content:flex-start; }
   .user-create-page .form-grid,
   .user-create-page .identity-config-box .form-grid { grid-template-columns:1fr; }
   .user-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); }

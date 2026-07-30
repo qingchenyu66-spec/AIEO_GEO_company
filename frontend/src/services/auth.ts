@@ -42,6 +42,8 @@ export interface AuthSession {
   identity: IdentityInfo
   identities: IdentityInfo[]
   menus: MenuInfo[]
+  /** 有平台范围编辑权时生效；空数组=不可勾任何端 */
+  allowed_monitor_platforms?: string[]
 }
 
 export interface LoginResult {

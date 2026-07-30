@@ -54,6 +54,8 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
     # 菜单权限随会话返回，前端只渲染数据库授权菜单，不再写死平台/客户菜单。
     if ensure_identity_menus_from_position(db, identity):
         db.commit()
+    from app.services.menu_permission_service import identity_allowed_monitor_platforms
+
     menus = [item.model_dump() for item in get_identity_menus(db, identity)]
     return {
         "access_token": create_access_token(user, identity),
@@ -62,6 +64,7 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
         "identity": identity_info(identity, db),
         "identities": [identity_info(item, db) for item in identities],
         "menus": menus,
+        "allowed_monitor_platforms": identity_allowed_monitor_platforms(db, identity),
     }
 
 
@@ -145,11 +148,15 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
     if ensure_identity_menus_from_position(db, current.identity):
         db.commit()
+    # 2026-07-30 - /me 刷新会话冲掉平台白名单 - 与 login/switch 同口径带回 allowed_monitor_platforms
+    from app.services.menu_permission_service import identity_allowed_monitor_platforms
+
     return ApiResponse(data={
         "user": {"id": current.user.id, "username": current.user.username, "display_name": current.user.display_name},
         "identity": identity_info(current.identity, db),
         "identities": [identity_info(item, db) for item in identities],
         "menus": [item.model_dump() for item in get_identity_menus(db, current.identity)],
+        "allowed_monitor_platforms": identity_allowed_monitor_platforms(db, current.identity),
     })
 
 

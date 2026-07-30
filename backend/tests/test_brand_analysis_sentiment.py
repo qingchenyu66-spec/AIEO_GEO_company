@@ -1,4 +1,4 @@
-"""Brand analysis DeepSeek sentiment helpers."""
+﻿"""Brand analysis DeepSeek sentiment helpers."""
 
 from app.services.brand_analysis_service import (
     BA_DESC_HARD_MAX,
@@ -365,3 +365,4 @@ def test_group_ai_descriptions_one_snapshot_many_points():
     assert len(rows) == 3
     assert all(r["sample_count"] == 1 for r in rows)
     assert all(r["answers"][0]["subtask_id"] == "d1" for r in rows)
+

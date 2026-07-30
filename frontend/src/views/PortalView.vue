@@ -242,6 +242,17 @@ const pageSubtitle = computed(() => {
   if (activeMenuCode.value === 'customer.brand_analysis') {
     return '基于已购平台样本的文字诊断：提及率、短板、AI 描述与分端表现'
   }
+  // 2026-07-30 - 顶栏副文案全局一句像没换页 - 仅 GEO/竞品/信源/报告/知识库按页区分
+  const customerPageSubtitles: Record<string, string> = {
+    'customer.realtime': '按平台与问题查看监测结果与推荐排名',
+    'customer.competitor': '本品牌与竞品的提及率、首位提及与情绪对比',
+    'customer.sources': '引用来源结构、官网占比与高频站点',
+    'customer.reports': '预览与导出已发布的周期监测报告',
+    'customer.knowledge': '归档品牌资料，供报告引用与团队共享',
+  }
+  if (customerPageSubtitles[activeMenuCode.value]) {
+    return customerPageSubtitles[activeMenuCode.value]
+  }
   return isPlatform.value ? '企业运营、任务消耗、平台运行与风险情况' : '品牌曝光、推荐排名、信源分析与监测趋势'
 })
 

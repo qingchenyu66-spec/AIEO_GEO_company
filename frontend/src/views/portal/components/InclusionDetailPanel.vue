@@ -16,7 +16,7 @@ import { parseAnswerBlocks } from '../answerBlocks'
 import { formatDateTime, formatRank, externalLink } from '../portalUtils'
 import { platformLabelMap, sentimentLabelMap } from '../portalMaps'
 
-const PAGE_SIZE = 5
+const PAGE_SIZE = 10
 
 const props = defineProps<{
   tenantId?: number | null
@@ -29,7 +29,8 @@ const props = defineProps<{
 const loading = ref(false)
 const snapshots = ref<WorkspaceSnapshot[]>([])
 const page = ref(1)
-/** 本格局部筛选：默认只看有位次；「全部」含未提及。切换会重新请求，避免后端 prefer_ranked 把未提及挤掉。 */
+const total = ref(0)
+/** 本格局部筛选：默认只看有位次；「含未提及」含无位次。切换会重新请求。 */
 const rankScope = ref<'ranked' | 'all'>('ranked')
 
 const snapshotVisible = ref(false)
@@ -68,29 +69,7 @@ function articleDomain(row: WorkspaceSnapshot) {
   }
 }
 
-const filteredSnapshots = computed(() => {
-  // 平台 / 排名口径已在接口侧按 props + rankScope 拉取，这里只做关键词本地筛
-  const query = (props.keywordFilter || '').trim().toLowerCase()
-  if (!query) return snapshots.value
-  return snapshots.value.filter(row => {
-    const haystack = [
-      snapshotKeyword(row),
-      row.prompt,
-      row.keyword_group,
-      articleTitle(row),
-      articleDomain(row),
-      platformLabelMap[row.platform] || row.platform,
-    ].join(' ').toLowerCase()
-    return haystack.includes(query)
-  })
-})
-
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredSnapshots.value.length / PAGE_SIZE)))
-
-const pagedSnapshots = computed(() => {
-  const start = (page.value - 1) * PAGE_SIZE
-  return filteredSnapshots.value.slice(start, start + PAGE_SIZE)
-})
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 const dialogRankLabel = computed(() => {
   // 与列表行一致：优先用点开时带入的列表名次，避免详情重算与列表不一致
@@ -122,12 +101,8 @@ const snapshotSourceRows = computed(() => {
   }))
 })
 
-watch(filteredSnapshots, () => {
-  page.value = 1
-})
-
-watch(totalPages, (total) => {
-  if (page.value > total) page.value = total
+watch(totalPages, (pages) => {
+  if (page.value > pages) page.value = pages
 })
 
 async function openSnapshot(row: WorkspaceSnapshot) {
@@ -160,16 +135,27 @@ async function loadSnapshots() {
       start_date: props.startDate || undefined,
       end_date: props.endDate || undefined,
       platform: props.platformFilter || undefined,
-      limit: 48,
+      keyword: (props.keywordFilter || '').trim() || undefined,
+      page: page.value,
+      limit: PAGE_SIZE,
       rank_scope: rankScope.value,
     }, { silentError: true }))
     snapshots.value = data?.recent_snapshots || []
+    total.value = Number(data?.total ?? snapshots.value.length) || 0
   } catch (error: unknown) {
     notifyOperationError(error, '收录明细加载失败')
     snapshots.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
+}
+
+function goPage(next: number) {
+  const clamped = Math.min(Math.max(1, next), totalPages.value)
+  if (clamped === page.value) return
+  page.value = clamped
+  void loadSnapshots()
 }
 
 onMounted(() => {
@@ -177,8 +163,11 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.tenantId, props.startDate, props.endDate, props.platformFilter, rankScope.value] as const,
-  () => { void loadSnapshots() },
+  () => [props.tenantId, props.startDate, props.endDate, props.platformFilter, props.keywordFilter, rankScope.value] as const,
+  () => {
+    page.value = 1
+    void loadSnapshots()
+  },
 )
 </script>
 
@@ -192,14 +181,14 @@ watch(
           :class="{ active: rankScope === 'ranked' }"
           @click="rankScope = 'ranked'"
         >
-          有排名
+          有位次
         </button>
         <button
           type="button"
           :class="{ active: rankScope === 'all' }"
           @click="rankScope = 'all'"
         >
-          全部
+          含未提及
         </button>
       </div>
     </div>
@@ -217,11 +206,11 @@ watch(
           </tr>
         </thead>
         <tbody>
-          <tr v-if="!pagedSnapshots.length">
+          <tr v-if="!snapshots.length">
             <td colspan="5" class="source-inclusion-empty">—</td>
           </tr>
           <tr
-            v-for="row in pagedSnapshots"
+            v-for="row in snapshots"
             :key="row.subtask_id"
             class="is-clickable"
             @click="openSnapshot(row)"
@@ -252,13 +241,13 @@ watch(
       </table>
     </div>
 
-    <div v-if="filteredSnapshots.length > PAGE_SIZE" class="source-soft-pager">
-      <button type="button" class="source-soft-btn" :disabled="page <= 1" @click="page -= 1">
+    <div v-if="total > PAGE_SIZE" class="source-soft-pager">
+      <button type="button" class="source-soft-btn" :disabled="page <= 1 || loading" @click="goPage(page - 1)">
         <ChevronLeft :size="14" />
         上一页
       </button>
-      <span>共 {{ filteredSnapshots.length }} 条 · {{ page }} / {{ totalPages }}</span>
-      <button type="button" class="source-soft-btn" :disabled="page >= totalPages" @click="page += 1">
+      <span>共 {{ total }} 条 · {{ page }} / {{ totalPages }}</span>
+      <button type="button" class="source-soft-btn" :disabled="page >= totalPages || loading" @click="goPage(page + 1)">
         下一页
         <ChevronRight :size="14" />
       </button>

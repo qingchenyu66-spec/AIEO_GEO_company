@@ -63,8 +63,6 @@ function openCustomerPreview(tenant: { id: number; name: string }) {
 const {
   platformLabelMap,
   formatPlatformLabels,
-  supportedPlatforms,
-  catalogPlatforms,
   loadCatalogPlatforms,
   groupHasPlatform,
   onPlatformCheckClick,
@@ -110,6 +108,9 @@ const {
   enterpriseFormServiceLabel,
   visibleEnterpriseTabs,
   canEditEnterpriseTab,
+  canEditRegions,
+  canEditModels,
+  editableCatalogPlatforms,
   canCreateTenant,
   canEditTenantList,
   isTenantExpired,
@@ -117,6 +118,7 @@ const {
   tenantServiceLabel,
   canStopTenantService,
   canRestoreTenantService,
+  canPurgeTenant,
   stopTenantActionLabel,
   tenantServicePeriod,
   tenantMonitorLabel,
@@ -151,6 +153,7 @@ const {
   submitBrandWordGroups,
   submitTenant,
   removeTenant,
+  purgeTenantThoroughly,
   restoreTenantService,
   openTenantTransferDialog,
   submitTenantTransfer,
@@ -282,13 +285,22 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             </span>
           </div>
           <div class="enterprise-actions">
-            <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
-            <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
-            <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
-            <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
-            <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
-            <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
-            <button v-else-if="canRestoreTenantService(tenant)" type="button" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
+            <!-- 2026-07-30 - 操作钮过多挤一行 - 拆成常用 / 危险两行 -->
+            <div class="enterprise-actions-row">
+              <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
+              <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+              <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+              <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
+              <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
+            </div>
+            <div
+              v-if="canStopTenantService(tenant) || canRestoreTenantService(tenant) || canPurgeTenant()"
+              class="enterprise-actions-row"
+            >
+              <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
+              <button v-else-if="canRestoreTenantService(tenant)" type="button" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
+              <button v-if="canPurgeTenant()" type="button" class="danger-text-btn" @click="purgeTenantThoroughly(tenant)">彻底删除</button>
+            </div>
           </div>
         </div>
         <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty enterprise-empty">暂无符合筛选条件的企业。</div>
@@ -324,7 +336,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </div>
         <div class="detail-actions">
           <button class="filter-reset-btn" @click="backToEnterpriseList">返回列表</button>
-          <button v-if="canEditEnterpriseTab(enterpriseDetailTab)" class="primary-btn small-btn" :disabled="loadingBrand" @click="() => submitBrandAsset()">保存当前配置</button>
+          <button v-if="canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)" class="primary-btn small-btn" :disabled="loadingBrand" @click="() => submitBrandAsset()">保存当前配置</button>
         </div>
       </div>
       <div class="enterprise-detail-tabs">
@@ -339,16 +351,16 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <span>企业状态</span>
           <div class="readonly-status" :class="{ stopped: !enterpriseFormServiceActive }">{{ enterpriseFormServiceLabel }}</div>
         </label>
-        <label class="region-field form-field-full">
+        <label v-if="canEditRegions" class="region-field form-field-full">
           <span>服务地区</span>
           <RegionMultiSelect
             v-model="brandForm.region_codes"
-            :disabled="!canEditEnterpriseTab('profile')"
+            :disabled="!canEditRegions"
           />
         </label>
         <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
       </div>
-      <div v-if="enterpriseDetailTab === 'profile' && canEditEnterpriseTab('profile')" class="section-save-actions keyword-save-actions">
+      <div v-if="enterpriseDetailTab === 'profile' && (canEditEnterpriseTab('profile') || canEditRegions)" class="section-save-actions keyword-save-actions">
         <button class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('企业资料已保存')">保存企业资料</button>
       </div>
       <section v-if="enterpriseDetailTab === 'keywords'" class="keyword-group-panel">
@@ -435,11 +447,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   />
                 </div>
               </div>
-              <div class="keyword-field keyword-group-platform-field">
+              <div v-if="canEditModels" class="keyword-field keyword-group-platform-field">
                 <span class="keyword-field-label">监测平台（{{ platformSelectionCount(group) }}）</span>
-                <div class="platform-check-grid compact">
+                <div v-if="!editableCatalogPlatforms.length" class="mini-empty compact-empty">当前职位未配置可勾选平台</div>
+                <div v-else class="platform-check-grid compact">
                   <label
-                    v-for="platform in (catalogPlatforms.length ? catalogPlatforms : supportedPlatforms)"
+                    v-for="platform in editableCatalogPlatforms"
                     :key="`${index}-${platform.code}`"
                     class="platform-check"
                     :class="{
@@ -453,7 +466,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                       type="checkbox"
                       tabindex="-1"
                       :checked="groupHasPlatform(group, platform.code)"
-                      :disabled="!canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
+                      :disabled="!canEditModels || !canEditEnterpriseTab('keywords') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
                     />
                     <PlatformBadge
                       :code="platform.code"
@@ -469,7 +482,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                     </small>
                     <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
                     <button
-                      v-if="canEditEnterpriseTab('keywords') && groupHasPlatform(group, platform.code)"
+                      v-if="canEditModels && canEditEnterpriseTab('keywords') && groupHasPlatform(group, platform.code)"
                       type="button"
                       class="platform-uncheck-btn"
                       title="取消勾选"
@@ -563,11 +576,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   />
                 </div>
               </div>
-              <div class="keyword-field keyword-group-platform-field">
+              <div v-if="canEditModels" class="keyword-field keyword-group-platform-field">
                 <span class="keyword-field-label">监测平台（{{ platformSelectionCount(group) }}）</span>
-                <div class="platform-check-grid compact">
+                <div v-if="!editableCatalogPlatforms.length" class="mini-empty compact-empty">当前职位未配置可勾选平台</div>
+                <div v-else class="platform-check-grid compact">
                   <label
-                    v-for="platform in (catalogPlatforms.length ? catalogPlatforms : supportedPlatforms)"
+                    v-for="platform in editableCatalogPlatforms"
                     :key="`bw-${index}-${platform.code}`"
                     class="platform-check"
                     :class="{
@@ -581,7 +595,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                       type="checkbox"
                       tabindex="-1"
                       :checked="groupHasPlatform(group, platform.code)"
-                      :disabled="!canEditEnterpriseTab('brand_words') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
+                      :disabled="!canEditModels || !canEditEnterpriseTab('brand_words') || ('selectable' in platform && !platform.selectable && !groupHasPlatform(group, platform.code))"
                     />
                     <PlatformBadge
                       :code="platform.code"
@@ -597,7 +611,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                     </small>
                     <small v-if="'labels' in platform && platform.labels?.length" class="platform-status-tag">{{ platform.labels.join('·') }}</small>
                     <button
-                      v-if="canEditEnterpriseTab('brand_words') && groupHasPlatform(group, platform.code)"
+                      v-if="canEditModels && canEditEnterpriseTab('brand_words') && groupHasPlatform(group, platform.code)"
                       type="button"
                       class="platform-uncheck-btn"
                       title="取消勾选"

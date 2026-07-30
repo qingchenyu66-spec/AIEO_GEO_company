@@ -121,7 +121,9 @@ _CORP_NAME_HINTS = (
 
 def _normalize_answer_layout(text: str) -> str:
     """Split inline bullets / headers crushed onto one line (yuanbao/doubao HTML export)."""
-    normalized = re.sub(r"<[^>]+>", "\n", text or "")
+    # 2026-07-30 - markdown 表格内 <br> 若先剥成换行会拆断 | 行，品牌表只剩首行
+    normalized = re.sub(r"<br\s*/?>", " ", text or "", flags=re.I)
+    normalized = re.sub(r"<[^>]+>", "\n", normalized)
     normalized = re.sub(r"\r", "\n", normalized)
     # 元宝分享页：孤立「•」行后接「公司名：说明」——合成可解析 bullet
     # ponytail: 只合并空子弹行；编号清单 1.\\n1.\\n 另案，避免把「点位权属」抬成选手

@@ -145,9 +145,36 @@ const visiblePlatforms = computed(() => (
   todoOnly.value ? platforms.value.filter(p => p.todo > 0) : platforms.value
 ))
 
+/** 筛选项「全部平台」：主区按端分块竖铺热力 */
+const isAllPlatformsView = computed(() => !platformFilter.value)
+
 const activePlatformMeta = computed(() => (
   platforms.value.find(p => p.id === activePlatform.value) || null
 ))
+
+const allPlatformKpis = computed(() => {
+  let todo = 0
+  let fail = 0
+  const avgs: number[] = []
+  for (const p of platforms.value) {
+    todo += Number(p.todo) || 0
+    fail += Number(p.fail) || 0
+    if (p.avg != null && Number.isFinite(Number(p.avg))) avgs.push(Number(p.avg))
+  }
+  return {
+    todo,
+    fail,
+    avg: avgs.length ? Math.round((avgs.reduce((s, n) => s + n, 0) / avgs.length) * 10) / 10 : null,
+  }
+})
+
+const cellLookup = computed(() => {
+  const map = new Map<string, SnapshotBackfillMatrixCell>()
+  for (const cell of cells.value) {
+    map.set(`${cell.platform}||${cell.word}||${cell.date}`, cell)
+  }
+  return map
+})
 
 const visibleWords = computed(() => {
   if (!todoOnly.value) return words.value
@@ -158,15 +185,6 @@ const visibleWords = computed(() => {
   )
   const list = words.value.filter(w => set.has(w))
   return list.length ? list : words.value
-})
-
-const cellMap = computed(() => {
-  const map = new Map<string, SnapshotBackfillMatrixCell>()
-  for (const cell of cells.value) {
-    if (cell.platform !== activePlatform.value) continue
-    map.set(`${cell.word}||${cell.date}`, cell)
-  }
-  return map
 })
 
 function shortDate(iso: string) {
@@ -183,8 +201,26 @@ function rankText(rank: number | null | undefined) {
   return rank == null ? '—' : String(rank)
 }
 
-function getCell(word: string, date: string) {
-  return cellMap.value.get(`${word}||${date}`) || null
+function platformDisplayName(code: string) {
+  return platforms.value.find(p => p.id === code)?.name
+    || platformLabelMap[code]
+    || code
+}
+
+function wordsForPlatform(platformId: string) {
+  // 2026-07-30 - 全部平台只见一端 - 分块矩阵按端各自出词行
+  const platCells = cells.value.filter(c => c.platform === platformId)
+  if (!platCells.length) return [] as string[]
+  if (!todoOnly.value) {
+    const set = new Set(platCells.map(c => c.word))
+    return words.value.filter(w => set.has(w))
+  }
+  const set = new Set(platCells.filter(c => c.has_todo).map(c => c.word))
+  return words.value.filter(w => set.has(w))
+}
+
+function getCell(word: string, date: string, platform?: string) {
+  return cellLookup.value.get(`${platform || activePlatform.value}||${word}||${date}`) || null
 }
 
 async function loadTenants() {
@@ -262,7 +298,11 @@ async function loadMatrix(options?: { quiet?: boolean }) {
     cells.value = nextCells
     if (result.date_from && !filterDateFrom.value) filterDateFrom.value = result.date_from
     if (result.date_to && !filterDateTo.value) filterDateTo.value = result.date_to
-    ensureActivePlatform()
+    if (platformFilter.value) {
+      activePlatform.value = platformFilter.value
+    } else {
+      ensureActivePlatform()
+    }
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if ((error as { code?: string })?.code === 'ERR_CANCELED') return
@@ -282,6 +322,16 @@ function scheduleLoadMatrix() {
 }
 
 function selectPlatform(id: string) {
+  // 2026-07-30 - 全部平台分块竖铺 - 侧栏点端滚动到对应热力块；单端筛选时切该端
+  if (isAllPlatformsView.value) {
+    activePlatform.value = id
+    document.getElementById(`sb-plat-block-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+  if (platformFilter.value !== id) {
+    platformFilter.value = id
+    return
+  }
   activePlatform.value = id
   if (todoOnly.value) {
     const p = platforms.value.find(x => x.id === id)
@@ -292,9 +342,14 @@ function selectPlatform(id: string) {
   }
 }
 
-function openCell(word: string, date: string) {
-  const cell = getCell(word, date)
+function openCell(word: string, date: string, platform?: string) {
+  const cell = getCell(word, date, platform)
   if (!cell) return
+  openCellDirect(cell)
+}
+
+function openCellDirect(cell: SnapshotBackfillMatrixCell) {
+  activePlatform.value = cell.platform
   cellDrawer.value = cell
   cellDrawerVisible.value = true
 }
@@ -755,30 +810,107 @@ watch(
         <div class="sb-main-head">
           <div class="sb-platform-title">
             <div class="sb-platform-logo">
-              {{ (activePlatformMeta?.name || activePlatform || '—').slice(0, 1) }}
+              {{ isAllPlatformsView ? '全' : (activePlatformMeta?.name || activePlatform || '—').slice(0, 1) }}
             </div>
             <div>
-              <h2>{{ activePlatformMeta?.name || platformLabelMap[activePlatform] || activePlatform || '—' }}</h2>
-              <p>{{ todoOnly ? '只看待补格子' : '全量词 × 日均位' }}</p>
+              <h2>
+                {{
+                  isAllPlatformsView
+                    ? '全部平台'
+                    : (activePlatformMeta?.name || platformLabelMap[activePlatform] || activePlatform || '—')
+                }}
+              </h2>
+              <p>
+                {{
+                  isAllPlatformsView
+                    ? (todoOnly ? '各端待补热力' : '各端词 × 日均位')
+                    : (todoOnly ? '只看待补格子' : '全量词 × 日均位')
+                }}
+              </p>
             </div>
           </div>
           <div class="sb-kpis">
             <div class="sb-kpi primary">
-              <strong>{{ activePlatformMeta?.todo ?? 0 }}</strong>
+              <strong>{{ isAllPlatformsView ? allPlatformKpis.todo : (activePlatformMeta?.todo ?? 0) }}</strong>
               <span>待补录</span>
             </div>
             <div class="sb-kpi">
-              <strong>{{ activePlatformMeta?.fail ?? 0 }}</strong>
+              <strong>{{ isAllPlatformsView ? allPlatformKpis.fail : (activePlatformMeta?.fail ?? 0) }}</strong>
               <span>失败未忽略</span>
             </div>
             <div class="sb-kpi secondary">
-              <strong>{{ activePlatformMeta?.avg ?? '—' }}</strong>
+              <strong>{{ isAllPlatformsView ? (allPlatformKpis.avg ?? '—') : (activePlatformMeta?.avg ?? '—') }}</strong>
               <span>均位</span>
             </div>
           </div>
         </div>
 
         <div v-if="loading" class="mini-empty">加载中…</div>
+        <template v-else-if="isAllPlatformsView">
+          <div v-if="!visiblePlatforms.length || !dates.length" class="mini-empty snapshot-backfill-empty">
+            当前筛选下没有矩阵数据
+          </div>
+          <div v-else class="sb-plat-blocks">
+            <div
+              v-for="p in visiblePlatforms"
+              :id="`sb-plat-block-${p.id}`"
+              :key="p.id"
+              class="sb-plat-block"
+              :class="{ active: p.id === activePlatform }"
+            >
+              <div class="sb-plat-block-head">
+                <div class="sb-platform-title">
+                  <div class="sb-platform-logo">{{ (p.name || p.id).slice(0, 1) }}</div>
+                  <div>
+                    <h3>{{ p.name || platformLabelMap[p.id] || p.id }}</h3>
+                    <p>{{ p.todo }} 待补 · {{ p.fail }} 失败 · 均位 {{ p.avg ?? '—' }}</p>
+                  </div>
+                </div>
+              </div>
+              <div v-if="!wordsForPlatform(p.id).length" class="mini-empty">该端暂无格子</div>
+              <div v-else class="sb-matrix-wrap">
+                <table class="sb-matrix">
+                  <thead>
+                    <tr>
+                      <th>监测词 \\ 日期</th>
+                      <th v-for="d in dates" :key="d">{{ shortDate(d) }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="word in wordsForPlatform(p.id)" :key="`${p.id}-${word}`">
+                      <th :title="word">{{ word }}</th>
+                      <td v-for="d in dates" :key="`${p.id}-${word}-${d}`">
+                        <button
+                          v-if="getCell(word, d, p.id)"
+                          type="button"
+                          class="sb-cell"
+                          :class="[
+                            rankClass(getCell(word, d, p.id)?.rank),
+                            { 'has-todo': getCell(word, d, p.id)?.has_todo },
+                          ]"
+                          @click="openCell(word, d, p.id)"
+                        >
+                          <span>{{ rankText(getCell(word, d, p.id)?.rank) }}</span>
+                          <small>{{ getCell(word, d, p.id)?.sample_count || 0 }}次</small>
+                        </button>
+                        <span v-else class="sb-cell rank-none is-empty">—</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="sb-legend">
+              <span><i class="sb-swatch" style="background:#e6f7ef" />1–3</span>
+              <span><i class="sb-swatch" style="background:#fff3d9" />4+</span>
+              <span><i class="sb-swatch" style="background:#eef1f4" />无位次</span>
+              <span>
+                <i class="sb-swatch" style="background:#fde8e2;outline:2px solid #e4572e;outline-offset:1px" />
+                暖色+红点 = 待补
+              </span>
+            </div>
+          </div>
+        </template>
         <div v-else-if="!visibleWords.length || !dates.length" class="mini-empty snapshot-backfill-empty">
           当前筛选下没有矩阵数据
         </div>
@@ -855,7 +987,7 @@ watch(
       <div class="sb-drawer-panel">
         <h3>格子待办</h3>
         <div class="sub">
-          {{ activePlatformMeta?.name || activePlatform }} · {{ cellDrawer.word }} · {{ cellDrawer.date }}
+          {{ platformDisplayName(cellDrawer.platform) }} · {{ cellDrawer.word }} · {{ cellDrawer.date }}
           · 均位 {{ rankText(cellDrawer.rank) }}
         </div>
         <div

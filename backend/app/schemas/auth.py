@@ -35,3 +35,5 @@ class AuthSession(BaseModel):
     identity: IdentityInfo
     identities: list[IdentityInfo]
     menus: list[dict] = []
+    # 2026-07-30 - 平台范围多选 - 有 models 编辑权时生效；空=不可勾任何端
+    allowed_monitor_platforms: list[str] = []

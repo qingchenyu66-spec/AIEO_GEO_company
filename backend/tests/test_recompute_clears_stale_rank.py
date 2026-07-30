@@ -80,3 +80,37 @@ def test_preferred_column_table_rank_first_row() -> None:
     detail = _resolve_brand_rank_detail(subtask, "大国品牌（kimi）", ["大国品牌"], asset=None)
     assert detail.rank == 1
     assert detail.rank_basis == "preferred_column"
+
+
+def test_preferred_column_ignores_prose_can_prefer_bullet() -> None:
+    """2026-07-30 - 「可以首选松下」总结句不得当首选列表头，否则霍尼韦尔被数成第5。"""
+    from app.services.monitor_service import _preferred_column_table_rank, _resolve_brand_rank_detail
+
+    answer = """
+### 主流品牌速览与定位
+| 品牌类型 | 代表品牌与系列 | 核心特点 |
+| --- | --- | --- |
+| 日系 | **松下 (Panasonic)** <br>ZDP | 稳 |
+| 欧美 | **霍尼韦尔 (Honeywell)** | 性价比 |
+| 国产 | **格力 (GREE)** | 除霾 |
+
+### 总结建议
+*   **追求稳妥**：可以首选**松下**，产品成熟。
+*   雾霾严重 → **格力**
+*   母婴 → **空气堡**
+*   节能 → **布朗**
+*   **预算有限**：可以关注**霍尼韦尔**等性价比高的品牌。
+"""
+    assert _preferred_column_table_rank(answer, ["霍尼韦尔"]) is None
+
+    subtask = SimpleNamespace(
+        prompt="新风系统品牌推荐",
+        answer_content=answer,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=5,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(subtask, "新风系统品牌推荐", ["霍尼韦尔"], asset=None)
+    assert detail.rank == 2
+    assert detail.rank_basis in {"table", "section", None} or detail.source in {"structured", "appearance"}

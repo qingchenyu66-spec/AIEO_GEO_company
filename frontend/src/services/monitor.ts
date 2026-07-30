@@ -648,8 +648,10 @@ export interface InclusionSnapshotsQuery {
   end_date?: string
   tenant_id?: number
   platform?: string
+  keyword?: string
+  page?: number
   limit?: number
-  /** ranked=有排名；all=全部（含未提及） */
+  /** ranked=有位次；all=含未提及 */
   rank_scope?: 'ranked' | 'all'
 }
 
@@ -657,6 +659,9 @@ export interface InclusionSnapshotsResult {
   recent_snapshots: WorkspaceSnapshot[]
   purchased_platforms: string[]
   rank_scope?: 'ranked' | 'all'
+  total?: number
+  page?: number
+  page_size?: number
 }
 
 export async function getInclusionSnapshots(

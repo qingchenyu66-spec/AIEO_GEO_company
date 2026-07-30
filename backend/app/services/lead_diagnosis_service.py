@@ -1070,17 +1070,18 @@ def refresh_lead_diagnosis_after_backfill(db: Session, task_id: str) -> None:
         db.commit()
 
 
-def _load_subtasks(db: Session, lead: LeadDiagnosis) -> list[GeoMonitorSubtask]:
-    task_ids = [run.task_id for run in (lead.runs or []) if run.task_id and run.status != "failed"]
+def _load_subtasks_by_task_ids(db: Session, task_ids: list[str]) -> list[GeoMonitorSubtask]:
     if not task_ids:
         return []
+    # 2026-07-30 - 1038 类风险 - 诊断聚合不依赖顺序，勿全行 ORDER BY 宽列 filesort
     return list(
-        db.scalars(
-            select(GeoMonitorSubtask)
-            .where(GeoMonitorSubtask.task_id.in_(task_ids))
-            .order_by(GeoMonitorSubtask.id.asc())
-        )
+        db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
     )
+
+
+def _load_subtasks(db: Session, lead: LeadDiagnosis) -> list[GeoMonitorSubtask]:
+    task_ids = [run.task_id for run in (lead.runs or []) if run.task_id and run.status != "failed"]
+    return _load_subtasks_by_task_ids(db, task_ids)
 
 
 def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | None]:
@@ -1567,13 +1568,7 @@ def aggregate_tenant_diagnosis(db: Session, tenant_id: int) -> dict[str, Any]:
         tasks=tasks,
     )
     task_ids = [run.task_id for run in (ephemeral.runs or []) if run.task_id]
-    subtasks = list(
-        db.scalars(
-            select(GeoMonitorSubtask)
-            .where(GeoMonitorSubtask.task_id.in_(task_ids))
-            .order_by(GeoMonitorSubtask.id.asc())
-        )
-    )
+    subtasks = _load_subtasks_by_task_ids(db, task_ids)
     if not subtasks:
         raise ValueError("关联监测子任务为空，无法汇总诊断")
 

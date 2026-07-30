@@ -44,6 +44,7 @@ from app.schemas.permission import (
     PositionSaveRequest,
     RoleInfo,
     TenantCreateRequest,
+    TenantPurgeRequest,
     TenantTransferOwnerRequest,
     TenantUpdateRequest,
     UserCreateRequest,
@@ -51,13 +52,16 @@ from app.schemas.permission import (
 )
 from app.services.management_service import (
     _tenant_code_from_name,
+    allocate_tenant_code,
     create_managed_user,
     delete_managed_user,
     list_managed_users,
     list_platform_sales_users,
+    raise_if_live_tenant_name_or_code_conflict,
     reset_managed_user_password,
     restore_managed_user,
     set_managed_user_status,
+    tenant_name_was_purged,
     transfer_tenant_owner,
     update_managed_user,
 )
@@ -372,6 +376,21 @@ def position_code_from_name(identity_type: str, name: str) -> str:
     return f"{identity_type}_POS_{digest}"
 
 
+def _strip_purge_grant_unless_admin(position: Position, menu_grants: list | None) -> list | None:
+    """2026-07-30 - 彻底删除仅 PLATFORM_ADMIN，非管理员职位保存时剥掉该授权。"""
+    if not menu_grants:
+        return menu_grants
+    if position.position_code == "PLATFORM_ADMIN":
+        return menu_grants
+    filtered = []
+    for item in menu_grants:
+        code = getattr(item, "menu_code", None)
+        if code == "platform.audit.purge":
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def sync_position_menus(
     db: Session,
     position_id: int,
@@ -391,12 +410,23 @@ def sync_position_menus(
     )
 
 
+def _apply_position_allowed_platforms(db: Session, position: Position, payload: PositionSaveRequest) -> None:
+    from app.services.menu_permission_service import normalize_allowed_monitor_platforms
+
+    # 2026-07-30 - 平台白名单按职位直接保存，不再依赖「编辑平台范围」总开关
+    position.allowed_monitor_platforms_json = normalize_allowed_monitor_platforms(
+        list(payload.allowed_monitor_platforms or [])
+    )
+
+
 def position_to_dict(
     position: Position,
     *,
     grants: list[MenuGrantItem] | None = None,
     db: Session | None = None,
 ) -> dict:
+    from app.services.menu_permission_service import normalize_allowed_monitor_platforms
+
     resolved_grants = grants if grants is not None else (
         position_menu_grants(db, position.id) if db is not None else []
     )
@@ -409,6 +439,9 @@ def position_to_dict(
         description=position.description,
         menu_ids=[item.menu_id for item in resolved_grants],
         menu_grants=resolved_grants,
+        allowed_monitor_platforms=normalize_allowed_monitor_platforms(
+            list(getattr(position, "allowed_monitor_platforms_json", None) or [])
+        ),
     ).model_dump()
 
 
@@ -499,16 +532,18 @@ def management_create_position(
         role_code=payload.role_code,
         description=(payload.description or "").strip() or None,
         status=payload.status,
+        allowed_monitor_platforms_json=[],
     )
     db.add(position)
     db.flush()
+    _apply_position_allowed_platforms(db, position, payload)
     sync_position_menus(
         db,
         position.id,
         payload.menu_ids,
         identity_type=payload.identity_type,
         writable=payload.identity_type == "PLATFORM",
-        menu_grants=payload.menu_grants or None,
+        menu_grants=_strip_purge_grant_unless_admin(position, payload.menu_grants or None),
     )
     write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}", target_module="职位管理", target_id=position.id)
     db.commit()
@@ -547,13 +582,14 @@ def management_update_position(
     position.role_code = payload.role_code
     position.description = (payload.description or "").strip() or None
     position.status = payload.status
+    _apply_position_allowed_platforms(db, position, payload)
     sync_position_menus(
         db,
         position.id,
         payload.menu_ids,
         identity_type=payload.identity_type,
         writable=payload.identity_type == "PLATFORM",
-        menu_grants=payload.menu_grants or None,
+        menu_grants=_strip_purge_grant_unless_admin(position, payload.menu_grants or None),
     )
     synced_users = sync_identity_menus_for_position(db, position.id)
     write_management_log(db, current, "职位修改", f"修改职位：{position.position_name}（已同步 {synced_users} 个身份）", target_module="职位管理", target_id=position.id, risk_level="关注")
@@ -997,10 +1033,14 @@ def management_create_tenant(
     _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权新增企业")
     validate_service_period(payload.service_start_date, payload.service_end_date)
     name = payload.name.strip()
-    code = (payload.code or _tenant_code_from_name(name)).strip()
-    exists = db.scalar(select(Tenant).where(or_(Tenant.name == name, Tenant.code == code), Tenant.deleted.is_(False)))
-    if exists is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="企业名称或企业编码已存在")
+    # 2026-07-30 - 企业重名方案 B - 在册拦截分文案；软删可再建并换 code
+    preferred_code = (payload.code or _tenant_code_from_name(name)).strip()
+    try:
+        raise_if_live_tenant_name_or_code_conflict(db, name=name, code=preferred_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    was_purged = tenant_name_was_purged(db, name)
+    code = allocate_tenant_code(db, name, preferred_code)
 
     tenant = Tenant(
         name=name,
@@ -1020,7 +1060,10 @@ def management_create_tenant(
     write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
-    return ApiResponse(data=tenant_to_dict(tenant, db=db))
+    data = tenant_to_dict(tenant, db=db)
+    if was_purged:
+        data["name_was_purged"] = True
+    return ApiResponse(data=data)
 
 
 @router.put("/tenants/{tenant_id}", response_model=ApiResponse[dict])
@@ -1045,15 +1088,10 @@ def management_update_tenant(
     validate_service_period(payload.service_start_date, payload.service_end_date)
     name = payload.name.strip()
     code = (payload.code or tenant.code or _tenant_code_from_name(name)).strip()
-    exists = db.scalar(
-        select(Tenant).where(
-            or_(Tenant.name == name, Tenant.code == code),
-            Tenant.id != tenant_id,
-            Tenant.deleted.is_(False),
-        )
-    )
-    if exists is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="企业名称或企业编码已存在")
+    try:
+        raise_if_live_tenant_name_or_code_conflict(db, name=name, code=code, exclude_id=tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     tenant.name = name
     tenant.code = code
@@ -1193,6 +1231,50 @@ def management_restore_tenant(
     db.commit()
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant, db=db))
+
+
+@router.post("/tenants/{tenant_id}/purge", response_model=ApiResponse[dict])
+def management_purge_tenant(
+    tenant_id: int,
+    payload: TenantPurgeRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """彻底删除：先备份，再清监测历史与客户账号，最后软删企业。"""
+    require_platform(current)
+    from app.services.tenant_scope import is_platform_admin_identity
+
+    # 2026-07-30 - 彻底删除仅管理员 - 菜单权 + 职位双重校验
+    if not is_platform_admin_identity(db, current.identity):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台管理员可彻底删除企业")
+    _require_platform_menu(db, current, "platform.audit.purge", "can_delete", "当前账号无权彻底删除企业")
+    guard_sales_tenant(db, current, tenant_id)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
+    if payload.confirm_name.strip() != tenant.name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="确认名称与企业名称不一致")
+
+    from app.services.tenant_purge_service import purge_tenant_thoroughly
+
+    try:
+        # 2026-07-30 - 彻底删除独立于停服；先备份再清历史与账号
+        stats = purge_tenant_thoroughly(db, tenant, operator_user_id=current.user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    write_management_log(
+        db,
+        current,
+        "企业彻底删除",
+        f"彻底删除企业：{tenant.name}（备份 {stats.get('backup_path')}）",
+        target_module="企业管理",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        risk_level="高危",
+    )
+    db.commit()
+    return ApiResponse(data=stats)
 
 
 @router.get("/users", response_model=ApiResponse[list[dict]])

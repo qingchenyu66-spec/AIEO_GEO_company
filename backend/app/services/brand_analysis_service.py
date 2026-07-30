@@ -19,7 +19,9 @@ from app.services.brand_service import get_brand_asset, tenant_purchased_platfor
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.monitor_service import (
     _answer_excerpt,
+    _hydrate_subtasks_in_id_order,
     _normalize_sentiment_label,
+    _ordered_subtask_ids,
     _resolve_workspace_brief_tenant_id,
     _subtask_answer_plaintext,
 )
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 # 2026-07-28 - 正负面：v2 过严正面归零；v3 适中口径，打开页会重判
 BA_SENTIMENT_SOURCE = "deepseek-v3"
+# 2026-07-30 - 竞品情绪趋势：模力近全中性 - 无 DeepSeek 时用规则二次标，source 独立勿冒充 LLM
+BA_SENTIMENT_RULE_SOURCE = "rule-v1"
 # 2026-07-29 - 要点级情感 deepseek-v3；旧 v2 无 sentiment 字段视为未抽，打开页 parse 会重抽
 # （已弃用 v2 仅字符串列表：组标签继承整段情感，吊销要点会被并进正面）
 BA_DESC_SOURCE = "deepseek-v3"
@@ -44,6 +48,9 @@ BA_DESC_HARD_MAX = 16
 # ponytail: SequenceMatcher on short CN text; 0.60 + LCS 门闩合并近义、少误并不同业务点。
 # Ceiling: 仍可能漏并换词大的近义；upgrade path: embedding / DeepSeek cluster.
 BA_DESC_SIMILARITY = 0.60
+# 2026-07-30 - 品牌分析首屏 ~11s - 近义合并改 bigram 候选，避免 400+ 桶 O(n²) 全比
+BA_DESC_MERGE_CANDIDATE_CAP = 32
+BA_DESC_LCS_NEED = 6
 _DESC_PUNCT_RE = re.compile(r"[\s、。，；：！？\"'“”‘’（）()\[\]【】《》·\-—_/\\|＋+]+")
 # 2026-07-29 - 工商/合规硬风险：归并禁与非风险并，旧数据无要点情感时回退为负面
 _RISK_DESC_RE = re.compile(
@@ -70,6 +77,12 @@ def _has_deepseek_sentiment(subtask: GeoMonitorSubtask) -> bool:
     return str(raw.get("_ba_sentiment_source") or "") == BA_SENTIMENT_SOURCE
 
 
+def _has_secondary_sentiment(subtask: GeoMonitorSubtask) -> bool:
+    """DeepSeek 或规则二次标均算已解析（竞品趋势优先用二次标）。"""
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    return str(raw.get("_ba_sentiment_source") or "") in {BA_SENTIMENT_SOURCE, BA_SENTIMENT_RULE_SOURCE}
+
+
 def _mark_deepseek_sentiment(subtask: GeoMonitorSubtask, sentiment: str) -> None:
     raw = dict(subtask.raw_result_json) if isinstance(subtask.raw_result_json, dict) else {}
     raw["_ba_sentiment_source"] = BA_SENTIMENT_SOURCE
@@ -77,6 +90,67 @@ def _mark_deepseek_sentiment(subtask: GeoMonitorSubtask, sentiment: str) -> None
     subtask.raw_result_json = raw
     flag_modified(subtask, "raw_result_json")
     subtask.sentiment = sentiment
+
+
+def _mark_rule_sentiment(subtask: GeoMonitorSubtask, sentiment: str) -> None:
+    raw = dict(subtask.raw_result_json) if isinstance(subtask.raw_result_json, dict) else {}
+    raw["_ba_sentiment_source"] = BA_SENTIMENT_RULE_SOURCE
+    raw["_ba_sentiment"] = sentiment
+    subtask.raw_result_json = raw
+    flag_modified(subtask, "raw_result_json")
+    subtask.sentiment = sentiment
+
+
+_RULE_NEG_RE = re.compile(
+    r"吊销|注销|经营异常|行政处罚|失信|投诉|翻车|不推荐|避雷|虚假|欺诈|风险极高|严重违法"
+)
+_RULE_POS_RE = re.compile(
+    r"推荐|首选|领先|优势|口碑好|值得信赖|王牌|开创|专精特新|头部品牌|优质|认可"
+)
+
+
+def rule_classify_brand_sentiment(text: str, brand_name: str | None = None) -> str:
+    """轻量规则二次情感；无 API 时兜底。有品牌名时要求正文出现品牌片段才抬正/负。"""
+    body = str(text or "")
+    if len(body.strip()) < 8:
+        return "neutral"
+    brand = str(brand_name or "").strip()
+    if brand and len(brand) >= 2:
+        # 公司全称过长时用前 4 字做弱提及判断
+        needle = brand[:4] if len(brand) >= 4 else brand
+        if needle not in body and brand not in body:
+            return "neutral"
+    neg = len(_RULE_NEG_RE.findall(body))
+    pos = len(_RULE_POS_RE.findall(body))
+    if neg > pos and neg > 0:
+        return "negative"
+    if pos > neg and pos > 0:
+        return "positive"
+    return "neutral"
+
+
+def effective_monitor_sentiment(subtask: GeoMonitorSubtask) -> str | None:
+    """竞品/洞察读口径：二次标（DeepSeek>规则）优先，否则模力原标。"""
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    source = str(raw.get("_ba_sentiment_source") or "")
+    secondary = str(raw.get("_ba_sentiment") or "").strip().lower()
+    if source == BA_SENTIMENT_SOURCE and secondary in SENTIMENT_KEYS:
+        return secondary
+    if source == BA_SENTIMENT_RULE_SOURCE and secondary in SENTIMENT_KEYS:
+        return secondary
+    text = str(subtask.sentiment or "").strip().lower()
+    mapping = {
+        "positive": "positive",
+        "negative": "negative",
+        "neutral": "neutral",
+        "正向": "positive",
+        "负向": "negative",
+        "中立": "neutral",
+        "正面": "positive",
+        "负面": "negative",
+        "中性": "neutral",
+    }
+    return mapping.get(text)
 
 
 def _has_deepseek_description(subtask: GeoMonitorSubtask) -> bool:
@@ -243,21 +317,33 @@ def _description_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
-def _lcs_run_len(a: str, b: str) -> int:
-    """最长连续公共子串长度（短中文要点够用）。"""
+def _lcs_run_len(a: str, b: str, *, need: int = BA_DESC_LCS_NEED) -> int:
+    """最长连续公共子串长度（短中文要点够用）；达到 need 可提前结束。"""
     if not a or not b:
         return 0
+    if need <= 0:
+        need = BA_DESC_LCS_NEED
     prev = [0] * (len(b) + 1)
     best = 0
-    for i, ca in enumerate(a, start=1):
+    for ca in a:
         cur = [0] * (len(b) + 1)
         for j, cb in enumerate(b, start=1):
             if ca == cb:
                 cur[j] = prev[j - 1] + 1
                 if cur[j] > best:
                     best = cur[j]
+                    if best >= need:
+                        return best
         prev = cur
     return best
+
+
+def _char_bigrams(text: str) -> set[str]:
+    if not text:
+        return set()
+    if len(text) < 2:
+        return {text}
+    return {text[i : i + 2] for i in range(len(text) - 1)}
 
 
 def _descriptions_similar(
@@ -266,6 +352,8 @@ def _descriptions_similar(
     *,
     threshold: float = BA_DESC_SIMILARITY,
     brand_aliases: list[str] | None = None,
+    core_a: str | None = None,
+    core_b: str | None = None,
 ) -> bool:
     """近义合并：全等直接并；其余在去主体名后比；风险/非风险互不并。"""
     na = _normalize_description_key(a)
@@ -277,8 +365,8 @@ def _descriptions_similar(
     # 2026-07-29 - 吊销等硬风险不得与成立/资质类非风险并成一组
     if _is_risk_description(a) != _is_risk_description(b):
         return False
-    ca = _core_description_key(a, brand_aliases)
-    cb = _core_description_key(b, brand_aliases)
+    ca = core_a if core_a is not None else _core_description_key(a, brand_aliases)
+    cb = core_b if core_b is not None else _core_description_key(b, brand_aliases)
     # 去主体后过短：只靠公司名撞车，不并
     if len(ca) < 4 or len(cb) < 4:
         return False
@@ -286,13 +374,16 @@ def _descriptions_similar(
     # 2026-07-28 - 「总部位于北京」vs「2008年成立总部位于北京」类包含句应合并
     if len(shorter) >= 6 and shorter in longer:
         return True
+    # 长度差过大且无包含关系时，近义概率极低，跳过昂贵比对
+    if min(len(ca), len(cb)) / max(len(ca), len(cb)) < 0.45:
+        return False
     ratio = SequenceMatcher(None, ca, cb).ratio()
     if ratio >= 0.85:
         return True
     if ratio < threshold:
         return False
     # 2026-07-28 - 0.60~0.85 易把短视频/户外等不同要点并掉 - 加连续公共子串门闩
-    return _lcs_run_len(ca, cb) >= 6
+    return _lcs_run_len(ca, cb, need=BA_DESC_LCS_NEED) >= BA_DESC_LCS_NEED
 
 
 def _dominant_sent_key(tally: dict[str, int]) -> str:
@@ -333,18 +424,49 @@ def _merge_similar_description_buckets(
         if ri != rj:
             parent[rj] = ri
 
+    # 预计算 core + bigram 倒排，只对共享字串的候选做近义比对（O(n·k) 代替 O(n²)）
+    cores = [_core_description_key(str(b.get("description") or ""), brand_aliases) for b in buckets]
+    sent_keys = [_dominant_sent_key(b["_sent_tally"]) for b in buckets]
+    gram_lists = [list(_char_bigrams(core) or ({core[:1]} if core else set())) for core in cores]
+    gram_index: dict[str, list[int]] = {}
+    for i, grams in enumerate(gram_lists):
+        for gram in grams:
+            gram_index.setdefault(gram, []).append(i)
+
+    cap = max(8, int(BA_DESC_MERGE_CANDIDATE_CAP))
     for i in range(len(buckets)):
-        for j in range(i + 1, len(buckets)):
-            if not _sentiments_mergeable(
-                _dominant_sent_key(buckets[i]["_sent_tally"]),
-                _dominant_sent_key(buckets[j]["_sent_tally"]),
-            ):
+        core = cores[i]
+        if not core:
+            continue
+        share_count: dict[int, int] = {}
+        for gram in gram_lists[i]:
+            for j in gram_index.get(gram, ()):
+                if j > i:
+                    share_count[j] = share_count.get(j, 0) + 1
+        # 长句要求 ≥2 个 bigram 重叠，砍掉「的/公司」类弱碰撞；短句仍放宽
+        min_share = 2 if len(core) >= 8 else 1
+        cand = [j for j, cnt in share_count.items() if cnt >= min_share]
+        if not cand:
+            continue
+        if len(cand) > cap:
+            cand = sorted(
+                cand,
+                key=lambda j: (-share_count[j], abs(len(cores[j]) - len(core)), j),
+            )[:cap]
+        else:
+            cand.sort()
+        sent_i = sent_keys[i]
+        desc_i = buckets[i]["description"]
+        for j in cand:
+            if not _sentiments_mergeable(sent_i, sent_keys[j]):
                 continue
             if _descriptions_similar(
-                buckets[i]["description"],
+                desc_i,
                 buckets[j]["description"],
                 threshold=threshold,
                 brand_aliases=brand_aliases,
+                core_a=core,
+                core_b=cores[j],
             ):
                 union(i, j)
 
@@ -390,14 +512,15 @@ def preserve_brand_analysis_sentiment_on_upsert(
     subtask: GeoMonitorSubtask,
     incoming: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any]]:
-    """同步远端时保留 DeepSeek 二次解析结果（情感 + AI 描述）。返回 (sentiment, raw_json)。"""
+    """同步远端时保留 DeepSeek/规则二次解析结果（情感 + AI 描述）。返回 (sentiment, raw_json)。"""
     prev = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
-    keep = str(prev.get("_ba_sentiment_source") or "") == BA_SENTIMENT_SOURCE
+    prev_source = str(prev.get("_ba_sentiment_source") or "")
+    keep = prev_source in {BA_SENTIMENT_SOURCE, BA_SENTIMENT_RULE_SOURCE}
     kept_value = str(prev.get("_ba_sentiment") or subtask.sentiment or "").strip().lower()
     raw = dict(incoming) if isinstance(incoming, dict) else {}
     remote_sentiment = incoming.get("sentiment") if isinstance(incoming, dict) else None
     if keep and kept_value in SENTIMENT_KEYS:
-        raw["_ba_sentiment_source"] = BA_SENTIMENT_SOURCE
+        raw["_ba_sentiment_source"] = prev_source
         raw["_ba_sentiment"] = kept_value
         sentiment_out: str | None = kept_value
     else:
@@ -440,22 +563,49 @@ def parse_brand_word_sentiments_with_deepseek(
     brand_name: str,
     subtasks: list[GeoMonitorSubtask],
     max_items: int = BA_SENTIMENT_MAX_PER_REQUEST,
+    upgrade_rule: bool = True,
 ) -> dict[str, Any]:
-    """对尚未二次解析的品牌词回答调用 DeepSeek，写回 sentiment。"""
+    """对尚未二次解析的回答调用 DeepSeek，写回 sentiment；无 Key 时规则兜底。"""
     client = DeepseekClient()
-    # 品牌分析情感只依赖 API Key，不绑「情感关键词」功能开关
-    if not client.api_key:
-        return {"parsed": 0, "skipped": len(subtasks), "error": "未配置 DeepSeek API Key"}
-
     pending: list[GeoMonitorSubtask] = []
     for item in subtasks:
+        # DeepSeek 已标跳过；规则标默认可升级，竞品读路径可关以免反复打 LLM
         if _has_deepseek_sentiment(item):
+            continue
+        if not upgrade_rule and _has_secondary_sentiment(item):
             continue
         if not _subtask_answer_plaintext(item).strip():
             continue
         pending.append(item)
         if len(pending) >= max_items:
             break
+
+    if not pending:
+        left = sum(
+            1
+            for item in subtasks
+            if (
+                (not _has_deepseek_sentiment(item) if upgrade_rule else not _has_secondary_sentiment(item))
+                and _subtask_answer_plaintext(item).strip()
+            )
+        )
+        return {"parsed": 0, "pending_left": left, "errors": [], "source": "none"}
+
+    if not client.api_key:
+        # 2026-07-30 - 无 DeepSeek Key 时规则二次标，避免竞品趋势长期锁死模力中性
+        for item in pending:
+            sentiment = rule_classify_brand_sentiment(
+                _subtask_answer_plaintext(item),
+                brand_name,
+            )
+            _mark_rule_sentiment(item, sentiment)
+        db.commit()
+        return {
+            "parsed": len(pending),
+            "pending_left": 0,
+            "errors": [],
+            "source": BA_SENTIMENT_RULE_SOURCE,
+        }
 
     parsed = 0
     errors: list[str] = []
@@ -468,22 +618,46 @@ def parse_brand_word_sentiments_with_deepseek(
         try:
             rows = client.classify_brand_answer_sentiments(brand_name=brand_name, items=payload)
         except DeepseekApiError as exc:
-            logger.warning("brand analysis sentiment parse failed tenant=%s error=%s", tenant_id, exc)
+            logger.warning("monitor sentiment parse failed tenant=%s error=%s", tenant_id, exc)
             errors.append(str(exc))
+            # DeepSeek 失败：对本批改规则兜底，避免整页继续全中性
+            for item in batch:
+                if _has_deepseek_sentiment(item):
+                    continue
+                _mark_rule_sentiment(
+                    item,
+                    rule_classify_brand_sentiment(_subtask_answer_plaintext(item), brand_name),
+                )
+                parsed += 1
             break
         by_id = {row["id"]: row["sentiment"] for row in rows}
         for item in batch:
             sentiment = by_id.get(item.subtask_id)
             if sentiment not in SENTIMENT_KEYS:
+                sentiment = rule_classify_brand_sentiment(
+                    _subtask_answer_plaintext(item),
+                    brand_name,
+                )
+                _mark_rule_sentiment(item, sentiment)
+                parsed += 1
                 continue
             _mark_deepseek_sentiment(item, sentiment)
             parsed += 1
     if parsed:
         db.commit()
+    left = sum(
+        1
+        for item in subtasks
+        if (
+            (not _has_deepseek_sentiment(item) if upgrade_rule else not _has_secondary_sentiment(item))
+            and _subtask_answer_plaintext(item).strip()
+        )
+    )
     return {
         "parsed": parsed,
-        "pending_left": max(0, len(pending) - parsed),
+        "pending_left": left,
         "errors": errors,
+        "source": BA_SENTIMENT_SOURCE,
     }
 
 
@@ -639,26 +813,6 @@ def _load_brand_word_subtasks(
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            joinedload(GeoMonitorSubtask.task).load_only(
-                GeoMonitorTask.monitor_keywords,
-                GeoMonitorTask.created_at,
-                GeoMonitorTask.purpose,
-            ),
-            load_only(
-                GeoMonitorSubtask.subtask_id,
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.status,
-                GeoMonitorSubtask.answer_content,
-                GeoMonitorSubtask.mention_context,
-                GeoMonitorSubtask.page_screenshot,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.raw_result_json,
-                GeoMonitorSubtask.updated_at,
-            ),
-        )
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
@@ -673,7 +827,30 @@ def _load_brand_word_subtasks(
         .order_by(GeoMonitorSubtask.updated_at.desc())
         .limit(limit)
     )
-    return list(db.scalars(stmt).unique())
+    # 2026-07-30 - 1038 类风险 - 品牌分析 ORDER BY 勿带 answer/raw/screenshot，id-first 再 hydrate
+    ordered_ids = _ordered_subtask_ids(db, stmt)
+    return _hydrate_subtasks_in_id_order(
+        db,
+        ordered_ids,
+        joinedload(GeoMonitorSubtask.task).load_only(
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
+            GeoMonitorTask.purpose,
+        ),
+        load_only(
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.status,
+            GeoMonitorSubtask.answer_content,
+            GeoMonitorSubtask.mention_context,
+            GeoMonitorSubtask.page_screenshot,
+            GeoMonitorSubtask.sentiment,
+            GeoMonitorSubtask.raw_result_json,
+            GeoMonitorSubtask.updated_at,
+        ),
+    )
 
 
 def build_brand_analysis_dashboard(
@@ -871,8 +1048,9 @@ def build_brand_analysis_dashboard(
 
 
 def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) -> None:
-    """品牌词任务同步完成后尽快二次解析情感与 AI 描述。"""
-    if str(getattr(task, "purpose", "") or "") != "brand_word" or not task.tenant_id:
+    """监测任务同步完成后二次解析情感；品牌词另抽 AI 描述。"""
+    purpose = str(getattr(task, "purpose", "") or "")
+    if purpose not in {"brand_word", "geo"} or not task.tenant_id:
         return
     asset = get_brand_asset(db, task.tenant_id)
     brand_name = (asset.company_full_name if asset else None) or (asset.brand_name if asset else None) or "监测品牌"
@@ -886,12 +1064,17 @@ def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) ->
     )
     if not subtasks:
         return
+    # 2026-07-30 - GEO 同步后补二次情感，竞品情绪趋势不再只信模力中性
     parse_brand_word_sentiments_with_deepseek(
         db,
         tenant_id=task.tenant_id,
         brand_name=str(brand_name),
         subtasks=subtasks,
+        max_items=BA_SENTIMENT_MAX_PER_REQUEST if purpose == "brand_word" else 48,
+        upgrade_rule=True,
     )
+    if purpose != "brand_word":
+        return
     parse_brand_word_descriptions_with_deepseek(
         db,
         tenant_id=task.tenant_id,

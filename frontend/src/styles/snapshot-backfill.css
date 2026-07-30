@@ -708,6 +708,47 @@ table.sb-matrix tbody th {
   border: 1px solid rgba(0, 0, 0, .06);
 }
 
+/* 2026-07-30 - 全部平台分块竖铺热力 - 每端独立词×日；侧栏锚点滚动 */
+.sb-plat-blocks {
+  display: grid;
+  gap: 18px;
+  max-height: min(70vh, calc(100vh - 220px));
+  overflow: auto;
+}
+
+.sb-plat-block {
+  border: 1px solid var(--sb-line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fafbfc;
+  scroll-margin-top: 12px;
+}
+
+.sb-plat-block.active {
+  border-color: rgba(228, 87, 46, 0.45);
+  box-shadow: 0 0 0 2px rgba(228, 87, 46, 0.1);
+}
+
+.sb-plat-block-head {
+  margin-bottom: 10px;
+}
+
+.sb-plat-block-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.sb-plat-block-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--sb-muted, #6b7280);
+}
+
+.sb-plat-block .sb-matrix-wrap {
+  background: #fff;
+  border-radius: 8px;
+}
+
 .sb-side {
   padding: 14px;
   display: grid;

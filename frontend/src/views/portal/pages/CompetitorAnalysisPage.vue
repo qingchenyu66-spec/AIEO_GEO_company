@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import {
   AlertTriangle,
-  ArrowRight,
   BarChart3,
   Cloud,
   Download,
@@ -59,7 +58,6 @@ const {
   resetFilters,
   exportCsv,
   togglePlatform,
-  drillDownToRealtime,
   closeKeywordSnapshot,
   snapshotVisible,
   snapshotLoading,
@@ -259,16 +257,14 @@ const snapshotSourceRows = computed(() => {
             <div>
               <h3>品牌提及率分析</h3>
               <p>
-                本品牌 + 全部配置竞品走势 · 点击数据点下钻
+                <!-- 2026-07-30 - 洞察四宫格下钻意义不大 - 去掉点击下钻文案与查看明细 -->
+                本品牌 · 全部配置竞品走势
                 <span v-if="mentionTrendHiddenCount > 0" class="brand-insights-trend-note">
                   （另有 {{ mentionTrendHiddenCount }} 个竞品见右侧排行榜）
                 </span>
               </p>
             </div>
-            <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
-              查看明细
-              <ArrowRight />
-            </button>
+            <BarChart3 />
           </div>
           <div
             v-if="leaderboardRows.some(row => row.mention > 0)"
@@ -293,13 +289,11 @@ const snapshotSourceRows = computed(() => {
               <span>提及率</span>
               <span>首位提及率</span>
             </div>
-            <button
+            <div
               v-for="(row, index) in leaderboardRows"
               :key="row.name"
-              type="button"
-              class="brand-insights-rank-row is-clickable"
+              class="brand-insights-rank-row"
               :class="{ 'is-brand': row.is_brand }"
-              @click="drillDownToRealtime()"
             >
               <span>{{ index + 1 }}</span>
               <div class="brand-insights-rank-name">
@@ -308,7 +302,7 @@ const snapshotSourceRows = computed(() => {
               </div>
               <strong>{{ row.mention }}%</strong>
               <span>{{ row.first_mention_rate }}%</span>
-            </button>
+            </div>
           </div>
         </article>
 
@@ -316,7 +310,7 @@ const snapshotSourceRows = computed(() => {
           <div class="competitor-panel-head">
             <div>
               <h3>情绪趋势</h3>
-              <p>监测回答情感标签占比 · 点击下钻</p>
+              <p>监测回答情感标签占比</p>
             </div>
             <HeartPulse />
           </div>
@@ -334,10 +328,7 @@ const snapshotSourceRows = computed(() => {
               <h3>情绪指数排行榜</h3>
               <p>各品牌在推荐列表中被提及时的回答情绪分布</p>
             </div>
-            <button type="button" class="insight-detail-btn" @click="drillDownToRealtime()">
-              查看明细
-              <ArrowRight />
-            </button>
+            <HeartPulse />
           </div>
           <div class="brand-insights-rank-table">
             <div class="brand-insights-rank-head sentiment">
@@ -346,13 +337,11 @@ const snapshotSourceRows = computed(() => {
               <span>正面占比</span>
               <span>负面占比</span>
             </div>
-            <button
+            <div
               v-for="(row, index) in sentimentLeaderboardRows"
               :key="`sentiment-${row.name}`"
-              type="button"
-              class="brand-insights-rank-row is-clickable"
+              class="brand-insights-rank-row"
               :class="{ 'is-brand': row.is_brand }"
-              @click="drillDownToRealtime()"
             >
               <span>{{ index + 1 }}</span>
               <div class="brand-insights-rank-name">
@@ -361,7 +350,7 @@ const snapshotSourceRows = computed(() => {
               </div>
               <strong class="is-positive">{{ row.positive_rate }}%</strong>
               <span class="is-negative">{{ row.negative_rate }}%</span>
-            </button>
+            </div>
             <div v-if="!sentimentLeaderboardRows.length" class="mini-empty">暂无情绪排行数据。</div>
           </div>
         </article>

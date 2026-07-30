@@ -21,12 +21,6 @@ export interface CompetitorCompareRow {
   gap_summary?: string | null
 }
 
-export interface CompetitorPlatformCompareRow {
-  platform: string
-  sample_count: number
-  rows: CompetitorCompareRow[]
-}
-
 export interface MentionTrendSeries {
   name: string
   is_brand?: boolean
@@ -53,19 +47,38 @@ export interface SentimentLeaderboardRow {
   sentiment_sample: number
 }
 
+export interface CompetitorPlatformCompareRow {
+  platform: string
+  sample_count: number
+  rows: CompetitorCompareRow[]
+  mention_trends?: BrandInsightsTrends
+  sentiment_trends?: SentimentTrendSeries
+  sentiment_rows?: SentimentLeaderboardRow[]
+}
+
 export interface CompetitorCompareSummary {
   brand_name: string | null
   competitor_count: number
   sample_total: number
+  /** 平台 Tab 用：未按选中平台过滤的样本总数 */
+  tab_sample_total?: number
   start_at?: string
   end_at?: string
   prompt_options?: string[]
   trend_day_keys?: string[]
   rows: CompetitorCompareRow[]
   platform_rows: CompetitorPlatformCompareRow[]
+  /** 平台 Tab 用：各端样本数（不受当前平台筛选影响） */
+  platform_tab_counts?: Array<{ platform: string; sample_count: number }>
   mention_trends?: BrandInsightsTrends
   sentiment_trends?: SentimentTrendSeries
   sentiment_rows?: SentimentLeaderboardRow[]
+  sentiment_parse?: {
+    parsed?: number
+    pending_left?: number
+    errors?: string[]
+    source?: string
+  }
 }
 
 /** @deprecated use CompetitorCompareRow */
@@ -166,3 +179,46 @@ export async function getCompetitorCompare(params?: {
 
 /** @deprecated use getCompetitorCompare */
 export const getBrandInsights = getCompetitorCompare
+
+export type SourceStatRow = {
+  title: string
+  url: string
+  site?: string | null
+  count: number
+  platforms?: string[]
+  exposure_terms?: string[]
+  questions?: string[]
+  latest_time?: string | null
+  has_exposure?: boolean
+}
+
+export type SourceCitationTrend = {
+  start_at?: string | null
+  end_at?: string | null
+  points?: Array<{ label: string; value: number; day?: string }>
+}
+
+export type SourceAnalysisSummary = {
+  tenant_id: number
+  source_stats: SourceStatRow[]
+  source_stats_all?: SourceStatRow[]
+  source_citation_trend?: SourceCitationTrend
+  source_citation_trend_by_platform?: Record<string, SourceCitationTrend>
+  platform_stats?: Array<{
+    platform: string
+    total: number
+    completed: number
+    mention_rate: number
+    avg_rank: number | null
+  }>
+}
+
+export async function getSourceStats(params?: {
+  tenant_id?: number
+}): Promise<SourceAnalysisSummary> {
+  const response = await http.get('/v1/analytics/source-stats', {
+    params,
+    timeout: 60000,
+  })
+  return response.data.data
+}

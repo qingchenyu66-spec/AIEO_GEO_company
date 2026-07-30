@@ -142,18 +142,31 @@ export function useReportCenter(options: UseReportCenterOptions) {
     const rows = filteredReports.value
     const latest = rows[0]
     const publishedCount = rows.filter(item => item.status === 'published').length
-    const avgHealth = rows.filter(item => item.health_score != null)
-    const healthAvg = avgHealth.length
-      ? Math.round(avgHealth.reduce((sum, item) => sum + (item.health_score || 0), 0) / avgHealth.length)
-      : null
+    const latestTitle = latest ? formatReportDisplayTitle(latest) : null
+    const latestTypeLabel = latest?.report_type_label || latest?.report_type || null
+    // 2026-07-30 - hero 去健康分 - 第三卡优先提及率，缺省再均位
+    let latestMetricLabel = '最新提及率'
+    let latestMetricValue: string | number = '—'
+    let latestMetricHint = latestTitle || '暂无报告'
+    if (latest?.mention_rate != null) {
+      latestMetricLabel = '最新提及率'
+      latestMetricValue = `${latest.mention_rate}%`
+    } else if (latest?.avg_rank != null) {
+      latestMetricLabel = '最新均位'
+      latestMetricValue = latest.avg_rank
+    } else if (!latest) {
+      latestMetricHint = '暂无报告'
+    } else {
+      latestMetricHint = '暂无监测指标'
+    }
     return {
       total: rows.length,
       publishedCount,
-      latestTitle: latest
-        ? formatReportDisplayTitle(latest)
-        : null,
-      latestHealth: latest?.health_score ?? null,
-      avgHealth: healthAvg,
+      latestTitle,
+      latestTypeLabel,
+      latestMetricLabel,
+      latestMetricValue,
+      latestMetricHint,
     }
   })
 

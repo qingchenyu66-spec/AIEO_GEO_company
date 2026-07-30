@@ -145,8 +145,9 @@ function diagnosisTitleText(title: string | null | undefined) {
         </span>
         <h2>{{ heroTitle }}</h2>
         <p>
-          汇总 AI 平台监测结果、品牌诊断与信源引用，形成可交付的结构化报告。
-          {{ isPlatform ? '周期报告自动发布至客户端；企业诊断仅供运营内部预览导出。' : '此处展示已发布的周期监测报告，支持在线预览、导出 PDF/HTML/Word 与打印。' }}
+          {{ isPlatform
+            ? '按企业查看周期报告与内部诊断，支持预览与导出。'
+            : '查看已发布的周期监测报告，支持预览与导出。' }}
         </p>
       </div>
       <article class="report-hero-metric">
@@ -155,14 +156,14 @@ function diagnosisTitleText(title: string | null | undefined) {
         <em>{{ heroMetrics.publishedCount }} 份已发布</em>
       </article>
       <article class="report-hero-metric">
-        <span>最新健康分</span>
-        <b>{{ heroMetrics.latestHealth ?? '—' }}</b>
+        <span>最新报告</span>
+        <b>{{ heroMetrics.latestTypeLabel || '—' }}</b>
         <em>{{ heroMetrics.latestTitle || '暂无报告' }}</em>
       </article>
       <article class="report-hero-metric">
-        <span>平均健康分</span>
-        <b>{{ heroMetrics.avgHealth ?? '—' }}</b>
-        <em>基于当前筛选范围</em>
+        <span>{{ heroMetrics.latestMetricLabel }}</span>
+        <b>{{ heroMetrics.latestMetricValue }}</b>
+        <em>{{ heroMetrics.latestMetricHint }}</em>
       </article>
     </article>
 

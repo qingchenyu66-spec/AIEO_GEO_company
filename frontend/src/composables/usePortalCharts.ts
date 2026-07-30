@@ -189,7 +189,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
             { name: '中性', type: 'line', smooth: true, symbolSize: 6, data: rows.map(item => item.neutral) },
             { name: '负面', type: 'line', smooth: true, symbolSize: 6, data: rows.map(item => item.negative) },
           ],
-        })
+        }, true)
         trendMini.off('click')
         if (data.chartClickHandlers?.sentimentTrend) {
           trendMini.on('click', (params: { dataIndex?: number }) => {
@@ -307,7 +307,7 @@ export function usePortalCharts(refs: PortalChartRefs) {
               emphasis: { focus: 'series', lineStyle: { width: 2.8 } },
             }
           }),
-        })
+        }, true)
         mentionTrendChart.off('click')
         if (data.chartClickHandlers?.mentionTrend) {
           mentionTrendChart.on('click', (params: { dataIndex?: number; seriesIndex?: number }) => {

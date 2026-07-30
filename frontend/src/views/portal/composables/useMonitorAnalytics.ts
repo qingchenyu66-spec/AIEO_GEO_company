@@ -15,9 +15,7 @@ import { parsePreviewTenantId } from '../customerPreview'
 
 export const monitorSummaryMenuCodes = new Set([
   'platform.diagnosis',
-  'platform.sources',
   'customer.diagnosis',
-  'customer.sources',
   'platform.models',
 ])
 

@@ -71,6 +71,27 @@ _TRANSIENT_SYNC_ERRORS = (MolizhishuApiError, TimeoutError, OperationalError)
 logger = logging.getLogger(__name__)
 
 
+def _ordered_subtask_ids(db: Session, stmt) -> list[int]:
+    """ORDER BY/LIMIT 阶段只取主键，避免宽列进 filesort（MySQL 1038）。
+
+    2026-07-30 - 同 platforms/matrix、补录列表 - stmt 勿带 load_only 胖列；排序后再 hydrate
+    """
+    id_stmt = stmt.with_only_columns(GeoMonitorSubtask.id, maintain_column_froms=True)
+    return list(db.scalars(id_stmt))
+
+
+def _hydrate_subtasks_in_id_order(db: Session, ordered_ids: list[int], *option_args) -> list[GeoMonitorSubtask]:
+    if not ordered_ids:
+        return []
+    by_id = {
+        item.id: item
+        for item in db.scalars(
+            select(GeoMonitorSubtask).options(*option_args).where(GeoMonitorSubtask.id.in_(ordered_ids))
+        ).unique()
+    }
+    return [by_id[i] for i in ordered_ids if i in by_id]
+
+
 def _has_structured_rankings(value: Any) -> bool:
     return bool(normalize_structured_rankings(value or []))
 
@@ -1193,6 +1214,66 @@ def get_customer_source_stats_bundle(
         lock_ttl_seconds=120,
         wait_seconds=45.0,
     )
+
+
+def build_source_analysis_summary(
+    db: Session,
+    current: CurrentSession,
+    *,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
+    """信源分析页专用轻载荷：只聚合信源，不扫监测任务/子任务大表。
+
+    2026-07-30 - 信源页等整包 summary ~7s - 独立接口走日物化缓存
+    """
+    from app.services.brand_service import (
+        active_keyword_groups,
+        brand_exposure_terms,
+        get_brand_asset,
+        tenant_purchased_platforms,
+    )
+    from app.services.tenant_scope import resolve_and_guard_analytics_tenant
+
+    resolved = resolve_and_guard_analytics_tenant(
+        db,
+        current,
+        tenant_id,
+        menu_code="platform.sources" if current.identity.identity_type == "PLATFORM" else "customer.sources",
+    )
+    asset = get_brand_asset(db, resolved)
+    exposure = brand_exposure_terms(asset, active_keyword_groups(db, resolved))
+    purchased = set(tenant_purchased_platforms(db, resolved, asset))
+    bundle = get_customer_source_stats_bundle(
+        db,
+        resolved,
+        purchased_platforms=purchased,
+        exposure_terms=exposure,
+    )
+
+    platform_stats: list[dict[str, Any]] = []
+    try:
+        from app.services.monitor_stats_service import aggregate_platform_stats, has_daily_stats
+
+        if has_daily_stats(db, [resolved]):
+            since = (datetime.now().date() - timedelta(days=30))
+            rows = aggregate_platform_stats(db, tenant_ids=[resolved], since=since)
+            if rows:
+                platform_stats = sort_platform_items(rows)
+    except Exception:
+        logger.exception("source analysis platform_stats failed tenant_id=%s", resolved)
+
+    return {
+        "tenant_id": resolved,
+        "source_stats": bundle.get("source_stats") or [],
+        "source_stats_all": bundle.get("source_stats_all") or [],
+        "source_citation_trend": bundle.get("source_citation_trend") or {
+            "start_at": None,
+            "end_at": None,
+            "points": [],
+        },
+        "source_citation_trend_by_platform": bundle.get("source_citation_trend_by_platform") or {},
+        "platform_stats": platform_stats,
+    }
 
 
 def _empty_monitor_summary(current: CurrentSession) -> dict[str, Any]:
@@ -2674,7 +2755,9 @@ def _subtask_answer_plaintext(subtask: GeoMonitorSubtask) -> str:
     for field in (subtask.answer_content, subtask.mention_context):
         if not field:
             continue
-        cleaned = re.sub(r"<[^>]+>", "\n", str(field))
+        # 2026-07-30 - 表内 <br> 先变空格再剥其它标签，避免 | 行被拆断导致品牌表只剩首行
+        cleaned = re.sub(r"<br\s*/?>", " ", str(field), flags=re.I)
+        cleaned = re.sub(r"<[^>]+>", "\n", cleaned)
         cleaned = re.sub(r"\r", "\n", cleaned)
         parts.append(cleaned)
     return "\n".join(parts).strip()
@@ -2809,12 +2892,21 @@ def _preferred_column_table_rank(answer_text: str, brand_terms: list[str]) -> in
     """选型表「首选推荐」列：品牌首次出现在首选列的数据行序（1-based）。
 
     2026-07-29 - Kimi 选型表首选第一行被 LLM 判成第4 - 规则直接读首选列，不依赖 LLM
+    2026-07-30 - 「可以首选松下」列表句误触发 - 仅认首选推荐/首选+备选真表头，排除 bullet
     """
     if not answer_text or not brand_terms:
         return None
     lines = [str(line or "").strip() for line in answer_text.splitlines()]
     for idx, header in enumerate(lines):
         if "首选" not in header:
+            continue
+        # 列表/散文里的「可以首选 XX」不是选型表头
+        if header.lstrip().startswith(("*", "-", "•", "·", "▪")):
+            continue
+        if not (
+            "首选推荐" in header
+            or ("备选" in header and "首选" in header)
+        ):
             continue
         # 表头需同时能分出首选列；常见「首选推荐」「首选」+「备选」
         if "\t" in header:
@@ -2836,6 +2928,8 @@ def _preferred_column_table_rank(answer_text: str, brand_terms: list[str]) -> in
                     break
                 continue
             if data.startswith(("一、", "二、", "三、", "四、", "五、", "##", "关键提醒")):
+                break
+            if data.lstrip().startswith(("*", "-", "•", "·", "▪")):
                 break
             if "\t" in data:
                 cells = [c.strip() for c in data.split("\t")]
@@ -3526,13 +3620,6 @@ def ranking_matrix(
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            joinedload(GeoMonitorSubtask.task).load_only(
-                GeoMonitorTask.monitor_keywords,
-                GeoMonitorTask.created_at,
-            ),
-            load_only(*light_cols),
-        )
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == resolved_tenant_id,
@@ -3557,7 +3644,17 @@ def ranking_matrix(
     fetch_limit = 3500 if schedule_task_ids else 2000
     if selected_platform:
         fetch_limit = min(fetch_limit, 2500)
-    subtasks = list(db.scalars(stmt.limit(fetch_limit)).unique())
+    # 2026-07-30 - 1038 类风险 - ranking 矩阵 ORDER BY 勿带 JSON 宽列，id-first 再 hydrate
+    ordered_ids = _ordered_subtask_ids(db, stmt.limit(fetch_limit))
+    subtasks = _hydrate_subtasks_in_id_order(
+        db,
+        ordered_ids,
+        joinedload(GeoMonitorSubtask.task).load_only(
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
+        ),
+        load_only(*light_cols),
+    )
     legacy_group_filter = str(monitor_group or keyword or "").strip()
     scoped_group = str(keyword_group or "").strip()
     scoped_monitor = str(monitor_keyword or "").strip()
@@ -4288,7 +4385,90 @@ def _workspace_period_day_bounds(
     range_end: datetime,
 ) -> tuple[date, date]:
     period_end = min(trend_end.date(), range_end.date())
-    return trend_start.date(), period_end
+    period_start = trend_start.date()
+    if period_start > period_end:
+        period_start = period_end
+    return period_start, period_end
+
+
+def _snapshot_recency_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("detect_day") or ""),
+        str(item.get("updated_at") or ""),
+        str(item.get("subtask_id") or ""),
+    )
+
+
+def _diversify_snapshots_by_detect_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按检测日轮询取样，避免 limit/首页被最新一两天塞满。"""
+    if len(rows) <= 1:
+        return list(rows)
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        day = str(row.get("detect_day") or "")
+        by_day.setdefault(day, []).append(row)
+    for day_rows in by_day.values():
+        day_rows.sort(key=_snapshot_recency_key, reverse=True)
+    days_sorted = sorted(by_day.keys(), reverse=True)
+    cursors = {day: 0 for day in days_sorted}
+    out: list[dict[str, Any]] = []
+    while True:
+        progressed = False
+        for day in days_sorted:
+            idx = cursors[day]
+            bucket = by_day[day]
+            if idx < len(bucket):
+                out.append(bucket[idx])
+                cursors[day] = idx + 1
+                progressed = True
+        if not progressed:
+            break
+    return out
+
+
+def _workspace_period_snapshot_pool(
+    snapshot_candidates: list[dict[str, Any]],
+    *,
+    trend_start: datetime,
+    trend_end: datetime,
+    range_end: datetime,
+    rank_scope: str = "prefer_ranked",
+    diversify_days: bool = False,
+) -> list[dict[str, Any]]:
+    """周期内完整样本池（未截断）。"""
+    period_start, period_end = _workspace_period_day_bounds(trend_start, trend_end, range_end)
+    in_period: list[dict[str, Any]] = []
+    for item in snapshot_candidates:
+        day_raw = item.get("detect_day")
+        if not day_raw:
+            continue
+        try:
+            day = date.fromisoformat(str(day_raw)[:10])
+        except ValueError:
+            continue
+        if period_start <= day <= period_end:
+            in_period.append(item)
+    if not in_period:
+        return []
+
+    scope = str(rank_scope or "prefer_ranked").strip().lower()
+    if scope == "ranked":
+        pool = [row for row in in_period if row.get("brand_rank") is not None]
+        pool.sort(key=_snapshot_recency_key, reverse=True)
+    elif scope == "all":
+        pool = list(in_period)
+        pool.sort(key=_snapshot_recency_key, reverse=True)
+    else:
+        # prefer_ranked（默认）
+        ranked = [row for row in in_period if row.get("brand_rank") is not None]
+        unranked = [row for row in in_period if row.get("brand_rank") is None]
+        ranked.sort(key=_snapshot_recency_key, reverse=True)
+        unranked.sort(key=_snapshot_recency_key, reverse=True)
+        pool = ranked + unranked
+
+    if diversify_days:
+        return _diversify_snapshots_by_detect_day(pool)
+    return pool
 
 
 def _workspace_period_snapshots(
@@ -4307,46 +4487,46 @@ def _workspace_period_snapshots(
     - ranked：只要有位次
     - all：有无位次都按时间倒序，供「全部」切换真正能看到未提及
     """
-    period_start, period_end = _workspace_period_day_bounds(trend_start, trend_end, range_end)
-    in_period: list[dict[str, Any]] = []
-    for item in snapshot_candidates:
-        day_raw = item.get("detect_day")
-        if not day_raw:
-            continue
-        try:
-            day = date.fromisoformat(str(day_raw)[:10])
-        except ValueError:
-            continue
-        if period_start <= day <= period_end:
-            in_period.append(item)
-    if not in_period:
-        return []
+    pool = _workspace_period_snapshot_pool(
+        snapshot_candidates,
+        trend_start=trend_start,
+        trend_end=trend_end,
+        range_end=range_end,
+        rank_scope=rank_scope,
+        diversify_days=False,
+    )
+    if str(rank_scope or "").strip().lower() == "prefer_ranked":
+        # 保持旧行为：先排满有位次，再补未提及到 limit
+        ranked = [row for row in pool if row.get("brand_rank") is not None]
+        unranked = [row for row in pool if row.get("brand_rank") is None]
+        out = ranked[:limit]
+        if len(out) < limit:
+            out.extend(unranked[: limit - len(out)])
+        return out
+    return pool[:limit]
 
-    def _recency_key(item: dict[str, Any]) -> tuple[str, str, str]:
-        return (
-            str(item.get("detect_day") or ""),
-            str(item.get("updated_at") or ""),
-            str(item.get("subtask_id") or ""),
-        )
 
-    scope = str(rank_scope or "prefer_ranked").strip().lower()
-    if scope == "ranked":
-        pool = [row for row in in_period if row.get("brand_rank") is not None]
-        pool.sort(key=_recency_key, reverse=True)
-        return pool[:limit]
-    if scope == "all":
-        pool = list(in_period)
-        pool.sort(key=_recency_key, reverse=True)
-        return pool[:limit]
-
-    # prefer_ranked（默认）
-    ranked = [row for row in in_period if row.get("brand_rank") is not None]
-    unranked = [row for row in in_period if row.get("brand_rank") is None]
-    ranked.sort(key=_recency_key, reverse=True)
-    unranked.sort(key=_recency_key, reverse=True)
-    out = ranked[:limit]
-    if len(out) < limit:
-        out.extend(unranked[: limit - len(out)])
+def _filter_inclusion_snapshots_by_keyword(
+    rows: list[dict[str, Any]],
+    keyword: str | None,
+) -> list[dict[str, Any]]:
+    query = str(keyword or "").strip().lower()
+    if not query:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        haystack = " ".join(
+            str(row.get(key) or "")
+            for key in ("monitor_keyword", "prompt", "keyword_group", "platform")
+        ).lower()
+        articles = row.get("source_articles") or []
+        if isinstance(articles, list):
+            for article in articles[:3]:
+                if not isinstance(article, dict):
+                    continue
+                haystack += f" {article.get('title') or ''} {article.get('domain') or ''}"
+        if query in haystack.lower():
+            out.append(row)
     return out
 
 
@@ -4358,14 +4538,20 @@ def list_inclusion_snapshots(
     end_date: date | None = None,
     tenant_id: int | None = None,
     platform: str | None = None,
-    limit: int = 48,
+    keyword: str | None = None,
+    page: int = 1,
+    limit: int = 10,
     rank_scope: str = "ranked",
 ) -> dict[str, Any]:
     """信源页「收录明细」专用：按周期/平台直查子任务，避免吃 workspace-brief 全局 24 条样本。
 
     「8 次引用」是信源引用次数；本列表是监测子任务行。
-    rank_scope=ranked|all 与前端「有排名/全部」对齐；勿用 prefer_ranked，否则有排名装满 limit 后切换无差别。
+    rank_scope=ranked|all 与前端「有位次/含未提及」对齐；勿用 prefer_ranked，否则有位次装满后切换无差别。
+    2026-07-30 - 收录明细条数假齐+只堆最新天 - 返回截断前 total，按 detect_day 轮询，服务端分页
+    2026-07-30 - 含未提及/翻页 5s - 轻量扫池只 hydrate 当前页；池内有位次用 mention_position 近似
     """
+    from types import SimpleNamespace
+
     tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
     range_end = customer_display_cutoff()
     start_at = datetime.combine(start_date, time.min) if start_date else None
@@ -4375,6 +4561,8 @@ def list_inclusion_snapshots(
         end_at=end_at,
         default_lookback_days=7 if not start_at and not end_at else None,
     )
+    page = max(1, int(page or 1))
+    limit = max(1, min(50, int(limit or 10)))
 
     asset = get_brand_asset(db, tenant_id)
     keyword_group_rows = list_keyword_groups(db, tenant_id)
@@ -4386,6 +4574,19 @@ def list_inclusion_snapshots(
     purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
     purchased_set = set(purchased_platforms)
 
+    scope = str(rank_scope or "ranked").strip().lower()
+    if scope not in {"ranked", "all"}:
+        scope = "ranked"
+
+    empty = {
+        "recent_snapshots": [],
+        "purchased_platforms": purchased_platforms,
+        "rank_scope": scope,
+        "total": 0,
+        "page": page,
+        "page_size": limit,
+    }
+
     platform_key = str(platform or "").strip()
     if platform_key in ("", "all"):
         platform_key = ""
@@ -4393,14 +4594,12 @@ def list_inclusion_snapshots(
         from app.core.platform_order import expand_platform_codes
 
         if platform_key not in expand_platform_codes(purchased_set):
-            return {"recent_snapshots": [], "purchased_platforms": purchased_platforms}
+            return empty
 
     lookback_start = trend_start - timedelta(days=14)
-    # 平台已筛时多取一些；补录会刷新 updated_at，窄窗+硬截断会挤掉同周期旧样本
     period_days = max(1, (trend_end.date() - trend_start.date()).days + 1)
-    fetch_cap = min(1200, max(limit * 8, period_days * 40, 160 if platform_key else 240))
-    # 2026-07-27 - 收录明细须跟上边近7/30/全部同一周期：可见性按 detect_day∈[start,昨日]，
-    # 勿再用 updated_at<=昨日——今日洗库/回写会把周期内行全部误杀（艾迪亚近7天变空）
+    scan_limit = min(3000, max(800, period_days * 80, 400 if platform_key else 600))
+    # 2026-07-27 - 收录明细须跟上边近7/30/全部同一周期：可见性按 detect_day∈[start,昨日]
     conditions = [
         GeoMonitorTask.deleted.is_(False),
         GeoMonitorTask.tenant_id == tenant_id,
@@ -4415,59 +4614,147 @@ def list_inclusion_snapshots(
         from app.core.platform_order import platform_code_family
 
         family = platform_code_family(platform_key)
-        conditions.append(GeoMonitorSubtask.platform.in_(family) if len(family) > 1 else GeoMonitorSubtask.platform == platform_key)
+        conditions.append(
+            GeoMonitorSubtask.platform.in_(family) if len(family) > 1 else GeoMonitorSubtask.platform == platform_key
+        )
     elif purchased_set:
         from app.core.platform_order import expand_platform_codes
 
         conditions.append(GeoMonitorSubtask.platform.in_(expand_platform_codes(purchased_set)))
 
-    stmt = (
-        select(GeoMonitorSubtask)
-        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            joinedload(GeoMonitorSubtask.task).load_only(
-                GeoMonitorTask.monitor_keywords,
-                GeoMonitorTask.created_at,
-                GeoMonitorTask.total_items,
-                GeoMonitorTask.completed_items,
-            ),
-            load_only(
-                GeoMonitorSubtask.subtask_id,
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.status,
-                GeoMonitorSubtask.mention_context,
-                GeoMonitorSubtask.page_screenshot,
-                GeoMonitorSubtask.reference_list_json,
-                GeoMonitorSubtask.mention_position,
-                GeoMonitorSubtask.all_rankings_json,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.updated_at,
-            ),
+    # ponytail: 池阶段用 mention_position 近似「有位次」；展示行再走完整 _resolve_brand_rank。
+    # 上限：仅有 JSON 榜、列空的行会进「含未提及」而非「有位次」；要绝对同口径再给池阶段装 all_rankings_json。
+    if scope == "ranked":
+        conditions.append(GeoMonitorSubtask.mention_position.is_not(None))
+
+    scan_stmt = (
+        select(
+            GeoMonitorSubtask.id,
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.updated_at,
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
         )
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .where(*conditions)
         .order_by(GeoMonitorSubtask.updated_at.desc())
-        .limit(fetch_cap)
+        .limit(scan_limit)
     )
-    subtasks = list(db.scalars(stmt).unique())
-    task_ids = list({item.task_id for item in subtasks if item.task_id})
+    scan_rows = list(db.execute(scan_stmt).all())
+    if not scan_rows:
+        return empty
+
+    task_ids = list({row.task_id for row in scan_rows if row.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
     lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
 
-    snapshot_candidates: list[dict[str, Any]] = []
-    match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
-    for item in subtasks:
-        if item.task is None:
-            continue
+    light_candidates: list[dict[str, Any]] = []
+    for row in scan_rows:
+        task_proxy = SimpleNamespace(
+            task_id=row.task_id,
+            tenant_id=tenant_id,
+            created_at=row.created_at,
+            monitor_keywords=row.monitor_keywords,
+        )
+        sub_proxy = SimpleNamespace(updated_at=row.updated_at)
         schedule_ctx = _resolve_subtask_schedule_context(
-            item.task,
+            task_proxy,  # type: ignore[arg-type]
             schedule_runs_map,
             asset,
             lead_runs_map,
         )
-        detect_dt = _subtask_detect_datetime(item, item.task, schedule_ctx)
+        detect_dt = _subtask_detect_datetime(sub_proxy, task_proxy, schedule_ctx)  # type: ignore[arg-type]
         if detect_dt is None or detect_dt > range_end or detect_dt < trend_start:
+            continue
+        monitor_keywords = row.monitor_keywords
+        keyword_group = _prompt_group_name(row.prompt or "", keyword_group_rows) or monitor_keywords
+        display_keyword = (
+            _resolve_prompt_monitor_keyword(row.prompt or "", keyword_group_rows)
+            or str(row.prompt or "").strip()
+            or str(monitor_keywords or "").strip()
+            or keyword_group
+        )
+        light_candidates.append({
+            "_pk": row.id,
+            "subtask_id": row.subtask_id,
+            "task_id": row.task_id,
+            "platform": row.platform,
+            "prompt": row.prompt,
+            "keyword_group": keyword_group,
+            "monitor_keyword": display_keyword,
+            "schedule_label": schedule_ctx.get("schedule_label"),
+            "schedule_window_key": schedule_ctx.get("schedule_window_key"),
+            "detect_day": detect_dt.date().isoformat(),
+            "prompt_intent": prompt_monitor_intent(row.prompt),
+            "brand_rank": row.mention_position,
+            "brand_mentioned": row.mention_position is not None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        })
+
+    # 已在 SQL 按 scope 过滤；池内用 all 保持时间序 + 日轮询
+    pool = _workspace_period_snapshot_pool(
+        light_candidates,
+        trend_start=trend_start,
+        trend_end=trend_end,
+        range_end=range_end,
+        rank_scope="all",
+        diversify_days=True,
+    )
+    pool = _filter_inclusion_snapshots_by_keyword(pool, keyword)
+    total = len(pool)
+    offset = (page - 1) * limit
+    page_light = pool[offset: offset + limit]
+    if not page_light:
+        return {
+            "recent_snapshots": [],
+            "purchased_platforms": purchased_platforms,
+            "rank_scope": scope,
+            "total": total,
+            "page": page,
+            "page_size": limit,
+        }
+
+    match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
+    page_pks = [int(item["_pk"]) for item in page_light if item.get("_pk") is not None]
+    subtasks = _hydrate_subtasks_in_id_order(
+        db,
+        page_pks,
+        joinedload(GeoMonitorSubtask.task).load_only(
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
+            GeoMonitorTask.total_items,
+            GeoMonitorTask.completed_items,
+        ),
+        load_only(
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.status,
+            GeoMonitorSubtask.mention_context,
+            GeoMonitorSubtask.page_screenshot,
+            GeoMonitorSubtask.reference_list_json,
+            GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.all_rankings_json,
+            GeoMonitorSubtask.sentiment,
+            GeoMonitorSubtask.updated_at,
+        ),
+    )
+    by_pk = {item.id: item for item in subtasks}
+    recent_snapshots: list[dict[str, Any]] = []
+    for light in page_light:
+        item = by_pk.get(int(light["_pk"]))
+        if item is None or item.task is None:
+            row = {k: v for k, v in light.items() if k != "_pk"}
+            row.setdefault("sentiment", None)
+            row.setdefault("answer_excerpt", None)
+            row.setdefault("page_screenshot", None)
+            row.setdefault("source_articles", [])
+            recent_snapshots.append(row)
             continue
         monitor_keywords = item.task.monitor_keywords
         brand_rank, brand_mentioned = _resolve_brand_rank(
@@ -4476,24 +4763,17 @@ def list_inclusion_snapshots(
             match_terms,
             asset,
         )
-        keyword_group = _prompt_group_name(item.prompt or "", keyword_group_rows) or monitor_keywords
-        display_keyword = (
-            _resolve_prompt_monitor_keyword(item.prompt or "", keyword_group_rows)
-            or str(item.prompt or "").strip()
-            or str(monitor_keywords or "").strip()
-            or keyword_group
-        )
-        snapshot_candidates.append({
+        recent_snapshots.append({
             "subtask_id": item.subtask_id,
             "task_id": item.task_id,
             "platform": item.platform,
             "prompt": item.prompt,
-            "keyword_group": keyword_group,
-            "monitor_keyword": display_keyword,
-            "schedule_label": schedule_ctx.get("schedule_label"),
-            "schedule_window_key": schedule_ctx.get("schedule_window_key"),
-            "detect_day": detect_dt.date().isoformat(),
-            "prompt_intent": prompt_monitor_intent(item.prompt),
+            "keyword_group": light.get("keyword_group"),
+            "monitor_keyword": light.get("monitor_keyword"),
+            "schedule_label": light.get("schedule_label"),
+            "schedule_window_key": light.get("schedule_window_key"),
+            "detect_day": light.get("detect_day"),
+            "prompt_intent": light.get("prompt_intent") or prompt_monitor_intent(item.prompt),
             "brand_rank": brand_rank,
             "brand_mentioned": brand_mentioned,
             "sentiment": _normalize_sentiment_label(item.sentiment),
@@ -4503,22 +4783,15 @@ def list_inclusion_snapshots(
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         })
 
-    scope = str(rank_scope or "ranked").strip().lower()
-    if scope not in {"ranked", "all"}:
-        scope = "ranked"
-    recent_snapshots = _workspace_period_snapshots(
-        snapshot_candidates,
-        trend_start=trend_start,
-        trend_end=trend_end,
-        range_end=range_end,
-        limit=limit,
-        rank_scope=scope,
-    )
     return {
         "recent_snapshots": recent_snapshots,
         "purchased_platforms": purchased_platforms,
         "rank_scope": scope,
+        "total": total,
+        "page": page,
+        "page_size": limit,
     }
+
 
 
 def _workspace_pick_snapshot_subtask_ids(
@@ -5092,28 +5365,6 @@ def workspace_brief(
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-        .options(
-            joinedload(GeoMonitorSubtask.task).load_only(
-                GeoMonitorTask.monitor_keywords,
-                GeoMonitorTask.created_at,
-                GeoMonitorTask.total_items,
-                GeoMonitorTask.completed_items,
-            ),
-            load_only(
-                GeoMonitorSubtask.subtask_id,
-                GeoMonitorSubtask.task_id,
-                GeoMonitorSubtask.platform,
-                GeoMonitorSubtask.prompt,
-                GeoMonitorSubtask.status,
-                GeoMonitorSubtask.mention_context,
-                GeoMonitorSubtask.page_screenshot,
-                GeoMonitorSubtask.reference_list_json,
-                GeoMonitorSubtask.mention_position,
-                GeoMonitorSubtask.all_rankings_json,
-                GeoMonitorSubtask.sentiment,
-                GeoMonitorSubtask.updated_at,
-            ),
-        )
         .where(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
@@ -5125,8 +5376,34 @@ def workspace_brief(
             ),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
+        .limit(subtask_limit)
     )
-    subtasks = list(db.scalars(stmt.limit(subtask_limit)))
+    # 2026-07-30 - 1038 类风险 - workspace brief ORDER BY 勿带 screenshot/JSON，id-first 再 hydrate
+    ordered_ids = _ordered_subtask_ids(db, stmt)
+    subtasks = _hydrate_subtasks_in_id_order(
+        db,
+        ordered_ids,
+        joinedload(GeoMonitorSubtask.task).load_only(
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
+            GeoMonitorTask.total_items,
+            GeoMonitorTask.completed_items,
+        ),
+        load_only(
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.status,
+            GeoMonitorSubtask.mention_context,
+            GeoMonitorSubtask.page_screenshot,
+            GeoMonitorSubtask.reference_list_json,
+            GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.all_rankings_json,
+            GeoMonitorSubtask.sentiment,
+            GeoMonitorSubtask.updated_at,
+        ),
+    )
     if purchased_set:
         subtasks = [item for item in subtasks if item.platform in purchased_set]
 

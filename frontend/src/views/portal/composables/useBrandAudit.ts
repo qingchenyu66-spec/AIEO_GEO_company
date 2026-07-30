@@ -4,7 +4,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  createTenant, deleteTenant, getTenants, listTenantSalesOwners, restoreTenant, transferTenantOwner, updateTenant,
+  createTenant, deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant,
   type TenantInfo,
   type TenantSalesOwner,
 } from '../../../services/management'
@@ -25,8 +25,11 @@ export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' 
 export const enterprisePermissionCodeMap = {
   list: 'platform.audit.list',
   profile: 'platform.audit.profile',
+  regions: 'platform.audit.regions',
   keywords: 'platform.audit.keywords',
   brand_words: 'platform.audit.keywords',
+  models: 'platform.audit.models',
+  purge: 'platform.audit.purge',
   schedule: 'platform.audit.schedule',
   competitors: 'platform.audit.competitors',
   files: 'platform.audit.files',
@@ -89,6 +92,28 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const grant = menuGrant(enterprisePermissionCodeMap[tab])
     return Boolean(grant?.can_update)
   }
+
+  // 2026-07-30 - 地区仍看菜单编辑权；平台以职位白名单为准（非空即可勾对应端）
+  const canEditRegions = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.regions)?.can_update))
+  const allowedMonitorPlatforms = computed(() => {
+    const raw = auth.session?.allowed_monitor_platforms
+    return Array.isArray(raw) ? raw.map(code => String(code || '').trim()).filter(Boolean) : []
+  })
+  const canEditModels = computed(() => allowedMonitorPlatforms.value.length > 0)
+  const editableCatalogPlatforms = computed(() => {
+    const source = catalogPlatforms.value.length
+      ? catalogPlatforms.value
+      : supportedPlatforms.map(item => ({
+          code: item.code,
+          name: item.name,
+          selectable: true,
+          labels: [] as string[],
+          default_mode: 'standard' as const,
+        }))
+    if (!canEditModels.value) return []
+    const allow = new Set(allowedMonitorPlatforms.value)
+    return source.filter(item => allow.has(item.code))
+  })
 
   const canCreateTenant = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
   const canEditTenantList = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
@@ -301,6 +326,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return !tenant.status && ['manual', 'canceled'].includes(tenant.stop_reason || '') && !isTenantExpired(tenant)
   }
 
+  function canPurgeTenant() {
+    return Boolean(menuGrant(enterprisePermissionCodeMap.purge)?.can_delete)
+  }
+
   function stopTenantActionLabel(tenant: TenantInfo) {
     return isTenantPending(tenant) ? '取消服务' : '停止服务'
   }
@@ -354,7 +383,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
-  function normalizeKeywordGroups(asset: BrandAsset | null, tenantName = '') {
+  function normalizeKeywordGroups(asset: BrandAsset | null, _tenantName = '') {
     const groups = asset?.keyword_groups?.length ? asset.keyword_groups : []
     if (groups.length) {
       keywordGroupRows.value = groups.map((group, index) => {
@@ -375,18 +404,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       })
       return
     }
-    const aliases = asset?.aliases?.length ? asset.aliases : []
-    const keywords = [...new Set([asset?.company_full_name || tenantName, ...(asset?.monitor_keywords || []), ...(asset?.product_keywords || [])].filter(Boolean))]
-    keywordGroupRows.value = keywords.map((keyword, index) => ({
-      id: null,
-      name: defaultKeywordGroupName(index),
-      monitor_keyword: keyword,
-      monitor_keywords: [keyword],
-      exposure_terms: index === 0 && aliases.length ? aliases : [keyword],
-      platforms: normalizePlatformSelections(asset?.monitored_platforms || []),
-      sort_order: index,
-      status: true,
-    }))
+    // 2026-07-30 - 监测词不预填企业名；无词组时给一个空词组卡片
+    keywordGroupRows.value = []
+    keywordGroupRows.value = [makeKeywordGroup()]
   }
 
   async function startEditGroupName(index: number) {
@@ -812,7 +832,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       return
     }
     const missingPlatforms = keywordGroups.find(group => group.status && !group.platforms.length)
-    if (missingPlatforms) {
+    if (missingPlatforms && canEditModels.value) {
       ElMessage.warning('每个启用的监测词组至少选择一个监测平台')
       return
     }
@@ -893,7 +913,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       })
       .filter(group => group.monitor_keywords.length)
     const missingPlatforms = groups.find(group => group.status && !group.platforms.length)
-    if (missingPlatforms) {
+    if (missingPlatforms && canEditModels.value) {
       ElMessage.warning('每个启用的品牌词组至少选择一个监测平台')
       return
     }
@@ -945,6 +965,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       tenantDialog.value = false
       await loadEnterpriseList()
       await openEnterpriseDetail(tenant)
+      // 2026-07-30 - 方案 B 第三档提示 - 软删同名允许新建时明示
+      if (tenant.name_was_purged) {
+        ElMessage.warning('该名称曾被彻底删除，将新建企业')
+      }
       ElMessage.success('企业已新增，请继续维护监控配置')
     } catch (error: unknown) {
       notifyError(error, '企业新增失败')
@@ -967,6 +991,38 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       ElMessage.success(`企业已${actionLabel}`)
     } catch (error: unknown) {
       notifyError(error, `${actionLabel}失败`)
+    } finally {
+      loadingBrand.value = false
+    }
+  }
+
+  async function purgeTenantThoroughly(tenant: TenantInfo) {
+    if (!canPurgeTenant()) return
+    try {
+      const { value } = await ElMessageBox.prompt(
+        `将备份后清除「${tenant.name}」的监测历史、品牌配置，并删除该企业下客户账号。此操作不可在界面恢复。请输入企业全称确认：`,
+        '彻底删除企业',
+        {
+          type: 'warning',
+          confirmButtonText: '确认彻底删除',
+          cancelButtonText: '取消',
+          inputPlaceholder: tenant.name,
+          inputValidator: (val) => {
+            if (!val || val.trim() !== tenant.name.trim()) return '请输入与企业名称完全一致的文字'
+            return true
+          },
+        },
+      )
+      loadingBrand.value = true
+      await purgeTenant(tenant.id, String(value || '').trim())
+      if (brandForm.tenant_id === tenant.id) {
+        brandForm.tenant_id = null
+      }
+      await loadEnterpriseList()
+      ElMessage.success('企业已彻底删除（已保留备份）')
+    } catch (error: unknown) {
+      if (error === 'cancel' || error === 'close') return
+      notifyError(error, '彻底删除失败')
     } finally {
       loadingBrand.value = false
     }
@@ -1212,6 +1268,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const rows = platformRows(source)
     const group = rows.value[groupIndex]
     if (!group) return
+    // 2026-07-30 - 无平台权限整块隐藏且不可选；仅职位多选内的端可点
+    if (!canEditModels.value) return
+    if (!allowedMonitorPlatforms.value.includes(code)) return
     if (!canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
     if (groupHasPlatform(group, code)) {
@@ -1235,14 +1294,16 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function removeGroupPlatform(groupIndex: number, code: string, source: 'keywords' | 'brand_words' = 'keywords') {
     const rows = platformRows(source)
     const group = rows.value[groupIndex]
-    if (!group || !canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
+    if (!group || !canEditModels.value) return
+    if (!allowedMonitorPlatforms.value.includes(code)) return
+    if (!canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
     rows.value[groupIndex] = { ...group, platforms: next }
   }
 
   function confirmModeDialog() {
     const target = modeDialogTarget.value
-    if (!target) {
+    if (!target || !canEditModels.value) {
       modeDialogVisible.value = false
       return
     }
@@ -1336,6 +1397,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     visibleEnterpriseTabs,
     canViewEnterpriseTab,
     canEditEnterpriseTab,
+    canEditRegions,
+    canEditModels,
+    editableCatalogPlatforms,
     canCreateTenant,
     canEditTenantList,
     isTenantExpired,
@@ -1343,6 +1407,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     tenantServiceLabel,
     canStopTenantService,
     canRestoreTenantService,
+    canPurgeTenant,
     stopTenantActionLabel,
     tenantServicePeriod,
     tenantMonitorLabel,
@@ -1382,6 +1447,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     submitBrandWordGroups,
     submitTenant,
     removeTenant,
+    purgeTenantThoroughly,
     restoreTenantService,
     openTenantTransferDialog,
     submitTenantTransfer,

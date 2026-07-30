@@ -128,6 +128,9 @@ def test_dual_identity_login_and_select(auth_seed: dict[str, str]) -> None:
     me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {session['access_token']}"})
     assert me.status_code == 200
     assert me.json()["data"]["identity"]["identity_type"] == "PLATFORM"
+    # 2026-07-30 - /me 必须带回平台白名单，否则门户刷新后企业管理无法勾平台
+    assert "allowed_monitor_platforms" in me.json()["data"]
+    assert isinstance(me.json()["data"]["allowed_monitor_platforms"], list)
 
     customer_identity = next(item for item in session["identities"] if item["identity_type"] == "CUSTOMER")
     switched = client.post(

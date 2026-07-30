@@ -21,11 +21,14 @@ export const SETTINGS_CHILD_MENUS = [
 ] as const
 
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
-export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis', 'platform.audit.models']
+export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis']
 export const hiddenEnterprisePermissionMenus = [
   'platform.audit.list',
   'platform.audit.profile',
+  'platform.audit.regions',
   'platform.audit.keywords',
+  'platform.audit.models',
+  'platform.audit.purge',
   'platform.audit.schedule',
   'platform.audit.competitors',
   'platform.audit.files',

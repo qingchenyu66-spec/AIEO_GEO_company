@@ -133,7 +133,8 @@ def competitor_compare_cache_key(
     start_key = start_date or "default"
     end_key = end_date or "default"
     return (
-        f"analytics:competitor-compare:v2:{identity_type}:{tenant_id}:"
+        # 2026-07-30 - v4：丢弃 v3 可能缓存的「无各端趋势切片」脏数据
+        f"analytics:competitor-compare:v4:{identity_type}:{tenant_id}:"
         f"{platform_key}:{days}:{start_key}:{end_key}:{prompt_key}"
     )
 

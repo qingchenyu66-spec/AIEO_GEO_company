@@ -1,4 +1,5 @@
 import hashlib
+from datetime import date
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -16,6 +17,9 @@ from app.services.permission_service import (
     replace_identity_menus_from_position,
 )
 from app.services.tenant_scope import is_sales_identity
+
+# 2026-07-30 - 创建/改名重名提示（方案 B）- 在册分服务中/停服拦截；软删可再建
+TENANT_NAME_WAS_PURGED_HINT = "该名称曾被彻底删除，将新建企业"
 
 
 def can_manage_all_users(db: Session, identity: UserIdentity) -> bool:
@@ -90,6 +94,70 @@ def _tenant_code_from_name(name: str) -> str:
     return f"TENANT_{digest}"
 
 
+def allocate_tenant_code(db: Session, name: str, preferred: str | None = None) -> str:
+    """分配未被占用的企业编码（含软删行，避免 uk 撞车）。"""
+    base = (preferred or _tenant_code_from_name(name)).strip() or _tenant_code_from_name(name)
+    code = base
+    suffix = 0
+    while db.scalar(select(Tenant.id).where(Tenant.code == code)) is not None:
+        suffix += 1
+        code = f"{base}_{suffix}"
+        # ponytail: 极端撞库上限；正常不会打满
+        if suffix > 1000:
+            raise ValueError("企业编码分配失败，请稍后重试")
+    return code
+
+
+def tenant_name_was_purged(db: Session, name: str) -> bool:
+    return (
+        db.scalar(select(Tenant.id).where(Tenant.name == name, Tenant.deleted.is_(True)).limit(1)) is not None
+    )
+
+
+def live_tenant_name_conflict_detail(tenant: Tenant, name: str) -> str:
+    """在册企业重名提示：服务中/未开始 vs 已停服。"""
+    today = date.today()
+    pending = bool(
+        tenant.service_start_date
+        and tenant.service_start_date > today
+        and tenant.stop_reason != "canceled"
+    )
+    if tenant.status or pending:
+        return f"企业「{name}」已存在且服务中，请勿重复创建"
+    return f"企业「{name}」已存在但已停服，请恢复服务或更换名称"
+
+
+def find_live_tenant_name_or_code_conflict(
+    db: Session,
+    *,
+    name: str,
+    code: str,
+    exclude_id: int | None = None,
+) -> Tenant | None:
+    stmt = select(Tenant).where(
+        or_(Tenant.name == name, Tenant.code == code),
+        Tenant.deleted.is_(False),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Tenant.id != exclude_id)
+    return db.scalar(stmt)
+
+
+def raise_if_live_tenant_name_or_code_conflict(
+    db: Session,
+    *,
+    name: str,
+    code: str,
+    exclude_id: int | None = None,
+) -> None:
+    exists = find_live_tenant_name_or_code_conflict(db, name=name, code=code, exclude_id=exclude_id)
+    if exists is None:
+        return
+    if exists.name == name:
+        raise ValueError(live_tenant_name_conflict_detail(exists, name))
+    raise ValueError(f"企业编码「{code}」已存在")
+
+
 def _reject_garbled_text(value: str | None, field_name: str) -> None:
     if value and value.strip() and set(value.strip()) == {"?"}:
         raise ValueError(f"{field_name}疑似编码异常，请重新输入中文后保存")
@@ -110,7 +178,12 @@ def _resolve_tenant(db: Session, item: UserIdentityCreateItem, owner_user_id: in
     _reject_garbled_text(tenant_name, "企业名称")
     tenant = db.scalar(select(Tenant).where(Tenant.name == tenant_name, Tenant.deleted.is_(False)))
     if tenant is None:
-        tenant = Tenant(name=tenant_name, code=_tenant_code_from_name(tenant_name), owner_user_id=owner_user_id)
+        # 2026-07-30 - 软删同名再建 - 换新 code，避免与软删行 uk 冲突
+        tenant = Tenant(
+            name=tenant_name,
+            code=allocate_tenant_code(db, tenant_name),
+            owner_user_id=owner_user_id,
+        )
         db.add(tenant)
         db.flush()
     return tenant

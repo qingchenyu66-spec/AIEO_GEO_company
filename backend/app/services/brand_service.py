@@ -32,6 +32,45 @@ def resolve_tenant_id(current: CurrentSession, requested_tenant_id: int | None) 
     return requested_tenant_id
 
 
+def sanitize_brand_asset_payload_for_grants(
+    db: Session,
+    current: CurrentSession,
+    payload: BrandAssetSaveRequest,
+) -> BrandAssetSaveRequest:
+    """无地区/平台编辑权时，请求体回填库内原值，避免审批 diff / 误覆盖。"""
+    from app.services.menu_permission_service import (
+        has_identity_menu_permission,
+        identity_allowed_monitor_platforms,
+    )
+
+    identity_id = current.identity.id
+    can_regions = has_identity_menu_permission(db, identity_id, "platform.audit.regions", "can_update")
+    # 2026-07-30 - 平台编辑权=职位白名单非空
+    can_models = bool(identity_allowed_monitor_platforms(db, current.identity))
+    if can_regions and can_models:
+        return payload
+    if payload.tenant_id is None:
+        return payload
+    asset = get_brand_asset(db, int(payload.tenant_id))
+    if asset is None:
+        return payload
+    data = payload.model_dump(mode="python")
+    if not can_regions:
+        data["region_codes"] = list(asset.region_codes_json or [])
+    if not can_models:
+        existing_groups = {item.id: item for item in list_keyword_groups(db, asset.tenant_id)}
+        groups = []
+        for item in data.get("keyword_groups") or []:
+            gid = item.get("id")
+            if gid and gid in existing_groups:
+                item = dict(item)
+                item["platforms"] = list(existing_groups[gid].platforms_json or [])
+            groups.append(item)
+        data["keyword_groups"] = groups
+        data["monitored_platforms"] = list(asset.monitored_platforms_json or [])
+    return BrandAssetSaveRequest(**data)
+
+
 def _guard_tenant_write(db: Session, current: CurrentSession, tenant_id: int) -> None:
     ensure_tenant(db, tenant_id)
     ensure_sales_tenant_access(db, current, tenant_id)
@@ -238,14 +277,13 @@ def ensure_keyword_group_payload(group: BrandKeywordGroup | dict[str, Any], inde
 
 
 def editable_keyword_groups(db: Session, tenant_id: int) -> list[BrandKeywordGroup | dict[str, Any]]:
-    """企业管理页读取全部词组（含停用），无词组表数据时回退旧字段。"""
+    """企业管理页读取全部词组（含停用）；无词组表数据时不再用企业名拼默认词。"""
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         return []
     rows = list_keyword_groups(db, tenant_id)
-    if rows:
-        return list(rows)
-    return _fallback_keyword_groups(asset)
+    # 2026-07-30 - 监测词进来为空；旧字段回退仅给调度/监测用 active_keyword_groups
+    return list(rows)
 
 
 def _normalize_group_monitor_keywords(item: BrandKeywordGroupSaveRequest) -> list[str]:
@@ -256,16 +294,46 @@ def _normalize_group_monitor_keywords(item: BrandKeywordGroupSaveRequest) -> lis
     return keywords
 
 
-def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveRequest) -> None:
+def merge_platform_selections_for_grants(
+    existing: list[Any] | None,
+    incoming: list[Any] | None,
+    *,
+    allowed_codes: set[str] | None,
+) -> list[dict[str, Any]]:
+    """按职位可配平台合并。allowed_codes=None 表示无权改平台，原样保留。"""
+    existing_n = normalize_platform_selections(existing or [])
+    incoming_n = normalize_platform_selections(incoming or [])
+    if allowed_codes is None:
+        return existing_n
+    preserved = [item for item in existing_n if item["code"] not in allowed_codes]
+    updated = [item for item in incoming_n if item["code"] in allowed_codes]
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for item in [*updated, *preserved]:
+        code = item["code"]
+        if code in seen:
+            continue
+        seen.add(code)
+        result.append(item)
+    return result
+
+
+def save_keyword_groups(
+    db: Session,
+    asset: BrandAsset,
+    payload: BrandAssetSaveRequest,
+    *,
+    allow_platform_edit: bool = True,
+    allowed_platform_codes: set[str] | None = None,
+) -> None:
     """用前端提交的词组覆盖当前企业词组。"""
     existing = {item.id: item for item in list_keyword_groups(db, asset.tenant_id)}
     seen_ids: set[int] = set()
     source_groups = payload.keyword_groups
     if not source_groups:
-        source_groups = [
-            type("_Group", (), {"id": None, "monitor_keyword": keyword, "monitor_keywords": [keyword], "exposure_terms": [keyword], "sort_order": index, "status": True})()
-            for index, keyword in enumerate(_dedupe([payload.company_full_name, payload.brand_name, *payload.monitor_keywords]))
-        ]
+        # 2026-07-30 - 空词组不再用企业全称/品牌名自动造监测词
+        source_groups = []
+    allow_codes = allowed_platform_codes if allow_platform_edit else None
     for index, item in enumerate(source_groups):
         keywords = _normalize_group_monitor_keywords(item)
         if not keywords:
@@ -273,7 +341,16 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         primary = keywords[0]
         group_name = str(item.name or "").strip() or default_keyword_group_name(index)
         group = existing.get(item.id) if item.id else None
+        creating = group is None
         if group is None:
+            # 2026-07-30 - 平台范围多选 - 新建词组只允许授权端；无授权则空（保留已有配置语义）
+            seed_platforms = merge_platform_selections_for_grants(
+                [],
+                item.platforms or [],
+                allowed_codes=allow_codes if allow_platform_edit else set(),
+            )
+            if not allow_platform_edit:
+                seed_platforms = normalize_platform_selections(asset.monitored_platforms_json or [])
             group = BrandKeywordGroup(
                 tenant_id=asset.tenant_id,
                 brand_asset_id=asset.id,
@@ -281,7 +358,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
                 monitor_keyword=primary,
                 monitor_keywords_json=list(keywords),
                 exposure_terms_json=_dedupe(item.exposure_terms or keywords),
-                platforms_json=normalize_platform_selections(item.platforms or []),
+                platforms_json=seed_platforms,
             )
             db.add(group)
         group.brand_asset_id = asset.id
@@ -291,9 +368,16 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         flag_modified(group, "monitor_keywords_json")
         group.exposure_terms_json = _dedupe(item.exposure_terms or keywords)
         flag_modified(group, "exposure_terms_json")
-        platforms = normalize_platform_selections(item.platforms or [])
-        group.platforms_json = platforms
-        flag_modified(group, "platforms_json")
+        if allow_platform_edit and not creating:
+            group.platforms_json = merge_platform_selections_for_grants(
+                group.platforms_json,
+                item.platforms or [],
+                allowed_codes=allow_codes,
+            )
+            flag_modified(group, "platforms_json")
+        elif allow_platform_edit and creating:
+            # 已在 seed 写入
+            pass
         group.sort_order = item.sort_order if item.sort_order is not None else index
         group.status = item.status
         group.deleted = False
@@ -314,7 +398,7 @@ def save_keyword_groups(db: Session, asset: BrandAsset, payload: BrandAssetSaveR
         union_platforms.extend(keyword_group_platforms(item))
     if union_platforms:
         asset.monitored_platforms_json = sort_platform_codes(_dedupe(union_platforms))
-    elif payload.monitored_platforms:
+    elif allow_platform_edit and payload.monitored_platforms:
         asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
 
 
@@ -378,11 +462,18 @@ def save_brand_word_groups(
     返回资产与保存后全部启用词组（once/weekly 均供保存后立即提交一轮；
     weekly 仍由周一 Beat 按周调度）。
     """
+    from app.services.menu_permission_service import identity_allowed_monitor_platforms
+
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
     _guard_tenant_write(db, current, tenant_id)
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
         raise ValueError("请先保存企业资料或监测词配置，再配置品牌词")
+
+    # 2026-07-30 - 平台编辑权=职位白名单；有权则仅改授权端
+    allowed_set = set(identity_allowed_monitor_platforms(db, current.identity))
+    can_models = bool(allowed_set)
+    allowed_codes: set[str] | None = allowed_set if can_models else None
 
     existing = {item.id: item for item in list_brand_word_groups(db, tenant_id)}
     seen_ids: set[int] = set()
@@ -392,22 +483,30 @@ def save_brand_word_groups(
         if not keywords:
             continue
         platforms = normalize_platform_selections(item.platforms or [])
-        if item.status and not platforms:
-            raise ValueError("每个启用的品牌词组至少选择一个监测平台")
         primary = keywords[0]
         group_name = str(item.name or "").strip() or default_brand_word_group_name(index)
         run_mode = str(item.run_mode or "once").strip().lower()
         if run_mode not in {"once", "weekly"}:
             raise ValueError("运行时间仅支持「仅本次」或「周」")
         group = existing.get(item.id) if item.id else None
+        creating = group is None
         if group is None:
+            seed_platforms = merge_platform_selections_for_grants(
+                [],
+                platforms,
+                allowed_codes=allowed_codes if can_models else set(),
+            )
+            if not can_models:
+                seed_platforms = normalize_platform_selections(asset.monitored_platforms_json or [])
+            if item.status and not seed_platforms:
+                raise ValueError("每个启用的品牌词组至少选择一个监测平台")
             group = BrandWordGroup(
                 tenant_id=asset.tenant_id,
                 brand_asset_id=asset.id,
                 name=group_name,
                 monitor_keyword=primary,
                 monitor_keywords_json=list(keywords),
-                platforms_json=platforms,
+                platforms_json=seed_platforms,
                 run_mode=run_mode,
             )
             db.add(group)
@@ -416,8 +515,15 @@ def save_brand_word_groups(
         group.monitor_keyword = primary
         group.monitor_keywords_json = list(keywords)
         flag_modified(group, "monitor_keywords_json")
-        group.platforms_json = platforms
-        flag_modified(group, "platforms_json")
+        if can_models and not creating:
+            group.platforms_json = merge_platform_selections_for_grants(
+                group.platforms_json,
+                platforms,
+                allowed_codes=allowed_codes,
+            )
+            flag_modified(group, "platforms_json")
+        if item.status and not keyword_group_platforms(group, asset):
+            raise ValueError("每个启用的品牌词组至少选择一个监测平台")
         group.run_mode = run_mode
         group.sort_order = item.sort_order if item.sort_order is not None else index
         group.status = item.status
@@ -471,10 +577,28 @@ def active_brand_word_groups(
 
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
     """新增或更新企业品牌资产。"""
+    from app.services.menu_permission_service import (
+        has_identity_menu_permission,
+        identity_allowed_monitor_platforms,
+    )
+
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
     _guard_tenant_write(db, current, tenant_id)
+    identity_id = current.identity.id
+    # 2026-07-30 - 地区看菜单编辑权；平台看职位白名单
+    can_profile = has_identity_menu_permission(db, identity_id, "platform.audit.profile", "can_update")
+    can_regions = has_identity_menu_permission(db, identity_id, "platform.audit.regions", "can_update")
+    can_keywords = has_identity_menu_permission(db, identity_id, "platform.audit.keywords", "can_update")
+    allowed_platform_codes: set[str] | None = set(identity_allowed_monitor_platforms(db, current.identity))
+    can_models = bool(allowed_platform_codes)
+    can_schedule = has_identity_menu_permission(db, identity_id, "platform.audit.schedule", "can_update")
+    if not can_models:
+        allowed_platform_codes = None
+
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
+        if not can_profile:
+            raise PermissionError("无企业资料编辑权限，无法新建企业配置")
         asset = BrandAsset(
             tenant_id=tenant_id,
             company_full_name=payload.company_full_name,
@@ -489,26 +613,39 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
             schedule_month_days_json=[],
         )
         db.add(asset)
-    asset.company_full_name = payload.company_full_name
-    asset.brand_name = payload.brand_name
-    asset.brand_short_name = payload.brand_short_name
-    asset.monitor_keywords_json = _dedupe([*payload.monitor_keywords, *payload.product_keywords])
-    asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
-    asset.product_keywords_json = []
-    if not payload.keyword_groups:
+    if can_profile:
+        asset.company_full_name = payload.company_full_name
+        asset.brand_name = payload.brand_name
+        asset.brand_short_name = payload.brand_short_name
+        asset.official_url = payload.official_url
+        asset.description = payload.description
+    if can_keywords or not asset.monitor_keywords_json:
+        asset.monitor_keywords_json = _dedupe([*payload.monitor_keywords, *payload.product_keywords])
+        asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])
+        asset.product_keywords_json = []
+    if can_models and not payload.keyword_groups:
         asset.monitored_platforms_json = sort_platform_codes(_dedupe(payload.monitored_platforms))
-    asset.region_codes_json = normalize_region_codes(payload.region_codes)
-    asset.official_url = payload.official_url
-    asset.description = payload.description
-    asset.schedule_type = payload.schedule_type
-    asset.schedule_times_json = _dedupe(payload.schedule_times)
-    asset.schedule_frequency = payload.schedule_frequency
-    asset.schedule_weekdays_json = _int_dedupe(payload.schedule_weekdays, 1, 7)
-    asset.schedule_month_days_json = _int_dedupe(payload.schedule_month_days, 1, 31)
+    if can_regions:
+        asset.region_codes_json = normalize_region_codes(payload.region_codes)
+    elif getattr(asset, "region_codes_json", None) is None:
+        asset.region_codes_json = []
+    if can_schedule:
+        asset.schedule_type = payload.schedule_type
+        asset.schedule_times_json = _dedupe(payload.schedule_times)
+        asset.schedule_frequency = payload.schedule_frequency
+        asset.schedule_weekdays_json = _int_dedupe(payload.schedule_weekdays, 1, 7)
+        asset.schedule_month_days_json = _int_dedupe(payload.schedule_month_days, 1, 31)
     asset.status = True
     asset.deleted = False
     db.flush()
-    save_keyword_groups(db, asset, payload)
+    if can_keywords:
+        save_keyword_groups(
+            db,
+            asset,
+            payload,
+            allow_platform_edit=can_models,
+            allowed_platform_codes=allowed_platform_codes,
+        )
     db.commit()
     db.refresh(asset)
     # 露出词/平台变更后清摘要与信源缓存，避免脏读至多 6h

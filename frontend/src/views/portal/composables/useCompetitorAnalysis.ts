@@ -1,5 +1,5 @@
-import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { withRetry } from '../../../composables/useRetry'
@@ -15,7 +15,6 @@ import {
 } from '../../../utils/customerMonitorDate'
 import { notifyOperationError } from '../../../utils/requestError'
 import { PortalAnalyticsKey } from '../injectionKeys'
-import { resolveRealtimeMenu } from '../portalNavigation'
 import { platformLabelMap } from '../portalMaps'
 import { sortPlatformTabs } from '../platformOrder'
 import { isCustomerPreviewActive, parsePreviewTenantId } from '../customerPreview'
@@ -52,7 +51,6 @@ export function useBrandInsights(options?: {
   sentimentWordCloudRef?: Ref<HTMLDivElement | null>
 }) {
   const route = useRoute()
-  const router = useRouter()
   const auth = useAuthStore()
   const isCustomerView = computed(() => (
     auth.session?.identity?.identity_type === 'CUSTOMER'
@@ -131,9 +129,12 @@ export function useBrandInsights(options?: {
     void loadSummary()
   }
 
-  function buildCompareParams() {
+  function buildCompareParams(options?: { includePlatforms?: boolean }) {
     const base = {
-      platforms: selectedPlatforms.value.length ? selectedPlatforms.value.join(',') : undefined,
+      // 2026-07-30 - 点平台重拉对比太慢 - 对比始终全平台，前端本地切；词云仍可带平台
+      platforms: options?.includePlatforms && selectedPlatforms.value.length
+        ? selectedPlatforms.value.join(',')
+        : undefined,
       prompt: promptFilter.value || undefined,
       tenant_id: platformTenantId.value,
     }
@@ -150,23 +151,29 @@ export function useBrandInsights(options?: {
     }
   }
 
-  function drillDownDateDays() {
-    if (!isCustomerView.value) return datePreset.value
-    const start = new Date(`${trendStartDate.value}T00:00:00`)
-    const end = new Date(`${trendEndDate.value}T00:00:00`)
-    const span = Math.ceil((end.getTime() - start.getTime()) / 86400000) + 1
-    if (span <= 7) return '7'
-    if (span <= 30) return '30'
-    return '90'
-  }
+  const activePlatformSlice = computed(() => {
+    const selected = selectedPlatforms.value
+    if (selected.length !== 1 || !summary.value?.platform_rows?.length) return null
+    return summary.value.platform_rows.find(row => row.platform === selected[0]) || null
+  })
 
   const platformTabs = computed(() => {
+    // 2026-07-30 - 点选平台后其它 Tab 变 0 - 用未按平台过滤的 tab 计数
     const counts = new Map<string, number>()
-    ;(summary.value?.platform_rows || []).forEach(row => counts.set(row.platform, row.sample_count))
+    const tabRows = summary.value?.platform_tab_counts?.length
+      ? summary.value.platform_tab_counts
+      : (summary.value?.platform_rows || []).map(row => ({
+        platform: row.platform,
+        sample_count: row.sample_count,
+      }))
+    tabRows.forEach(row => counts.set(row.platform, row.sample_count))
     ;(brandAsset.value?.monitored_platforms || []).forEach(code => {
       if (!counts.has(code)) counts.set(code, 0)
     })
-    const total = summary.value?.sample_total || 0
+    const total = summary.value?.tab_sample_total
+      ?? (summary.value?.platform_tab_counts?.length
+        ? tabRows.reduce((sum, row) => sum + (row.sample_count || 0), 0)
+        : (summary.value?.sample_total || 0))
     return sortPlatformTabs([
       { code: 'all', name: '全部平台', count: total },
       ...Array.from(counts.entries())
@@ -176,8 +183,9 @@ export function useBrandInsights(options?: {
 
   const promptOptions = computed(() => summary.value?.prompt_options || [])
 
-  const leaderboardRows = computed<CompetitorLeaderboardRow[]>(() => (
-    (summary.value?.rows || []).map(row => ({
+  const leaderboardRows = computed<CompetitorLeaderboardRow[]>(() => {
+    const sourceRows = activePlatformSlice.value?.rows || summary.value?.rows || []
+    return sourceRows.map(row => ({
       name: row.name,
       is_brand: Boolean(row.is_brand),
       mention: row.mention_rate,
@@ -186,23 +194,45 @@ export function useBrandInsights(options?: {
       rank: row.avg_rank,
       rank_sample_count: row.rank_sample_count || 0,
     }))
-  ))
+  })
 
-  const sentimentLeaderboardRows = computed<SentimentLeaderboardRow[]>(() => (
-    (summary.value?.sentiment_rows || []).map(row => ({
+  const sentimentLeaderboardRows = computed<SentimentLeaderboardRow[]>(() => {
+    const slice = activePlatformSlice.value
+    if (slice) {
+      const sliceRows = slice.sentiment_rows
+      if (sliceRows && sliceRows.length) {
+        return sliceRows.map(row => ({
+          name: row.name,
+          is_brand: Boolean(row.is_brand),
+          positive_rate: row.positive_rate,
+          negative_rate: row.negative_rate,
+          sentiment_sample: row.sentiment_sample,
+        }))
+      }
+    }
+    return (summary.value?.sentiment_rows || []).map(row => ({
       name: row.name,
       is_brand: Boolean(row.is_brand),
       positive_rate: row.positive_rate,
       negative_rate: row.negative_rate,
       sentiment_sample: row.sentiment_sample,
     }))
-  ))
+  })
 
   const brandRow = computed(() => leaderboardRows.value.find(row => row.is_brand) || null)
   const brandSentimentRow = computed(() => sentimentLeaderboardRows.value.find(row => row.is_brand) || null)
-  const sampleTotal = computed(() => summary.value?.sample_total || 0)
+  const sampleTotal = computed(() => (
+    activePlatformSlice.value?.sample_count
+    ?? summary.value?.sample_total
+    ?? 0
+  ))
   const configuredCount = computed(() => brandCompetitors.value.length || summary.value?.competitor_count || 0)
-  const mentionTrendSeries = computed(() => summary.value?.mention_trends || { labels: [], series: [] })
+  // 2026-07-30 - 有各端切片用切片；缺字段回退全局，避免曲线整块空白
+  const mentionTrendSeries = computed(() => {
+    const sliceTrends = activePlatformSlice.value?.mention_trends
+    if (sliceTrends?.labels?.length && sliceTrends.series?.length) return sliceTrends
+    return summary.value?.mention_trends || { labels: [], series: [] }
+  })
 
   const focusedMentionTrendSeries = computed(() => {
     const trend = mentionTrendSeries.value
@@ -235,10 +265,10 @@ export function useBrandInsights(options?: {
 
   const mentionTrendHiddenCount = computed(() => focusedMentionTrendSeries.value.hidden_count || 0)
 
-  const trendDayKeys = computed(() => summary.value?.trend_day_keys || [])
-
   const sentimentTrendRows = computed(() => {
-    const trend = summary.value?.sentiment_trends
+    const sliceTrends = activePlatformSlice.value?.sentiment_trends
+    const trend = (sliceTrends?.labels?.length ? sliceTrends : null)
+      || summary.value?.sentiment_trends
     if (!trend?.labels?.length) return []
     return trend.labels.map((label, index) => ({
       label,
@@ -267,7 +297,8 @@ export function useBrandInsights(options?: {
       return {
         level: 'sample' as const,
         title: '等待监测样本',
-        body: '定时检测完成后会自动汇总提及率、排名与情绪趋势。点击图表数据点可下钻到实时检测查看明细。',
+        // 2026-07-30 - 四宫格下钻已下线 - 口径文案去掉下钻指引
+        body: '定时检测完成后会自动汇总提及率、排名与情绪趋势。',
       }
     }
     if (!configuredCount.value) {
@@ -280,15 +311,9 @@ export function useBrandInsights(options?: {
     return {
       level: 'ok' as const,
       title: '数据口径说明',
-      body: '提及率 = 品牌在推荐列表中出现次数 / 样本总数。情绪指数按品牌出现在推荐列表时的回答情感标签统计。点击趋势图、排行榜或情绪词可下钻实时检测。',
+      body: '提及率 = 品牌在推荐列表中出现次数 / 样本总数。情绪指数按品牌出现在推荐列表时的回答情感标签统计。',
     }
   })
-
-  function resolveTrendDayIso(label: string) {
-    const index = mentionTrendSeries.value.labels.indexOf(label)
-    if (index < 0) return undefined
-    return trendDayKeys.value[index]
-  }
 
   const platformTenantId = computed(() => {
     const previewId = parsePreviewTenantId(route)
@@ -300,34 +325,6 @@ export function useBrandInsights(options?: {
     if (Number.isFinite(parsed)) return parsed
     return brandAsset.value?.tenant_id
   })
-
-  function drillDownToRealtime(options?: { platform?: string; prompt?: string; dayLabel?: string }) {
-    const target = resolveRealtimeMenu(!isCustomerView.value, platformTenantId.value ?? null)
-    const query: Record<string, string> = {
-      ...Object.fromEntries(
-        Object.entries(route.query).filter(([, value]) => value != null).map(([key, value]) => [key, String(value)]),
-      ),
-      menu: target.menu,
-      ...target.query,
-    }
-    delete query.task_id
-    delete query.subtask_id
-
-    const platform = options?.platform
-      || (selectedPlatforms.value.length === 1 ? selectedPlatforms.value[0] : '')
-    if (platform) query.platform = platform
-
-    const prompt = options?.prompt ?? promptFilter.value
-    if (prompt) query.monitor_prompt = prompt
-
-    query.date_days = drillDownDateDays()
-    query.view = 'matrix'
-
-    const dayIso = options?.dayLabel ? resolveTrendDayIso(options.dayLabel) : undefined
-    if (dayIso) query.insights_day = dayIso
-
-    router.push({ path: route.path, query }).catch(() => undefined)
-  }
 
   async function openKeywordSnapshot(item: SentimentKeywordItem) {
     const subtaskId = String(item.subtask_id || '').trim()
@@ -359,10 +356,12 @@ export function useBrandInsights(options?: {
       selectedPlatforms.value = []
       return
     }
-    const set = new Set(selectedPlatforms.value)
-    if (set.has(code)) set.delete(code)
-    else set.add(code)
-    selectedPlatforms.value = [...set]
+    // 单选本地切换：再点同一端回到全部，避免多选还得重算合并
+    if (selectedPlatforms.value.length === 1 && selectedPlatforms.value[0] === code) {
+      selectedPlatforms.value = []
+      return
+    }
+    selectedPlatforms.value = [code]
   }
 
   let keywordsRequested = false
@@ -394,7 +393,7 @@ export function useBrandInsights(options?: {
     const version = loadVersion
     keywordsLoading.value = true
     try {
-      const params = { ...buildCompareParams(), limit: 55 }
+      const params = { ...buildCompareParams({ includePlatforms: true }), limit: 55 }
       const keywordData = await getSentimentKeywords(params)
       if (version !== loadVersion) return
       if (keywordData) sentimentKeywords.value = keywordData
@@ -441,10 +440,6 @@ export function useBrandInsights(options?: {
       sourceStructureRows: [],
       sourceTrendRows: [],
       sourceCategoryLabels: {},
-      chartClickHandlers: {
-        mentionTrend: payload => drillDownToRealtime({ dayLabel: payload.label }),
-        sentimentTrend: payload => drillDownToRealtime({ dayLabel: payload.label }),
-      },
     })
   }
 
@@ -507,7 +502,14 @@ export function useBrandInsights(options?: {
   watch([datePreset], () => {
     if (!isCustomerView.value) scheduleReload()
   })
-  watch([selectedPlatforms, promptFilter], () => { scheduleReload() })
+  watch([promptFilter], () => { scheduleReload() })
+  watch(selectedPlatforms, () => {
+    // 对比数据本地切；情绪词仍按平台异步重拉（不挡主界面）
+    sentimentKeywords.value = null
+    keywordsRequested = false
+    void loadSentimentKeywords()
+    void nextTick(() => refreshTrendCharts())
+  })
   watch(promptOptions, (options) => {
     if (promptFilter.value && !options.includes(promptFilter.value)) {
       promptFilter.value = ''
@@ -589,7 +591,6 @@ export function useBrandInsights(options?: {
     resetFilters,
     exportCsv,
     togglePlatform,
-    drillDownToRealtime,
     openKeywordSnapshot,
     closeKeywordSnapshot,
     snapshotVisible,

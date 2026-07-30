@@ -3,8 +3,10 @@ import { Building2, HelpCircle, ShieldCheck } from '@lucide/vue'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 import { menuIcon } from './menuIcons'
 import { actionsForMenu, actionLabelForMenu, countPermissionRows } from './menuPermissionMatrix'
+import { supportedPlatforms } from './platformMeta'
 
 const admin = usePlatformAdminInject()
+const platformAllowOptions = supportedPlatforms
 const {
   positionDialog,
   editingPosition,
@@ -14,6 +16,9 @@ const {
   permissionModules,
   activeGrantCount,
   onPositionIdentityTypeChange,
+  // 2026-07-30 - admin.xxx 嵌套 ref 不解包，el-select 多选空白 - 提到顶层再绑
+  allowedMonitorPlatforms,
+  showPlatformAllowSelect,
   editDialog,
   editingUser,
   editForm,
@@ -41,6 +46,21 @@ const {
 
 function actionOptions(type: 'PLATFORM' | 'CUSTOMER', menuCode: string) {
   return actionsForMenu(menuCode, type)
+}
+
+function isAllowedPlatform(code: string) {
+  return allowedMonitorPlatforms.value.includes(code)
+}
+
+function toggleAllowedPlatform(code: string, event: Event) {
+  // 2026-07-30 - el-select 未全局注册导致空白；改原生勾选芯片
+  const checked = (event.target as HTMLInputElement).checked
+  const next = new Set(allowedMonitorPlatforms.value)
+  if (checked) next.add(code)
+  else next.delete(code)
+  allowedMonitorPlatforms.value = platformAllowOptions
+    .map(item => item.code)
+    .filter(item => next.has(item))
 }
 </script>
 
@@ -76,14 +96,32 @@ function actionOptions(type: 'PLATFORM' | 'CUSTOMER', menuCode: string) {
             <component :is="menuIcon(row.menu)" />
             <span>{{ row.menu.menu_name }}</span>
           </div>
-          <div v-if="!row.headerOnly" class="permission-action-options">
+          <div v-if="!row.headerOnly && actionOptions(positionForm.identity_type, row.menu.menu_code).length" class="permission-action-options">
             <label v-for="action in actionOptions(positionForm.identity_type, row.menu.menu_code)" :key="`${row.menu.id}-${action}`" class="permission-action-chip">
               <input v-model="admin.menuGrants[row.menu.id][action]" type="checkbox" />
               <span>{{ actionLabelForMenu(row.menu.menu_code, action) }}</span>
             </label>
           </div>
-          <div v-else class="permission-action-options permission-action-options-muted">
-            <span>勾选下方子项以授权新增平台或客户账号</span>
+          <!-- 2026-07-30 - 平台范围=按职位勾选可配端；不用未注册的 el-select -->
+          <div
+            v-if="row.menu.menu_code === 'platform.audit.models' && showPlatformAllowSelect"
+            class="permission-platform-allow"
+          >
+            <span class="permission-platform-allow-label">可配置平台（按职位不同；不选则不能勾任何平台）</span>
+            <div class="permission-action-options">
+              <label
+                v-for="platform in platformAllowOptions"
+                :key="platform.code"
+                class="permission-action-chip"
+              >
+                <input
+                  type="checkbox"
+                  :checked="isAllowedPlatform(platform.code)"
+                  @change="toggleAllowedPlatform(platform.code, $event)"
+                />
+                <span>{{ platform.name }}</span>
+              </label>
+            </div>
           </div>
         </div>
       </div>

@@ -37,6 +37,7 @@ export function usePositionManagement(options: PositionManagementOptions) {
   const positionDialog = ref(false)
   const savingPosition = ref(false)
   const menuGrants = reactive<MenuGrantState>(createEmptyGrantState())
+  const allowedMonitorPlatforms = ref<string[]>([])
   const positionForm = reactive({
     position_name: '',
     identity_type: 'PLATFORM' as IdentityType,
@@ -48,6 +49,21 @@ export function usePositionManagement(options: PositionManagementOptions) {
   const positionFormMenus = computed(() => assignablePermissionMenus(positionForm.identity_type, assignMenus[positionForm.identity_type] || []))
   const permissionModules = computed(() => permissionModulesFor(positionForm.identity_type, assignMenus[positionForm.identity_type] || []))
   const activeGrantCount = computed(() => countActiveGrants(menuGrants))
+  const modelsMenu = computed(() => positionFormMenus.value.find(menu => menu.menu_code === 'platform.audit.models') || null)
+  // 2026-07-30 - 职位直接勾可选平台；有「平台范围」菜单行就出多选
+  const showPlatformAllowSelect = computed(() => Boolean(modelsMenu.value))
+
+  function syncModelsGrantFromAllowlist() {
+    const menu = modelsMenu.value
+    if (!menu) return
+    const on = allowedMonitorPlatforms.value.length > 0
+    menuGrants[menu.id] = {
+      can_export: on,
+      can_create: false,
+      can_update: on,
+      can_delete: false,
+    }
+  }
 
   function notifyError(error: unknown, context: string) {
     notifyOperationError(error, context, managementErrorMessage)
@@ -70,6 +86,7 @@ export function usePositionManagement(options: PositionManagementOptions) {
     positionForm.role_code = defaultRoleForIdentityType(type)
     positionForm.description = ''
     positionForm.status = true
+    allowedMonitorPlatforms.value = []
     resetMenuGrants(type)
   }
 
@@ -85,6 +102,7 @@ export function usePositionManagement(options: PositionManagementOptions) {
     positionForm.role_code = row.role_code
     positionForm.description = row.description || ''
     positionForm.status = true
+    allowedMonitorPlatforms.value = [...(row.allowed_monitor_platforms || [])]
     resetMenuGrants(row.identity_type)
     Object.assign(
       menuGrants,
@@ -99,6 +117,7 @@ export function usePositionManagement(options: PositionManagementOptions) {
         })),
       ),
     )
+    syncModelsGrantFromAllowlist()
     positionDialog.value = true
   }
 
@@ -123,6 +142,8 @@ export function usePositionManagement(options: PositionManagementOptions) {
       ElMessage.warning('职位底层权限未初始化，请刷新后重试')
       return
     }
+    // 白名单非空 → 同步 models 授权，再计有效权限项
+    syncModelsGrantFromAllowlist()
     if (!activeGrantCount.value) {
       ElMessage.warning('请至少勾选一项功能权限')
       return
@@ -136,6 +157,7 @@ export function usePositionManagement(options: PositionManagementOptions) {
         description: positionForm.description.trim() || null,
         menu_grants: grantsToPayload(menuGrants, positionFormMenus.value),
         menu_ids: [],
+        allowed_monitor_platforms: showPlatformAllowSelect.value ? [...allowedMonitorPlatforms.value] : [],
         status: positionForm.status,
       }
       if (editingPosition.value) {
@@ -176,6 +198,8 @@ export function usePositionManagement(options: PositionManagementOptions) {
     savingPosition,
     positionForm,
     menuGrants,
+    allowedMonitorPlatforms,
+    showPlatformAllowSelect,
     positionFormMenus,
     permissionModules,
     activeGrantCount,

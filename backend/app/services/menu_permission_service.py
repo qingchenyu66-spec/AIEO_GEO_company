@@ -14,8 +14,10 @@ from app.schemas.permission import MenuGrantItem, MenuInfo
 ROUTE_PARENT_BY_CHILD: dict[str, str] = {
     "platform.audit.list": "platform.audit",
     "platform.audit.profile": "platform.audit",
+    "platform.audit.regions": "platform.audit",
     "platform.audit.keywords": "platform.audit",
     "platform.audit.models": "platform.audit",
+    "platform.audit.purge": "platform.audit",
     "platform.audit.schedule": "platform.audit",
     "platform.audit.competitors": "platform.audit",
     "platform.audit.files": "platform.audit",
@@ -76,8 +78,10 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.dashboard": frozenset({"can_export"}),
     "platform.audit.list": frozenset({"can_export", "can_update", "can_delete"}),
     "platform.audit.profile": frozenset({"can_export", "can_update"}),
+    "platform.audit.regions": frozenset({"can_export", "can_update"}),
     "platform.audit.keywords": frozenset({"can_export", "can_update"}),
     "platform.audit.models": frozenset({"can_export", "can_update"}),
+    "platform.audit.purge": frozenset({"can_delete"}),
     "platform.audit.schedule": frozenset({"can_export", "can_update"}),
     "platform.audit.competitors": frozenset({"can_export", "can_update"}),
     "platform.audit.files": frozenset({"can_export"}),
@@ -221,6 +225,37 @@ def has_identity_menu_permission(
         )
     ).scalar_one_or_none()
     return bool(grant and getattr(grant, action, False))
+
+
+def normalize_allowed_monitor_platforms(raw: list[str] | None) -> list[str]:
+    from app.core.platform_order import sort_platform_codes
+
+    codes: list[str] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        code = str(item or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return sort_platform_codes(codes)
+
+
+def identity_allowed_monitor_platforms(db: Session, identity: UserIdentity) -> list[str]:
+    """会话用：直接读职位平台白名单（按职位不同）；无职位则空。"""
+    # 2026-07-30 - 不再用 models.can_update 当大门；白名单即权限
+    if not identity.position_id:
+        return []
+    from app.models.permission import Position
+
+    position = db.scalar(
+        select(Position).where(Position.id == identity.position_id, Position.deleted.is_(False))
+    )
+    if position is None:
+        return []
+    return normalize_allowed_monitor_platforms(
+        list(getattr(position, "allowed_monitor_platforms_json", None) or [])
+    )
 
 
 def has_any_identity_menu_permission(

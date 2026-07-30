@@ -3,9 +3,7 @@ import { computed, ref } from 'vue'
 import {
   AlertTriangle,
   Database,
-  Download,
   Globe,
-  Info,
   RefreshCw,
 } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
@@ -70,7 +68,6 @@ const {
   setRankTab,
   selectWebsiteDomain,
   clearWebsiteDomain,
-  exportCsv,
   sourceCategoryLabels,
   sourceCategoryLabel,
   domainFromUrl,
@@ -149,10 +146,6 @@ const categoryOptions = [
               <RefreshCw />
               刷新
             </button>
-            <button type="button" class="primary-btn small-btn" :disabled="!websiteShortList.length" @click="exportCsv">
-              <Download />
-              导出 CSV
-            </button>
           </div>
         </div>
         <div v-if="platformTabs.length > 1" class="source-platform-chips">
@@ -206,10 +199,9 @@ const categoryOptions = [
       </div>
     </article>
 
-    <div class="source-insight" :class="`is-${insight.level}`">
+    <div v-if="insight" class="source-insight" :class="`is-${insight.level}`">
       <div class="source-insight-icon">
-        <AlertTriangle v-if="insight.level === 'empty'" />
-        <Info v-else />
+        <AlertTriangle />
       </div>
       <div>
         <strong>{{ insight.title }}</strong>

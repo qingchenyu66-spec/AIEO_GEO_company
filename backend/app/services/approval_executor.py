@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, UTC
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
@@ -35,7 +35,10 @@ from app.services.brand_service import (
 from app.services.lead_diagnosis_service import create_lead_diagnosis, submit_due_lead_run, update_lead_diagnosis
 from app.services.management_service import (
     _tenant_code_from_name,
+    allocate_tenant_code,
     create_managed_user,
+    raise_if_live_tenant_name_or_code_conflict,
+    tenant_name_was_purged,
     update_managed_user,
 )
 from app.services.report_service import generate_report, publish_report, update_report
@@ -127,10 +130,10 @@ def _exec_user_update(db: Session, current: CurrentSession, record: OperationApp
 def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     payload = TenantCreateRequest.model_validate(data.get("body") or data)
     name = payload.name.strip()
-    code = (payload.code or _tenant_code_from_name(name)).strip()
-    exists = db.scalar(select(Tenant).where(or_(Tenant.name == name, Tenant.code == code), Tenant.deleted.is_(False)))
-    if exists is not None:
-        raise ValueError("企业名称或企业编码已存在")
+    preferred_code = (payload.code or _tenant_code_from_name(name)).strip()
+    raise_if_live_tenant_name_or_code_conflict(db, name=name, code=preferred_code)
+    was_purged = tenant_name_was_purged(db, name)
+    code = allocate_tenant_code(db, name, preferred_code)
     tenant = Tenant(
         name=name,
         code=code,
@@ -146,7 +149,10 @@ def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationA
         if tenant.stop_reason == "expired" and tenant.stopped_at is None:
             tenant.stopped_at = datetime.now(UTC)
         sync_tenant_accounts_for_service_state(db, tenant)
-    return {"id": tenant.id, "name": tenant.name, "code": tenant.code}
+    result = {"id": tenant.id, "name": tenant.name, "code": tenant.code}
+    if was_purged:
+        result["name_was_purged"] = True
+    return result
 
 
 def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
@@ -157,15 +163,7 @@ def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationA
         raise ValueError("企业不存在")
     name = payload.name.strip()
     code = (payload.code or tenant.code or _tenant_code_from_name(name)).strip()
-    exists = db.scalar(
-        select(Tenant).where(
-            or_(Tenant.name == name, Tenant.code == code),
-            Tenant.id != tenant_id,
-            Tenant.deleted.is_(False),
-        )
-    )
-    if exists is not None:
-        raise ValueError("企业名称或企业编码已存在")
+    raise_if_live_tenant_name_or_code_conflict(db, name=name, code=code, exclude_id=tenant_id)
     tenant.name = name
     tenant.code = code
     tenant.service_start_date = payload.service_start_date

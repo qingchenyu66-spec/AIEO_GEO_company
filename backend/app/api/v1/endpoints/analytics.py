@@ -26,10 +26,11 @@ from app.schemas.sentiment_wordcloud import (
     SentimentWordCloudImageResponse,
 )
 from app.services.competitor_analytics_service import build_competitor_compare_summary
-from app.services.monitor_service import customer_display_cutoff
+from app.services.monitor_service import build_source_analysis_summary, customer_display_cutoff
 from app.services.sentiment_keyword_service import build_sentiment_keywords
 from app.services.sentiment_wordcloud_image_service import generate_sentiment_wordcloud_image
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
+from app.services.menu_permission_service import has_identity_menu_permission
 
 from app.core.chinese_stop_words import WORDCLOUD_STOP_WORDS
 
@@ -209,3 +210,26 @@ def competitor_compare(
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="analytics.competitor_compare")
+
+
+@router.get("/source-stats", response_model=ApiResponse[dict])
+def source_stats(
+    tenant_id: int | None = None,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """信源分析页轻接口：信源聚合 + 引用趋势，不扫监测任务大表。"""
+    try:
+        if current.identity.identity_type == "CUSTOMER":
+            if not has_identity_menu_permission(db, current.identity.id, "customer.sources", "can_export"):
+                raise PermissionError("无权查看信源分析")
+        else:
+            if not (
+                has_identity_menu_permission(db, current.identity.id, "platform.sources", "can_export")
+                or has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export")
+            ):
+                raise PermissionError("无权查看信源分析")
+        data = build_source_analysis_summary(db, current, tenant_id=tenant_id)
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.source_stats")

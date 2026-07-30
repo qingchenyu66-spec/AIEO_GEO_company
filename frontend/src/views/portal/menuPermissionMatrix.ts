@@ -29,8 +29,11 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
 
   'platform.audit.list': ['can_export', 'can_update', 'can_delete'],
   'platform.audit.profile': ['can_export', 'can_update'],
+  'platform.audit.regions': ['can_export', 'can_update'],
   'platform.audit.keywords': ['can_export', 'can_update'],
-  'platform.audit.models': ['can_export', 'can_update'],
+  // 2026-07-30 - 平台范围按职位多选，不再用查看/编辑总开关
+  'platform.audit.models': [],
+  'platform.audit.purge': ['can_delete'],
   'platform.audit.schedule': ['can_export', 'can_update'],
   'platform.audit.competitors': ['can_export', 'can_update'],
   'platform.audit.files': ['can_export'],
@@ -71,8 +74,10 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
 const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string>>> = {
   'platform.audit.list': { can_export: '查看', can_update: '新增/编辑', can_delete: '停止服务' },
   'platform.audit.profile': { can_export: '查看', can_update: '编辑资料' },
+  'platform.audit.regions': { can_export: '查看', can_update: '编辑服务地区' },
   'platform.audit.keywords': { can_export: '查看', can_update: '编辑监测词' },
-  'platform.audit.models': { can_export: '查看', can_update: '编辑平台范围' },
+  'platform.audit.models': {},
+  'platform.audit.purge': { can_delete: '彻底删除' },
   'platform.audit.schedule': { can_export: '查看', can_update: '编辑监控计划' },
   'platform.audit.competitors': { can_export: '查看', can_update: '编辑竞品' },
   'platform.lead_diagnosis': { can_export: '查看/导出 PDF', can_create: '新建诊断' },
@@ -243,6 +248,7 @@ export function countPermissionRows(rows: PermissionMenuRow[], grants: MenuGrant
 
 export function actionsForMenu(menuCode: string, type: IdentityType): PermissionAction[] {
   if (MENU_ACTIONS[menuCode]) return MENU_ACTIONS[menuCode]
+  if (menuCode === 'platform.audit.purge') return ['can_delete']
   if (menuCode.startsWith('platform.audit.')) {
     return menuCode === 'platform.audit.list'
       ? ['can_export', 'can_update', 'can_delete']
