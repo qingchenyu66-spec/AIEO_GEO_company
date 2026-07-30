@@ -410,7 +410,6 @@ onMounted(() => {
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
     :preview-mode="isPreviewActive"
-    :preview-tenant-name="previewTenantName"
     @toggle-user-submenu="toggleUserSubmenu"
     @select-menu="selectMenu"
     @set-menu-code="navigateToMenu"

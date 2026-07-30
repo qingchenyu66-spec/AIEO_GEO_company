@@ -328,7 +328,9 @@
 }
 
 .portal-shell:has(.portal-content-immersive) .identity-switch,
-.portal-shell:has(.portal-content-immersive) .icon-action {
+.portal-shell:has(.portal-content-immersive) .icon-action,
+/* 2026-07-30 - 预览退出在顶栏，沉浸顶栏需同色以免白底刺眼 */
+.portal-shell:has(.portal-content-immersive) .preview-exit-btn {
   border-color: rgba(120, 180, 230, .22);
   background: rgba(255, 255, 255, .06);
   color: #dce9ff;

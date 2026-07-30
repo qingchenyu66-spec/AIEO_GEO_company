@@ -37,7 +37,6 @@ defineProps<{
   fullscreen?: boolean
   pendingApprovalCount?: number
   previewMode?: boolean
-  previewTenantName?: string
 }>()
 
 const emit = defineEmits<{
@@ -168,6 +167,13 @@ function toggleSidebarPin() {
       <header v-if="!fullscreen" class="topbar">
         <div class="crumb">GEO Monitor / {{ pageTitle }}</div>
         <div class="top-actions">
+          <!-- 2026-07-30 - 预览退出抢视线/像退出登录 - 顶栏次要按钮「返回企业管理」，去蓝条 -->
+          <button
+            v-if="previewMode"
+            type="button"
+            class="preview-exit-btn"
+            @click="emit('exitPreview')"
+          >返回企业管理</button>
           <NotificationBell @open-alerts="emit('openAlerts')" />
           <el-dropdown v-if="identityCount > 1" trigger="click" @command="(id: number) => emit('switchIdentity', id)">
             <button type="button" class="identity-switch">
@@ -198,14 +204,6 @@ function toggleSidebarPin() {
           </button>
         </div>
       </header>
-      <!-- 2026-07-28 - 预览条 sticky 与页内筛选条抢 top:0 - 移出滚动区，不参与 sticky 叠层 -->
-      <div v-if="previewMode" class="ws-preview-banner portal-preview-banner">
-        <div>
-          <strong>只读预览</strong>
-          <span>正在预览「{{ previewTenantName || '客户' }}」门户全部菜单，不可代客户操作</span>
-        </div>
-        <button type="button" class="ws-campus-primary" @click="emit('exitPreview')">返回企业管理</button>
-      </div>
       <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">
         <div v-if="!immersive" class="page-head">
           <div class="page-head-main">
