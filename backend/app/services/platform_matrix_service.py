@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
@@ -29,45 +29,48 @@ def _today_bounds() -> tuple[datetime, datetime]:
 
 
 def _today_global_platform_health(db: Session) -> dict[str, dict[str, Any]]:
-    """Aggregate today's subtask outcomes per platform across all tenants."""
+    """Aggregate today's subtask outcomes per platform across all tenants.
+
+    2026-07-30 - platforms/matrix Out of sort memory(1038) - 勿整行拉 subtask+ORDER BY，改 SQL 按平台聚合
+    """
     start_at, end_at = _today_bounds()
-    subtasks = list(
-        db.scalars(
-            select(GeoMonitorSubtask)
-            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-            .where(
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorTask.purpose == "geo",
-                GeoMonitorTask.created_at >= start_at,
-                GeoMonitorTask.created_at <= end_at,
-            )
-            .order_by(GeoMonitorSubtask.updated_at.desc(), GeoMonitorSubtask.id.desc())
+    terminal = list(TERMINAL_SUBTASK_STATUSES)
+    success = list(SUCCESS_SUBTASK_STATUSES)
+    rows = db.execute(
+        select(
+            GeoMonitorSubtask.platform,
+            func.count().label("total"),
+            func.sum(
+                case((GeoMonitorSubtask.status.in_(terminal), 1), else_=0)
+            ).label("completed"),
+            func.sum(case((GeoMonitorSubtask.status == "failed", 1), else_=0)).label("failed"),
+            func.sum(
+                case((GeoMonitorSubtask.status.in_(success), 1), else_=0)
+            ).label("success"),
+            func.max(GeoMonitorSubtask.updated_at).label("latest_at"),
         )
-    )
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .where(
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.purpose == "geo",
+            GeoMonitorTask.created_at >= start_at,
+            GeoMonitorTask.created_at <= end_at,
+        )
+        .group_by(GeoMonitorSubtask.platform)
+    ).all()
+
     buckets: dict[str, dict[str, Any]] = {}
-    for item in subtasks:
-        code = (item.platform or "").strip()
+    for row in rows:
+        code = (row.platform or "").strip()
         if not code:
             continue
-        bucket = buckets.setdefault(
-            code,
-            {
-                "total": 0,
-                "completed": 0,
-                "failed": 0,
-                "success": 0,
-                "latest_at": None,
-            },
-        )
-        bucket["total"] += 1
-        if item.status in TERMINAL_SUBTASK_STATUSES:
-            bucket["completed"] += 1
-        if item.status == "failed":
-            bucket["failed"] += 1
-        if item.status in SUCCESS_SUBTASK_STATUSES:
-            bucket["success"] += 1
-        if item.updated_at and (bucket["latest_at"] is None or item.updated_at > bucket["latest_at"]):
-            bucket["latest_at"] = item.updated_at
+        buckets[code] = {
+            "total": int(row.total or 0),
+            "completed": int(row.completed or 0),
+            "failed": int(row.failed or 0),
+            "success": int(row.success or 0),
+            "latest_at": row.latest_at,
+        }
     return buckets
 
 
