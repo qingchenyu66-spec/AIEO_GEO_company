@@ -16,7 +16,7 @@ from app.services.permission_service import (
     replace_identity_menus,
     replace_identity_menus_from_position,
 )
-from app.services.tenant_scope import is_sales_identity
+from app.services.tenant_scope import is_platform_admin_identity, is_sales_identity
 
 # 2026-07-30 - 创建/改名重名提示（方案 B）- 在册分服务中/停服拦截；软删可再建
 TENANT_NAME_WAS_PURGED_HINT = "该名称曾被彻底删除，将新建企业"
@@ -27,6 +27,47 @@ def can_manage_all_users(db: Session, identity: UserIdentity) -> bool:
     if identity.identity_type != "PLATFORM":
         return False
     return not is_sales_identity(db, identity)
+
+
+def _platform_identity_requests_admin(db: Session, item: UserIdentityCreateItem) -> bool:
+    """目标身份是否在申请平台管理员职位或角色。"""
+    if item.identity_type != "PLATFORM":
+        return False
+    if str(item.role_code or "").upper() == "PLATFORM_ADMIN":
+        return True
+    if item.position_id is None:
+        return False
+    position = db.scalar(
+        select(Position).where(
+            Position.id == item.position_id,
+            Position.deleted.is_(False),
+        )
+    )
+    return bool(position is not None and position.position_code == "PLATFORM_ADMIN")
+
+
+def assert_actor_can_assign_identities(
+    db: Session,
+    actor_identity: UserIdentity,
+    identities: list[UserIdentityCreateItem],
+) -> None:
+    """2026-07-30 - 非管理员不可赋管理员职/角，防运营提权。"""
+    if is_platform_admin_identity(db, actor_identity):
+        return
+    for item in identities:
+        if _platform_identity_requests_admin(db, item):
+            raise PermissionError("仅平台管理员可分配管理员职位或角色")
+
+
+def assert_actor_can_manage_target_user(db: Session, actor_identity: UserIdentity, target: User) -> None:
+    """非管理员不可改已有管理员账号。"""
+    if is_platform_admin_identity(db, actor_identity):
+        return
+    for identity in target.identities:
+        if identity.deleted:
+            continue
+        if is_platform_admin_identity(db, identity):
+            raise PermissionError("仅平台管理员可修改管理员账号")
 
 
 def list_managed_users(
@@ -339,6 +380,7 @@ def create_managed_user(
     if exists is not None:
         raise ValueError("账号已存在")
     _reject_garbled_text(payload.display_name, "用户姓名")
+    assert_actor_can_assign_identities(db, creator_identity, list(payload.identities))
 
     user = User(
         username=payload.username,
@@ -372,6 +414,8 @@ def update_managed_user(
 ) -> User:
     user = get_managed_user(db, user_id, current_user, current_identity)
     _reject_garbled_text(payload.display_name, "用户姓名")
+    assert_actor_can_manage_target_user(db, current_identity, user)
+    assert_actor_can_assign_identities(db, current_identity, list(payload.identities))
     identity_types = [item.identity_type for item in payload.identities]
     if len(identity_types) != len(set(identity_types)):
         raise ValueError("同一用户不能重复添加相同登录身份")

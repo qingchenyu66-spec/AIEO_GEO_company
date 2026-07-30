@@ -53,8 +53,11 @@ from app.schemas.permission import (
 from app.services.management_service import (
     _tenant_code_from_name,
     allocate_tenant_code,
+    assert_actor_can_assign_identities,
+    assert_actor_can_manage_target_user,
     create_managed_user,
     delete_managed_user,
+    get_managed_user,
     list_managed_users,
     list_platform_sales_users,
     raise_if_live_tenant_name_or_code_conflict,
@@ -83,7 +86,7 @@ from app.services.permission_service import (
     list_positions_by_identity_type,
     list_roles_by_identity_type,
 )
-from app.services.tenant_scope import ensure_sales_tenant_access, sales_owned_tenant_ids
+from app.services.tenant_scope import ensure_sales_tenant_access, is_platform_admin_identity, sales_owned_tenant_ids
 from app.services.approval_service import can_review_approvals, queue_or_run
 
 router = APIRouter(prefix="/management")
@@ -484,7 +487,11 @@ def management_roles(
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
     _require_user_assignable_read(db, current, "当前账号无权查看角色配置")
-    roles = [
+    roles = list_roles_by_identity_type(db, identity_type)
+    # 2026-07-30 - 非管理员不可见管理员角色，避免下拉提权
+    if identity_type == "PLATFORM" and not is_platform_admin_identity(db, current.identity):
+        roles = [role for role in roles if str(role.role_code or "").upper() != "PLATFORM_ADMIN"]
+    data = [
         RoleInfo(
             id=role.id,
             role_code=role.role_code,
@@ -492,9 +499,9 @@ def management_roles(
             identity_type=role.identity_type,
             data_scope=role.data_scope,
         ).model_dump()
-        for role in list_roles_by_identity_type(db, identity_type)
+        for role in roles
     ]
-    return ApiResponse(data=roles)
+    return ApiResponse(data=data)
 
 
 @router.get("/positions", response_model=ApiResponse[list[dict]])
@@ -506,6 +513,9 @@ def management_positions(
     require_platform(current)
     _require_user_assignable_read(db, current, "当前账号无权查看职位列表")
     positions = list_positions_by_identity_type(db, identity_type)
+    # 2026-07-30 - 非管理员不可见管理员职位，避免下拉提权
+    if identity_type == "PLATFORM" and not is_platform_admin_identity(db, current.identity):
+        positions = [item for item in positions if item.position_code != "PLATFORM_ADMIN"]
     return ApiResponse(data=positions_to_dicts(db, positions))
 
 
@@ -1348,6 +1358,8 @@ def management_create_user(
         return {"id": user.id, "username": user.username, "display_name": user.display_name}
 
     try:
+        # 入队前先拦：销售/运营不能把「建管理员」送进审批
+        assert_actor_can_assign_identities(db, current.identity, list(payload.identities))
         pending, result = queue_or_run(
             db,
             current,
@@ -1358,6 +1370,9 @@ def management_create_user(
             payload={"body": payload.model_dump(mode="json")},
             executor=_execute,
         )
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1385,6 +1400,9 @@ def management_update_user(
         return {"id": user.id, "username": user.username, "display_name": user.display_name}
 
     try:
+        target = get_managed_user(db, user_id, current.user, current.identity)
+        assert_actor_can_manage_target_user(db, current.identity, target)
+        assert_actor_can_assign_identities(db, current.identity, list(payload.identities))
         pending, result = queue_or_run(
             db,
             current,
@@ -1396,6 +1414,9 @@ def management_update_user(
             target_id=user_id,
             executor=_execute,
         )
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

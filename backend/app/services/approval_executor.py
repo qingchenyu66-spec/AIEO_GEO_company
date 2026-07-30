@@ -34,8 +34,10 @@ from app.services.brand_service import (
 )
 from app.services.lead_diagnosis_service import create_lead_diagnosis, submit_due_lead_run, update_lead_diagnosis
 from app.services.management_service import (
+    _platform_identity_requests_admin,
     _tenant_code_from_name,
     allocate_tenant_code,
+    assert_actor_can_assign_identities,
     create_managed_user,
     raise_if_live_tenant_name_or_code_conflict,
     tenant_name_was_purged,
@@ -47,7 +49,7 @@ from app.services.tenant_account_service import (
     restore_tenant_customer_accounts,
     sync_tenant_accounts_for_service_state,
 )
-from app.services.tenant_scope import resolve_and_guard_tenant_id
+from app.services.tenant_scope import is_platform_admin_identity, resolve_and_guard_tenant_id
 
 
 def _payload(record: OperationApproval) -> dict[str, Any]:
@@ -74,6 +76,19 @@ def _requester_actor(db: Session, record: OperationApproval) -> tuple[User, User
 def execute_approval(db: Session, current: CurrentSession, record: OperationApproval) -> dict[str, Any]:
     key = record.operation_key
     data = _payload(record)
+    # 2026-07-30 - 涉及管理员职/角的用户单，仅管理员可批
+    if key in {"management.user.create", "management.user.update"}:
+        body = data.get("body") if isinstance(data.get("body"), dict) else data
+        try:
+            if key == "management.user.create":
+                payload = UserCreateRequest.model_validate(body)
+            else:
+                payload = UserUpdateRequest.model_validate(body)
+            needs_admin = any(_platform_identity_requests_admin(db, item) for item in payload.identities)
+        except Exception:
+            needs_admin = False
+        if needs_admin and not is_platform_admin_identity(db, current.identity):
+            raise PermissionError("仅平台管理员可审批涉及管理员职位的申请")
     handlers = {
         "management.user.create": _exec_user_create,
         "management.user.update": _exec_user_update,

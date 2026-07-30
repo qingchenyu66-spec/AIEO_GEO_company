@@ -1,8 +1,28 @@
 import { reactive } from 'vue'
 import { withRetry } from '../../../composables/useRetry'
+import { useAuthStore } from '../../../stores/auth'
 import type { IdentityType, MenuInfo } from '../../../services/auth'
 import { getManagementMenus, getManagementPositions, getManagementRoles, type PositionInfo, type RoleInfo } from '../../../services/management'
 import type { UserIdentityForm } from '../permissionGroups'
+
+function isCurrentPlatformAdmin() {
+  const auth = useAuthStore()
+  const identity = auth.session?.identity
+  if (!identity || identity.identity_type !== 'PLATFORM') return false
+  if (identity.position_code === 'PLATFORM_ADMIN') return true
+  return String(identity.role_code || '').toUpperCase() === 'PLATFORM_ADMIN'
+}
+
+function filterAssignablePlatformPositions(rows: PositionInfo[]) {
+  if (isCurrentPlatformAdmin()) return rows
+  // 2026-07-30 - 非管理员下拉隐藏管理员职位
+  return rows.filter(item => item.position_code !== 'PLATFORM_ADMIN')
+}
+
+function filterAssignablePlatformRoles(rows: RoleInfo[]) {
+  if (isCurrentPlatformAdmin()) return rows
+  return rows.filter(item => String(item.role_code || '').toUpperCase() !== 'PLATFORM_ADMIN')
+}
 
 export function useAssignableOptions() {
   const assignMenus = reactive<Record<IdentityType, MenuInfo[]>>({ PLATFORM: [], CUSTOMER: [] })
@@ -36,9 +56,9 @@ export function useAssignableOptions() {
     ])
     assignMenus.PLATFORM = platformMenus
     assignMenus.CUSTOMER = customerMenus
-    roles.PLATFORM = platformRoles
+    roles.PLATFORM = filterAssignablePlatformRoles(platformRoles)
     roles.CUSTOMER = customerRoles
-    positions.PLATFORM = platformPositions
+    positions.PLATFORM = filterAssignablePlatformPositions(platformPositions)
     positions.CUSTOMER = customerPositions
     if (!userForm.identity_configs.PLATFORM.role_code) userForm.identity_configs.PLATFORM.role_code = defaultRoleForIdentityType('PLATFORM')
     if (!userForm.identity_configs.CUSTOMER.role_code) userForm.identity_configs.CUSTOMER.role_code = defaultRoleForIdentityType('CUSTOMER')
@@ -50,7 +70,7 @@ export function useAssignableOptions() {
   }
 
   async function refreshPositions() {
-    positions.PLATFORM = await withRetry(() => getManagementPositions('PLATFORM'))
+    positions.PLATFORM = filterAssignablePlatformPositions(await withRetry(() => getManagementPositions('PLATFORM')))
     positions.CUSTOMER = await withRetry(() => getManagementPositions('CUSTOMER'))
   }
 
