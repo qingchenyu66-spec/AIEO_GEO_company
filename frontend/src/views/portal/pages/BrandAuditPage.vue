@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted } from 'vue'
+import { MoreHorizontal } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
@@ -285,22 +286,40 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             </span>
           </div>
           <div class="enterprise-actions">
-            <!-- 2026-07-30 - 操作钮过多挤一行 - 拆成常用 / 危险两行 -->
-            <div class="enterprise-actions-row">
-              <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
-              <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
-              <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
-              <button v-if="canTransferTenantOwner" type="button" class="filter-reset-btn" @click="openTenantTransferDialog(tenant)">转移</button>
-              <button v-if="canGenerateEnterpriseReport" type="button" class="filter-reset-btn" @click="openReportDialog(tenant)">报告</button>
-            </div>
-            <div
-              v-if="canStopTenantService(tenant) || canRestoreTenantService(tenant) || canPurgeTenant()"
-              class="enterprise-actions-row"
+            <!-- 2026-07-30 - 按线上卡片布局收敛操作 - 主钮留查看/详情/编辑，其余进三点 -->
+            <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
+            <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
+            <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
+            <el-dropdown
+              v-if="canTransferTenantOwner || canGenerateEnterpriseReport || canStopTenantService(tenant) || canRestoreTenantService(tenant) || canPurgeTenant()"
+              trigger="click"
             >
-              <button v-if="canStopTenantService(tenant)" type="button" class="danger-text-btn" @click="removeTenant(tenant)">{{ stopTenantActionLabel(tenant) }}</button>
-              <button v-else-if="canRestoreTenantService(tenant)" type="button" class="filter-search-btn" @click="restoreTenantService(tenant)">恢复服务</button>
-              <button v-if="canPurgeTenant()" type="button" class="danger-text-btn" @click="purgeTenantThoroughly(tenant)">彻底删除</button>
-            </div>
+              <button type="button" class="icon-action enterprise-more-btn" title="更多操作" aria-label="更多操作">
+                <MoreHorizontal />
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="canTransferTenantOwner" @click="openTenantTransferDialog(tenant)">转移</el-dropdown-item>
+                  <el-dropdown-item v-if="canGenerateEnterpriseReport" @click="openReportDialog(tenant)">报告</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canStopTenantService(tenant)"
+                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport"
+                    @click="removeTenant(tenant)"
+                  >{{ stopTenantActionLabel(tenant) }}</el-dropdown-item>
+                  <el-dropdown-item
+                    v-else-if="canRestoreTenantService(tenant)"
+                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport"
+                    @click="restoreTenantService(tenant)"
+                  >恢复服务</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canPurgeTenant()"
+                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport || canStopTenantService(tenant) || canRestoreTenantService(tenant)"
+                    class="enterprise-action-danger"
+                    @click="purgeTenantThoroughly(tenant)"
+                  >彻底删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
         <div v-if="!loadingBrand && !filteredTenants.length" class="mini-empty enterprise-empty">暂无符合筛选条件的企业。</div>

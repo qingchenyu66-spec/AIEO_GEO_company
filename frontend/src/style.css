@@ -3012,24 +3012,31 @@ button:disabled {
 .status-pill.dark { color:#475569 !important; background:#e2e8f0; }
 .enterprise-actions {
   display:flex;
-  flex-direction:column;
-  align-items:flex-end;
+  flex-direction:row;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
   gap:8px;
   min-width:0;
 }
-.enterprise-actions-row {
-  display:flex;
-  flex-wrap:wrap;
-  justify-content:flex-end;
-  gap:8px;
-  align-items:center;
-}
 .enterprise-actions .filter-search-btn,
-.enterprise-actions .filter-reset-btn,
-.enterprise-actions .danger-text-btn {
+.enterprise-actions .filter-reset-btn {
   min-width:54px;
   height:34px;
   padding:0 13px;
+}
+.enterprise-actions .enterprise-more-btn {
+  width:34px;
+  height:34px;
+  min-width:34px;
+  padding:0;
+}
+.enterprise-actions .enterprise-more-btn svg {
+  width:16px;
+  height:16px;
+}
+.enterprise-action-danger {
+  color:#c0392b !important;
 }
 .enterprise-empty { padding:28px 12px; }
 .detail-actions { display:flex; gap:10px; align-items:center; }
@@ -3805,8 +3812,7 @@ button:disabled {
   .schedule-type-grid,
   .competitor-table-head,
   .competitor-row { grid-template-columns:1fr; }
-  .enterprise-actions { align-items:flex-start; min-width:0; }
-  .enterprise-actions-row { justify-content:flex-start; }
+  .enterprise-actions { justify-content:flex-start; }
   .user-create-page .form-grid,
   .user-create-page .identity-config-box .form-grid { grid-template-columns:1fr; }
   .user-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); }
