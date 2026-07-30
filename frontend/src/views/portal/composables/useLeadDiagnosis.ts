@@ -14,6 +14,11 @@ import {
   type LeadDiagnosisRun,
   type LeadDiagnosisStatus,
 } from '../../../services/leadDiagnosis'
+import {
+  isDuplicateMergedApproval,
+  isPendingApproval,
+  pendingApprovalMessage,
+} from '../../../services/approvals'
 import { notifyOperationError } from '../../../utils/requestError'
 import { platformLabelMap } from '../portalMaps'
 import { supportedPlatforms } from '../platformMeta'
@@ -395,6 +400,14 @@ export function useLeadDiagnosis() {
         start_immediately: createForm.value.start_immediately,
       })
       closeCreatePanel()
+      // 2026-07-30 - 销售新建进审批后仍用审批单 id 拉详情 404 - 待审态只提示，不 selectRecord
+      if (isPendingApproval(created)) {
+        const msg = pendingApprovalMessage(created, '已提交审批，等待运营或管理员审核通过后生效')
+        if (isDuplicateMergedApproval(created)) ElMessage.warning(msg)
+        else ElMessage.info(msg)
+        await loadRecords()
+        return
+      }
       ElMessage.success('诊断任务已创建，系统将连续三天共九次自动抓取')
       await loadRecords()
       await selectRecord(created.id)

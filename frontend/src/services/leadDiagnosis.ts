@@ -86,7 +86,9 @@ export async function getLeadDiagnosisDetail(leadId: number): Promise<LeadDiagno
   return response.data.data
 }
 
-export async function createLeadDiagnosis(payload: CreateLeadDiagnosisPayload): Promise<LeadDiagnosisDetail> {
+export async function createLeadDiagnosis(
+  payload: CreateLeadDiagnosisPayload,
+): Promise<LeadDiagnosisDetail | (import('./approvals').OperationApproval & { pending_approval: true })> {
   const response = await http.post('/v1/lead-diagnosis', payload)
   return response.data.data
 }
