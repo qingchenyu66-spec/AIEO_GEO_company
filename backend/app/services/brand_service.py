@@ -115,10 +115,14 @@ def is_generic_keyword_group_name(name: str | None) -> bool:
     return not text or bool(_GENERIC_KEYWORD_GROUP_NAME.match(text))
 
 
-def keyword_group_name(group: BrandKeywordGroup | dict[str, Any] | None, index: int = 0) -> str:
+def keyword_group_name(
+    group: BrandKeywordGroup | BrandWordGroup | dict[str, Any] | None,
+    index: int = 0,
+) -> str:
     if group is None:
         return default_keyword_group_name(index)
-    if isinstance(group, BrandKeywordGroup):
+    # 2026-07-31 - 品牌词审批通过时 BrandWordGroup 被当 dict.get 炸 500 - 监测/品牌词 ORM 共用字段读取
+    if isinstance(group, (BrandKeywordGroup, BrandWordGroup)):
         text = str(group.name or "").strip()
         if text:
             return text
@@ -137,11 +141,13 @@ def keyword_group_name(group: BrandKeywordGroup | dict[str, Any] | None, index: 
     return default_keyword_group_name(index)
 
 
-def keyword_group_monitor_keywords(group: BrandKeywordGroup | dict[str, Any] | None) -> list[str]:
+def keyword_group_monitor_keywords(
+    group: BrandKeywordGroup | BrandWordGroup | dict[str, Any] | None,
+) -> list[str]:
     """Return deduplicated monitor keywords for a keyword group."""
     if group is None:
         return []
-    if isinstance(group, BrandKeywordGroup):
+    if isinstance(group, (BrandKeywordGroup, BrandWordGroup)):
         raw = list(group.monitor_keywords_json or [])
         if not raw:
             primary = str(group.monitor_keyword or "").strip()
@@ -172,14 +178,15 @@ def keyword_group_display_label(group: BrandKeywordGroup | dict[str, Any] | None
 
 
 def keyword_group_platform_configs(
-    group: BrandKeywordGroup | dict[str, Any] | None,
+    group: BrandKeywordGroup | BrandWordGroup | dict[str, Any] | None,
     asset: BrandAsset | None = None,
 ) -> list[dict[str, Any]]:
     """词组平台配置（code/mode/screenshot）；无配置时回退企业级 code 列表。"""
     if group is None:
         codes = list(asset.monitored_platforms_json or []) if asset else []
         return normalize_platform_selections(codes)
-    if isinstance(group, BrandKeywordGroup):
+    # 2026-07-31 - 同上：BrandWordGroup 走 ORM 分支读 platforms_json，勿 .get
+    if isinstance(group, (BrandKeywordGroup, BrandWordGroup)):
         raw = list(group.platforms_json or [])
     else:
         raw = list(group.get("platforms") or [])
@@ -191,7 +198,7 @@ def keyword_group_platform_configs(
 
 
 def keyword_group_platforms(
-    group: BrandKeywordGroup | dict[str, Any] | None,
+    group: BrandKeywordGroup | BrandWordGroup | dict[str, Any] | None,
     asset: BrandAsset | None = None,
 ) -> list[str]:
     """词组绑定的监测平台编码；无配置时回退企业级平台范围（兼容旧数据）。"""

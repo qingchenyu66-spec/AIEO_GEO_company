@@ -20,6 +20,24 @@ def test_brand_word_schedule_key_helpers():
     assert not is_brand_word_schedule_key("20260720-0930-kw12")
 
 
+def test_keyword_group_platforms_accepts_brand_word_group():
+    """审批执行 save_brand_word_groups 会把 BrandWordGroup ORM 传给平台 helper。"""
+    from app.models.brand import BrandWordGroup
+    from app.services.brand_service import keyword_group_monitor_keywords, keyword_group_platforms
+
+    group = BrandWordGroup(
+        tenant_id=1,
+        brand_asset_id=1,
+        name="品牌词组1",
+        monitor_keyword="金隅涂料",
+        monitor_keywords_json=["金隅涂料"],
+        platforms_json=[{"code": "deepseek", "mode": "standard"}],
+        run_mode="once",
+    )
+    assert keyword_group_platforms(group) == ["deepseek"]
+    assert keyword_group_monitor_keywords(group) == ["金隅涂料"]
+
+
 def test_brand_word_group_save_request_run_mode():
     from app.schemas.brand import BrandWordGroupSaveRequest
 
