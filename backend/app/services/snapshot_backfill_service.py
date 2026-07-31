@@ -334,6 +334,9 @@ def notify_failed_subtasks_for_task(db: Session, task: GeoMonitorTask) -> int:
     """任务终态时按「公司×具体场次时刻」汇总写入待补录通知（平台拆进正文）。"""
     if task.status not in TERMINAL_STATUSES and (task.failed_items or 0) <= 0:
         return 0
+    # 2026-07-31 - 售前诊断不发补录铃铛 - 通知只服务签约日常监测，报告/诊断另线
+    if _is_lead_diagnosis_backfill_task(db, task):
+        return 0
     groups: dict[tuple[str, str, str], list[tuple[GeoMonitorSubtask, dict[str, Any]]]] = defaultdict(list)
     for subtask in task.subtasks or []:
         if subtask_backfill_dismissed(subtask):
@@ -458,6 +461,9 @@ def _notify_subtask_backfill(
     ctx: dict[str, Any] | None = None,
 ) -> None:
     """兼容旧调用：单条并入公司×场次时刻汇总。"""
+    # 2026-07-31 - 同上：取消忽略等单条入口也不给售前发铃铛
+    if _is_lead_diagnosis_backfill_task(db, task):
+        return
     payload = ctx or build_snapshot_backfill_item(db, subtask, task)
     scope = str(payload.get("brand_name") or payload.get("tenant_name") or task.monitor_keywords or "监测任务")
     platform = str(subtask.platform or payload.get("platform") or "").strip() or "unknown"
@@ -1076,6 +1082,14 @@ def _resolve_snapshot_backfill_source(
         task,
         has_lead_run=bool(lead_ctx.get("lead_diagnosis_id")),
     )
+
+
+def _is_lead_diagnosis_backfill_task(db: Session, task: GeoMonitorTask) -> bool:
+    """独立售前抓取任务（无签约 tenant）。"""
+    if task.tenant_id:
+        return False
+    lead_ctx = _lead_context_for_task(db, task.task_id)
+    return _resolve_snapshot_backfill_source(task, lead_ctx) == "lead_diagnosis"
 
 
 def _matches_keyword_group_filter(

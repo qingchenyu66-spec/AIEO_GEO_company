@@ -135,6 +135,67 @@ def test_subtask_needs_snapshot_backfill_uses_effective_display_rank() -> None:
     )
 
 
+def test_notify_skips_lead_diagnosis_tasks(db_session) -> None:
+    """售前独立抓取任务失败不写补录铃铛通知。"""
+    from datetime import date
+
+    from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES
+
+    lead = LeadDiagnosis(
+        brand_name="售前品牌",
+        status="collecting",
+        created_by_user_id=7,
+        prompts_json=["问1"],
+        competitors_json=[],
+        platforms_json=[{"platform": "doubao", "mode": "standard"}],
+        region_codes_json=[],
+        schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
+        diagnosis_date=date(2026, 7, 31),
+    )
+    db_session.add(lead)
+    db_session.flush()
+    task = GeoMonitorTask(
+        task_id="lead-task-1",
+        tenant_id=None,
+        monitor_keywords="售前品牌",
+        status="partial_completed",
+        total_items=1,
+        completed_items=0,
+        failed_items=1,
+        prompts_json=["问1"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="lead-st-1",
+        task_id="lead-task-1",
+        platform="doubao",
+        mode="standard",
+        prompt="问1",
+        status="failed",
+        raw_result_json={},
+        error_message="抓取失败",
+        auto_retry_count=1,
+        auto_retry_status="failed",
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.add(
+        LeadDiagnosisRun(
+            lead_diagnosis_id=lead.id,
+            schedule_key="lead-20260731-1600",
+            schedule_label="7月31日 16:00",
+            task_id="lead-task-1",
+            status="partial_completed",
+        )
+    )
+    db_session.commit()
+
+    assert notify_failed_subtasks_for_task(db_session, task) == 0
+    assert db_session.query(SystemNotification).count() == 0
+
+
 def test_notify_failed_subtasks_for_task_creates_single_notification(db_session) -> None:
     tenant = Tenant(name="艾迪亚", code="aidya", owner_user_id=88)
     db_session.add(tenant)
