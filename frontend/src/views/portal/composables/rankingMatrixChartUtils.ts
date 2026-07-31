@@ -286,28 +286,20 @@ export function resolveScopedColumnRow(
   return resolveColumnRow(rows, column, matrixDayKeys(rows).at(-1))
 }
 
-function columnGroupLabels(column: RankingMatrixColumn) {
-  const labels = new Set<string>()
-  for (const text of [column.monitor_keyword, column.group_name, column.prompt]) {
-    const token = (text || '').trim()
-    if (token) labels.add(token)
-  }
-  return labels
-}
-
 export function rowMatchesColumn(row: RankingMatrixRow, column: RankingMatrixColumn) {
-  const rowGroup = (row.keyword_group || '').trim()
-  const labels = columnGroupLabels(column)
-  if (rowGroup) {
-    if (labels.has(rowGroup)) return true
-    for (const label of labels) {
-      if (rowGroup.includes(label) || label.includes(rowGroup)) return true
-    }
-  }
   const prompt = (column.prompt || '').trim()
   const monitorKeyword = (column.monitor_keyword || '').trim()
+  const groupName = (column.group_name || '').trim()
+  // 先认格子 key：有该监测词样本即可（含未提及 / 无位次）
   if (prompt && row.cells[prompt]) return true
   if (monitorKeyword && row.cells[monitorKeyword]) return true
+  const rowGroup = (row.keyword_group || '').trim()
+  if (!rowGroup) return false
+  // 2026-07-31 - 「家用新风…」.includes(「新风…」) 误匹配，短词热力全变 — 且点不开
+  // 已弃用双向 includes；词组行只允许精确等于 prompt / monitor_keyword / group_name
+  if (prompt && rowGroup === prompt) return true
+  if (monitorKeyword && rowGroup === monitorKeyword) return true
+  if (groupName && rowGroup === groupName) return true
   return false
 }
 
@@ -475,6 +467,44 @@ export function selfCheckMatrixRankScope() {
   console.assert(heatData.length === 3 && heatData[0]?.dayKey === '2026-06-01' && heatData[0]?.prompt === 'p1')
   console.assert(heatData[0]?.value[2] > 0)
   console.assert(heatData[1]?.value[2] === -1)
+  // 2026-07-31 - 嵌套词名 includes 误匹配：短词不得落到「家用短词」行上
+  {
+    const nestedCol = { prompt: '新风系统品牌推荐', group_name: null, monitor_keyword: '新风系统品牌推荐' }
+    const homeCol = { prompt: '家用新风系统品牌推荐', group_name: null, monitor_keyword: '家用新风系统品牌推荐' }
+    const cell = (mp: number | null): RankingMatrixCell => ({
+      subtask_id: 'x',
+      mention_position: mp,
+      status: 'completed',
+      page_screenshot: null,
+      sentiment: null,
+      updated_at: null,
+    })
+    const nestedRows: RankingMatrixRow[] = [
+      {
+        task_id: 't1',
+        platform: 'doubao',
+        day_key: '2026-07-27',
+        schedule_window_key: '2026-07-27',
+        schedule_label: '07-27',
+        snapshot_at: '2026-07-27',
+        keyword_group: '新风系统品牌推荐',
+        cells: { 新风系统品牌推荐: cell(2.7) },
+      },
+      {
+        task_id: 't2',
+        platform: 'doubao',
+        day_key: '2026-07-27',
+        schedule_window_key: '2026-07-27',
+        schedule_label: '07-27',
+        snapshot_at: '2026-07-27',
+        keyword_group: '家用新风系统品牌推荐',
+        cells: { 家用新风系统品牌推荐: cell(1.7) },
+      },
+    ]
+    console.assert(resolveColumnRank(nestedRows, nestedCol, '2026-07-27') === 2.7)
+    console.assert(resolveColumnRank(nestedRows, homeCol, '2026-07-27') === 1.7)
+    console.assert(!!resolveColumnCell(resolveColumnRow(nestedRows, nestedCol, '2026-07-27'), nestedCol))
+  }
   const heatAxis = (heatOpt.xAxis as { data?: string[]; axisLabel?: { interval?: number } }).data || []
   console.assert(heatAxis.length === 3 && heatAxis[0] === '06-01' && heatAxis[1] === '06-02' && heatAxis[2] === '06-03')
   console.assert((heatOpt.xAxis as { axisLabel?: { interval?: number } }).axisLabel?.interval === 0)

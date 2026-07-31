@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { ECharts } from 'echarts/core'
 import type {
   RankingMatrix,
@@ -269,7 +270,11 @@ async function renderChart() {
       if (!column) return
       const row = resolveColumnRow(slice.rows, column, point.dayKey)
       const cell = resolveColumnCell(row, column)
-      if (!row || !cell) return
+      // 2026-07-31 - 无样本日与误匹配空 cell 点了无反馈 - 有 cell（含未提及）才开抽屉，否则提示
+      if (!row || !cell) {
+        ElMessage.info('该日暂无监测记录')
+        return
+      }
       emit('openCell', {
         row,
         prompt: column.prompt,
