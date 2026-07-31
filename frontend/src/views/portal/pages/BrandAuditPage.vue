@@ -217,16 +217,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 <template>
   <section class="brand-page">
     <article v-if="!enterpriseDetailMode" class="panel enterprise-list-panel">
-      <div class="panel-head">
-        <div>
-          <h2>企业列表</h2>
-          <p>先选择客户企业，再进入详情维护品牌资产、竞品库和自动监测配置。</p>
-        </div>
-        <div class="detail-actions">
-          <button class="filter-reset-btn" :disabled="loadingBrand" @click="loadEnterpriseList">刷新企业</button>
-          <button v-if="canCreateTenant" class="primary-btn small-btn" @click="tenantDialog = true">新增企业</button>
-        </div>
-      </div>
+      <!-- 2026-07-31 - 列表头与页头双标题重复 - 去面板头，动作并入筛选行右侧 -->
       <div class="enterprise-filter-bar">
         <label class="enterprise-filter-keyword">
           <span>企业名称</span>
@@ -257,6 +248,10 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         >
           重置
         </button>
+        <div class="enterprise-filter-actions">
+          <button type="button" class="filter-reset-btn" :disabled="loadingBrand" @click="loadEnterpriseList">刷新企业</button>
+          <button v-if="canCreateTenant" type="button" class="primary-btn small-btn" @click="tenantDialog = true">新增企业</button>
+        </div>
       </div>
       <div class="enterprise-list-summary">
         <span>共 {{ filteredTenants.length }} 家企业</span>

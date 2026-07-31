@@ -2896,6 +2896,18 @@ button:disabled {
   border-color:#9fc5ee;
   color:#236bd1;
 }
+.enterprise-filter-actions {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+}
+.enterprise-filter-actions .filter-reset-btn,
+.enterprise-filter-actions .primary-btn {
+  height:36px;
+  min-height:36px;
+}
 .enterprise-list-summary {
   display:flex;
   justify-content:space-between;

@@ -236,6 +236,8 @@ const pageSubtitle = computed(() => {
   if (isApprovalPage.value) {
     return '审核销售提交的用户、企业、报告与诊断操作；通过后才会真正生效'
   }
+  // 2026-07-31 - 企业管理页副文案像运营总览 - 改为贴列表能力
+  if (isBrandAssetPage.value) return '管理客户企业、服务状态与监测配置'
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'
