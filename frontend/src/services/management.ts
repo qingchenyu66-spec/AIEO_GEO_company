@@ -304,6 +304,38 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
   return response.data.data
 }
 
+/** 模力监测按日消耗日历；DeepSeek 无官方日流水 */
+export interface QuotaDailyCostDay {
+  date: string
+  amount: number
+  subtask_count: number
+  heat: number
+}
+
+export interface QuotaDailyCost {
+  year: number
+  month: number
+  month_label: string
+  source: string
+  source_label: string
+  deepseek_note: string
+  days_in_month: number
+  first_weekday: number
+  month_total: number
+  max_amount: number
+  days: QuotaDailyCostDay[]
+}
+
+export async function getQuotaDailyCost(year?: number, month?: number): Promise<QuotaDailyCost> {
+  const response = await http.get('/v1/management/quota-daily-cost', {
+    params: {
+      ...(year != null ? { year } : {}),
+      ...(month != null ? { month } : {}),
+    },
+  })
+  return response.data.data
+}
+
 export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<TenantInfo> {
   const response = await http.post('/v1/management/tenants', payload)
   invalidateCache('/v1/management/tenants')

@@ -784,6 +784,25 @@ button:disabled {
 .ops-quota-grid div.is-highlight b { color:#0b6bcb; font-size:26px; }
 .ops-quota-grid small { display:block; margin-top:4px; color:#8a9bb0; font-size:11px; }
 .ops-balance-error { margin:10px 0 0; color:#c0392b; font-size:12px; }
+/* 2026-07-31 - 费用额度加模力按日热力 - 当月格网，DeepSeek 只文案说明 */
+.ops-quota-calendar { margin-top:14px; padding-top:12px; border-top:1px solid #edf3fa; }
+.ops-quota-calendar-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.ops-quota-calendar-head strong { display:block; color:#15243e; font-size:13px; }
+.ops-quota-calendar-head span { color:#71839a; font-size:12px; }
+.ops-quota-calendar-nav { display:flex; align-items:center; gap:8px; }
+.ops-quota-calendar-nav em { font-style:normal; color:#1a3656; font-weight:700; font-size:13px; min-width:72px; text-align:center; }
+.ops-quota-calendar-weekdays { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; margin-bottom:4px; }
+.ops-quota-calendar-weekdays span { text-align:center; color:#8a9bb0; font-size:11px; }
+.ops-quota-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; }
+.ops-quota-calendar-grid i { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:44px; border-radius:6px; background:#f4f8fc; color:#536a86; font-style:normal; }
+.ops-quota-calendar-grid i.pad { background:transparent; }
+.ops-quota-calendar-grid i b { font-size:12px; line-height:1.2; }
+.ops-quota-calendar-grid i small { margin-top:2px; font-size:10px; color:inherit; opacity:.9; }
+.ops-quota-calendar-grid i.heat-1 { background:#d6ebff; color:#1a5fa8; }
+.ops-quota-calendar-grid i.heat-2 { background:#9fd0ff; color:#0b4f8c; }
+.ops-quota-calendar-grid i.heat-3 { background:#4ea3f0; color:#fff; }
+.ops-quota-calendar-grid i.heat-4 { background:#0b6bcb; color:#fff; }
+.ops-quota-calendar-note { margin:8px 0 0; color:#8a9bb0; font-size:11px; }
 .ops-task-list div { padding:11px; border:1px solid #dce8f5; border-radius:8px; background:#fbfdff; }
 .ops-task-list b,.ops-task-list span,.ops-task-list em { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ops-task-list span,.ops-task-list em { margin-top:5px; color:#71839a; font-size:12px; font-style:normal; }

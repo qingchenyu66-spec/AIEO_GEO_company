@@ -774,6 +774,36 @@ def management_overview(
         raise_read_endpoint_error(exc, context="management.overview")
 
 
+@router.get("/quota-daily-cost", response_model=ApiResponse[dict])
+def management_quota_daily_cost(
+    year: int | None = Query(default=None, ge=2020, le=2100),
+    month: int | None = Query(default=None, ge=1, le=12),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """模力监测按日消耗日历；默认当月。DeepSeek 无官方日流水，不在此返回格子。"""
+    # 2026-07-31 - 费用日历要当月热力 - 独立轻量接口，避免塞进 overview 加重缓存
+    require_platform(current)
+    today = date.today()
+    target_year = int(year or today.year)
+    target_month = int(month or today.month)
+    owned_tenant_ids = sales_owned_tenant_ids(db, current)
+    try:
+        from app.services.quota_daily_cost_service import fetch_molizhishu_daily_costs
+
+        data = fetch_molizhishu_daily_costs(
+            db,
+            year=target_year,
+            month=target_month,
+            tenant_ids=owned_tenant_ids,
+        )
+        return ApiResponse(data=data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="management.quota_daily_cost")
+
+
 # 方案 C：平台分布近窗；费用排行稍宽；重聚合走物理预聚合表
 from app.services.ops_overview_rollup_service import (
     COST_RANKING_WINDOW_DAYS,

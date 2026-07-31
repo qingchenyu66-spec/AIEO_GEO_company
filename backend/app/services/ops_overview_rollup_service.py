@@ -91,7 +91,18 @@ def build_overview_heavy_rollup(
         limit=8,
         since=cost_since,
     )
-    total_cost = round(sum(row["cost"] for row in cost_ranking), 4)
+    # 2026-07-31 - 「累计消耗」曾误用排行 Top8 求和偏小 - 改为近 30 日全量子任务金额
+    used_amount_stmt = (
+        select(func.coalesce(func.sum(GeoMonitorSubtask.amount), 0))
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .where(
+            GeoMonitorTask.deleted.is_(False),
+            GeoMonitorTask.created_at >= cost_since,
+        )
+    )
+    if tenant_ids is not None:
+        used_amount_stmt = used_amount_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
+    total_cost = round(float(db.scalar(used_amount_stmt) or 0), 4)
 
     total_subtasks_stmt = (
         select(func.count(GeoMonitorSubtask.id))

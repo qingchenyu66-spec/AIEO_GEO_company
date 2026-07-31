@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Clock3, Database, FileBarChart, Gauge, RefreshCw, Settings, Sparkles, WalletCards, Zap } from '@lucide/vue'
-import { getPlatformOverview, type MolizhishuBalance, type PlatformOverview } from '../../services/management'
+import { getPlatformOverview, getQuotaDailyCost, type MolizhishuBalance, type PlatformOverview, type QuotaDailyCost } from '../../services/management'
 import type { DeepseekBalance } from '../../services/platforms'
 import { extractErrorDetail } from '../../utils/requestError'
 import { initChart, type ECharts } from '../../utils/echartsLoader'
@@ -16,12 +16,61 @@ const props = defineProps<{
 const overview = ref<PlatformOverview | null>(null)
 const molizhishuBalance = ref<MolizhishuBalance | null>(null)
 const deepseekBalance = ref<DeepseekBalance | null>(null)
+const quotaDaily = ref<QuotaDailyCost | null>(null)
+const quotaDailyLoading = ref(false)
+const quotaCalendarYear = ref(new Date().getFullYear())
+const quotaCalendarMonth = ref(new Date().getMonth() + 1)
 const loading = ref(false)
 const errorText = ref('')
 const taskCompletionChartRef = ref<HTMLDivElement | null>(null)
 let taskCompletionChart: ECharts | null = null
 
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+
 const platformStats = computed(() => sortPlatformRows(overview.value?.platform_stats || []))
+
+const quotaCalendarCells = computed(() => {
+  const data = quotaDaily.value
+  if (!data) return [] as Array<{ key: string; day?: number; amount?: number; heat?: number; title?: string; empty?: boolean }>
+  const leading = Array.from({ length: data.first_weekday }, (_, i) => ({ key: `pad-${i}`, empty: true as const }))
+  const days = data.days.map(item => {
+    const dayNum = Number(item.date.slice(-2))
+    return {
+      key: item.date,
+      day: dayNum,
+      amount: item.amount,
+      heat: item.heat,
+      title: `${item.date} · ¥${item.amount} · ${item.subtask_count} 条子任务`,
+    }
+  })
+  return [...leading, ...days]
+})
+
+function shiftQuotaMonth(delta: number) {
+  let y = quotaCalendarYear.value
+  let m = quotaCalendarMonth.value + delta
+  while (m < 1) {
+    m += 12
+    y -= 1
+  }
+  while (m > 12) {
+    m -= 12
+    y += 1
+  }
+  const now = new Date()
+  if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) return
+  quotaCalendarYear.value = y
+  quotaCalendarMonth.value = m
+  void loadQuotaDailyCost()
+}
+
+const canShiftQuotaNext = computed(() => {
+  const now = new Date()
+  return (
+    quotaCalendarYear.value < now.getFullYear()
+    || (quotaCalendarYear.value === now.getFullYear() && quotaCalendarMonth.value < now.getMonth() + 1)
+  )
+})
 
 function cleanDashboardLog(value: string | null | undefined, fallback = '历史编码异常记录，原文不可恢复') {
   const text = String(value || '').trim()
@@ -117,13 +166,30 @@ const quotaRows = computed(() => {
   const deepseek = deepseekBalance.value ?? overview.value?.deepseek_balance
   return [
     { label: '账户余额', value: formatBalanceValue(balance), highlight: true, note: balanceNote(balance) },
-    { label: 'DeepSeek 账户余额', value: formatBalanceValue(deepseek), highlight: true, note: balanceNote(deepseek) },
-    { label: '累计消耗', value: quota?.used_amount ?? 0 },
+    {
+      label: 'DeepSeek 账户余额',
+      value: formatBalanceValue(deepseek),
+      highlight: true,
+      // 2026-07-31 - DeepSeek 无官方日流水 - 卡片标明仅余额，日历只画模力
+      note: [balanceNote(deepseek), '仅余额，无按日流水'].filter(Boolean).join(' · ') || '仅余额，无按日流水',
+    },
+    { label: '近 30 日消耗', value: quota?.used_amount ?? 0 },
     { label: '今日消耗', value: quota?.today_amount ?? 0 },
     { label: '预计月消耗', value: quota?.estimated_month_amount ?? 0 },
     { label: '单条均价', value: quota?.avg_cost_per_subtask ?? 0 },
   ]
 })
+
+async function loadQuotaDailyCost() {
+  quotaDailyLoading.value = true
+  try {
+    quotaDaily.value = await getQuotaDailyCost(quotaCalendarYear.value, quotaCalendarMonth.value)
+  } catch {
+    quotaDaily.value = null
+  } finally {
+    quotaDailyLoading.value = false
+  }
+}
 
 async function loadOverview() {
   loading.value = true
@@ -134,6 +200,7 @@ async function loadOverview() {
     overview.value = overviewData
     molizhishuBalance.value = overviewData.molizhishu_balance ?? null
     deepseekBalance.value = overviewData.deepseek_balance ?? null
+    void loadQuotaDailyCost()
   } catch (error: any) {
     errorText.value = extractErrorDetail(error)
   } finally {
@@ -311,6 +378,37 @@ onUnmounted(() => {
         </div>
         <p v-if="(molizhishuBalance ?? overview?.molizhishu_balance)?.error" class="ops-balance-error">{{ (molizhishuBalance ?? overview?.molizhishu_balance)?.error }}</p>
         <p v-if="(deepseekBalance ?? overview?.deepseek_balance)?.error" class="ops-balance-error">{{ (deepseekBalance ?? overview?.deepseek_balance)?.error }}</p>
+        <div class="ops-quota-calendar">
+          <div class="ops-quota-calendar-head">
+            <div>
+              <strong>{{ quotaDaily?.source_label || '模力监测按日消耗' }}</strong>
+              <span v-if="quotaDaily">本月合计 ¥{{ quotaDaily.month_total }}</span>
+            </div>
+            <div class="ops-quota-calendar-nav">
+              <button type="button" class="filter-reset-btn" :disabled="quotaDailyLoading" @click="shiftQuotaMonth(-1)">上月</button>
+              <em>{{ quotaCalendarYear }}-{{ String(quotaCalendarMonth).padStart(2, '0') }}</em>
+              <button type="button" class="filter-reset-btn" :disabled="quotaDailyLoading || !canShiftQuotaNext" @click="shiftQuotaMonth(1)">下月</button>
+            </div>
+          </div>
+          <div class="ops-quota-calendar-weekdays">
+            <span v-for="label in WEEKDAY_LABELS" :key="label">{{ label }}</span>
+          </div>
+          <div v-if="quotaDailyLoading && !quotaDaily" class="mini-empty">日历加载中…</div>
+          <div v-else class="ops-quota-calendar-grid">
+            <i
+              v-for="cell in quotaCalendarCells"
+              :key="cell.key"
+              :class="[`heat-${cell.heat || 0}`, { pad: cell.empty }]"
+              :title="cell.title"
+            >
+              <template v-if="!cell.empty">
+                <b>{{ cell.day }}</b>
+                <small v-if="cell.amount">{{ cell.amount }}</small>
+              </template>
+            </i>
+          </div>
+          <p class="ops-quota-calendar-note">{{ quotaDaily?.deepseek_note || 'DeepSeek 仅余额快照，无官方按日流水' }}</p>
+        </div>
       </article>
 
       <article class="panel">
