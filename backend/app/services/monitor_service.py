@@ -644,13 +644,15 @@ def _is_valid_citation_source(source: dict[str, Any]) -> bool:
     return True
 
 
-def _snapshot_source_articles(item: GeoMonitorSubtask, *, limit: int = 2) -> list[dict[str, str]]:
-    """收录明细用：引用文章标题 + 可点开的原文 URL。"""
+def _light_source_articles_from_refs(refs: Any, *, limit: int = 3) -> list[dict[str, str]]:
+    """从 reference_list_json 抽标题/域名，供收录明细关键词筛（hydrate 前也能搜标题）。"""
     from urllib.parse import urlparse
 
     articles: list[dict[str, str]] = []
     seen: set[str] = set()
-    for source in item.reference_list_json or []:
+    if not isinstance(refs, list):
+        return articles
+    for source in refs:
         if not isinstance(source, dict) or not _is_valid_citation_source(source):
             continue
         url = str(source.get("url") or "").strip()
@@ -674,6 +676,11 @@ def _snapshot_source_articles(item: GeoMonitorSubtask, *, limit: int = 2) -> lis
         if len(articles) >= limit:
             break
     return articles
+
+
+def _snapshot_source_articles(item: GeoMonitorSubtask, *, limit: int = 2) -> list[dict[str, str]]:
+    """收录明细用：引用文章标题 + 可点开的原文 URL。"""
+    return _light_source_articles_from_refs(item.reference_list_json, limit=limit)
 
 
 def _is_relevant_source(source: dict[str, Any], terms: list[str]) -> bool:
@@ -4530,6 +4537,23 @@ def _filter_inclusion_snapshots_by_keyword(
     return out
 
 
+def _inclusion_scan_columns(*, with_refs: bool) -> list[Any]:
+    cols: list[Any] = [
+        GeoMonitorSubtask.id,
+        GeoMonitorSubtask.subtask_id,
+        GeoMonitorSubtask.task_id,
+        GeoMonitorSubtask.platform,
+        GeoMonitorSubtask.prompt,
+        GeoMonitorSubtask.mention_position,
+        GeoMonitorSubtask.updated_at,
+        GeoMonitorTask.monitor_keywords,
+        GeoMonitorTask.created_at,
+    ]
+    if with_refs:
+        cols.append(GeoMonitorSubtask.reference_list_json)
+    return cols
+
+
 def list_inclusion_snapshots(
     db: Session,
     current: CurrentSession,
@@ -4652,18 +4676,10 @@ def list_inclusion_snapshots(
 
     # 调度窗内行数通常可控；仍设天花板防异常租户拖垮
     scan_limit = 8000
+    # 2026-07-31 - 顶栏搜标题收录明细搜不到 - 有 keyword 时把 reference 标题带进轻池再筛
+    keyword_q = str(keyword or "").strip()
     scan_stmt = (
-        select(
-            GeoMonitorSubtask.id,
-            GeoMonitorSubtask.subtask_id,
-            GeoMonitorSubtask.task_id,
-            GeoMonitorSubtask.platform,
-            GeoMonitorSubtask.prompt,
-            GeoMonitorSubtask.mention_position,
-            GeoMonitorSubtask.updated_at,
-            GeoMonitorTask.monitor_keywords,
-            GeoMonitorTask.created_at,
-        )
+        select(*_inclusion_scan_columns(with_refs=bool(keyword_q)))
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .where(*conditions)
         .order_by(GeoMonitorSubtask.updated_at.desc())
@@ -4703,7 +4719,7 @@ def list_inclusion_snapshots(
             or str(monitor_keywords or "").strip()
             or keyword_group
         )
-        light_candidates.append({
+        light_row: dict[str, Any] = {
             "_pk": row.id,
             "subtask_id": row.subtask_id,
             "task_id": row.task_id,
@@ -4718,7 +4734,13 @@ def list_inclusion_snapshots(
             "brand_rank": row.mention_position,
             "brand_mentioned": row.mention_position is not None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-        })
+        }
+        if keyword_q:
+            light_row["source_articles"] = _light_source_articles_from_refs(
+                getattr(row, "reference_list_json", None),
+                limit=3,
+            )
+        light_candidates.append(light_row)
 
     # 已在 SQL 按 scope 过滤；池内用 all 保持时间序 + 日轮询
     pool = _workspace_period_snapshot_pool(

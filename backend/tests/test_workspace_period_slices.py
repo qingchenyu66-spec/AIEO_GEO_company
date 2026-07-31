@@ -146,3 +146,29 @@ def test_inclusion_schedule_window_excludes_pre_period_keys() -> None:
     assert "20260724-0930" >= start_key
     assert "20260730-1630" < end_excl
     assert "20260731-0930" >= end_excl
+
+
+def test_inclusion_keyword_matches_source_article_title() -> None:
+    from app.services.monitor_service import _filter_inclusion_snapshots_by_keyword
+
+    rows = [
+        {
+            "subtask_id": "a",
+            "monitor_keyword": "LED广告公司推荐",
+            "prompt": "LED广告公司推荐",
+            "source_articles": [
+                {"title": "2026重庆户外LED广告屏厂家口碑推荐榜单", "domain": "chinabidding.com.cn"},
+            ],
+        },
+        {
+            "subtask_id": "b",
+            "monitor_keyword": "公交广告公司哪家好",
+            "prompt": "公交广告公司哪家好",
+            "source_articles": [{"title": "无关标题", "domain": "example.com"}],
+        },
+    ]
+    hit = _filter_inclusion_snapshots_by_keyword(rows, "重庆户外LED")
+    assert [r["subtask_id"] for r in hit] == ["a"]
+    # hydrate 前没有 source_articles 时，标题搜不到（回归保护）
+    bare = [{**rows[0], "source_articles": []}]
+    assert _filter_inclusion_snapshots_by_keyword(bare, "重庆户外LED") == []
