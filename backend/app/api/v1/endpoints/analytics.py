@@ -112,7 +112,7 @@ def sentiment_keywords(
             start_date=start_date.isoformat() if start_date else None,
             end_date=end_date.isoformat() if end_date else None,
             # 2026-07-31 - S3 邻近窗口+短语极性上线，旧缓存键失效
-            prompt=f"{prompt or 'all'}|llm={int(llm)}|v=s3",
+            prompt=f"{prompt or 'all'}|llm={int(llm)}|v=s3b",
             limit=limit,
         )
 

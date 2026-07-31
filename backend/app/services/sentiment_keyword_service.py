@@ -62,6 +62,8 @@ _POSITIVE_POLARITY_CUES: tuple[str, ...] = (
     "省心", "实力强", "头部", "优质", "出色", "亮眼", "值得信赖", "值得选", "稳妥",
     "执行力强", "落地强", "服务好", "体验好", "口碑佳", "正反馈", "好评", "强势",
     "一手价", "价格实", "最实", "实惠", "公道", "高效", "精准", "覆盖强", "资源强",
+    "提升", "增长", "突破", "优选", "亮点", "成熟", "完善", "卓越", "显著", "优于",
+    "更优", "更好", "更高", "更强", "触达", "匹配", "覆盖广", "效果好", "转化高",
 )
 _BRAND_WINDOW_RADIUS = 48
 
@@ -170,6 +172,17 @@ def _phrase_matches_polarity(text: str, polarity: str) -> bool:
     return _phrase_polarity(text) == polarity
 
 
+def _accept_phrase_for_polarity(text: str, polarity: str, *, from_llm: bool = False) -> bool:
+    """非对称闸门：负面必须命中负向线索；正面允许 LLM 在无反义时放行（避免词云被掏空）。"""
+    scored = _phrase_polarity(text)
+    if scored == polarity:
+        return True
+    if scored is not None and scored != polarity:
+        return False
+    # 2026-07-31 - S3 过严导致正面词云只剩几条 - LLM 抽正面且词表未覆盖时放行
+    return bool(from_llm and polarity == "positive")
+
+
 def _brand_adjacent_text(text: str | None, brand_names: set[str], *, radius: int = _BRAND_WINDOW_RADIUS) -> str:
     """只保留含品牌名的子句/邻近窗口，避免整篇回答里的无关卖点混进词云。"""
     cleaned = _clean_text(text or "")
@@ -224,19 +237,19 @@ def _extract_phrases(
     for clause in _CLAUSE_SPLIT.split(cleaned):
         clause = clause.strip()
         if _is_useful_sentiment_phrase(clause, blocked) and (
-            polarity is None or _phrase_matches_polarity(clause, polarity)
+            polarity is None or _accept_phrase_for_polarity(clause, polarity)
         ):
             phrases.add(clause)
         for part in _PHRASE_SPLIT.split(clause):
             part = part.strip()
             if _is_useful_sentiment_phrase(part, blocked) and (
-                polarity is None or _phrase_matches_polarity(part, polarity)
+                polarity is None or _accept_phrase_for_polarity(part, polarity)
             ):
                 phrases.add(part)
 
     for word in re.findall(r"[\u4e00-\u9fff]{4,12}", cleaned):
         if _is_useful_sentiment_phrase(word, blocked) and (
-            polarity is None or _phrase_matches_polarity(word, polarity)
+            polarity is None or _accept_phrase_for_polarity(word, polarity)
         ):
             phrases.add(word)
     return phrases
@@ -342,8 +355,8 @@ def _aggregate_with_deepseek(
                     text = row["text"]
                     if not _is_useful_sentiment_phrase(text, blocked):
                         continue
-                    # LLM 仍可能吐中性卖点；短语级极性再闸一道
-                    if not _phrase_matches_polarity(text, polarity):
+                    # 负面仍严；正面 LLM 结果在无反义命中时放行
+                    if not _accept_phrase_for_polarity(text, polarity, from_llm=True):
                         continue
                     entry = bucket[text]
                     entry["count"] += 1

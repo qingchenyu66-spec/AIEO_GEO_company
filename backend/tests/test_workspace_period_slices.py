@@ -136,3 +136,13 @@ def test_workspace_schedule_key_bounds_align_business_days() -> None:
     assert "20260719-1630-kw20" < end_excl
     assert "20260701-0930-kw20" < start_key
     assert "20260720-0930-kw20" >= end_excl
+
+
+def test_inclusion_schedule_window_excludes_pre_period_keys() -> None:
+    """收录明细进池与热力同界：周期前 schedule_key 不得进 [start, end+1)。"""
+    start_key, end_excl = _workspace_schedule_key_bounds(date(2026, 7, 24), date(2026, 7, 30))
+    # 批量回写前的旧窗（如 7/23）必须落在下界之外
+    assert "20260723-1330" < start_key
+    assert "20260724-0930" >= start_key
+    assert "20260730-1630" < end_excl
+    assert "20260731-0930" >= end_excl

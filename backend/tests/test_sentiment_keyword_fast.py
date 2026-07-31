@@ -45,11 +45,18 @@ def test_useful_phrase_drops_entities_and_meta():
 
 
 def test_phrase_polarity_gates_neutral_selling_points():
+    from app.services.sentiment_keyword_service import _accept_phrase_for_polarity
+
     assert _phrase_polarity("隐藏成本") == "negative"
     assert _phrase_matches_polarity("报价偏高不透明", "negative")
     assert not _phrase_matches_polarity("一手资源", "negative")
+    assert not _accept_phrase_for_polarity("一手资源", "negative", from_llm=True)
     assert not _phrase_matches_polarity("全球户外老大", "negative")
     assert _phrase_matches_polarity("落地执行力强", "positive")
+    # 正面 LLM：词表未覆盖但非负向 → 放行（勿用含「精准」等已扩词表项的样例）
+    assert _accept_phrase_for_polarity("品牌知名度较高", "positive", from_llm=True)
+    # 规则路径仍要求正向线索
+    assert not _accept_phrase_for_polarity("品牌知名度较高", "positive", from_llm=False)
 
 
 def test_brand_adjacent_text_keeps_near_brand_only():

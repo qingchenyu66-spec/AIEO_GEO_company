@@ -4547,6 +4547,7 @@ def list_inclusion_snapshots(
 
     「8 次引用」是信源引用次数；本列表是监测子任务行。
     rank_scope=ranked|all 与前端「有位次/含未提及」对齐；勿用 prefer_ranked，否则有位次装满后切换无差别。
+    进池优先 schedule_key 业务日 task_id（与热力同源），禁止只靠 updated_at 截断。
     2026-07-30 - 收录明细条数假齐+只堆最新天 - 返回截断前 total，按 detect_day 轮询，服务端分页
     2026-07-30 - 含未提及/翻页 5s - 轻量扫池只 hydrate 当前页；池内有位次用 mention_position 近似
     """
@@ -4596,20 +4597,42 @@ def list_inclusion_snapshots(
         if platform_key not in expand_platform_codes(purchased_set):
             return empty
 
-    lookback_start = trend_start - timedelta(days=14)
-    period_days = max(1, (trend_end.date() - trend_start.date()).days + 1)
-    scan_limit = min(3000, max(800, period_days * 80, 400 if platform_key else 600))
     # 2026-07-27 - 收录明细须跟上边近7/30/全部同一周期：可见性按 detect_day∈[start,昨日]
+    # 2026-07-31 - 批量回写 updated_at 占满扫描窗导致有位次也全空 - 改按 schedule_key 业务日进池（与热力/词×平台同源）
+    # 已弃用：按 updated_at DESC limit 800/5000 再滤 detect_day
+    period_start, period_end_day = _workspace_period_day_bounds(trend_start, trend_end, range_end)
+    start_key, end_key_exclusive = _workspace_schedule_key_bounds(period_start, period_end_day)
+    schedule_task_ids = [
+        tid
+        for tid in db.scalars(
+            select(GeoMonitorScheduleRun.task_id).where(
+                GeoMonitorScheduleRun.tenant_id == tenant_id,
+                GeoMonitorScheduleRun.task_id.isnot(None),
+                GeoMonitorScheduleRun.schedule_key >= start_key,
+                GeoMonitorScheduleRun.schedule_key < end_key_exclusive,
+            )
+        )
+        if tid
+    ]
+    schedule_task_ids = list(dict.fromkeys(schedule_task_ids))
+
     conditions = [
         GeoMonitorTask.deleted.is_(False),
         GeoMonitorTask.tenant_id == tenant_id,
         GeoMonitorTask.purpose == "geo",
         GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-        or_(
-            GeoMonitorSubtask.updated_at >= lookback_start,
-            GeoMonitorTask.created_at >= lookback_start,
-        ),
     ]
+    if schedule_task_ids:
+        conditions.append(GeoMonitorSubtask.task_id.in_(schedule_task_ids))
+    else:
+        # 无调度记录时回退宽窗（旧数据/手工任务）；仍靠下方 detect_day 收口
+        lookback_start = trend_start - timedelta(days=14)
+        conditions.append(
+            or_(
+                GeoMonitorSubtask.updated_at >= lookback_start,
+                GeoMonitorTask.created_at >= lookback_start,
+            )
+        )
     if platform_key:
         from app.core.platform_order import platform_code_family
 
@@ -4627,6 +4650,8 @@ def list_inclusion_snapshots(
     if scope == "ranked":
         conditions.append(GeoMonitorSubtask.mention_position.is_not(None))
 
+    # 调度窗内行数通常可控；仍设天花板防异常租户拖垮
+    scan_limit = 8000
     scan_stmt = (
         select(
             GeoMonitorSubtask.id,
