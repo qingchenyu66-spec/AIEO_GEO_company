@@ -29,14 +29,27 @@ const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
 const platformStats = computed(() => sortPlatformRows(overview.value?.platform_stats || []))
 
-const quotaCalendarCells = computed(() => {
+type QuotaCalendarCell = {
+  key: string
+  empty: boolean
+  day?: number
+  amount?: number
+  heat?: number
+  title?: string
+}
+
+const quotaCalendarCells = computed((): QuotaCalendarCell[] => {
   const data = quotaDaily.value
-  if (!data) return [] as Array<{ key: string; day?: number; amount?: number; heat?: number; title?: string; empty?: boolean }>
-  const leading = Array.from({ length: data.first_weekday }, (_, i) => ({ key: `pad-${i}`, empty: true as const }))
-  const days = data.days.map(item => {
+  if (!data) return []
+  const leading: QuotaCalendarCell[] = Array.from({ length: data.first_weekday }, (_, i) => ({
+    key: `pad-${i}`,
+    empty: true,
+  }))
+  const days: QuotaCalendarCell[] = data.days.map(item => {
     const dayNum = Number(item.date.slice(-2))
     return {
       key: item.date,
+      empty: false,
       day: dayNum,
       amount: item.amount,
       heat: item.heat,
