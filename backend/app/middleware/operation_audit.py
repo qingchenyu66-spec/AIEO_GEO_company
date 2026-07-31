@@ -30,14 +30,21 @@ _SKIP_PREFIXES = (
 _SKIP_EXPLICIT_AUDIT_PREFIXES = (
     "/api/v1/management/",
 )
-_SKIP_PATHS = frozenset({"/", "/api/v1/auth/login", "/api/v1/auth/select-identity"})
+_SKIP_PATHS = frozenset({
+    "/",
+    "/api/v1/auth/login",
+    "/api/v1/auth/select-identity",
+    # 2026-07-31 - 模力回调无登录态会被标成「匿名请求」噪音 - 整段不记审计（与匿名 logout 同策略）
+    "/api/v1/monitor/molizhishu/callback",
+})
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _should_audit(method: str, path: str) -> bool:
     if method not in _MUTATING:
         return False
-    if path in _SKIP_PATHS:
+    normalized = path.rstrip("/") or "/"
+    if path in _SKIP_PATHS or normalized in _SKIP_PATHS:
         return False
     if any(path.startswith(prefix) for prefix in _SKIP_EXPLICIT_AUDIT_PREFIXES):
         return False

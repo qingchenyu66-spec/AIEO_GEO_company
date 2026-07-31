@@ -2,7 +2,11 @@
 
 from types import SimpleNamespace
 
-from app.middleware.operation_audit import build_audit_description, resolve_audit_operator
+from app.middleware.operation_audit import (
+    _should_audit,
+    build_audit_description,
+    resolve_audit_operator,
+)
 
 
 def test_resolve_audit_operator_without_token() -> None:
@@ -19,3 +23,9 @@ def test_resolve_audit_operator_without_token() -> None:
 def test_build_audit_description_switch_identity() -> None:
     request = SimpleNamespace(method="POST", url=SimpleNamespace(path="/api/v1/auth/switch-identity"), query_params={})
     assert build_audit_description(request) == "切换登录身份：切换到其他已授权身份"  # type: ignore[arg-type]
+
+
+def test_molizhishu_callback_skipped_from_audit() -> None:
+    assert _should_audit("POST", "/api/v1/monitor/molizhishu/callback") is False
+    assert _should_audit("POST", "/api/v1/monitor/molizhishu/callback/") is False
+    assert _should_audit("POST", "/api/v1/monitor/tasks") is True
