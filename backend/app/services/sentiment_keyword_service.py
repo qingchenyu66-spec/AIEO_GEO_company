@@ -48,6 +48,23 @@ _CLAUSE_SPLIT = re.compile(r"[。！？；\n\r|]+")
 _PHRASE_SPLIT = re.compile(r"[；;，,、：:]+")
 _NOISE_RE = re.compile(r"^[#\->\s|·•\d.]+$")
 
+# 2026-07-31 - S3：短语级极性闸门（整篇 sentiment 桶不够，需短语自带评价向）
+_NEGATIVE_POLARITY_CUES: tuple[str, ...] = (
+    "隐藏成本", "不透明", "报价乱", "虚高", "偏贵", "太贵", "昂贵", "水分", "套路",
+    "坑", "差评", "翻车", "暴雷", "投诉", "纠纷", "违约", "虚假", "夸大", "忽悠", "骗人",
+    "不推荐", "短板", "风险", "问题", "不足", "缺陷", "落后", "弱势", "糟糕", "劣质",
+    "售后差", "难落地", "难执行", "不稳定", "不靠谱", "混乱", "割韭菜", "黑幕", "猫腻",
+    "负面", "吐槽", "槽点", "硬伤", "瓶颈", "拖后腿", "拉胯", "踩坑", "避雷",
+)
+_POSITIVE_POLARITY_CUES: tuple[str, ...] = (
+    "靠谱", "领先", "首选", "推荐", "优势", "口碑好", "性价比高", "专业", "可靠",
+    "价格透明", "流程透明", "更透明",
+    "省心", "实力强", "头部", "优质", "出色", "亮眼", "值得信赖", "值得选", "稳妥",
+    "执行力强", "落地强", "服务好", "体验好", "口碑佳", "正反馈", "好评", "强势",
+    "一手价", "价格实", "最实", "实惠", "公道", "高效", "精准", "覆盖强", "资源强",
+)
+_BRAND_WINDOW_RADIUS = 48
+
 
 def _clean_text(text: str) -> str:
     cleaned = _CITATION_RE.sub("", text)
@@ -131,7 +148,72 @@ def _is_useful_sentiment_phrase(text: str, blocked: set[str]) -> bool:
     return True
 
 
-def _extract_phrases(text: str | None, *, blocked: set[str]) -> set[str]:
+def _phrase_polarity(text: str) -> str | None:
+    """短语级极性：positive / negative；无明显评价线索则 None（中性事实丢弃）。"""
+    compact = _compact(text)
+    if not compact:
+        return None
+    neg = sum(1 for cue in _NEGATIVE_POLARITY_CUES if cue in compact)
+    pos = sum(1 for cue in _POSITIVE_POLARITY_CUES if cue in compact)
+    if neg and not pos:
+        return "negative"
+    if pos and not neg:
+        return "positive"
+    if neg > pos:
+        return "negative"
+    if pos > neg:
+        return "positive"
+    return None
+
+
+def _phrase_matches_polarity(text: str, polarity: str) -> bool:
+    return _phrase_polarity(text) == polarity
+
+
+def _brand_adjacent_text(text: str | None, brand_names: set[str], *, radius: int = _BRAND_WINDOW_RADIUS) -> str:
+    """只保留含品牌名的子句/邻近窗口，避免整篇回答里的无关卖点混进词云。"""
+    cleaned = _clean_text(text or "")
+    if not cleaned:
+        return ""
+    names = sorted((n for n in brand_names if n and len(n.strip()) >= 2), key=len, reverse=True)
+    if not names:
+        return cleaned[:720]
+    windows: list[str] = []
+    seen: set[str] = set()
+    clauses = [part.strip() for part in _CLAUSE_SPLIT.split(cleaned) if part.strip()]
+    for clause in clauses:
+        if not any(name in clause for name in names):
+            continue
+        if clause not in seen:
+            seen.add(clause)
+            windows.append(clause[: radius * 2 + 24])
+    if windows:
+        return "。".join(windows)[:720]
+    # 无句读时退回半径窗口
+    for name in names:
+        start = 0
+        while True:
+            idx = cleaned.find(name, start)
+            if idx < 0:
+                break
+            left = max(0, idx - radius)
+            right = min(len(cleaned), idx + len(name) + radius)
+            chunk = cleaned[left:right].strip()
+            if chunk and chunk not in seen:
+                seen.add(chunk)
+                windows.append(chunk)
+            start = idx + len(name)
+    if not windows:
+        return ""
+    return "。".join(windows)[:720]
+
+
+def _extract_phrases(
+    text: str | None,
+    *,
+    blocked: set[str],
+    polarity: str | None = None,
+) -> set[str]:
     if not text:
         return set()
     cleaned = _clean_text(text)
@@ -141,15 +223,21 @@ def _extract_phrases(text: str | None, *, blocked: set[str]) -> set[str]:
     phrases: set[str] = set()
     for clause in _CLAUSE_SPLIT.split(cleaned):
         clause = clause.strip()
-        if _is_useful_sentiment_phrase(clause, blocked):
+        if _is_useful_sentiment_phrase(clause, blocked) and (
+            polarity is None or _phrase_matches_polarity(clause, polarity)
+        ):
             phrases.add(clause)
         for part in _PHRASE_SPLIT.split(clause):
             part = part.strip()
-            if _is_useful_sentiment_phrase(part, blocked):
+            if _is_useful_sentiment_phrase(part, blocked) and (
+                polarity is None or _phrase_matches_polarity(part, polarity)
+            ):
                 phrases.add(part)
 
     for word in re.findall(r"[\u4e00-\u9fff]{4,12}", cleaned):
-        if _is_useful_sentiment_phrase(word, blocked):
+        if _is_useful_sentiment_phrase(word, blocked) and (
+            polarity is None or _phrase_matches_polarity(word, polarity)
+        ):
             phrases.add(word)
     return phrases
 
@@ -178,22 +266,25 @@ def _brand_mentioned(item: GeoMonitorSubtask, brand_names: set[str]) -> bool:
     return any(_entity_mentioned_in_entries(entries, name) for name in brand_names)
 
 
-def _snippet_for_subtask(item: GeoMonitorSubtask) -> str:
+def _snippet_for_subtask(item: GeoMonitorSubtask, brand_names: set[str]) -> str:
+    # 2026-07-31 - S3：优先 mention_context；否则只取品牌邻近窗口，勿喂全文
     context = _clean_text(item.mention_context or "")
     if context:
         return context[:420]
-    answer = _clean_text(item.answer_content or "")
-    return answer[:720]
+    return _brand_adjacent_text(item.answer_content, brand_names)
 
 
 def _aggregate_rule_based(
     items: list[GeoMonitorSubtask],
     blocked: set[str],
+    *,
+    polarity: str,
+    brand_names: set[str],
 ) -> dict[str, dict[str, Any]]:
     bucket: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "subtask_ids": [], "task_ids": []})
     for item in items:
-        phrases = _extract_phrases(item.mention_context, blocked=blocked)
-        phrases.update(_extract_phrases(item.answer_content, blocked=blocked))
+        source = _snippet_for_subtask(item, brand_names)
+        phrases = _extract_phrases(source, blocked=blocked, polarity=polarity)
         for phrase in phrases:
             entry = bucket[phrase]
             entry["count"] += 1
@@ -208,6 +299,7 @@ def _aggregate_with_deepseek(
     polarity: str,
     items: list[GeoMonitorSubtask],
     blocked: set[str],
+    brand_names: set[str],
 ) -> dict[str, dict[str, Any]] | None:
     client = DeepseekClient()
     if not client.enabled or not items:
@@ -215,15 +307,16 @@ def _aggregate_with_deepseek(
 
     bucket: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "subtask_ids": [], "task_ids": []})
     sampled = items[:_LLM_MAX_SUBTASKS]
-    excerpts = [
-        {
+    excerpts = []
+    for item in sampled:
+        text = _snippet_for_subtask(item, brand_names)
+        if not text:
+            continue
+        excerpts.append({
             "subtask_id": item.subtask_id,
             "task_id": item.task_id,
-            "text": _snippet_for_subtask(item),
-        }
-        for item in sampled
-        if _snippet_for_subtask(item)
-    ]
+            "text": text,
+        })
     if not excerpts:
         return None
 
@@ -248,6 +341,9 @@ def _aggregate_with_deepseek(
                 for row in phrases:
                     text = row["text"]
                     if not _is_useful_sentiment_phrase(text, blocked):
+                        continue
+                    # LLM 仍可能吐中性卖点；短语级极性再闸一道
+                    if not _phrase_matches_polarity(text, polarity):
                         continue
                     entry = bucket[text]
                     entry["count"] += 1
@@ -404,10 +500,16 @@ def build_sentiment_keywords(
                 polarity=polarity,
                 items=grouped[polarity],
                 blocked=blocked,
+                brand_names=brand_names,
             )
             if llm_bucket:
                 return polarity, llm_bucket, True
-        return polarity, _aggregate_rule_based(grouped[polarity], blocked), False
+        return polarity, _aggregate_rule_based(
+            grouped[polarity],
+            blocked,
+            polarity=polarity,
+            brand_names=brand_names,
+        ), False
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
             executor.submit(build_polarity_bucket, polarity): polarity

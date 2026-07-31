@@ -361,7 +361,7 @@ const snapshotSourceRows = computed(() => {
           <div>
             <h3>品牌情绪词</h3>
             <p>
-              从本品牌被提及的回答中提取短语 · 点击词条直达快照
+              从品牌邻近评价中提取正/负面短语 · 点击词条直达快照
             </p>
           </div>
           <Cloud />
