@@ -39,6 +39,7 @@ export const useAuthStore = defineStore('auth', {
     isLoggedIn: (state) => Boolean(state.session?.identity),
     portalPath: (state) => state.session?.identity.identity_type === 'PLATFORM' ? '/platform' : '/customer',
     allowedMenus: (state) => state.session?.menus || [],
+    mustChangePassword: (state) => Boolean(state.session?.user?.must_change_password),
   },
   actions: {
     saveSession(session: AuthSession) {

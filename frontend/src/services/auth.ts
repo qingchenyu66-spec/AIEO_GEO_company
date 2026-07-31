@@ -19,6 +19,7 @@ export interface UserInfo {
   id: number
   username: string
   display_name: string
+  must_change_password?: boolean
 }
 
 export interface MenuInfo {
@@ -76,4 +77,11 @@ export async function meApi(): Promise<Omit<AuthSession, 'access_token' | 'token
 
 export async function logoutApi(): Promise<void> {
   await http.post('/v1/auth/logout')
+}
+
+export async function changePasswordApi(oldPassword: string, newPassword: string): Promise<void> {
+  await http.post('/v1/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
 }

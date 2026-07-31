@@ -236,6 +236,20 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         description="仅这些平台职位可见上下架/可用性铃铛。不选则默认销售+运营+管理员",
         value_type="str",
     ),
+    "tenant_expiry_notify_days": ConfigMeta(
+        field="tenant_expiry_notify_days",
+        category="notification",
+        label="客户即将到期 · 提前天数",
+        description="服务结束日在今天起 N 天内（含今天）则推站内通知；默认 7",
+        value_type="int",
+    ),
+    "tenant_expiry_notify_position_ids": ConfigMeta(
+        field="tenant_expiry_notify_position_ids",
+        category="notification",
+        label="客户即将到期 · 通知职位",
+        description="勾选的平台职位可见到期铃铛；销售仅收名下企业。不选则不推送",
+        value_type="str",
+    ),
 }
 
 

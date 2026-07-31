@@ -76,6 +76,8 @@ def test_list_system_configs_filters_category(db_session):
         "snapshot_backfill_notify_owner",
         "snapshot_backfill_notify_operation",
         "snapshot_backfill_notify_admin",
+        "tenant_expiry_notify_days",
+        "tenant_expiry_notify_position_ids",
     }
 
 

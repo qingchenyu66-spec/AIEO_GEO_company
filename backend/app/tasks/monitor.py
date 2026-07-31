@@ -524,6 +524,33 @@ def expire_overdue_tenant_services_task() -> dict[str, Any]:
     return {"status": "ok", "handled": handled}
 
 
+@celery_app.task(name="app.tasks.monitor.scan_tenant_expiry_notifications", ignore_result=True)
+def scan_tenant_expiry_notifications_task() -> dict[str, Any]:
+    """每日按通知规则推送客户即将到期站内铃铛。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    lock_key = _scan_lock_key("tenant-expiry-notify", bucket_minutes=60)
+    with redis_lock(lock_key, ttl_seconds=3600) as acquired:
+        if not acquired:
+            return {"status": "locked"}
+
+        from app.services.tenant_expiry_notify_service import sync_tenant_expiry_notifications
+
+        db = SessionLocal()
+        try:
+            result = sync_tenant_expiry_notifications(db)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    record_beat_scan("app.tasks.monitor.scan_tenant_expiry_notifications", result)
+    logger.info("scan_tenant_expiry_notifications %s", result)
+    return {"status": "ok", **result}
+
+
 @celery_app.task(name="app.tasks.monitor.sync_platform_catalog_daily", ignore_result=True)
 def sync_platform_catalog_daily_task() -> dict[str, Any]:
     """每日同步模力支持平台目录：上下架 + 取消已下架勾选 + 铃铛。"""

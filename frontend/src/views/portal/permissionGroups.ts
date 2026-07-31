@@ -1,6 +1,6 @@
 import type { IdentityType, MenuInfo } from '../../services/auth'
 import { generateInitialPassword } from '../../utils/password'
-import { POSITION_MENU } from './constants'
+import { POSITION_MENU, hiddenFromAssignablePermissionMenus } from './constants'
 
 export function permissionGroupTitle(type: IdentityType, key: string) {
   const platformTitles: Record<string, string> = {
@@ -65,7 +65,10 @@ export function permissionGroupsFor(
     ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   const buckets: Record<string, MenuInfo[]> = {}
-  for (const menu of assignMenus[type]) {
+  // 2026-07-31 - 方案B：权限配置文案分组也不列品牌洞察/信源分析（侧栏菜单仍保留）
+  const hideFromConfig = new Set(hiddenFromAssignablePermissionMenus)
+  for (const menu of assignMenus[type] || []) {
+    if (hideFromConfig.has(menu.menu_code)) continue
     const key = permissionGroupKey(menu)
     if (!buckets[key]) buckets[key] = []
     buckets[key].push(menu)

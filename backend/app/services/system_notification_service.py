@@ -24,6 +24,7 @@ PLATFORM_RESTRICTED_CATEGORIES = (
     "celery_queue",
     "snapshot_backfill",
     "platform_service",
+    "tenant_expiry",
 )
 
 
@@ -36,6 +37,8 @@ def can_view_notification_category(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> bool | None:
     """通知分类是否可见；None 表示需结合 payload 中的用户 ID 判断。"""
     if category == "operation_approval":
@@ -53,6 +56,11 @@ def can_view_notification_category(
         return can_view_customer_reports
     if category == "platform_service":
         return can_view_platform_service
+    if category == "tenant_expiry":
+        if not can_view_tenant_expiry:
+            return False
+        # 销售需按 owner_user_id 过滤；其他已勾职位看全部（含无归属）
+        return None if tenant_expiry_owner_only else True
     return False
 
 
@@ -172,8 +180,10 @@ def _apply_notification_visibility_filter(
     can_view_snapshot_backfill: bool,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> Select[tuple[SystemNotification]]:
-    """按角色过滤通知：审批、运维告警、补录待办、平台可用性分别鉴权。"""
+    """按角色过滤通知：审批、运维告警、补录待办、平台可用性、客户到期分别鉴权。"""
     clauses = [SystemNotification.category.not_in(PLATFORM_RESTRICTED_CATEGORIES)]
     if can_review_approvals:
         clauses.append(SystemNotification.category == "operation_approval")
@@ -209,6 +219,18 @@ def _apply_notification_visibility_filter(
             )
     if can_view_platform_service:
         clauses.append(SystemNotification.category == "platform_service")
+    if can_view_tenant_expiry:
+        owner_expr = _owner_user_id_expr()
+        if tenant_expiry_owner_only:
+            # 2026-07-31 - 到期通知销售精细化 - 仅名下企业，无归属不推销售
+            clauses.append(
+                and_(
+                    SystemNotification.category == "tenant_expiry",
+                    owner_expr == user_id,
+                )
+            )
+        else:
+            clauses.append(SystemNotification.category == "tenant_expiry")
     return stmt.where(or_(*clauses))
 
 
@@ -284,6 +306,8 @@ def _user_can_read_notification(
     can_view_customer_reports: bool,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> bool:
     if row.created_at < _notification_retention_cutoff():
         return False
@@ -317,6 +341,8 @@ def _user_can_read_notification(
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
             can_view_platform_service=can_view_platform_service,
+            can_view_tenant_expiry=can_view_tenant_expiry,
+            tenant_expiry_owner_only=tenant_expiry_owner_only,
         )
         if allowed is False:
             return False
@@ -333,6 +359,28 @@ def _user_can_read_notification(
             user_id=user_id,
             owner_only=snapshot_backfill_owner_only,
         )
+    if row.category == "tenant_expiry":
+        allowed = can_view_notification_category(
+            row.category,
+            can_review_approvals=can_review_approvals,
+            can_view_ops_alerts=can_view_ops_alerts,
+            can_view_snapshot_backfill=can_view_snapshot_backfill,
+            can_view_platform_service=can_view_platform_service,
+            can_view_tenant_expiry=can_view_tenant_expiry,
+            tenant_expiry_owner_only=tenant_expiry_owner_only,
+        )
+        if allowed is False:
+            return False
+        if allowed is True:
+            return True
+        if not row.payload_json:
+            return False
+        try:
+            payload = json.loads(row.payload_json)
+        except json.JSONDecodeError:
+            return False
+        owner_id = _payload_owner_user_id(payload)
+        return owner_id is not None and owner_id == user_id
     allowed = can_view_notification_category(
         row.category,
         can_review_approvals=can_review_approvals,
@@ -340,8 +388,98 @@ def _user_can_read_notification(
         can_view_snapshot_backfill=can_view_snapshot_backfill,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         can_view_platform_service=can_view_platform_service,
+        can_view_tenant_expiry=can_view_tenant_expiry,
+        tenant_expiry_owner_only=tenant_expiry_owner_only,
     )
     return allowed is True
+
+
+def upsert_tenant_expiry_notification(
+    db: Session,
+    *,
+    tenant_id: int,
+    title: str,
+    message: str,
+    payload: dict[str, Any],
+    level: str = "warning",
+    auto_commit: bool = True,
+) -> SystemNotification:
+    """客户即将到期铃铛（按企业一条，销售靠 owner_user_id 过滤）。"""
+    source_key = f"tenant_expiry:{tenant_id}"
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+            SystemNotification.tenant_id.is_(None),
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message[:500]
+        existing.level = level
+        existing.category = "tenant_expiry"
+        existing.payload_json = payload_text
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        if auto_commit:
+            db.commit()
+            db.refresh(existing)
+        return existing
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="tenant_expiry",
+        level=level,
+        title=title,
+        message=message[:500],
+        payload_json=payload_text,
+        source_key=source_key,
+    )
+    db.add(row)
+    if auto_commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
+    return row
+
+
+def resolve_tenant_expiry_notifications(
+    db: Session,
+    *,
+    active_tenant_ids: set[int],
+    auto_commit: bool = True,
+) -> int:
+    """删除不在窗口内的到期通知。"""
+    rows = list(
+        db.scalars(
+            select(SystemNotification).where(
+                SystemNotification.audience_type == "PLATFORM",
+                SystemNotification.category == "tenant_expiry",
+                SystemNotification.tenant_id.is_(None),
+            )
+        )
+    )
+    cleared = 0
+    for row in rows:
+        tenant_id = None
+        if row.payload_json:
+            try:
+                tenant_id = int(json.loads(row.payload_json).get("tenant_id") or 0) or None
+            except (json.JSONDecodeError, TypeError, ValueError):
+                tenant_id = None
+        if tenant_id is None and row.source_key.startswith("tenant_expiry:"):
+            try:
+                tenant_id = int(row.source_key.split(":", 1)[1])
+            except (TypeError, ValueError):
+                tenant_id = None
+        if tenant_id is not None and tenant_id in active_tenant_ids:
+            continue
+        _delete_notification(db, row, auto_commit=False)
+        cleared += 1
+    if auto_commit and cleared:
+        db.commit()
+    return cleared
 
 
 def upsert_monitor_alert_notification(db: Session, alert: dict[str, Any]) -> SystemNotification | None:
@@ -904,6 +1042,8 @@ def _visible_notification_ids_stmt(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> Select[tuple[int]]:
     audience = "PLATFORM" if identity_type == "PLATFORM" else "CUSTOMER"
     visible_ids = select(SystemNotification.id).where(
@@ -926,6 +1066,8 @@ def _visible_notification_ids_stmt(
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
             can_view_platform_service=can_view_platform_service,
+            can_view_tenant_expiry=can_view_tenant_expiry,
+            tenant_expiry_owner_only=tenant_expiry_owner_only,
         )
     return visible_ids
 
@@ -944,6 +1086,8 @@ def list_notifications_for_user(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> list[dict[str, Any]]:
     stmt = _notification_query_for_user(
         user_id=user_id,
@@ -959,6 +1103,8 @@ def list_notifications_for_user(
             can_view_snapshot_backfill=can_view_snapshot_backfill,
             snapshot_backfill_owner_only=snapshot_backfill_owner_only,
             can_view_platform_service=can_view_platform_service,
+            can_view_tenant_expiry=can_view_tenant_expiry,
+            tenant_expiry_owner_only=tenant_expiry_owner_only,
         )
     else:
         stmt = _apply_customer_notification_visibility_filter(
@@ -1012,6 +1158,8 @@ def count_unread_notifications(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> int:
     visible_ids = _visible_notification_ids_stmt(
         user_id=user_id,
@@ -1023,6 +1171,8 @@ def count_unread_notifications(
         can_view_customer_reports=can_view_customer_reports,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         can_view_platform_service=can_view_platform_service,
+        can_view_tenant_expiry=can_view_tenant_expiry,
+        tenant_expiry_owner_only=tenant_expiry_owner_only,
     )
     read_subq = (
         select(SystemNotificationRead.notification_id)
@@ -1048,6 +1198,8 @@ def mark_notification_read(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> bool:
     exists = db.scalar(
         select(SystemNotificationRead.id).where(
@@ -1071,6 +1223,8 @@ def mark_notification_read(
         can_view_customer_reports=can_view_customer_reports,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         can_view_platform_service=can_view_platform_service,
+        can_view_tenant_expiry=can_view_tenant_expiry,
+        tenant_expiry_owner_only=tenant_expiry_owner_only,
     ):
         return False
     db.add(SystemNotificationRead(user_id=user_id, notification_id=notification_id))
@@ -1090,6 +1244,8 @@ def mark_all_notifications_read(
     can_view_customer_reports: bool = False,
     snapshot_backfill_owner_only: bool = False,
     can_view_platform_service: bool = False,
+    can_view_tenant_expiry: bool = False,
+    tenant_expiry_owner_only: bool = False,
 ) -> int:
     """标记当前用户可见范围内的全部未读；禁止再走 list(limit=100) 后筛未读。"""
     visible_ids = _visible_notification_ids_stmt(
@@ -1102,6 +1258,8 @@ def mark_all_notifications_read(
         can_view_customer_reports=can_view_customer_reports,
         snapshot_backfill_owner_only=snapshot_backfill_owner_only,
         can_view_platform_service=can_view_platform_service,
+        can_view_tenant_expiry=can_view_tenant_expiry,
+        tenant_expiry_owner_only=tenant_expiry_owner_only,
     )
     read_ids = select(SystemNotificationRead.notification_id).where(
         SystemNotificationRead.user_id == user_id,

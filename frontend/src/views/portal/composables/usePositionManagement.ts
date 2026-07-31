@@ -17,6 +17,7 @@ import {
   grantsFromPosition,
   grantsToPayload,
   permissionModulesFor,
+  preserveHiddenAssignableGrants,
   type MenuGrantState,
 } from '../menuPermissionMatrix'
 import type { AssignableOptions } from './useAssignableOptions'
@@ -150,12 +151,32 @@ export function usePositionManagement(options: PositionManagementOptions) {
     }
     savingPosition.value = true
     try {
+      // 2026-07-31 - 品牌洞察/信源分析不进配置勾选 - 保存时并回已有隐藏授权，勿误清
+      const visibleGrants = grantsToPayload(menuGrants, positionFormMenus.value)
+      const preservedGrants = editingPosition.value
+        ? preserveHiddenAssignableGrants(
+          assignMenus[positionForm.identity_type] || [],
+          editingPosition.value.menu_grants?.length
+            ? editingPosition.value.menu_grants
+            : editingPosition.value.menu_ids.map(menuId => ({
+              menu_id: menuId,
+              can_create: false,
+              can_update: false,
+              can_delete: false,
+              can_export: true,
+            })),
+        )
+        : []
+      const preservedIds = new Set(preservedGrants.map(item => item.menu_id))
       const payload = {
         position_name: positionForm.position_name.trim(),
         identity_type: positionForm.identity_type,
         role_code: positionForm.role_code,
         description: positionForm.description.trim() || null,
-        menu_grants: grantsToPayload(menuGrants, positionFormMenus.value),
+        menu_grants: [
+          ...visibleGrants.filter(item => !preservedIds.has(item.menu_id)),
+          ...preservedGrants,
+        ],
         menu_ids: [],
         allowed_monitor_platforms: showPlatformAllowSelect.value ? [...allowedMonitorPlatforms.value] : [],
         status: positionForm.status,

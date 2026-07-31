@@ -4083,6 +4083,28 @@ button:disabled {
   font-size: 13px;
   font-weight: 500;
 }
+.auth-hint {
+  margin: 0 0 14px;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.auth-secondary {
+  margin-top: 14px;
+  width: 100%;
+  height: 42px;
+  border: 1px solid rgba(148, 163, 184, .35);
+  border-radius: 11px;
+  color: #cbd5e1;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-secondary:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, .55);
+  color: #fff;
+}
 .auth-submit {
   display: flex;
   align-items: center;

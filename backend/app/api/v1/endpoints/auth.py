@@ -17,13 +17,34 @@ from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.models.permission import Position
-from app.schemas.auth import IdentityInfo, IdentitySelectRequest, IdentitySwitchRequest, LoginRequest
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    IdentityInfo,
+    IdentitySelectRequest,
+    IdentitySwitchRequest,
+    LoginRequest,
+)
 from app.schemas.common import ApiResponse
-from app.services.auth_service import LoginRejected, authenticate, create_access_token, create_identity_ticket
+from app.services.auth_service import (
+    LoginRejected,
+    authenticate,
+    change_own_password,
+    create_access_token,
+    create_identity_ticket,
+)
 from app.services.menu_permission_service import ensure_identity_menus_from_position
 from app.services.permission_service import get_identity_menus
 
 router = APIRouter(prefix="/auth")
+
+
+def _user_public(user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "must_change_password": bool(getattr(user, "must_change_password", False)),
+    }
 
 
 def identity_info(identity: UserIdentity, db: Session) -> dict:
@@ -60,7 +81,7 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
     return {
         "access_token": create_access_token(user, identity),
         "token_type": "bearer",
-        "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
+        "user": _user_public(user),
         "identity": identity_info(identity, db),
         "identities": [identity_info(item, db) for item in identities],
         "menus": menus,
@@ -108,7 +129,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     return ApiResponse(data={
         "requires_identity_selection": True,
         "ticket": create_identity_ticket(user),
-        "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
+        "user": _user_public(user),
         "identities": [identity_info(item, db) for item in identities],
     })
 
@@ -152,12 +173,33 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
     from app.services.menu_permission_service import identity_allowed_monitor_platforms
 
     return ApiResponse(data={
-        "user": {"id": current.user.id, "username": current.user.username, "display_name": current.user.display_name},
+        "user": _user_public(current.user),
         "identity": identity_info(current.identity, db),
         "identities": [identity_info(item, db) for item in identities],
         "menus": [item.model_dump() for item in get_identity_menus(db, current.identity)],
         "allowed_monitor_platforms": identity_allowed_monitor_platforms(db, current.identity),
     })
+
+
+@router.post("/change-password", response_model=ApiResponse[dict])
+def change_password(
+    payload: ChangePasswordRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """登录用户修改密码；新建/重置账号后的强制改密也走此接口。"""
+    try:
+        change_own_password(
+            db,
+            current.user,
+            old_password=payload.old_password,
+            new_password=payload.new_password,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data={"ok": True, "must_change_password": False})
 
 
 @router.post("/switch-identity", response_model=ApiResponse[dict])

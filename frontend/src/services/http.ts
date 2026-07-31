@@ -79,9 +79,17 @@ http.interceptors.response.use(
     }
 
     if (status === 403) {
+      const detail = error.response?.data?.detail
+      const detailText = typeof detail === 'string' ? detail : ''
+      // 2026-07-31 - 强制改密闸门 - 业务 API 403 时拉去改密页
+      if (detailText.includes('必须先修改登录密码')) {
+        if (!window.location.pathname.includes('/change-password')) {
+          window.location.href = '/change-password'
+        }
+        return Promise.reject(error)
+      }
       if (!(error.config as { silentError?: boolean } | undefined)?.silentError) {
-        const message = error.response?.data?.detail || '当前账号无权执行此操作'
-        ElMessage.warning(typeof message === 'string' ? message : '当前账号无权执行此操作')
+        ElMessage.warning(detailText || '当前账号无权执行此操作')
       }
       return Promise.reject(error)
     }

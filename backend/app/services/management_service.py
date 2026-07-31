@@ -387,6 +387,8 @@ def create_managed_user(
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
         created_by=creator.id,
+        # 2026-07-31 - 新建账号强制首次登录改密
+        must_change_password=True,
     )
     db.add(user)
     db.flush()
@@ -445,6 +447,8 @@ def update_managed_user(
 def reset_managed_user_password(db: Session, user_id: int, password: str, current_user: User, current_identity: UserIdentity) -> None:
     user = get_managed_user(db, user_id, current_user, current_identity)
     user.password_hash = hash_password(password)
+    # 2026-07-31 - 管理员重置后同样强制改密
+    user.must_change_password = True
     db.commit()
 
 

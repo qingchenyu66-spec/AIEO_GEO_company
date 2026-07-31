@@ -113,6 +113,16 @@ async function handleRead(item: SystemNotification) {
     open.value = false
     return
   }
+  if (item.category === 'tenant_expiry') {
+    const payload = item.payload || {}
+    const query: Record<string, string> = {}
+    if (payload.tenant_id != null && String(payload.tenant_id)) {
+      query.tenant_id = String(payload.tenant_id)
+    }
+    portalNavigate('platform.audit', false, query)
+    open.value = false
+    return
+  }
   if (item.category === 'report_published' && item.payload) {
     const payload = item.payload
     portalNavigate('customer.reports', false, {

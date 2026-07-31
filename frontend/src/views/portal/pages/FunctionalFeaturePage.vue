@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElOption, ElSelect } from 'element-plus'
+import 'element-plus/es/components/select/style/css'
+import 'element-plus/es/components/option/style/css'
 import { useAuthStore } from '../../../stores/auth'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { withRetry } from '../../../composables/useRetry'
@@ -90,7 +92,7 @@ const settingsTabs = computed(() => {
     { key: 'secrets', title: '接口密钥', desc: '监测服务、DeepSeek 等敏感配置，保存后立即生效' },
     { key: 'schedule', title: '调度策略', desc: '监测容差、接口限速、Celery 扫描与同步参数' },
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
-    { key: 'notification', title: '通知规则', desc: '快照补录待办谁收、弱排名阈值（默认 Top3 之外）' },
+    { key: 'notification', title: '通知规则', desc: '补录谁收、客户即将到期天数/职位、弱排名阈值' },
     { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
   ]
   return all.filter(tab => canAccessSettingsCategory(tab.key))
@@ -156,7 +158,14 @@ function isSecretConfigRow(row: { config_key: string; secret?: boolean }) {
 }
 
 function isPositionNotifyConfig(row: { config_key: string }) {
-  return row.config_key === 'platform_service_notify_position_ids'
+  return (
+    row.config_key === 'platform_service_notify_position_ids'
+    || row.config_key === 'tenant_expiry_notify_position_ids'
+  )
+}
+
+function isTenantExpiryPositionConfig(row: { config_key: string }) {
+  return row.config_key === 'tenant_expiry_notify_position_ids'
 }
 
 function configValuePlaceholder(row: { value_type?: string }) {
@@ -191,9 +200,13 @@ function parsePositionIds(raw: string): number[] {
   }
 }
 
-function formatPositionIdsDisplay(raw: string) {
+function formatPositionIdsDisplay(raw: string, configKey?: string) {
   const ids = parsePositionIds(raw)
-  if (!ids.length) return '默认（销售+运营+管理员）'
+  if (!ids.length) {
+    return configKey === 'tenant_expiry_notify_position_ids'
+      ? '未选择（不推送）'
+      : '默认（销售+运营+管理员）'
+  }
   return ids
     .map((id) => platformPositions.value.find((item) => item.id === id)?.position_name || `#${id}`)
     .join('、')
@@ -206,7 +219,7 @@ function formatConfigDisplay(row: {
   secret?: boolean
 }) {
   if (row.value_type === 'bool') return formatBoolDisplay(row.config_value)
-  if (isPositionNotifyConfig(row)) return formatPositionIdsDisplay(row.config_value)
+  if (isPositionNotifyConfig(row)) return formatPositionIdsDisplay(row.config_value, row.config_key)
   return maskedConfigValue(row.config_value, row.config_key, row.secret)
 }
 
@@ -301,6 +314,19 @@ function navigateToMenu(menuCode: string) {
 
 function formatLogTime(value: string) {
   return value.replace('T', ' ').slice(0, 16)
+}
+
+/** 2026-07-31 - 彻底删除日志把备份绝对路径挤进上下文列 - 描述里「备份 …」拆第二行展示 */
+function logDescriptionParts(description: string | null | undefined) {
+  const text = String(description || '').trim()
+  const matched = text.match(/^(.*?)[（(]备份\s*(.+?)[）)]\s*$/u)
+  if (!matched) {
+    return { summary: text, backup: '' }
+  }
+  return {
+    summary: matched[1].trim(),
+    backup: matched[2].trim(),
+  }
 }
 
 function logContext(row: OperationLogRecord) {
@@ -685,7 +711,12 @@ onUnmounted(() => {
             <span>{{ formatLogTime(row.created_at) }}</span>
             <b>{{ row.operator_name }}</b>
             <span>{{ row.action_type }}</span>
-            <em>{{ row.description }}</em>
+            <template v-for="parts in [logDescriptionParts(row.description)]" :key="`${row.id}-desc`">
+              <em class="ops-log-desc">
+                <span>{{ parts.summary }}</span>
+                <small v-if="parts.backup">备份 {{ parts.backup }}</small>
+              </em>
+            </template>
             <span>{{ logContext(row) }}</span>
             <i>{{ row.risk_level }}</i>
           </div>
@@ -770,7 +801,7 @@ onUnmounted(() => {
                 clearable
                 collapse-tags
                 collapse-tags-tooltip
-                placeholder="不选则默认销售+运营+管理员"
+                :placeholder="isTenantExpiryPositionConfig(row) ? '不选则不推送' : '不选则默认销售+运营+管理员'"
               >
                 <ElOption
                   v-for="position in platformPositions"

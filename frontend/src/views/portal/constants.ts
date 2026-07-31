@@ -22,6 +22,8 @@ export const SETTINGS_CHILD_MENUS = [
 
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
 export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis']
+/** 仍可进侧栏，但不在职位/权限配置里勾选（避免运营端配置里出现客户分析页） */
+export const hiddenFromAssignablePermissionMenus = ['platform.competitor', 'platform.sources']
 export const hiddenEnterprisePermissionMenus = [
   'platform.audit.list',
   'platform.audit.profile',

@@ -42,7 +42,10 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "platform.snapshot_backfill",
         ("can_export", "can_update"),
     )
-    from app.services.platform_notify_recipients import identity_can_view_platform_service
+    from app.services.platform_notify_recipients import (
+        identity_can_view_platform_service,
+        identity_can_view_tenant_expiry,
+    )
     from app.services.system_config_service import get_runtime_config
 
     is_sales = is_sales_identity(db, current.identity)
@@ -57,6 +60,7 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
             can_view_snapshot_backfill = False
         elif not is_sales and not is_admin and not is_operation:
             can_view_snapshot_backfill = False
+    can_view_tenant_expiry = identity_can_view_tenant_expiry(db, current.identity)
     return {
         "can_review_approvals": can_review_approvals(db, current),
         "can_view_ops_alerts": can_view_ops_alerts,
@@ -64,6 +68,8 @@ def _notification_visibility(db: Session, current: CurrentSession) -> dict[str, 
         "snapshot_backfill_owner_only": bool(can_view_snapshot_backfill and is_sales),
         "can_view_customer_reports": can_view_customer_reports,
         "can_view_platform_service": identity_can_view_platform_service(db, current.identity),
+        "can_view_tenant_expiry": can_view_tenant_expiry,
+        "tenant_expiry_owner_only": bool(can_view_tenant_expiry and is_sales),
     }
 
 

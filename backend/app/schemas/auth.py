@@ -15,6 +15,13 @@ class IdentitySwitchRequest(BaseModel):
     identity_id: int
 
 
+class ChangePasswordRequest(BaseModel):
+    """登录用户修改自己的密码（强制改密 / 自助改密共用）。"""
+
+    old_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 class IdentityInfo(BaseModel):
     id: int
     identity_type: str

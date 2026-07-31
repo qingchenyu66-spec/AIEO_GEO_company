@@ -11,6 +11,7 @@ import {
   USER_CREATE_MENU,
   USER_CREATE_PLATFORM_MENU,
   USER_LIST_MENU,
+  hiddenFromAssignablePermissionMenus,
   hiddenPlatformMenus,
 } from './constants'
 import { permissionGroupKey, permissionGroupNote, permissionGroupTitle } from './permissionGroups'
@@ -123,6 +124,7 @@ export type PermissionMenuRow = {
 
 const HIDDEN_ASSIGNABLE = new Set([
   ...hiddenPlatformMenus,
+  ...hiddenFromAssignablePermissionMenus,
   'customer.assets',
   'customer.batch',
   'customer.geo',
@@ -296,6 +298,40 @@ export function grantsToPayload(state: MenuGrantState, menus: MenuInfo[]) {
       ...state[menu.id],
     }))
     .filter(item => grantHasAccess(item))
+}
+
+/** 职位保存时保留「配置里隐藏」的已有授权，避免改别的权限时把品牌洞察/信源分析清掉 */
+export function preserveHiddenAssignableGrants(
+  allMenus: MenuInfo[],
+  existingGrants: Array<{
+    menu_id: number
+    menu_code?: string
+    can_create?: boolean
+    can_update?: boolean
+    can_delete?: boolean
+    can_export?: boolean
+  }> | undefined,
+) {
+  const hiddenCodes = new Set(hiddenFromAssignablePermissionMenus)
+  const byId = new Map(allMenus.map(menu => [menu.id, menu]))
+  return (existingGrants || [])
+    .map(grant => {
+      const menu = byId.get(grant.menu_id)
+      if (!menu || !hiddenCodes.has(menu.menu_code)) return null
+      const flags = {
+        can_create: Boolean(grant.can_create),
+        can_update: Boolean(grant.can_update),
+        can_delete: Boolean(grant.can_delete),
+        can_export: Boolean(grant.can_export),
+      }
+      if (!grantHasAccess(flags)) return null
+      return {
+        menu_id: menu.id,
+        menu_code: menu.menu_code,
+        ...flags,
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
 }
 
 export function countActiveGrants(state: MenuGrantState) {

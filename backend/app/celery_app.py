@@ -33,6 +33,7 @@ celery_app.conf.update(
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
         "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
         "app.tasks.monitor.expire_overdue_tenant_services": {"queue": "default"},
+        "app.tasks.monitor.scan_tenant_expiry_notifications": {"queue": "default"},
         "app.tasks.monitor.sync_platform_catalog_daily": {"queue": "default"},
         "app.tasks.monitor.check_platform_availability_weekly": {"queue": "submit"},
         "app.tasks.monitor.finalize_platform_probes": {"queue": "sync"},
@@ -82,6 +83,10 @@ celery_app.conf.update(
         "expire-overdue-tenant-services": {
             "task": "app.tasks.monitor.expire_overdue_tenant_services",
             "schedule": crontab(hour=0, minute=10),
+        },
+        "scan-tenant-expiry-notifications": {
+            "task": "app.tasks.monitor.scan_tenant_expiry_notifications",
+            "schedule": crontab(hour=0, minute=20),
         },
         "sync-platform-catalog-daily": {
             "task": "app.tasks.monitor.sync_platform_catalog_daily",

@@ -14,6 +14,15 @@ from app.services.tenant_account_service import tenant_service_is_operational
 
 bearer = HTTPBearer(auto_error=False)
 
+# 强制改密期间仍可访问的路径后缀（挂在 /api/v1 下）
+_PASSWORD_CHANGE_ALLOWED_SUFFIXES = (
+    "/auth/me",
+    "/auth/logout",
+    "/auth/change-password",
+)
+
+PASSWORD_CHANGE_REQUIRED_DETAIL = "必须先修改登录密码"
+
 
 @dataclass
 class CurrentSession:
@@ -31,6 +40,11 @@ def _resolve_access_token(
     if cookie_token:
         return cookie_token
     return None
+
+
+def _path_allows_must_change_password(path: str) -> bool:
+    normalized = str(path or "").rstrip("/") or "/"
+    return any(normalized.endswith(suffix) for suffix in _PASSWORD_CHANGE_ALLOWED_SUFFIXES)
 
 
 def get_current_session(
@@ -63,6 +77,11 @@ def get_current_session(
         identity.tenant is None or not tenant_service_is_operational(identity.tenant)
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="企业服务已停用或已到期，请联系运营人员")
+    # 2026-07-31 - 新建/重置密码后强制改密 - 除 me/logout/change-password 外一律 403
+    if bool(getattr(identity.user, "must_change_password", False)) and not _path_allows_must_change_password(
+        request.url.path
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PASSWORD_CHANGE_REQUIRED_DETAIL)
     return CurrentSession(user=identity.user, identity=identity)
 
 

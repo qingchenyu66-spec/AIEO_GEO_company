@@ -81,3 +81,17 @@ def create_access_token(user: User, identity: UserIdentity) -> str:
         tenant_id=identity.tenant_id,
         role_code=identity.role_code,
     )
+
+
+def change_own_password(db: Session, user: User, *, old_password: str, new_password: str) -> User:
+    """用户自助改密；成功后清除 must_change_password。"""
+    if not verify_password(old_password, user.password_hash):
+        raise ValueError("当前密码不正确")
+    if old_password == new_password:
+        raise ValueError("新密码不能与当前密码相同")
+    if len(new_password.strip()) < 6:
+        raise ValueError("新密码至少 6 个字符")
+    user.password_hash = hash_password(new_password)
+    user.must_change_password = False
+    db.flush()
+    return user
