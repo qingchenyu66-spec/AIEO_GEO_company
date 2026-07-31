@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { BellRing, RefreshCw, Save, Wallet, X } from '@lucide/vue'
+import { RefreshCw, Save, Wallet, X } from '@lucide/vue'
 import CeleryMonitorPanel from '../components/CeleryMonitorPanel.vue'
 import {
   getAlertThresholds,
@@ -36,6 +36,14 @@ const balanceStatus = computed(() => {
   if (current <= critical) return 'critical'
   if (current <= warning) return 'warning'
   return 'normal'
+})
+
+const balanceStatusLabel = computed(() => {
+  if (!balance.value?.available) return '暂无法获取'
+  if (balanceStatus.value === 'normal') return '正常'
+  if (balanceStatus.value === 'warning') return '余额偏低'
+  if (balanceStatus.value === 'critical') return '余额不足'
+  return '未知'
 })
 
 function startEdit(item: AlertThreshold) {
@@ -98,68 +106,57 @@ onMounted(loadThresholds)
 </script>
 
 <template>
+  <!-- 2026-07-31 - 预警页太乱 - 去重 hero/装饰，规则改卡片行，功能不变 -->
   <section class="feature-page alert-thresholds-page">
-    <section class="ops-hero compact-hero">
-      <div>
-        <span>系统预警</span>
-        <h2>预警阈值与调度监控</h2>
-        <p>上方查看任务调度运行情况；下方可编辑业务指标与队列积压预警阈值。</p>
-      </div>
-      <button class="ops-refresh" :disabled="loading" @click="loadThresholds">
-        <RefreshCw :class="{ spinning: loading }" />
-        {{ loading ? '刷新中' : '刷新规则' }}
-      </button>
-    </section>
+    <div v-if="errorText" class="ops-error">{{ errorText }}</div>
+    <div v-if="successText" class="ops-success">{{ successText }}</div>
 
-    <CeleryMonitorPanel />
-
-    <article class="panel">
+    <!-- 规则放上：先改阈值；调度监控收在下面并默认折叠明细 -->
+    <article class="panel alert-rules-panel">
       <div class="panel-head">
         <div>
           <h2>队列积压预警</h2>
-          <p>submit / sync 队列深度阈值，保存后立即用于监控与告警（优先读数据库，未配置时回退 .env）</p>
+          <p>submit / sync 队列深度</p>
         </div>
-        <BellRing />
+        <button class="ops-refresh compact" :disabled="loading" @click="loadThresholds">
+          <RefreshCw :class="{ spinning: loading }" />
+          {{ loading ? '刷新中' : '刷新规则' }}
+        </button>
       </div>
 
-      <div v-if="errorText" class="ops-error">{{ errorText }}</div>
-      <div v-if="successText" class="ops-success">{{ successText }}</div>
-
-      <div v-if="queueThresholds.length" class="alert-threshold-table has-actions">
-        <div class="alert-threshold-head">
-          <span>规则名称</span>
-          <span>指标</span>
-          <span>预警值</span>
-          <span>严重值</span>
-          <span>单位</span>
-          <span>状态</span>
-          <span>操作</span>
-        </div>
-        <div v-for="item in queueThresholds" :key="item.id" class="alert-threshold-row">
+      <div v-if="queueThresholds.length" class="alert-rule-list">
+        <div v-for="item in queueThresholds" :key="item.id" class="alert-rule-card" :class="{ editing: editingId === item.id }">
           <template v-if="editingId === item.id">
-            <input v-model="draft.threshold_name" class="alert-threshold-input" />
-            <span>{{ item.metric_label || item.threshold_name }}</span>
-            <input v-model="draft.warning_value" class="alert-threshold-input narrow" />
-            <input v-model="draft.critical_value" class="alert-threshold-input narrow" />
-            <input v-model="draft.unit" class="alert-threshold-input narrow" />
-            <label class="alert-threshold-toggle">
-              <input v-model="draft.enabled" type="checkbox" />
-              启用
-            </label>
-            <span class="alert-threshold-actions">
+            <div class="alert-rule-main">
+              <input v-model="draft.threshold_name" class="alert-threshold-input" placeholder="规则名称" />
+              <span class="alert-rule-metric">{{ item.metric_label || item.threshold_name }}</span>
+            </div>
+            <div class="alert-rule-fields">
+              <label><span>预警</span><input v-model="draft.warning_value" class="alert-threshold-input" /></label>
+              <label><span>严重</span><input v-model="draft.critical_value" class="alert-threshold-input" /></label>
+              <label><span>单位</span><input v-model="draft.unit" class="alert-threshold-input" /></label>
+              <label class="alert-threshold-toggle">
+                <input v-model="draft.enabled" type="checkbox" />
+                启用
+              </label>
+            </div>
+            <div class="alert-threshold-actions">
               <button class="ops-mini-btn primary" :disabled="savingId === item.id" @click="saveEdit(item)">
                 <Save /> 保存
               </button>
               <button class="ops-mini-btn" @click="cancelEdit"><X /> 取消</button>
-            </span>
+            </div>
           </template>
           <template v-else>
-            <b>{{ item.threshold_name }}</b>
-            <span>{{ item.metric_label || item.threshold_name }}</span>
-            <span>{{ item.warning_value }}</span>
-            <span>{{ item.critical_value }}</span>
-            <span>{{ item.unit || '—' }}</span>
-            <em :class="{ off: !item.enabled }">{{ item.enabled ? '启用' : '停用' }}</em>
+            <div class="alert-rule-main">
+              <b>{{ item.threshold_name }}</b>
+              <span class="alert-rule-metric">{{ item.metric_label || item.threshold_name }}</span>
+            </div>
+            <div class="alert-rule-meta">
+              <span>预警 <strong>{{ item.warning_value }}</strong>{{ item.unit }}</span>
+              <span>严重 <strong>{{ item.critical_value }}</strong>{{ item.unit }}</span>
+              <em :class="{ off: !item.enabled }">{{ item.enabled ? '启用' : '停用' }}</em>
+            </div>
             <button class="ops-mini-btn" @click="startEdit(item)">编辑</button>
           </template>
         </div>
@@ -167,13 +164,12 @@ onMounted(loadThresholds)
       <div v-else class="mini-empty">暂无队列预警规则。</div>
     </article>
 
-    <article class="panel">
+    <article class="panel alert-rules-panel">
       <div class="panel-head">
         <div>
           <h2>业务预警规则</h2>
-          <p>排名、舆情、任务失败率与账户余额等业务指标</p>
+          <p>排名、舆情、任务失败率与账户余额等</p>
         </div>
-        <BellRing />
       </div>
 
       <section v-if="balanceThreshold" class="alert-balance-card" :class="`is-${balanceStatus}`">
@@ -186,51 +182,49 @@ onMounted(loadThresholds)
             · 严重 ≤ {{ balanceThreshold.critical_value }}{{ balanceThreshold.unit }}
           </p>
         </div>
-        <em>{{ balance?.available ? (balanceStatus === 'normal' ? '正常' : balanceStatus === 'warning' ? '余额偏低' : '余额不足') : '暂无法获取' }}</em>
+        <em>{{ balanceStatusLabel }}</em>
       </section>
 
-      <div v-if="businessThresholds.length" class="alert-threshold-table has-actions">
-        <div class="alert-threshold-head">
-          <span>规则名称</span>
-          <span>指标</span>
-          <span>预警值</span>
-          <span>严重值</span>
-          <span>单位</span>
-          <span>状态</span>
-          <span>操作</span>
-        </div>
-        <div v-for="item in businessThresholds" :key="item.id" class="alert-threshold-row">
+      <div v-if="businessThresholds.length" class="alert-rule-list">
+        <div v-for="item in businessThresholds" :key="item.id" class="alert-rule-card" :class="{ editing: editingId === item.id }">
           <template v-if="editingId === item.id">
-            <input v-model="draft.threshold_name" class="alert-threshold-input" />
-            <span>{{ item.metric_label || item.threshold_name }}</span>
-            <input v-model="draft.warning_value" class="alert-threshold-input narrow" />
-            <input v-model="draft.critical_value" class="alert-threshold-input narrow" />
-            <input v-model="draft.unit" class="alert-threshold-input narrow" />
-            <label class="alert-threshold-toggle">
-              <input v-model="draft.enabled" type="checkbox" />
-              启用
-            </label>
-            <span class="alert-threshold-actions">
+            <div class="alert-rule-main">
+              <input v-model="draft.threshold_name" class="alert-threshold-input" placeholder="规则名称" />
+              <span class="alert-rule-metric">{{ item.metric_label || item.threshold_name }}</span>
+            </div>
+            <div class="alert-rule-fields">
+              <label><span>预警</span><input v-model="draft.warning_value" class="alert-threshold-input" /></label>
+              <label><span>严重</span><input v-model="draft.critical_value" class="alert-threshold-input" /></label>
+              <label><span>单位</span><input v-model="draft.unit" class="alert-threshold-input" /></label>
+              <label class="alert-threshold-toggle">
+                <input v-model="draft.enabled" type="checkbox" />
+                启用
+              </label>
+            </div>
+            <div class="alert-threshold-actions">
               <button class="ops-mini-btn primary" :disabled="savingId === item.id" @click="saveEdit(item)">
                 <Save /> 保存
               </button>
               <button class="ops-mini-btn" @click="cancelEdit"><X /> 取消</button>
-            </span>
+            </div>
           </template>
           <template v-else>
-            <b>{{ item.threshold_name }}</b>
-            <span>{{ item.metric_label || item.threshold_name }}</span>
-            <span>{{ item.warning_value }}</span>
-            <span>{{ item.critical_value }}</span>
-            <span>{{ item.unit || '—' }}</span>
-            <em :class="{ off: !item.enabled }">{{ item.enabled ? '启用' : '停用' }}</em>
+            <div class="alert-rule-main">
+              <b>{{ item.threshold_name }}</b>
+              <span class="alert-rule-metric">{{ item.metric_label || item.threshold_name }}</span>
+            </div>
+            <div class="alert-rule-meta">
+              <span>预警 <strong>{{ item.warning_value }}</strong>{{ item.unit }}</span>
+              <span>严重 <strong>{{ item.critical_value }}</strong>{{ item.unit }}</span>
+              <em :class="{ off: !item.enabled }">{{ item.enabled ? '启用' : '停用' }}</em>
+            </div>
             <button class="ops-mini-btn" @click="startEdit(item)">编辑</button>
           </template>
         </div>
       </div>
-      <div v-else class="mini-empty">
-        暂无业务预警规则。请联系管理员在后台配置。
-      </div>
+      <div v-else class="mini-empty">暂无业务预警规则。</div>
     </article>
+
+    <CeleryMonitorPanel />
   </section>
 </template>

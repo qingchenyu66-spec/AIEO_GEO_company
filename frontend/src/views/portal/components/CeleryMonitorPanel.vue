@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Activity, AlertTriangle, Clock3, Gauge, ListTodo, RefreshCw, Server, Workflow } from '@lucide/vue'
+import { Activity, AlertTriangle, Clock3, Gauge, RefreshCw, Server, Workflow } from '@lucide/vue'
 import { getCeleryMonitor, type CeleryMonitorData } from '../../../services/platforms'
 import { extractErrorDetail } from '../../../utils/requestError'
 
@@ -84,6 +84,18 @@ function toggleBeatRow(key: string) {
 
 function beatRowKey(item: { task_key?: string; checked_at?: string }, index: number) {
   return `${item.task_key || 'beat'}-${item.checked_at || index}`
+}
+
+function keywordSubtitle(item: {
+  tenant_name?: string | null
+  tenant_id?: number | null
+  monitor_keywords?: string | null
+  keyword_group?: string | null
+}) {
+  const title = item.tenant_name || (item.tenant_id != null ? `企业 #${item.tenant_id}` : '')
+  const kw = String(item.monitor_keywords || item.keyword_group || '').trim()
+  if (!kw || kw === title) return ''
+  return kw
 }
 
 function formatTaskTime(raw?: string | null) {
@@ -219,53 +231,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section class="celery-runtime-section">
-      <div class="celery-section-head">
-        <ListTodo />
-        <div>
-          <h3>待同步监测明细</h3>
-          <p>已提交抓取、尚未全部拉回的主任务（{{ pendingSyncDetails.length }} 条，含平台与问题进度）</p>
-        </div>
-      </div>
-      <div v-if="pendingSyncDetails.length" class="celery-sync-detail-list">
-        <article v-for="item in pendingSyncDetails" :key="item.task_id" class="celery-sync-detail-card">
-          <div class="celery-sync-detail-head">
-            <div>
-              <strong>{{ item.tenant_name || `企业 #${item.tenant_id}` }}</strong>
-              <span>{{ item.monitor_keywords || item.keyword_group || '—' }}</span>
-            </div>
-            <div class="celery-sync-detail-meta">
-              <em :class="taskStatusClass(item.status)">{{ item.status }}</em>
-              <small>{{ item.schedule_label || item.task_id_short }}</small>
-            </div>
-          </div>
-          <div class="celery-sync-detail-grid">
-            <div>
-              <label>进度</label>
-              <strong>{{ item.progress_text }}</strong>
-              <small>失败 {{ item.failed_items || 0 }}</small>
-            </div>
-            <div>
-              <label>问题 ({{ item.prompt_count }})</label>
-              <p>{{ item.prompts_preview || '—' }}</p>
-            </div>
-            <div>
-              <label>待完成平台</label>
-              <p>{{ item.pending_platforms?.length ? item.pending_platforms.join('、') : '无' }}</p>
-            </div>
-          </div>
-          <ul v-if="item.platform_breakdown?.length" class="celery-platform-breakdown">
-            <li v-for="platform in item.platform_breakdown" :key="`${item.task_id}-${platform.code}`">
-              <span>{{ platform.name }}</span>
-              <em :class="platformStatusClass(platform)">{{ platformStatusLabel(platform) }}</em>
-              <small v-if="platform.pending_prompts?.length">排队问题：{{ platform.pending_prompts.join('；') }}</small>
-            </li>
-          </ul>
-        </article>
-      </div>
-      <div v-else class="mini-empty">当前没有待同步的监测主任务。</div>
-    </section>
-
+    <!-- 2026-07-31 - 预警页太乱：总览常显，明细默认折叠，功能都还在 -->
     <div class="celery-monitor-grid">
       <section v-for="queue in data?.queues || []" :key="queue.key" class="celery-queue-card">
         <div class="celery-queue-head">
@@ -317,14 +283,45 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <section class="celery-runtime-section">
-      <div class="celery-section-head">
-        <ListTodo />
-        <div>
-          <h3>正在执行的任务</h3>
-          <p>调度进程当前执行或排队中的任务（{{ runtimeTasks.length }} 条）</p>
-        </div>
+    <details class="celery-fold">
+      <summary>
+        待同步监测明细
+        <small>{{ pendingSyncDetails.length }} 条</small>
+      </summary>
+      <div v-if="pendingSyncDetails.length" class="celery-sync-detail-list">
+        <!-- 2026-07-31 - 明细卡大片空白+问题重复 - 压成标题行+平台芯片 -->
+        <article v-for="item in pendingSyncDetails" :key="item.task_id" class="celery-sync-detail-card dense">
+          <div class="celery-sync-detail-top">
+            <div class="celery-sync-detail-title">
+              <strong>{{ item.tenant_name || `企业 #${item.tenant_id}` }}</strong>
+              <span v-if="keywordSubtitle(item)">{{ keywordSubtitle(item) }}</span>
+            </div>
+            <div class="celery-sync-detail-chips">
+              <em :class="taskStatusClass(item.status)">{{ item.status }}</em>
+              <span class="celery-sync-progress">{{ item.progress_text }} · 失败 {{ item.failed_items || 0 }}</span>
+              <small>{{ item.schedule_label || item.task_id_short }}</small>
+            </div>
+          </div>
+          <p v-if="item.prompts_preview" class="celery-sync-prompts">{{ item.prompts_preview }}</p>
+          <ul v-if="item.platform_breakdown?.length" class="celery-platform-breakdown dense">
+            <li v-for="platform in item.platform_breakdown" :key="`${item.task_id}-${platform.code}`">
+              <span>{{ platform.name }}</span>
+              <em :class="platformStatusClass(platform)">{{ platformStatusLabel(platform) }}</em>
+            </li>
+          </ul>
+          <p v-else-if="item.pending_platforms?.length" class="celery-sync-prompts muted">
+            待完成：{{ item.pending_platforms.join('、') }}
+          </p>
+        </article>
       </div>
+      <div v-else class="mini-empty">当前没有待同步的监测主任务。</div>
+    </details>
+
+    <details class="celery-fold">
+      <summary>
+        正在执行的任务
+        <small>{{ runtimeTasks.length }} 条</small>
+      </summary>
       <div v-if="runtimeTasks.length" class="celery-runtime-table">
         <div class="celery-runtime-head">
           <span>状态</span>
@@ -342,16 +339,13 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-else class="mini-empty">当前没有正在执行的调度任务。</div>
-    </section>
+    </details>
 
-    <section class="celery-runtime-section">
-      <div class="celery-section-head">
-        <Clock3 />
-        <div>
-          <h3>最近调度扫描</h3>
-          <p>到点计划扫描、待同步扫描与队列健康检查记录</p>
-        </div>
-      </div>
+    <details class="celery-fold">
+      <summary>
+        最近调度扫描
+        <small>{{ data?.beat_history?.length || 0 }} 条</small>
+      </summary>
       <div v-if="data?.beat_history?.length" class="celery-beat-table">
         <div class="celery-runtime-head celery-beat-head">
           <span>时间</span>
@@ -380,24 +374,18 @@ onUnmounted(() => {
             v-if="item.sync_details?.length && expandedBeatRows[beatRowKey(item, index)]"
             class="celery-sync-detail-list celery-beat-sync-details"
           >
-            <article v-for="detail in item.sync_details" :key="detail.task_id" class="celery-sync-detail-card compact">
-              <div class="celery-sync-detail-head">
-                <div>
+            <article v-for="detail in item.sync_details" :key="detail.task_id" class="celery-sync-detail-card dense compact">
+              <div class="celery-sync-detail-top">
+                <div class="celery-sync-detail-title">
                   <strong>{{ detail.tenant_name || `企业 #${detail.tenant_id}` }}</strong>
-                  <span>{{ detail.monitor_keywords || '—' }} · {{ detail.progress_text }}</span>
+                  <span v-if="keywordSubtitle(detail)">{{ keywordSubtitle(detail) }}</span>
+                </div>
+                <div class="celery-sync-detail-chips">
+                  <span class="celery-sync-progress">{{ detail.progress_text }}</span>
                 </div>
               </div>
-              <div class="celery-sync-detail-grid compact">
-                <div>
-                  <label>问题</label>
-                  <p>{{ detail.prompts_preview || '—' }}</p>
-                </div>
-                <div>
-                  <label>待完成平台</label>
-                  <p>{{ detail.pending_platforms?.length ? detail.pending_platforms.join('、') : '已全部完成' }}</p>
-                </div>
-              </div>
-              <ul v-if="detail.platform_breakdown?.length" class="celery-platform-breakdown compact">
+              <p v-if="detail.prompts_preview" class="celery-sync-prompts">{{ detail.prompts_preview }}</p>
+              <ul v-if="detail.platform_breakdown?.length" class="celery-platform-breakdown dense">
                 <li v-for="platform in detail.platform_breakdown" :key="`${detail.task_id}-${platform.code}`">
                   <span>{{ platform.name }}</span>
                   <em :class="platformStatusClass(platform)">{{ platformStatusLabel(platform) }}</em>
@@ -408,10 +396,13 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-else class="mini-empty">暂无调度扫描记录。定时调度启动后会自动写入最近 15 条。</div>
-    </section>
+    </details>
 
-    <ul v-if="data?.tips?.length" class="celery-tip-list">
-      <li v-for="tip in data.tips" :key="tip">{{ tip }}</li>
-    </ul>
+    <details v-if="data?.tips?.length" class="celery-fold">
+      <summary>运行提示 <small>{{ data.tips.length }} 条</small></summary>
+      <ul class="celery-tip-list">
+        <li v-for="tip in data.tips" :key="tip">{{ tip }}</li>
+      </ul>
+    </details>
   </article>
 </template>
