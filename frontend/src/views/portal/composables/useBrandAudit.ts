@@ -930,10 +930,19 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         return
       }
       await loadBrandAssetData()
-      const onceCount = (saved.once_submitted || []).filter(item => item.status === 'submitted').length
-      const onceFailed = (saved.once_submitted || []).filter(item => item.status === 'failed')
-      if (onceFailed.length) {
-        // 2026-08-03 - 配置已存但模力提交失败时带上接口原因（常为服务未开始/停服）
+      const onceRows = saved.once_submitted || []
+      const onceCount = onceRows.filter(item => item.status === 'submitted').length
+      const onceFailed = onceRows.filter(item => item.status === 'failed')
+      const onceServiceSkipped = onceRows.filter(item => {
+        if (item.status !== 'skipped') return false
+        const msg = String(item.message || '')
+        return /尚未开始|已到期|未开通|已停服|暂不提交/.test(msg)
+      })
+      if (onceServiceSkipped.length) {
+        // 2026-08-03 - 服务未开通：配置已存、监测未跑，用 info 而非「调度失败」恐吓
+        const reason = onceServiceSkipped.map(item => String(item.message || '').trim()).filter(Boolean)[0]
+        ElMessage.info(reason ? `${successText}；${reason}` : `${successText}；服务未开通，监测暂未提交`)
+      } else if (onceFailed.length) {
         const reason = onceFailed
           .map(item => String(item.message || '').trim())
           .filter(Boolean)

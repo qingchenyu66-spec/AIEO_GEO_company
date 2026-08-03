@@ -28,6 +28,33 @@ def tenant_service_is_operational(tenant: Tenant | None, *, today: date | None =
     return True
 
 
+def molizhishu_submit_skip_message(tenant: Tenant | None, *, today: date | None = None) -> str | None:
+    """不可提交模力时返回温和跳过文案；可提交返回 None。不落 failed，避免运营看板「调度失败」惊吓。"""
+    # 2026-08-03 - 未开始/到期/停服：保存配置可以，提交在跑之前跳过
+    if tenant is None or tenant_service_is_operational(tenant, today=today):
+        return None
+    today = today or date.today()
+    if tenant.service_start_date and tenant.service_start_date > today:
+        return f"企业服务尚未开始（{tenant.service_start_date}），监测暂不提交"
+    if tenant.service_end_date and tenant.service_end_date < today:
+        return f"企业服务已到期（{tenant.service_end_date}），监测暂不提交"
+    return "企业服务未开通或已停服，监测暂不提交"
+
+
+def is_service_gate_schedule_message(message: str | None) -> bool:
+    """调度失败文案是否属于服务闸门（应从「调度失败」预警中排除）。"""
+    text = str(message or "")
+    markers = (
+        "企业服务尚未开始",
+        "企业服务已停止",
+        "企业服务已到期",
+        "企业服务未开通",
+        "监测暂不提交",
+        "不能提交新的监测任务",
+    )
+    return any(marker in text for marker in markers)
+
+
 def disable_tenant_customer_accounts(db: Session, tenant_id: int) -> int:
     """禁用企业下全部客户身份；用户无其它可用身份时同步禁用用户。
 

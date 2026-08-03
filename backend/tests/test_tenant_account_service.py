@@ -156,3 +156,23 @@ def test_molizhishu_submit_blocked_before_service_start():
     )
     with pytest.raises(ValueError, match="尚未开始"):
         _validate_tenant_service_available(tenant)
+
+
+def test_service_gate_skip_message_and_dashboard_filter():
+    from app.services.tenant_account_service import (
+        is_service_gate_schedule_message,
+        molizhishu_submit_skip_message,
+    )
+
+    pending = Tenant(
+        name="T6",
+        code="T6",
+        status=False,
+        service_start_date=date.today() + timedelta(days=3),
+    )
+    msg = molizhishu_submit_skip_message(pending)
+    assert msg is not None
+    assert "尚未开始" in msg
+    assert "暂不提交" in msg
+    assert is_service_gate_schedule_message("企业服务已停止，不能提交新的监测任务")
+    assert not is_service_gate_schedule_message("模力接口超时")

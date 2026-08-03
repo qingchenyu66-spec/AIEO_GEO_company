@@ -261,6 +261,7 @@ def submit_schedule_group(
 ) -> dict[str, Any]:
     """Submit one scheduled keyword group to Molizhishu."""
     from app.core.redis_client import redis_lock
+    from app.services.tenant_account_service import molizhishu_submit_skip_message
 
     asset = db.scalar(
         select(BrandAsset).where(
@@ -276,6 +277,17 @@ def submit_schedule_group(
             "status": "failed",
             "keyword": item.keyword,
             "message": "企业品牌资产不存在或未启用",
+        }
+    tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id, Tenant.deleted.is_(False)))
+    skip_message = molizhishu_submit_skip_message(tenant)
+    if skip_message:
+        # 2026-08-03 - 服务未开通：跑之前跳过，不落 failed，避免看板「调度失败」吓人
+        return {
+            "tenant_id": item.tenant_id,
+            "schedule_key": item.group_key,
+            "status": "skipped",
+            "keyword": item.keyword,
+            "message": skip_message,
         }
     if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
         return {
@@ -437,11 +449,27 @@ def _submit_schedule_group_locked(
         raise
     except (IntegrityError, ValueError) as exc:
         db.rollback()
+        from app.services.tenant_account_service import (
+            is_service_gate_schedule_message,
+            molizhishu_submit_skip_message,
+        )
+
+        message = str(exc)
+        # 兜底：即便漏过前置检查，服务闸门也不落 failed
+        if is_service_gate_schedule_message(message):
+            tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id))
+            return {
+                "tenant_id": item.tenant_id,
+                "schedule_key": item.group_key,
+                "status": "skipped",
+                "keyword": item.keyword,
+                "message": molizhishu_submit_skip_message(tenant) or "企业服务未开通，监测暂不提交",
+            }
         persist_schedule_group_failure(
             db,
             tenant_id=item.tenant_id,
             group_key=item.group_key,
-            error_message=str(exc),
+            error_message=message,
             prompt_count=len(payload.prompts),
             platform_count=len(payload.platforms),
             created_by=current.user.id,
@@ -451,7 +479,7 @@ def _submit_schedule_group_locked(
             "schedule_key": item.group_key,
             "status": "failed",
             "keyword": item.keyword,
-            "message": str(exc),
+            "message": message,
         }
 
 

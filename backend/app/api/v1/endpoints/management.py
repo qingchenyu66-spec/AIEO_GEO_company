@@ -945,6 +945,9 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
     }
 
     # 2026-08-03 - 调度失败/成功率按「今日全量」统计；曾 limit(20) 把 5 次失败放大成 75% 成功率
+    # 服务未开通导致的闸门跳过不计入「调度失败」（避免运营看板吓人）
+    from app.services.tenant_account_service import is_service_gate_schedule_message
+
     schedule_day_start = datetime.combine(today, datetime.min.time())
 
     def _today_schedule_count(*, status: str | None = None) -> int:
@@ -957,7 +960,17 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
             stmt = stmt.where(GeoMonitorScheduleRun.status == status)
         return int(db.scalar(stmt) or 0)
 
-    today_schedule_failed = _today_schedule_count(status="failed")
+    failed_stmt = select(GeoMonitorScheduleRun).where(
+        GeoMonitorScheduleRun.created_at >= schedule_day_start,
+        GeoMonitorScheduleRun.status == "failed",
+    )
+    if tenant_ids is not None:
+        failed_stmt = failed_stmt.where(GeoMonitorScheduleRun.tenant_id.in_(tenant_ids))
+    today_schedule_failed = sum(
+        1
+        for row in db.scalars(failed_stmt)
+        if not is_service_gate_schedule_message(row.error_message)
+    )
     today_schedule_submitted = _today_schedule_count(status="submitted")
     today_schedule_total = _today_schedule_count()
 
