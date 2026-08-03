@@ -636,7 +636,7 @@ def monitor_snapshot_backfill_matrix(
             str(keyword_group or ""),
         ]
     )
-    cache_key = f"snapshot_backfill:mtx:v5:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+    cache_key = f"snapshot_backfill:mtx:v6:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
     cached = get_json_cache(cache_key)
     if isinstance(cached, dict) and "cells" in cached:
         return ApiResponse(data=cached)

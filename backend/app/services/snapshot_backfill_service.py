@@ -1708,6 +1708,38 @@ def _gap_slot_window_key(day: date, slot: time) -> tuple[str, str]:
     return window_key, label
 
 
+def _schedule_slot_eligible_for_gap(
+    day: date,
+    slot_time: time,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    # 2026-08-03 - 当天未到调度时刻不展示缺口 - 按 slot 时刻判，不用容差窗
+    """缺口补录只对已过调度时刻；当天未到点的场次不展示、不可补。"""
+    now = now or datetime.now()
+    if day > now.date():
+        return False
+    if day < now.date():
+        return True
+    return now >= datetime.combine(day, slot_time)
+
+
+def _schedule_window_key_eligible_for_gap(
+    window_key: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    text = str(window_key or "").strip()
+    if len(text) < 13 or text[8] != "-":
+        return False
+    day_part, hm = text[:8], text[9:13]
+    try:
+        day = datetime.strptime(day_part, "%Y%m%d").date()
+        slot_time = time(hour=int(hm[0:2]), minute=int(hm[2:4]))
+    except ValueError:
+        return False
+    return _schedule_slot_eligible_for_gap(day, slot_time, now=now)
+
 def _tenant_matrix_word_platforms(
     db: Session,
     tenant_id: int,
@@ -1813,6 +1845,7 @@ def _merge_gap_cells_into_matrix(
     tenant = db.get(Tenant, tenant_id)
     tenant_name = tenant.name if tenant else None
     today = date.today()
+    now = datetime.now()
     service_start = tenant.service_start_date if tenant else None
     schedule_times = schedule_times_for_asset(asset)
     if not schedule_times:
@@ -1862,6 +1895,9 @@ def _merge_gap_cells_into_matrix(
         for prompt, plat, _group in expectations:
             gap_slots: list[dict[str, Any]] = []
             for slot_time in schedule_times:
+                # 2026-08-03 - 未到调度点不展示缺口 - 避免当天未跑场次误进补录
+                if not _schedule_slot_eligible_for_gap(cursor, slot_time, now=now):
+                    continue
                 window_key, _label = _gap_slot_window_key(cursor, slot_time)
                 if (plat, prompt, day_text, window_key) in occupied_slots:
                     continue
@@ -1983,6 +2019,8 @@ def ensure_gap_backfill_subtask(
         raise ValueError("platform、prompt、schedule_window_key 不能为空")
     if len(window_key) < 13 or window_key[8] != "-":
         raise ValueError("schedule_window_key 格式无效")
+    if not _schedule_window_key_eligible_for_gap(window_key):
+        raise ValueError("该调度场次尚未到点，暂不可补录")
 
     asset = get_brand_asset(db, tenant_id)
     if asset is None:

@@ -1069,6 +1069,24 @@ def test_matrix_includes_gap_cells_for_missed_schedule_day(db_session) -> None:
     assert matrix["summary"]["gap_cells"] >= 1
 
 
+def test_schedule_slot_eligible_for_gap_skips_future_today_slots() -> None:
+    from datetime import date, datetime, time
+
+    from app.services.snapshot_backfill_service import (
+        _schedule_slot_eligible_for_gap,
+        _schedule_window_key_eligible_for_gap,
+    )
+
+    today = date(2026, 8, 3)
+    now = datetime(2026, 8, 3, 10, 0, 0)
+    assert _schedule_slot_eligible_for_gap(today, time(9, 35), now=now) is True
+    assert _schedule_slot_eligible_for_gap(today, time(12, 25), now=now) is False
+    assert _schedule_slot_eligible_for_gap(today, time(16, 10), now=now) is False
+    assert _schedule_slot_eligible_for_gap(date(2026, 8, 2), time(16, 10), now=now) is True
+    assert _schedule_window_key_eligible_for_gap("20260803-1235", now=now) is False
+    assert _schedule_window_key_eligible_for_gap("20260802-1610", now=now) is True
+
+
 def test_ensure_gap_backfill_subtask_creates_local_records(db_session) -> None:
     from types import SimpleNamespace
 
