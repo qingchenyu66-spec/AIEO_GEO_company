@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Building2, ChevronDown, LogOut, PanelLeft, ShieldCheck } from '@lucide/vue'
+import { useRouter } from 'vue-router'
+import { Building2, ChevronDown, LockKeyhole, LogOut, PanelLeft, ShieldCheck } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
 import AppBrandLogo from '../../components/AppBrandLogo.vue'
@@ -50,6 +51,7 @@ const emit = defineEmits<{
 }>()
 
 const sidebarPinned = ref(false)
+const router = useRouter()
 
 onMounted(() => {
   try {
@@ -66,6 +68,14 @@ function toggleSidebarPin() {
   } catch {
     /* ignore */
   }
+}
+
+function onUserMenuCommand(command: 'change-password' | 'logout') {
+  if (command === 'change-password') {
+    void router.push('/change-password')
+    return
+  }
+  emit('logout')
 }
 </script>
 
@@ -195,13 +205,27 @@ function toggleSidebarPin() {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <div class="user-chip">
-            <span>{{ sessionDisplayInitial }}</span>
-            <div><b>{{ sessionUserName }}</b><small>{{ sessionUsername }}</small></div>
-          </div>
-          <button type="button" class="icon-action" title="退出登录" aria-label="退出登录" @click="emit('logout')">
-            <LogOut />
-          </button>
+          <el-dropdown trigger="click" @command="onUserMenuCommand">
+            <button type="button" class="user-menu-trigger" aria-label="账号菜单">
+              <div class="user-chip">
+                <span>{{ sessionDisplayInitial }}</span>
+                <div><b>{{ sessionUserName }}</b><small>{{ sessionUsername }}</small></div>
+              </div>
+              <ChevronDown class="user-menu-caret" aria-hidden="true" />
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="change-password">
+                  <LockKeyhole />
+                  修改密码
+                </el-dropdown-item>
+                <el-dropdown-item command="logout">
+                  <LogOut />
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </header>
       <main class="content portal-content" :class="{ 'portal-content-immersive': immersive }">

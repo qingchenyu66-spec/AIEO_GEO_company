@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, LockKeyhole } from '@lucide/vue'
@@ -11,6 +11,7 @@ import AppBrandLogo from '../components/AppBrandLogo.vue'
 const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(false)
+const forcedChange = computed(() => auth.mustChangePassword)
 const form = reactive({
   oldPassword: '',
   newPassword: '',
@@ -51,6 +52,10 @@ async function logoutInstead() {
   await auth.logout()
   await router.replace('/login')
 }
+
+async function backToPortal() {
+  await router.replace(auth.portalPath)
+}
 </script>
 
 <template>
@@ -69,11 +74,13 @@ async function logoutInstead() {
       <header class="auth-hero">
         <AppBrandLogo variant="full" alt="艾迪亚控股集团 · GEO Monitor" />
         <h1>修改登录密码</h1>
-        <p class="auth-hero-sub">首次登录或管理员重置后，需设置自己的密码才能继续使用系统</p>
+        <p class="auth-hero-sub">
+          {{ forcedChange ? '首次登录或管理员重置后，需设置自己的密码才能继续使用系统' : '更新当前账号的登录密码' }}
+        </p>
       </header>
 
       <form class="auth-form" @submit.prevent="submit">
-        <h2>设置新密码</h2>
+        <h2>{{ forcedChange ? '设置新密码' : '修改密码' }}</h2>
         <p class="auth-hint">当前账号：{{ auth.session?.user?.username || '—' }}</p>
 
         <label class="auth-field-label" for="old-password">当前密码</label>
@@ -84,7 +91,7 @@ async function logoutInstead() {
             v-model="form.oldPassword"
             type="password"
             autocomplete="current-password"
-            placeholder="管理员下发的初始密码"
+            :placeholder="forcedChange ? '管理员下发的初始密码' : '当前登录密码'"
           />
         </div>
 
@@ -116,7 +123,9 @@ async function logoutInstead() {
           <span>{{ loading ? '提交中…' : '确认修改' }}</span>
           <ArrowRight v-if="!loading" />
         </button>
-        <button type="button" class="auth-secondary" :disabled="loading" @click="logoutInstead">退出登录</button>
+        <button type="button" class="auth-secondary" :disabled="loading" @click="forcedChange ? logoutInstead() : backToPortal()">
+          {{ forcedChange ? '退出登录' : '返回' }}
+        </button>
       </form>
     </div>
   </main>

@@ -33,9 +33,7 @@ router.beforeEach((to) => {
   if (auth.isLoggedIn && auth.mustChangePassword && to.path !== '/change-password') {
     return '/change-password'
   }
-  if (auth.isLoggedIn && !auth.mustChangePassword && to.path === '/change-password') {
-    return auth.portalPath
-  }
+  // 2026-08-03 - 已改密用户也可主动进改密页 - 顶栏入口，勿再 redirect 回门户
 
   // 检查身份类型是否匹配
   const requiredIdentity = to.meta.identity as string | undefined

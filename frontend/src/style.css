@@ -478,6 +478,9 @@ button:disabled {
 .user-chip > span { display:grid; place-items:center; width:34px; height:34px; border-radius:50%; color:#fff; background:#2b71db; font-size:13px; font-weight:700; }
 .user-chip b,.user-chip small { display:block; }
 .user-chip b { font-size:12px; }.user-chip small { margin-top:2px; color:#8291a5; font-size:10px; }
+.user-menu-trigger { display:flex; align-items:center; gap:6px; border:none; background:transparent; cursor:pointer; padding:0; border-radius:9px; }
+.user-menu-trigger:hover .user-chip { background:rgba(43,113,219,.04); border-radius:9px; }
+.user-menu-caret { width:14px; color:#8291a5; flex-shrink:0; }
 .icon-action { display:grid; place-items:center; width:40px; height:40px; border:1px solid #d5e0ec; border-radius:9px; color:#657993; background:linear-gradient(180deg,#fff,#f8fbff); cursor:pointer; box-shadow:0 8px 18px rgba(35,72,118,.05); transition:transform .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease; }
 .icon-action:hover { color:#d94d62; border-color:#f0bdc5; transform:translateY(-1px); box-shadow:0 12px 24px rgba(172,55,75,.1); }
 .icon-action:active { transform:translateY(0) scale(.96); }
