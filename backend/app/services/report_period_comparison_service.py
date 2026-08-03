@@ -1963,24 +1963,6 @@ def _aggregate_bucket(rows: list[GeoMonitorSubtask]) -> dict[str, Any]:
     }
 
 
-def _split_items_proportionally(items: list[Any], n: int) -> list[list[Any]]:
-    """把有序样本按比例切成 n 段；样本少于槽位时就近复用，避免空槽。"""
-    if n <= 0:
-        return []
-    if not items:
-        return [[] for _ in range(n)]
-    total = len(items)
-    out: list[list[Any]] = []
-    for i in range(n):
-        start = (i * total) // n
-        end = ((i + 1) * total) // n
-        chunk = items[start:end]
-        if not chunk:
-            chunk = [items[min(start, total - 1)]]
-        out.append(list(chunk))
-    return out
-
-
 def _trend_slot_key(report_type: str, day: date, slots: list[dict[str, Any]]) -> str | None:
     if report_type == "weekly":
         return day.isoformat()
@@ -2008,62 +1990,35 @@ def build_period_trend(db, tenant_id: int, report_type: str, start: date, end: d
 
     if has_daily_stats(db, [tenant_id]):
         # 与工作台一致：Top3/提及率/均排走日表，避免明细扫描与采样口径漂移
-        all_rows = list(list_daily_stats_for_tenant(db, tenant_id, since=start, until=end))
         bucket_stats: dict[str, list] = defaultdict(list)
-        by_day: dict[date, list] = defaultdict(list)
-        for row in all_rows:
-            by_day[row.stat_date].append(row)
+        for row in list_daily_stats_for_tenant(db, tenant_id, since=start, until=end):
             key = _trend_slot_key(report_type, row.stat_date, slots)
             if key is None:
                 continue
             bucket_stats[key].append(row)
         for slot in slots:
             agg = period_bucket_from_stat_rows(bucket_stats.get(slot["key"], []))
-            # 2026-07-29 - 空月/空季轴要显式 0，勿丢成 null 导致柱/点消失
+            # 2026-08-03 - 空槽一律 0：按真实业务日归桶，勿按比例拆日回填（7.16 起监测却显示第1周有数）
             if int(agg.get("completed") or 0) <= 0:
                 agg = _empty_agg()
             points.append({**slot, **agg})
-        # 2026-07-29 - 空槽勿留 0% 假摔：有真实日时按日序比例拆进全部轴槽
-        if points and any(int(p.get("completed") or 0) <= 0 for p in points) and by_day:
-            day_chunks = _split_items_proportionally(sorted(by_day.keys()), len(slots))
-            points = []
-            for slot, days in zip(slots, day_chunks):
-                rows: list = []
-                for day in days:
-                    rows.extend(by_day.get(day) or [])
-                agg = period_bucket_from_stat_rows(rows)
-                if int(agg.get("completed") or 0) <= 0:
-                    agg = _empty_agg()
-                points.append({**slot, **agg})
     else:
         rows, day_by_id = _load_completed_subtasks(db, tenant_id, start, end)
         bucket_rows: dict[str, list[GeoMonitorSubtask]] = defaultdict(list)
-        by_day_rows: dict[date, list[GeoMonitorSubtask]] = defaultdict(list)
         for row in rows:
             day = day_by_id.get(row.id)
             if day is None:
                 continue
-            by_day_rows[day].append(row)
             key = _trend_slot_key(report_type, day, slots)
             if key is None:
                 continue
             bucket_rows[key].append(row)
         for slot in slots:
             agg = _aggregate_bucket(bucket_rows.get(slot["key"], []))
+            # 2026-08-03 - 空槽一律 0：同上，明细路径与日表一致
             if int(agg.get("completed") or 0) <= 0:
                 agg = _empty_agg()
             points.append({**slot, **agg})
-        if points and any(int(p.get("completed") or 0) <= 0 for p in points) and by_day_rows:
-            day_chunks = _split_items_proportionally(sorted(by_day_rows.keys()), len(slots))
-            points = []
-            for slot, days in zip(slots, day_chunks):
-                chunk_rows: list[GeoMonitorSubtask] = []
-                for day in days:
-                    chunk_rows.extend(by_day_rows.get(day) or [])
-                agg = _aggregate_bucket(chunk_rows)
-                if int(agg.get("completed") or 0) <= 0:
-                    agg = _empty_agg()
-                points.append({**slot, **agg})
 
     valid_mr = [p["mention_rate"] for p in points if p["mention_rate"] is not None]
     valid_rank = [p["avg_rank"] for p in points if p["avg_rank"] is not None]

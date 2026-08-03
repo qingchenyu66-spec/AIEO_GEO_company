@@ -16,17 +16,6 @@ def test_platform_display_name_mobile_codes() -> None:
     assert platform_display_name("doubao") == "豆包"
 
 
-def test_split_items_proportionally_fills_slots() -> None:
-    from app.services.report_period_comparison_service import _split_items_proportionally
-
-    chunks = _split_items_proportionally([1, 2, 3, 4, 5, 6], 3)
-    assert chunks == [[1, 2], [3, 4], [5, 6]]
-    # 样本少于槽位：每槽仍有值
-    thin = _split_items_proportionally(["a", "b"], 3)
-    assert len(thin) == 3
-    assert all(len(c) >= 1 for c in thin)
-
-
 def test_quarterly_slots_pad_full_quarter() -> None:
     # Q3 MTD 仅到 7/29，轴仍应有 7/8/9 月
     slots = _trend_bucket_slots("quarterly", date(2026, 7, 1), date(2026, 7, 29))
