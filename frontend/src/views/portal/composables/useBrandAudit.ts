@@ -933,7 +933,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       const onceCount = (saved.once_submitted || []).filter(item => item.status === 'submitted').length
       const onceFailed = (saved.once_submitted || []).filter(item => item.status === 'failed')
       if (onceFailed.length) {
-        ElMessage.warning(`${successText}；立即提交失败 ${onceFailed.length} 组`)
+        // 2026-08-03 - 配置已存但模力提交失败时带上接口原因（常为服务未开始/停服）
+        const reason = onceFailed
+          .map(item => String(item.message || '').trim())
+          .filter(Boolean)
+          .join('；')
+        ElMessage.warning(reason
+          ? `${successText}；立即提交失败 ${onceFailed.length} 组：${reason}`
+          : `${successText}；立即提交失败 ${onceFailed.length} 组`)
       } else if (onceCount) {
         ElMessage.success(`${successText}；已立即提交 ${onceCount} 组检测任务`)
       } else {

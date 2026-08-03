@@ -10,7 +10,6 @@ from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
-from app.services.tenant_account_service import tenant_service_is_operational
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -73,10 +72,11 @@ def get_current_session(
     )
     if identity is None or not identity.user.status:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或身份已停用")
+    # 2026-08-03 - 服务期只限模力提交；客户会话不因未开始/到期/停服被踢
     if identity.identity_type == "CUSTOMER" and (
-        identity.tenant is None or not tenant_service_is_operational(identity.tenant)
+        identity.tenant is None or bool(getattr(identity.tenant, "deleted", False))
     ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="企业服务已停用或已到期，请联系运营人员")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="企业不存在或已删除，请联系运营人员")
     # 2026-07-31 - 新建/重置密码后强制改密 - 除 me/logout/change-password 外一律 403
     if bool(getattr(identity.user, "must_change_password", False)) and not _path_allows_must_change_password(
         request.url.path

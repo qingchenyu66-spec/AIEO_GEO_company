@@ -1,4 +1,4 @@
-"""企业停服/到期 → 关联客户账号联动禁用。"""
+"""企业服务状态与客户账号：服务期只限模力提交，不再联动禁用登录。"""
 
 from __future__ import annotations
 
@@ -13,23 +13,26 @@ from app.models.user_identity import UserIdentity
 
 
 def tenant_service_is_operational(tenant: Tenant | None, *, today: date | None = None) -> bool:
-    """企业是否处于可服务状态（合同期内且未人工停服）。"""
+    """企业是否处于可向模力提交任务的状态（合同期内且未人工停服）。"""
     if tenant is None:
         return True
     today = today or date.today()
-    if not tenant.status:
-        return False
-    if tenant.stop_reason in {"manual", "canceled"}:
-        return False
     if tenant.service_start_date and tenant.service_start_date > today:
         return False
     if tenant.service_end_date and tenant.service_end_date < today:
+        return False
+    if not tenant.status:
+        return False
+    if tenant.stop_reason in {"manual", "canceled"}:
         return False
     return True
 
 
 def disable_tenant_customer_accounts(db: Session, tenant_id: int) -> int:
-    """禁用企业下全部客户身份；用户无其它可用身份时同步禁用用户。"""
+    """禁用企业下全部客户身份；用户无其它可用身份时同步禁用用户。
+
+    保留工具函数供运维脚本/测试；业务停服路径不再调用（见 sync / mark_tenant_inactive）。
+    """
     identities = list(
         db.scalars(
             select(UserIdentity).where(
@@ -96,24 +99,22 @@ def mark_tenant_inactive(
     stopped_by: int | None = None,
     stopped_at: datetime | None = None,
 ) -> None:
+    # 2026-08-03 - 停服只改企业状态；客户账号仍可登录用非模力
     tenant.status = False
     tenant.stop_reason = stop_reason
     tenant.stopped_at = stopped_at or datetime.now()
     if stopped_by is not None:
         tenant.stopped_by = stopped_by
-    disable_tenant_customer_accounts(db, tenant.id)
 
 
 def sync_tenant_accounts_for_service_state(db: Session, tenant: Tenant) -> None:
-    """按当前企业服务状态同步客户账号启用/禁用。"""
-    if tenant_service_is_operational(tenant):
-        restore_tenant_customer_accounts(db, tenant.id)
-    else:
-        disable_tenant_customer_accounts(db, tenant.id)
+    """服务状态变更时恢复历史误禁用账号；不再因未开始/到期/停服禁用。"""
+    # 2026-08-03 - 旧逻辑会 disable；现改为 restore，便于已到期/未开始客户仍能登录
+    restore_tenant_customer_accounts(db, tenant.id)
 
 
 def expire_overdue_tenant_services(db: Session, *, today: date | None = None) -> int:
-    """扫描合同已到期但仍可登录的企业，标记 expired 并禁用账号。返回处理企业数。"""
+    """扫描合同已到期企业，标记 expired；不禁用客户账号。返回处理企业数。"""
     today = today or date.today()
     tenants = list(
         db.scalars(
@@ -128,12 +129,11 @@ def expire_overdue_tenant_services(db: Session, *, today: date | None = None) ->
     handled = 0
     for tenant in tenants:
         if tenant.stop_reason == "expired" and not tenant_service_is_operational(tenant):
-            disable_tenant_customer_accounts(db, tenant.id)
             continue
         tenant.status = False
         tenant.stop_reason = "expired"
         if tenant.stopped_at is None:
             tenant.stopped_at = datetime.now()
-        disable_tenant_customer_accounts(db, tenant.id)
         handled += 1
+    db.flush()
     return handled

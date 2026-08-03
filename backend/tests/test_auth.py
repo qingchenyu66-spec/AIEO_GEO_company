@@ -142,7 +142,8 @@ def test_dual_identity_login_and_select(auth_seed: dict[str, str]) -> None:
     assert switched.json()["data"]["identity"]["identity_type"] == "CUSTOMER"
 
 
-def test_stopped_tenant_login_shows_service_message(auth_seed: dict[str, str]) -> None:
+def test_stopped_tenant_customer_can_still_login(auth_seed: dict[str, str]) -> None:
+    # 2026-08-03 - 人工停服仍可登录非模力；不再因服务状态拒登
     db = SessionLocal()
     try:
         user = db.scalar(
@@ -154,6 +155,29 @@ def test_stopped_tenant_login_shows_service_message(auth_seed: dict[str, str]) -
         tenant = next(item.tenant for item in user.identities if item.tenant_id is not None)
         tenant.status = False
         tenant.stop_reason = "manual"
+        db.commit()
+    finally:
+        db.close()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": auth_seed["single_username"], "password": auth_seed["password"]},
+    )
+    assert login.status_code == 200
+    data = login.json()["data"]
+    assert data["requires_identity_selection"] is False
+    assert data["session"]["identity"]["identity_type"] == "CUSTOMER"
+
+
+def test_disabled_account_login_rejected(auth_seed: dict[str, str]) -> None:
+    db = SessionLocal()
+    try:
+        user = db.scalar(
+            select(User)
+            .options(joinedload(User.identities))
+            .where(User.username == auth_seed["dual_username"])
+        )
+        assert user is not None
         user.status = False
         for identity in user.identities:
             identity.status = False
@@ -164,10 +188,10 @@ def test_stopped_tenant_login_shows_service_message(auth_seed: dict[str, str]) -
 
     login = client.post(
         "/api/v1/auth/login",
-        json={"username": auth_seed["single_username"], "password": auth_seed["password"]},
+        json={"username": auth_seed["dual_username"], "password": auth_seed["password"]},
     )
     assert login.status_code == 401
-    assert login.json()["detail"] == "企业服务已停止，请联系运营人员"
+    assert login.json()["detail"] == "账号已停用，请联系运营人员"
 
 
 def test_single_identity_login(auth_seed: dict[str, str]) -> None:

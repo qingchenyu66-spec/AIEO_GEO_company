@@ -511,14 +511,15 @@ def summarize_monitor_tasks_for_ops(
 
 
 def _validate_tenant_service_available(tenant: Tenant) -> None:
-    """提交新监测任务前校验企业服务状态，停服或过期企业不再产生扣费任务。"""
+    """模力提交闸门：未开始/到期/停服一律拦截（售前诊断走 submit_standalone_monitor_task 豁免）。"""
+    # 2026-08-03 - 先看合同日再看 status，避免「未开始但 status=0」误报成已停止
     today = datetime.now().date()
-    if not tenant.status:
-        raise ValueError("企业服务已停止，不能提交新的监测任务")
     if tenant.service_start_date and tenant.service_start_date > today:
         raise ValueError(f"企业服务尚未开始，开始日期为 {tenant.service_start_date}")
     if tenant.service_end_date and tenant.service_end_date < today:
         raise ValueError(f"企业服务已到期，到期日期为 {tenant.service_end_date}")
+    if not tenant.status:
+        raise ValueError("企业服务已停止，不能提交新的监测任务")
 
 
 def _reconcile_task_progress(task: GeoMonitorTask) -> None:

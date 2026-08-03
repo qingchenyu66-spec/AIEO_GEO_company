@@ -5,9 +5,6 @@ from app.core.config import settings
 from app.core.security import create_token, password_needs_rehash, hash_password, verify_password
 from app.models.user import User
 from app.models.user_identity import UserIdentity
-from app.services.tenant_account_service import tenant_service_is_operational
-
-
 class LoginRejected(Exception):
     """密码正确但账号/企业不可登录。"""
 
@@ -33,11 +30,17 @@ def get_user_for_login(db: Session, username: str) -> User | None:
 
 
 def active_identities(user: User) -> list[UserIdentity]:
-    return [
-        item
-        for item in user.identities
-        if item.status and not item.deleted and (item.tenant is None or tenant_service_is_operational(item.tenant))
-    ]
+    # 2026-08-03 - 服务未开始/到期/停服仍可登录用非模力；仅企业软删挡客户身份
+    result: list[UserIdentity] = []
+    for item in user.identities:
+        if not item.status or item.deleted:
+            continue
+        if item.identity_type == "CUSTOMER":
+            tenant = item.tenant
+            if tenant is None or bool(getattr(tenant, "deleted", False)):
+                continue
+        result.append(item)
+    return result
 
 
 def login_block_reason(user: User) -> str:
@@ -45,10 +48,8 @@ def login_block_reason(user: User) -> str:
         if item.identity_type != "CUSTOMER" or item.tenant_id is None:
             continue
         tenant = item.tenant
-        if tenant and not tenant_service_is_operational(tenant):
-            if tenant.stop_reason in {"manual", "canceled"}:
-                return "企业服务已停止，请联系运营人员"
-            return "企业服务已停用或已到期，请联系运营人员"
+        if tenant is not None and bool(getattr(tenant, "deleted", False)):
+            return "企业已删除，请联系运营人员"
     return "账号已停用，请联系运营人员"
 
 
