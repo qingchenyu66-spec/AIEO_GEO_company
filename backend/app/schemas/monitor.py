@@ -75,6 +75,15 @@ class SnapshotBackfillRequest(BaseModel):
     reference_urls: list[str] = Field(default_factory=list, max_length=20)
 
 
+class SnapshotBackfillGapSubtaskRequest(BaseModel):
+    """漏跑/到期日缺口：先落本地子任务再走常规快照补录。"""
+
+    tenant_id: int = Field(..., ge=1)
+    platform: str = Field(..., min_length=1, max_length=50)
+    prompt: str = Field(..., min_length=1, max_length=500)
+    schedule_window_key: str = Field(..., min_length=13, max_length=32)
+
+
 class SnapshotBackfillListSummary(BaseModel):
     total: int = 0
     pending: int = 0

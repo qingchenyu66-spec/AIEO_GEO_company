@@ -3,27 +3,33 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
+from app.core.region_catalog import region_submission_targets
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
 from app.services.brand_service import (
+    active_keyword_groups,
     get_brand_asset,
     keyword_group_display_label,
     keyword_group_monitor_keywords,
     keyword_group_name,
+    keyword_group_platforms,
+    keyword_group_primary_keyword,
     keyword_group_to_dict,
     list_keyword_groups,
     tenant_purchased_platforms,
 )
+from app.schemas.monitor import FAST_MONITOR_MODE
 from app.services.operation_log_service import write_operation_log
 from app.services.media_proxy_service import public_screenshot_url
 from app.services.monitor_service import (
@@ -44,6 +50,7 @@ from app.services.monitor_service import (
 )
 from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import rankings_for_storage
+from app.services.schedule_service import schedule_times_for_asset
 from app.services.share_page_fetch_service import fetch_share_page
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
@@ -270,10 +277,11 @@ def _detect_day_from_schedule(schedule_ctx: dict[str, Any] | None) -> str | None
     return None
 
 
-def matrix_cell_has_todo(*, ranks: list[float], sample_count: int) -> bool:
-    """词×平台×日红点：有场次且（无均值 或 均值>阈值）。无场次不标。"""
+def matrix_cell_has_todo(*, ranks: list[float], sample_count: int, gap_count: int = 0) -> bool:
+    """词×平台×日红点：有场次且（无均值 或 均值>阈值）；漏跑日缺口槽位也标。"""
     if sample_count <= 0:
-        return False
+        # 2026-08-03 - 到期漏跑日无子任务 - 矩阵仍露缺口格供补录
+        return gap_count > 0
     # 2026-07-28 - 算不出均值也标红 - 有场次但无一有效展示位次
     if not ranks:
         return True
@@ -1615,6 +1623,45 @@ def list_snapshot_backfill_matrix(
         if avg is not None:
             stats["avg_ranks"].append(float(avg))
 
+    source_filter = str(source or "").strip()
+    # 2026-08-03 - 到期漏跑日无子任务 - 单企业矩阵补期望调度缺口格
+    if tenant_id is not None and source_filter != "lead_diagnosis":
+        _merge_gap_cells_into_matrix(
+            db,
+            tenant_id=int(tenant_id),
+            d0=d0,
+            d1=d1,
+            dates=dates,
+            cells=cells,
+            word_order=word_order,
+            word_seen=word_seen,
+            platform_order=platform_order,
+            platform_seen=platform_seen,
+            platform_code=str(platform or "").strip(),
+            keyword_text=str(keyword or "").strip(),
+            keyword_group_filter=str(keyword_group or "").strip(),
+            purchased_exact=purchased_exact,
+        )
+        platform_stats = {
+            code: {"id": code, "name": platform_names.get(code) or code, "todo": 0, "fail": 0, "avg_ranks": []}
+            for code in platform_order
+        }
+        for cell in cells:
+            plat = str(cell.get("platform") or "")
+            stats = platform_stats.setdefault(
+                plat,
+                {"id": plat, "name": platform_names.get(plat) or plat, "todo": 0, "fail": 0, "avg_ranks": []},
+            )
+            if cell.get("has_todo"):
+                stats["todo"] += 1
+            stats["fail"] += int(cell.get("fail_count") or 0)
+            rank = cell.get("rank")
+            if rank is not None:
+                try:
+                    stats["avg_ranks"].append(float(rank))
+                except (TypeError, ValueError):
+                    pass
+
     platforms_out: list[dict[str, Any]] = []
     for code in platform_order:
         stats = platform_stats[code]
@@ -1641,8 +1688,407 @@ def list_snapshot_backfill_matrix(
             "fail_slots": sum(int(cell.get("fail_count") or 0) for cell in cells),
             "item_total": len(items),
             "scan_capped": bool((payload.get("summary") or {}).get("scan_capped")),
+            "gap_cells": sum(1 for cell in cells if int(cell.get("gap_count") or 0) > 0),
         },
     }
+
+
+def _schedule_day_eligible(asset: BrandAsset, day: date) -> bool:
+    """按企业调度配置判断该自然日是否应有监测。"""
+    if asset.schedule_type == "weekly":
+        return day.isoweekday() in (asset.schedule_weekdays_json or [])
+    if asset.schedule_type == "monthly":
+        return day.day in (asset.schedule_month_days_json or [])
+    return True
+
+
+def _gap_slot_window_key(day: date, slot: time) -> tuple[str, str]:
+    window_key = f"{day.strftime('%Y%m%d')}-{slot.hour:02d}{slot.minute:02d}"
+    label = f"{day.isoformat()} {slot.hour:02d}:{slot.minute:02d}"
+    return window_key, label
+
+
+def _tenant_matrix_word_platforms(
+    db: Session,
+    tenant_id: int,
+    *,
+    platform_code: str = "",
+    keyword_text: str = "",
+    keyword_group_filter: str = "",
+    purchased_exact: set[str] | None = None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """(prompt, platform, keyword_group_dict) 期望矩阵行。"""
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        return []
+    groups = active_keyword_groups(db, tenant_id)
+    group_filter = str(keyword_group_filter or "").strip()
+    selected_group = (
+        _resolve_keyword_group_filter(group_filter, groups) if group_filter else None
+    )
+    purchased = purchased_exact if purchased_exact is not None else set(tenant_purchased_platforms(db, tenant_id))
+    platform_filter = str(platform_code or "").strip()
+    keyword_filter = str(keyword_text or "").strip().lower()
+    rows: list[tuple[str, str, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    iter_groups = [selected_group] if selected_group is not None else groups
+    for group in iter_groups:
+        if group is None:
+            continue
+        for prompt in keyword_group_monitor_keywords(group):
+            if keyword_filter and keyword_filter not in prompt.lower():
+                continue
+            if group_filter and selected_group is None:
+                label = keyword_group_display_label(group)
+                if group_filter.lower() not in label.lower() and group_filter.lower() not in prompt.lower():
+                    continue
+            for plat in keyword_group_platforms(group, asset):
+                if purchased and plat not in purchased:
+                    continue
+                if platform_filter and plat != platform_filter:
+                    continue
+                key = (prompt, plat)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append((prompt, plat, group))
+    return rows
+
+
+def _build_gap_slot_payload(
+    *,
+    tenant_id: int,
+    tenant_name: str | None,
+    platform: str,
+    prompt: str,
+    day: date,
+    slot: time,
+) -> dict[str, Any]:
+    window_key, label = _gap_slot_window_key(day, slot)
+    return {
+        "subtask_id": None,
+        "task_id": None,
+        "schedule_label": label,
+        "schedule_window_key": window_key,
+        "mention_position": None,
+        "needs_backfill": True,
+        "backfill_dismissed": False,
+        "has_answer": False,
+        "status": "missing",
+        "error_message": "到期漏跑/无自动监测，待快照补录",
+        "prompt": prompt,
+        "platform": platform,
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_name,
+        "brand_name": None,
+        "source": "tenant_monitor",
+        "monitor_keywords": prompt,
+        "keyword_group": None,
+        "updated_at": None,
+        "is_gap": True,
+    }
+
+
+def _merge_gap_cells_into_matrix(
+    db: Session,
+    *,
+    tenant_id: int,
+    d0: date,
+    d1: date,
+    dates: list[str],
+    cells: list[dict[str, Any]],
+    word_order: list[str],
+    word_seen: set[str],
+    platform_order: list[str],
+    platform_seen: set[str],
+    platform_code: str = "",
+    keyword_text: str = "",
+    keyword_group_filter: str = "",
+    purchased_exact: set[str] | None = None,
+) -> None:
+    """单企业矩阵：为调度日无子任务的词×平台×日补缺口槽位（含到期漏跑日）。"""
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        return
+    tenant = db.get(Tenant, tenant_id)
+    tenant_name = tenant.name if tenant else None
+    today = date.today()
+    service_start = tenant.service_start_date if tenant else None
+    schedule_times = schedule_times_for_asset(asset)
+    if not schedule_times:
+        return
+
+    expectations = _tenant_matrix_word_platforms(
+        db,
+        tenant_id,
+        platform_code=platform_code,
+        keyword_text=keyword_text,
+        keyword_group_filter=keyword_group_filter,
+        purchased_exact=purchased_exact,
+    )
+    if not expectations:
+        return
+
+    cell_index: dict[tuple[str, str, str], dict[str, Any]] = {
+        (str(cell.get("platform") or ""), str(cell.get("word") or ""), str(cell.get("date") or "")): cell
+        for cell in cells
+    }
+    occupied_slots: set[tuple[str, str, str, str]] = set()
+    for cell in cells:
+        plat = str(cell.get("platform") or "")
+        word = str(cell.get("word") or "")
+        day = str(cell.get("date") or "")
+        for slot in cell.get("slots") or []:
+            window_key = str(slot.get("schedule_window_key") or "").strip()
+            if not window_key:
+                window_key = parse_schedule_slot(
+                    slot.get("schedule_window_key"),
+                    slot.get("schedule_label"),
+                )[0]
+            occupied_slots.add((plat, word, day, window_key))
+
+    cursor = d0
+    while cursor <= d1:
+        if cursor > today:
+            cursor += timedelta(days=1)
+            continue
+        if service_start and cursor < service_start:
+            cursor += timedelta(days=1)
+            continue
+        if not _schedule_day_eligible(asset, cursor):
+            cursor += timedelta(days=1)
+            continue
+        day_text = cursor.isoformat()
+        for prompt, plat, _group in expectations:
+            gap_slots: list[dict[str, Any]] = []
+            for slot_time in schedule_times:
+                window_key, _label = _gap_slot_window_key(cursor, slot_time)
+                if (plat, prompt, day_text, window_key) in occupied_slots:
+                    continue
+                gap_slots.append(
+                    _build_gap_slot_payload(
+                        tenant_id=tenant_id,
+                        tenant_name=tenant_name,
+                        platform=plat,
+                        prompt=prompt,
+                        day=cursor,
+                        slot=slot_time,
+                    )
+                )
+            if not gap_slots:
+                continue
+            cell_key = (plat, prompt, day_text)
+            existing = cell_index.get(cell_key)
+            if existing is None:
+                if plat not in platform_seen:
+                    platform_seen.add(plat)
+                    platform_order.append(plat)
+                if prompt not in word_seen:
+                    word_seen.add(prompt)
+                    word_order.append(prompt)
+                existing = {
+                    "platform": plat,
+                    "word": prompt,
+                    "date": day_text,
+                    "rank": None,
+                    "has_todo": True,
+                    "fail_count": len(gap_slots),
+                    "sample_count": 0,
+                    "rank_sample_count": 0,
+                    "gap_count": len(gap_slots),
+                    "slots": gap_slots,
+                }
+                cells.append(existing)
+                cell_index[cell_key] = existing
+            else:
+                merged_slots = list(existing.get("slots") or []) + gap_slots
+                gap_count = sum(1 for slot in merged_slots if slot.get("is_gap"))
+                active_samples = [slot for slot in merged_slots if not slot.get("backfill_dismissed") and not slot.get("is_gap")]
+                active_ranks: list[float] = []
+                for sample in active_samples:
+                    rank = sample.get("mention_position")
+                    try:
+                        if rank is not None:
+                            active_ranks.append(float(rank))
+                    except (TypeError, ValueError):
+                        pass
+                fail_count = sum(
+                    1
+                    for slot in merged_slots
+                    if slot.get("needs_backfill") and not slot.get("has_answer") and not slot.get("is_gap")
+                ) + gap_count
+                existing.update(
+                    {
+                        "slots": merged_slots,
+                        "gap_count": gap_count,
+                        "fail_count": fail_count,
+                        "has_todo": matrix_cell_has_todo(
+                            ranks=active_ranks,
+                            sample_count=len(active_samples),
+                            gap_count=gap_count,
+                        ),
+                    }
+                )
+        cursor += timedelta(days=1)
+
+
+def _keyword_group_suffix(group: dict[str, Any]) -> str:
+    return str(group.get("id") or group.get("sort_order", 0))
+
+
+def _resolve_group_for_prompt(
+    groups: list[dict[str, Any]],
+    prompt: str,
+) -> dict[str, Any] | None:
+    text = str(prompt or "").strip()
+    if not text:
+        return None
+    for group in groups:
+        if text in keyword_group_monitor_keywords(group):
+            return group
+        if _prompt_belongs_to_group(
+            text,
+            keyword_group_monitor_keywords(group),
+            group.get("exposure_terms") or [],
+        ):
+            return group
+    return groups[0] if groups else None
+
+
+def _new_gap_backfill_id(prefix: str = "bf") -> str:
+    return f"{prefix}{uuid4().hex[:14]}"
+
+
+def ensure_gap_backfill_subtask(
+    db: Session,
+    *,
+    tenant_id: int,
+    platform: str,
+    prompt: str,
+    schedule_window_key: str,
+    current: CurrentSession,
+) -> GeoMonitorSubtask:
+    """到期/漏跑日无子任务时，落本地占位 task+subtask+schedule_run 供快照补录。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可执行快照补录")
+
+    from app.services.monitor_service import ensure_sales_tenant_access
+
+    ensure_sales_tenant_access(db, current, tenant_id)
+
+    plat = str(platform or "").strip()
+    prompt_text = str(prompt or "").strip()
+    window_key = str(schedule_window_key or "").strip()
+    if not plat or not prompt_text or not window_key:
+        raise ValueError("platform、prompt、schedule_window_key 不能为空")
+    if len(window_key) < 13 or window_key[8] != "-":
+        raise ValueError("schedule_window_key 格式无效")
+
+    asset = get_brand_asset(db, tenant_id)
+    if asset is None:
+        raise ValueError("企业品牌资产不存在")
+    groups = active_keyword_groups(db, tenant_id)
+    group = _resolve_group_for_prompt(groups, prompt_text)
+    if group is None:
+        raise ValueError("未找到对应监测词组")
+
+    group_key: str | None = None
+    existing_run: GeoMonitorScheduleRun | None = None
+    region_code: str | None = None
+    for code in region_submission_targets(asset.region_codes_json):
+        region_suffix = f"-rg{code}" if code else ""
+        candidate_key = f"{window_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
+        run = db.scalar(
+            select(GeoMonitorScheduleRun).where(
+                GeoMonitorScheduleRun.tenant_id == tenant_id,
+                GeoMonitorScheduleRun.schedule_key == candidate_key,
+            )
+        )
+        if run and run.task_id:
+            task = db.scalar(
+                select(GeoMonitorTask).where(
+                    GeoMonitorTask.task_id == run.task_id,
+                    GeoMonitorTask.deleted.is_(False),
+                )
+            )
+            if task is not None:
+                for subtask in task.subtasks or []:
+                    if subtask.platform == plat and (subtask.prompt or "").strip() == prompt_text:
+                        return subtask
+        if group_key is None:
+            group_key = candidate_key
+            existing_run = run
+            region_code = code
+    if group_key is None:
+        raise ValueError("无法构建调度键")
+
+    day_part, hm_part = window_key[:8], window_key[9:13]
+    try:
+        slot_dt = datetime.strptime(f"{day_part}{hm_part}", "%Y%m%d%H%M")
+    except ValueError as exc:
+        raise ValueError("schedule_window_key 无法解析为检测时刻") from exc
+
+    monitor_keywords = keyword_group_primary_keyword(group) or prompt_text
+    task_id = _new_gap_backfill_id("bft")
+    subtask_id = _new_gap_backfill_id("bfs")
+    task = GeoMonitorTask(
+        task_id=task_id,
+        tenant_id=tenant_id,
+        created_by=current.user.id,
+        monitor_keywords=monitor_keywords,
+        status="failed",
+        total_items=1,
+        completed_items=0,
+        failed_items=1,
+        prompts_json=[prompt_text],
+        platforms_json=[{"platform": plat, "mode": FAST_MONITOR_MODE, "screenshot": 1}],
+        region_code_json=[region_code] if region_code else None,
+        purpose="geo",
+        raw_request_json={"source": "gap_backfill", "schedule_window_key": window_key},
+        raw_response_json={"source": "gap_backfill"},
+        created_at=slot_dt,
+        updated_at=slot_dt,
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id=subtask_id,
+        task_id=task_id,
+        platform=plat,
+        mode=FAST_MONITOR_MODE,
+        prompt=prompt_text,
+        status="failed",
+        error_message="到期漏跑/无自动监测，待快照补录",
+        raw_result_json={"source": "gap_backfill", "schedule_window_key": window_key},
+        updated_at=slot_dt,
+    )
+    task.subtasks = [subtask]
+    db.add(task)
+
+    if existing_run is None:
+        db.add(
+            GeoMonitorScheduleRun(
+                tenant_id=tenant_id,
+                schedule_key=group_key,
+                task_id=task_id,
+                status="submitted",
+                prompt_count=1,
+                platform_count=1,
+                created_by=current.user.id,
+                created_at=slot_dt,
+                updated_at=slot_dt,
+            )
+        )
+    else:
+        existing_run.task_id = task_id
+        existing_run.status = "submitted"
+        existing_run.error_message = None
+        existing_run.prompt_count = max(existing_run.prompt_count or 0, 1)
+        existing_run.platform_count = max(existing_run.platform_count or 0, 1)
+
+    db.flush()
+    db.commit()
+    db.refresh(subtask)
+    _bust_snapshot_backfill_matrix_cache()
+    return subtask
 
 
 def list_snapshot_backfill_items(

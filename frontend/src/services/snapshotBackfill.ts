@@ -88,7 +88,7 @@ export interface SnapshotBackfillMatrixPlatform {
 }
 
 export interface SnapshotBackfillMatrixSlot {
-  subtask_id: string
+  subtask_id: string | null
   task_id?: string
   schedule_label?: string | null
   schedule_window_key?: string | null
@@ -107,6 +107,7 @@ export interface SnapshotBackfillMatrixSlot {
   monitor_keywords?: string | null
   keyword_group?: string | null
   updated_at?: string | null
+  is_gap?: boolean
 }
 
 export interface SnapshotBackfillMatrixCell {
@@ -118,6 +119,7 @@ export interface SnapshotBackfillMatrixCell {
   fail_count: number
   sample_count: number
   rank_sample_count: number
+  gap_count?: number
   slots: SnapshotBackfillMatrixSlot[]
 }
 
@@ -133,6 +135,7 @@ export interface SnapshotBackfillMatrixResult {
     fail_slots: number
     item_total: number
     scan_capped?: boolean
+    gap_cells?: number
   }
 }
 
@@ -197,6 +200,17 @@ export async function getSnapshotBackfillMatrix(
     },
   })
   return response.data.data as SnapshotBackfillMatrixResult
+}
+
+export async function ensureGapBackfillSubtask(payload: {
+  tenant_id: number
+  platform: string
+  prompt: string
+  schedule_window_key: string
+}): Promise<{ subtask: MonitorSubtask; item: SnapshotBackfillPendingItem }> {
+  const response = await http.post('/v1/monitor/snapshot-backfill/gap-subtask', payload)
+  invalidateCache('/v1/monitor')
+  return response.data.data
 }
 
 export async function submitSnapshotBackfill(

@@ -8,6 +8,7 @@ import SnapshotBackfillDialog from '../components/SnapshotBackfillDialog.vue'
 import SnapshotBackfillDetailDrawer from '../components/SnapshotBackfillDetailDrawer.vue'
 import {
   dismissSnapshotBackfill,
+  ensureGapBackfillSubtask,
   getSnapshotBackfillMatrix,
   undismissSnapshotBackfill,
   type SnapshotBackfillMatrixCell,
@@ -414,18 +415,20 @@ function refreshPlatformStats(platformId: string) {
   }
 }
 
-/** 补录/忽略后只改本地场次，不整表重拉 */
+/** 补录/忽略后只改本地场次，不整表重拉；未命中返回 false（缺口格补录后需重拉矩阵） */
 function patchSlotLocally(
   subtaskId: string,
   patch: Partial<SnapshotBackfillMatrixSlot>,
-) {
+): boolean {
   let touchedPlatform = ''
+  let touched = false
   cells.value = cells.value.map((cell) => {
     const idx = cell.slots.findIndex(slot => slot.subtask_id === subtaskId)
     if (idx < 0) return cell
+    touched = true
     touchedPlatform = cell.platform
     const slots = cell.slots.slice()
-    slots[idx] = { ...slots[idx], ...patch }
+    slots[idx] = { ...slots[idx], ...patch, is_gap: false }
     return recomputeCell({ ...cell, slots })
   })
   if (touchedPlatform) refreshPlatformStats(touchedPlatform)
@@ -433,11 +436,16 @@ function patchSlotLocally(
     const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date)
     if (refreshed) cellDrawer.value = refreshed
   }
+  return touched
+}
+
+function slotKey(slot: SnapshotBackfillMatrixSlot) {
+  return slot.subtask_id || `gap:${slot.schedule_window_key || slot.schedule_label || ''}`
 }
 
 function slotToItem(slot: SnapshotBackfillMatrixSlot): SnapshotBackfillPendingItem {
   return {
-    subtask_id: slot.subtask_id,
+    subtask_id: slot.subtask_id || '',
     task_id: slot.task_id || '',
     tenant_id: slot.tenant_id ?? null,
     tenant_name: slot.tenant_name ?? null,
@@ -520,6 +528,22 @@ function openBackfillFromDetail() {
 async function openBackfillFromSlot(slot: SnapshotBackfillMatrixSlot) {
   if (!canSubmitBackfill.value) return
   try {
+    if (slot.is_gap || !slot.subtask_id) {
+      const tenantId = slot.tenant_id ?? (tenantFilter.value === '' ? null : Number(tenantFilter.value))
+      if (!tenantId || !slot.schedule_window_key) {
+        throw new Error('缺少企业或场次信息')
+      }
+      const result = await ensureGapBackfillSubtask({
+        tenant_id: tenantId,
+        platform: slot.platform || activePlatform.value,
+        prompt: slot.prompt || cellDrawer.value?.word || '',
+        schedule_window_key: slot.schedule_window_key,
+      })
+      backfillTarget.value = result.subtask
+      backfillVisible.value = true
+      await loadMatrix({ quiet: true })
+      return
+    }
     backfillTarget.value = await loadSubtask(slot.subtask_id)
     backfillVisible.value = true
   } catch (error: unknown) {
@@ -532,7 +556,7 @@ function isFailurePending(slot: SnapshotBackfillMatrixSlot) {
 }
 
 async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
-  if (!canSubmitBackfill.value || slot.backfill_dismissed) return
+  if (!canSubmitBackfill.value || slot.backfill_dismissed || slot.is_gap || !slot.subtask_id) return
   try {
     if (isFailurePending(slot)) {
       await ElMessageBox.confirm(
@@ -572,15 +596,18 @@ async function undismissFromDetail() {
 
 async function handleSuccess(updatedSubtask?: MonitorSubtask) {
   const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id
+  let patched = false
   if (updatedSubtask?.subtask_id) {
-    patchSlotLocally(updatedSubtask.subtask_id, {
+    patched = patchSlotLocally(updatedSubtask.subtask_id, {
       mention_position: updatedSubtask.mention_position ?? null,
       needs_backfill: updatedSubtask.needs_backfill ?? false,
       has_answer: Boolean(updatedSubtask.answer_content),
       status: updatedSubtask.status ?? null,
       error_message: updatedSubtask.error_message ?? null,
     })
-  } else {
+  }
+  // 2026-08-03 - 缺口格补录后矩阵仍显示漏跑 - 本地 patch 找不到 is_gap 槽位，须重拉
+  if (!patched) {
     await loadMatrix({ quiet: true })
   }
   emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
@@ -653,6 +680,7 @@ async function openFromQuery() {
 }
 
 function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
+  if (slot.is_gap) return '漏跑待补'
   if (slot.backfill_dismissed) return '已忽略'
   if (slot.needs_backfill && !slot.has_answer) return '失败待补'
   if (slot.needs_backfill) return '待补录'
@@ -992,7 +1020,7 @@ watch(
         </div>
         <div
           v-for="slot in cellDrawer.slots"
-          :key="slot.subtask_id"
+          :key="slotKey(slot)"
           class="sb-todo-item"
         >
           <div class="t">{{ slot.schedule_label || slot.schedule_window_key || '场次' }} · {{ slotStatusLabel(slot) }}</div>
@@ -1001,7 +1029,7 @@ watch(
             <template v-if="slot.error_message"> · {{ slot.error_message }}</template>
           </div>
           <div class="sb-todo-actions">
-            <button type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
+            <button v-if="slot.subtask_id" type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
             <button
               v-if="canSubmitBackfill"
               type="button"
@@ -1012,7 +1040,7 @@ watch(
               补录
             </button>
             <button
-              v-if="canSubmitBackfill && !slot.backfill_dismissed"
+              v-if="canSubmitBackfill && !slot.backfill_dismissed && !slot.is_gap && slot.subtask_id"
               type="button"
               class="sb-btn ghost"
               @click="dismissSlot(slot)"

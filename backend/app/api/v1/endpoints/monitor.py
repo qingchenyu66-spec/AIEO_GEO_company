@@ -23,6 +23,7 @@ from app.schemas.common import ApiResponse
 from app.schemas.monitor import (
     MonitorTaskCreateRequest,
     SnapshotBackfillListResponse,
+    SnapshotBackfillGapSubtaskRequest,
     SnapshotBackfillRequest,
 )
 from app.services.monitor_service import (
@@ -45,6 +46,7 @@ from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
     dismiss_snapshot_backfill,
+    ensure_gap_backfill_subtask,
     list_snapshot_backfill_matrix,
     list_snapshot_backfill_page,
     undismiss_snapshot_backfill,
@@ -634,7 +636,7 @@ def monitor_snapshot_backfill_matrix(
             str(keyword_group or ""),
         ]
     )
-    cache_key = f"snapshot_backfill:mtx:v4:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+    cache_key = f"snapshot_backfill:mtx:v5:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
     cached = get_json_cache(cache_key)
     if isinstance(cached, dict) and "cells" in cached:
         return ApiResponse(data=cached)
@@ -653,6 +655,52 @@ def monitor_snapshot_backfill_matrix(
     )
     set_json_cache(cache_key, data, ttl_seconds=30)
     return ApiResponse(data=data)
+
+
+@router.post("/snapshot-backfill/gap-subtask", response_model=ApiResponse[dict])
+def monitor_snapshot_backfill_gap_subtask(
+    payload: SnapshotBackfillGapSubtaskRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """漏跑/到期日：创建本地占位子任务，供后续快照补录。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+        ensure_sales_tenant_access(db, current, payload.tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    try:
+        subtask = ensure_gap_backfill_subtask(
+            db,
+            tenant_id=payload.tenant_id,
+            platform=payload.platform,
+            prompt=payload.prompt,
+            schedule_window_key=payload.schedule_window_key,
+            current=current,
+        )
+        task = get_monitor_task(db, subtask.task_id, current)
+        asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+        groups = (
+            [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+            if task.tenant_id
+            else []
+        )
+        from app.services.monitor_service import serialize_subtask_for_display
+
+        display = serialize_subtask_for_display(
+            subtask,
+            monitor_keywords=task.monitor_keywords,
+            asset=asset,
+            keyword_groups=groups,
+        )
+        ops_meta = build_snapshot_backfill_item(db, subtask, task)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="monitor.snapshot_backfill_gap_subtask")
+    return ApiResponse(data={"subtask": display, "item": ops_meta})
 
 
 @router.post("/subtasks/{subtask_id}/snapshot-backfill", response_model=ApiResponse[dict])

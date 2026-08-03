@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.notification import SystemNotification, SystemNotificationRead
@@ -15,7 +16,9 @@ from app.models.ops import OperationLog
 from app.models.tenant import Tenant
 from app.services.monitor_service import subtask_needs_snapshot_backfill
 from app.services.snapshot_backfill_service import (
+    ensure_gap_backfill_subtask,
     list_snapshot_backfill_items,
+    list_snapshot_backfill_matrix,
     list_snapshot_backfill_page,
     notify_failed_subtasks_for_task,
     subtask_backfill_eligible,
@@ -35,6 +38,8 @@ def db_session():
             GeoMonitorTask.__table__,
             GeoMonitorSubtask.__table__,
             GeoMonitorScheduleRun.__table__,
+            BrandAsset.__table__,
+            BrandKeywordGroup.__table__,
             SystemNotification.__table__,
             SystemNotificationRead.__table__,
             OperationLog.__table__,
@@ -307,6 +312,7 @@ def test_matrix_cell_has_todo_rules() -> None:
     from app.services.snapshot_backfill_service import matrix_cell_has_todo
 
     assert matrix_cell_has_todo(ranks=[], sample_count=0) is False
+    assert matrix_cell_has_todo(ranks=[], sample_count=0, gap_count=2) is True
     assert matrix_cell_has_todo(ranks=[], sample_count=2) is True  # 算不出均值也标红
     assert matrix_cell_has_todo(ranks=[1.0, 2.0, 3.0], sample_count=3) is False
     assert matrix_cell_has_todo(ranks=[3.0], sample_count=1) is False  # 等于阈值不标
@@ -1014,3 +1020,112 @@ def test_dismiss_and_undismiss_snapshot_backfill(db_session, monkeypatch) -> Non
     page2 = list_snapshot_backfill_page(db_session, tenant_id=tenant.id, pending_only=True, limit=10)
     assert page2["summary"]["pending"] == 1
     assert page2["items"][0]["subtask_id"] == "st-undismiss"
+
+
+def test_matrix_includes_gap_cells_for_missed_schedule_day(db_session) -> None:
+    from datetime import date
+
+    tenant = Tenant(
+        name="漏跑企业",
+        code="tenant-gap",
+        deleted=False,
+        service_start_date=date(2026, 1, 1),
+        service_end_date=date(2026, 8, 1),
+    )
+    db_session.add(tenant)
+    db_session.flush()
+    asset = BrandAsset(
+        tenant_id=tenant.id,
+        company_full_name="漏跑企业有限公司",
+        brand_name="漏跑品牌",
+        brand_short_name="漏跑",
+        monitor_keywords_json=["漏跑品牌怎么样"],
+        aliases_json=[],
+        product_keywords_json=[],
+        monitored_platforms_json=["doubao"],
+        region_codes_json=[],
+        schedule_times_json=["09:35", "12:25", "16:10"],
+        schedule_type="daily_times",
+        schedule_weekdays_json=[],
+        schedule_month_days_json=[],
+        status=True,
+        deleted=False,
+    )
+    db_session.add(asset)
+    db_session.commit()
+
+    matrix = list_snapshot_backfill_matrix(
+        db_session,
+        tenant_id=tenant.id,
+        detect_date_from=date(2026, 8, 2),
+        detect_date_to=date(2026, 8, 2),
+    )
+    gap_cells = [cell for cell in matrix["cells"] if int(cell.get("gap_count") or 0) > 0]
+    assert gap_cells, "到期漏跑日应出现缺口格"
+    cell = gap_cells[0]
+    assert cell["has_todo"] is True
+    assert len(cell["slots"]) == 3
+    assert all(slot.get("is_gap") for slot in cell["slots"])
+    assert matrix["summary"]["gap_cells"] >= 1
+
+
+def test_ensure_gap_backfill_subtask_creates_local_records(db_session) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    tenant = Tenant(name="缺口补录", code="tenant-gap-fill", deleted=False)
+    db_session.add(tenant)
+    db_session.flush()
+    asset = BrandAsset(
+        tenant_id=tenant.id,
+        company_full_name="缺口补录有限公司",
+        brand_name="缺口品牌",
+        brand_short_name="缺口",
+        monitor_keywords_json=["缺口品牌推荐"],
+        aliases_json=[],
+        product_keywords_json=[],
+        monitored_platforms_json=["doubao"],
+        region_codes_json=[],
+        schedule_times_json=["09:35"],
+        schedule_type="daily_times",
+        schedule_weekdays_json=[],
+        schedule_month_days_json=[],
+        status=True,
+        deleted=False,
+    )
+    db_session.add(asset)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(identity_type="PLATFORM", tenant_id=None, position_id=None),
+        user=SimpleNamespace(id=1, display_name="运营", username="ops"),
+    )
+    subtask = ensure_gap_backfill_subtask(
+        db_session,
+        tenant_id=tenant.id,
+        platform="doubao",
+        prompt="缺口品牌推荐",
+        schedule_window_key="20260802-0935",
+        current=current,
+    )
+    assert subtask.subtask_id.startswith("bfs")
+    assert subtask.status == "failed"
+    run = db_session.scalar(
+        select(GeoMonitorScheduleRun).where(
+            GeoMonitorScheduleRun.tenant_id == tenant.id,
+            GeoMonitorScheduleRun.task_id == subtask.task_id,
+        )
+    )
+    assert run is not None
+    assert "20260802-0935" in run.schedule_key
+
+    again = ensure_gap_backfill_subtask(
+        db_session,
+        tenant_id=tenant.id,
+        platform="doubao",
+        prompt="缺口品牌推荐",
+        schedule_window_key="20260802-0935",
+        current=current,
+    )
+    assert again.subtask_id == subtask.subtask_id
