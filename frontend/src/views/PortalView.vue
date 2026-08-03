@@ -43,6 +43,7 @@ import {
 } from './portal/customerPreview'
 import { platformLabelMap, monitorStatusLabelMap } from './portal/portalMaps'
 import { usePortalMenu } from './portal/usePortalMenu'
+import { useMenuFavorites } from './portal/composables/useMenuFavorites'
 import { useApprovalPendingCount } from './portal/composables/useApprovalPendingCount'
 import { resolveAccessibleTenantId, shouldPrefetchBrandForMenu } from './portal/tenantQueryScope'
 import '../styles/menu-config.css'
@@ -144,7 +145,16 @@ const menus = computed(() => {
   }
   return filtered
 })
-const userManagementMenu = computed(() => menus.value.find(item => item.menu_code === 'platform.users'))
+const sessionUserId = computed(() => auth.session?.user?.id)
+const sessionIdentityId = computed(() => auth.session?.identity?.id)
+const menuFavoritesEnabled = computed(() => !isPreviewActive.value)
+const {
+  isMenuPinned,
+  toggleMenuPin,
+  displayMenus,
+  pinnedMenuCount,
+} = useMenuFavorites(sessionUserId, sessionIdentityId, menus, menuFavoritesEnabled)
+const userManagementMenu = computed(() => displayMenus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
 const isCompetitorPage = computed(() => ['customer.competitor', 'platform.competitor'].includes(activeMenuCode.value))
@@ -207,7 +217,7 @@ const activeMenu = computed(() => {
   const userMenu = userManagementMenu.value
   if (isUserCreatePage.value && userMenu) return { ...userMenu, menu_code: USER_CREATE_MENU, menu_name: '用户新增' } as MenuInfo
   if (isUserListPage.value && userMenu) return { ...userMenu, menu_code: USER_LIST_MENU, menu_name: '用户列表' } as MenuInfo
-  if (isPositionManagementPage.value) return { ...(userManagementMenu.value || menus.value[0]), menu_code: POSITION_MENU, menu_name: '职位管理' } as MenuInfo
+  if (isPositionManagementPage.value) return { ...(userManagementMenu.value || displayMenus.value[0]), menu_code: POSITION_MENU, menu_name: '职位管理' } as MenuInfo
   return menus.value.find(item => item.menu_code === activeMenuCode.value) || menus.value[0]
 })
 
@@ -390,7 +400,10 @@ onMounted(() => {
 <template>
   <PortalLayout
     :is-platform="isPlatform"
-    :menus="menus"
+    :menus="displayMenus"
+    :pinned-menu-count="pinnedMenuCount"
+    :menu-favorites-enabled="menuFavoritesEnabled"
+    :is-menu-pinned="isMenuPinned"
     :active-menu-code="activeMenuCode"
     :user-menu-expanded="userMenuExpanded"
     :has-user-create-menu="hasUserCreateMenu"
@@ -413,6 +426,7 @@ onMounted(() => {
     :pending-approval-count="pendingApprovalCount"
     :preview-mode="isPreviewActive"
     @toggle-user-submenu="toggleUserSubmenu"
+    @toggle-menu-pin="toggleMenuPin"
     @select-menu="selectMenu"
     @set-menu-code="navigateToMenu"
     @switch-identity="switchIdentity"

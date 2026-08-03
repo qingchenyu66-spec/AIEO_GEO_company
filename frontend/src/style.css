@@ -79,8 +79,17 @@ button:disabled {
   color: #2868db;
 }
 .nav-icon { width: 19px; height: 19px; }
-.nav-parent .nav-caret { width:15px; height:15px; margin-left:auto; transition:.18s ease; }
+.nav-parent .nav-caret { width:15px; height:15px; margin-left:0; flex-shrink:0; transition:.18s ease; }
 .nav-parent.expanded .nav-caret { transform:rotate(180deg); }
+/* 2026-08-03 - 侧栏一级菜单置顶 - hover 星标，侧栏展开时可见 */
+.nav-favorites-divider { height:1px; margin:8px 6px 10px; background:rgba(142,171,210,.24); }
+.nav-favorite-btn { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; min-width:24px; min-height:24px; margin-left:auto; padding:0; border:0; border-radius:6px; color:#7d95b8; background:transparent; cursor:pointer; opacity:0; flex-shrink:0; line-height:0; transition:opacity .18s ease, color .18s ease, background .18s ease; }
+.nav-item:hover .nav-favorite-btn, .nav-favorite-btn.active, .nav-favorite-btn:focus-visible { opacity:1; }
+.nav-favorite-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
+.nav-favorite-btn.active { color:#f5c842; opacity:1; }
+.nav-favorite-btn svg { display:block; width:14px; height:14px; flex:0 0 14px; }
+.nav-item.active .nav-favorite-btn { color:rgba(255,255,255,.85); }
+.nav-item.active .nav-favorite-btn.active { color:#ffe58a; }
 .sub-nav { display:grid; gap:5px; margin:2px 0 8px 34px; padding-left:10px; border-left:1px solid rgba(142,171,210,.28); }
 .sub-nav-item { display:flex; align-items:center; min-height:34px; padding:0 11px; border-radius:7px; color:#91a8c7; text-decoration:none; font-size:13px; transition:.18s ease; }
 .sub-nav-item:hover { color:#fff; background:rgba(255,255,255,.055); transform:translateX(2px); }
@@ -256,7 +265,7 @@ button:disabled {
   }
   .portal-shell:not(.portal-fullscreen) .brand > div:last-of-type,
   .portal-shell:not(.portal-fullscreen) .portal-tag span,
-  .portal-shell:not(.portal-fullscreen) .nav-item > span,
+  .portal-shell:not(.portal-fullscreen) .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen) .nav-parent .nav-caret {
     display: block;
     max-width: 0;
@@ -271,6 +280,10 @@ button:disabled {
       opacity .16s ease 0s,
       transform .2s ease 0s,
       max-width .36s cubic-bezier(0.22, 1, 0.36, 1) .14s;
+  }
+  .portal-shell:not(.portal-fullscreen):not(.portal-sidebar-pinned):not(.portal-sidebar-expanded):not(:has(.sidebar:hover)) .nav-favorite-btn,
+  .portal-shell:not(.portal-fullscreen):not(.portal-sidebar-pinned):not(.portal-sidebar-expanded):not(:has(.sidebar:hover)) .nav-favorites-divider {
+    display: none;
   }
   .portal-shell:not(.portal-fullscreen) .nav-parent .nav-caret {
     flex-shrink: 0;
@@ -354,9 +367,9 @@ button:disabled {
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .portal-tag span,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .portal-tag span,
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .portal-tag span,
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav-item > span,
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav-item > span,
-  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav-item > span,
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav-item > span:not(.nav-favorite-btn),
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav-item > span:not(.nav-favorite-btn),
+  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav-parent .nav-caret,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav-parent .nav-caret,
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav-parent .nav-caret {
@@ -427,7 +440,7 @@ button:disabled {
   .portal-shell:not(.portal-fullscreen) .nav-item,
   .portal-shell:not(.portal-fullscreen) .brand > div:last-of-type,
   .portal-shell:not(.portal-fullscreen) .portal-tag span,
-  .portal-shell:not(.portal-fullscreen) .nav-item > span,
+  .portal-shell:not(.portal-fullscreen) .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen) .nav-parent .nav-caret,
   .portal-shell:not(.portal-fullscreen) .sub-nav,
   .portal-shell:not(.portal-fullscreen) .sidebar-pin {
@@ -4018,13 +4031,13 @@ button:disabled {
   .portal-shell { grid-template-columns:76px minmax(0,1fr); }
   .portal-shell .sidebar { width:76px; padding:18px 10px; }
   .portal-shell .brand { justify-content:center; padding:0 0 18px; }
-  .portal-shell .brand > div:last-child,.portal-tag span,.portal-shell .nav-item span { display:none; }
+  .portal-shell .brand > div:last-child,.portal-tag span,.portal-shell .nav-item > span:not(.nav-favorite-btn) { display:none; }
   .portal-shell .sub-nav { display:none; }
   .portal-shell.portal-sidebar-expanded { grid-template-columns:minmax(200px,42vw) minmax(0,1fr); }
   .portal-shell.portal-sidebar-expanded .sidebar { width:100%; padding:18px 12px; }
   .portal-shell.portal-sidebar-expanded .brand > div:last-child,
   .portal-shell.portal-sidebar-expanded .portal-tag span,
-  .portal-shell.portal-sidebar-expanded .nav-item span { display:block; }
+  .portal-shell.portal-sidebar-expanded .nav-item > span:not(.nav-favorite-btn) { display:block; }
   .portal-shell.portal-sidebar-expanded .sub-nav { display:grid; margin-left:0; padding-left:0; border-left:none; }
   .portal-shell .portal-tag { justify-content:center; padding:10px 6px; }
   .portal-shell .nav { gap:5px; margin-top:14px; }

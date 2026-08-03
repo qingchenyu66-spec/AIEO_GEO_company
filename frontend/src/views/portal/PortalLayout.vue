@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Building2, ChevronDown, LockKeyhole, LogOut, PanelLeft, ShieldCheck } from '@lucide/vue'
+import { Building2, ChevronDown, LockKeyhole, LogOut, PanelLeft, ShieldCheck, Star } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
 import AppBrandLogo from '../../components/AppBrandLogo.vue'
@@ -17,6 +17,9 @@ const SIDEBAR_PIN_KEY = 'geo.portal.sidebarPinned'
 defineProps<{
   isPlatform: boolean
   menus: MenuInfo[]
+  pinnedMenuCount: number
+  menuFavoritesEnabled: boolean
+  isMenuPinned: (menuCode: string) => boolean
   activeMenuCode: string
   userMenuExpanded: boolean
   hasUserCreateMenu: boolean
@@ -42,6 +45,7 @@ defineProps<{
 
 const emit = defineEmits<{
   toggleUserSubmenu: []
+  toggleMenuPin: [menuCode: string]
   selectMenu: [menu: MenuInfo]
   setMenuCode: [code: string]
   switchIdentity: [identityId: number]
@@ -113,7 +117,12 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
         </span>
       </div>
       <nav class="nav" aria-label="主导航">
-        <template v-for="menu in menus" :key="menu.menu_code">
+        <template v-for="(menu, index) in menus" :key="menu.menu_code">
+          <div
+            v-if="menuFavoritesEnabled && pinnedMenuCount > 0 && index === pinnedMenuCount"
+            class="nav-favorites-divider"
+            aria-hidden="true"
+          />
           <template v-if="menu.menu_code === 'platform.users'">
             <button
               type="button"
@@ -125,6 +134,20 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
             >
               <component :is="menuIcon(menu)" class="nav-icon" aria-hidden="true" />
               <span>{{ menu.menu_name }}</span>
+              <span
+                v-if="menuFavoritesEnabled"
+                role="button"
+                tabindex="0"
+                class="nav-favorite-btn"
+                :class="{ active: isMenuPinned(menu.menu_code) }"
+                :title="isMenuPinned(menu.menu_code) ? '取消置顶' : '置顶'"
+                :aria-label="isMenuPinned(menu.menu_code) ? '取消置顶' : '置顶'"
+                @click.stop="emit('toggleMenuPin', menu.menu_code)"
+                @keydown.enter.prevent.stop="emit('toggleMenuPin', menu.menu_code)"
+                @keydown.space.prevent.stop="emit('toggleMenuPin', menu.menu_code)"
+              >
+                <Star :fill="isMenuPinned(menu.menu_code) ? 'currentColor' : 'none'" />
+              </span>
               <ChevronDown class="nav-caret" aria-hidden="true" />
             </button>
             <div v-if="userMenuExpanded" id="portal-user-submenu" class="sub-nav" role="group" aria-label="用户管理子菜单">
@@ -169,6 +192,20 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
               class="nav-badge"
               :aria-label="`${pendingApprovalCount} 条待审批`"
             >{{ (pendingApprovalCount ?? 0) > 99 ? '99+' : pendingApprovalCount }}</b>
+            <span
+              v-if="menuFavoritesEnabled"
+              role="button"
+              tabindex="0"
+              class="nav-favorite-btn"
+              :class="{ active: isMenuPinned(menu.menu_code) }"
+              :title="isMenuPinned(menu.menu_code) ? '取消置顶' : '置顶'"
+              :aria-label="isMenuPinned(menu.menu_code) ? '取消置顶' : '置顶'"
+              @click.stop="emit('toggleMenuPin', menu.menu_code)"
+              @keydown.enter.prevent.stop="emit('toggleMenuPin', menu.menu_code)"
+              @keydown.space.prevent.stop="emit('toggleMenuPin', menu.menu_code)"
+            >
+              <Star :fill="isMenuPinned(menu.menu_code) ? 'currentColor' : 'none'" />
+            </span>
           </button>
         </template>
       </nav>
