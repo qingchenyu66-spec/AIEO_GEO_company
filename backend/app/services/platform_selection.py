@@ -6,9 +6,19 @@ from typing import Any
 
 from app.schemas.monitor import FAST_MONITOR_MODE, MonitorMode, ScreenshotMode
 
+_VALID_MODES = frozenset({"standard", "reasoning", "search", "reasoning_search"})
+
+
+def _coerce_mode(raw: Any) -> MonitorMode:
+    mode = str(raw or "").strip().lower()
+    if mode in _VALID_MODES:
+        return mode  # type: ignore[return-value]
+    return FAST_MONITOR_MODE
+
 
 def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
     """Accept legacy string, dict, or PlatformSelection-like object; return normalized dict or None."""
+    # 2026-08-03 - 方案B：保留用户选的快速/深度，不再全平台强制 search
     if isinstance(raw, str):
         code = raw.strip().lower()
         if not code:
@@ -25,13 +35,16 @@ def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
         code = str(code).strip().lower()
         if not code:
             return None
-        return {"code": code, "mode": FAST_MONITOR_MODE, "screenshot": 1}
+        return {
+            "code": code,
+            "mode": _coerce_mode(getattr(raw, "mode", None)),
+            "screenshot": 1,
+        }
     code = str(raw.get("code") or raw.get("platform") or "").strip().lower()
     if not code:
         return None
-    # 全平台强制 search（存量 standard/reasoning 也走联网拿信源；与 standard 同价）
     # ponytail: 产品强制截图作客户证据；UI 不再提供关闭入口，入口归一化恒为 1
-    return {"code": code, "mode": FAST_MONITOR_MODE, "screenshot": 1}
+    return {"code": code, "mode": _coerce_mode(raw.get("mode")), "screenshot": 1}
 
 
 def normalize_platform_selections(raw_list: list[Any] | None) -> list[dict[str, Any]]:

@@ -909,12 +909,10 @@ def _build_submit_payload(
 
 
 def _fast_platform_payload(item: PlatformConfig) -> dict[str, Any]:
-    """提交平台配置；保留 screenshot（与模力计费项一致），mode 统一 search。"""
-    from app.schemas.monitor import FAST_MONITOR_MODE
-
+    """提交平台配置；保留用户 mode，截图强制开启。"""
+    # 2026-08-03 - 方案B：不再提交层强制 search，深度思考需原样打到模力
     payload = item.model_dump()
-    # 提交层兜底：诊断/重试等未走 normalize 的路径也强制联网
-    payload["mode"] = FAST_MONITOR_MODE
+    payload["screenshot"] = 1
     return payload
 
 

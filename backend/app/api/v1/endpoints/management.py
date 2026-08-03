@@ -944,17 +944,22 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         "cost_ranking_window_days": COST_RANKING_WINDOW_DAYS,
     }
 
-    schedule_stmt = (
-        select(GeoMonitorScheduleRun)
-        .where(GeoMonitorScheduleRun.created_at >= datetime.combine(today, datetime.min.time()))
-        .order_by(GeoMonitorScheduleRun.created_at.desc())
-        .limit(20)
-    )
-    if tenant_ids is not None:
-        schedule_stmt = schedule_stmt.where(GeoMonitorScheduleRun.tenant_id.in_(tenant_ids))
-    schedule_rows = list(db.scalars(schedule_stmt))
-    today_schedule_failed = sum(1 for row in schedule_rows if row.status == "failed")
-    today_schedule_submitted = sum(1 for row in schedule_rows if row.status == "submitted")
+    # 2026-08-03 - 调度失败/成功率按「今日全量」统计；曾 limit(20) 把 5 次失败放大成 75% 成功率
+    schedule_day_start = datetime.combine(today, datetime.min.time())
+
+    def _today_schedule_count(*, status: str | None = None) -> int:
+        stmt = select(func.count()).select_from(GeoMonitorScheduleRun).where(
+            GeoMonitorScheduleRun.created_at >= schedule_day_start
+        )
+        if tenant_ids is not None:
+            stmt = stmt.where(GeoMonitorScheduleRun.tenant_id.in_(tenant_ids))
+        if status is not None:
+            stmt = stmt.where(GeoMonitorScheduleRun.status == status)
+        return int(db.scalar(stmt) or 0)
+
+    today_schedule_failed = _today_schedule_count(status="failed")
+    today_schedule_submitted = _today_schedule_count(status="submitted")
+    today_schedule_total = _today_schedule_count()
 
     log_stmt = select(OperationLog).order_by(OperationLog.created_at.desc()).limit(8)
     if tenant_ids is not None:
@@ -1007,7 +1012,7 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
             "today_cost": round(today_cost, 4),
             "active_tenants": service_counts.get("active", 0),
             "expiring_tenants": len(expiring_tenants),
-            "api_success_rate": round((today_schedule_submitted / max(1, len(schedule_rows))) * 100, 1),
+            "api_success_rate": round((today_schedule_submitted / max(1, today_schedule_total)) * 100, 1),
         },
         "service_counts": service_counts,
         "expiring_tenants": expiring_tenants[:8],

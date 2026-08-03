@@ -15,7 +15,8 @@ def test_normalize_legacy_string_platforms():
     assert rows[0]["screenshot"] == 1
 
 
-def test_normalize_all_platforms_forced_search():
+def test_normalize_preserves_selected_modes():
+    # 2026-08-03 - 方案B：不再全平台强制 search
     rows = normalize_platform_selections([
         "deepseek",
         {"code": "deepseek", "mode": "standard", "screenshot": 1},
@@ -24,8 +25,8 @@ def test_normalize_all_platforms_forced_search():
     ])
     assert rows == [
         {"code": "deepseek", "mode": "search", "screenshot": 1},
-        {"code": "doubao", "mode": "search", "screenshot": 1},
-        {"code": "kimi", "mode": "search", "screenshot": 1},
+        {"code": "doubao", "mode": "reasoning_search", "screenshot": 1},
+        {"code": "kimi", "mode": "reasoning", "screenshot": 1},
     ]
 
 
@@ -34,7 +35,7 @@ def test_normalize_object_platforms():
         {"code": "yuanbao", "mode": "reasoning", "screenshot": 0},
         {"platform": "qianwen"},
     ])
-    assert rows[0] == {"code": "yuanbao", "mode": "search", "screenshot": 1}
+    assert rows[0] == {"code": "yuanbao", "mode": "reasoning", "screenshot": 1}
     assert rows[1]["code"] == "qianwen"
     assert rows[1]["mode"] == "search"
     assert rows[1]["screenshot"] == 1

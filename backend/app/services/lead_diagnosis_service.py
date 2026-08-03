@@ -109,10 +109,13 @@ def build_platform_cost_ranking(
     *,
     tenant_name_map: dict[int, str],
     tenant_ids: list[int] | None = None,
-    limit: int = 8,
+    limit: int | None = None,
     since: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """运营总览费用排行：正式企业按 tenant 汇总，售前诊断按线索品牌拆分展示。"""
+    """运营总览费用排行：正式企业按 tenant 汇总，售前诊断按线索品牌拆分展示。
+
+    limit=None 表示返回全部有消耗行；勿再默认 Top8（企业少时会误以为数据不全）。
+    """
     from sqlalchemy import func
 
     tenant_stmt = (
@@ -191,6 +194,9 @@ def build_platform_cost_ranking(
             })
 
     ranking.sort(key=lambda item: item["cost"], reverse=True)
+    # 2026-08-03 - 去掉默认 Top8；企业全量有消耗都应展示
+    if limit is None or limit <= 0:
+        return ranking
     return ranking[:limit]
 
 

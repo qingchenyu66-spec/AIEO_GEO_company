@@ -60,6 +60,17 @@ export function defaultBrandWordGroupName(index: number) {
   return `品牌词组 ${index + 1}`
 }
 
+const VALID_PLATFORM_MODES = new Set(['standard', 'reasoning', 'search', 'reasoning_search'] as const)
+
+function coercePlatformMode(mode: unknown): PlatformSelection['mode'] {
+  const value = String(mode || '').trim()
+  if (VALID_PLATFORM_MODES.has(value as PlatformSelection['mode'])) {
+    return value as PlatformSelection['mode']
+  }
+  // 旧字符串平台缺省联网 search
+  return 'search'
+}
+
 export function normalizePlatformSelection(raw: string | PlatformSelection | null | undefined): PlatformSelection | null {
   if (!raw) return null
   if (typeof raw === 'string') {
@@ -69,8 +80,8 @@ export function normalizePlatformSelection(raw: string | PlatformSelection | nul
   }
   const code = String(raw.code || '').trim()
   if (!code) return null
-  // 全平台强制 search，与后端 normalize 一致
-  return { code, mode: 'search', screenshot: 1 }
+  // 2026-08-03 - 方案B：保留快速/深度选择，不再全平台强制 search
+  return { code, mode: coercePlatformMode(raw.mode), screenshot: 1 }
 }
 
 export function normalizePlatformSelections(raw: Array<string | PlatformSelection> | null | undefined): PlatformSelection[] {

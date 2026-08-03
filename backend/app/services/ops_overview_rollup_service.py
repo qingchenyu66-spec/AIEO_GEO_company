@@ -88,7 +88,8 @@ def build_overview_heavy_rollup(
         db,
         tenant_name_map=tenant_name_map,
         tenant_ids=tenant_ids,
-        limit=8,
+        # 2026-08-03 - 不再 Top8，近窗有消耗企业全部上榜
+        limit=None,
         since=cost_since,
     )
     # 2026-07-31 - 「累计消耗」曾误用排行 Top8 求和偏小 - 改为近 30 日全量子任务金额

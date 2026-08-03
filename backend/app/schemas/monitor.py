@@ -6,12 +6,14 @@ from pydantic import BaseModel, Field, HttpUrl
 MonitorMode = Literal["standard", "reasoning", "search", "reasoning_search"]
 ScreenshotMode = Literal[0, 1, 2]
 
-# 模力联网 search：与 standard 同价且返回信源；全平台统一，避免深度模式额外计费。
+# 缺省/旧数据回退：联网 search（与 standard 同价且带回信源）。深度思考走 reasoning，不再强制覆盖。
 FAST_MONITOR_MODE: MonitorMode = "search"
 
 
 def default_monitor_mode(platform: str) -> MonitorMode:
+    del platform
     return FAST_MONITOR_MODE
+
 
 
 class PlatformConfig(BaseModel):
