@@ -1363,43 +1363,32 @@ def render_source_influence_html(
     conclusion = esc(str(source_influence.get("conclusion") or ""))
     max_count = max((int(r.get("count") or 0) for r in rows), default=1) or 1
 
-    # 2026-07-29 - ECharts 左轴截断/叠字太丑；幻灯改 HTML 条形榜：全文露出 + 渐变圆角柱
+    # 2026-08-03 - 幻灯信源：逐条卡片=全文标题+柱+渠道价值拆解，按 li 拆页；勿表+榜双块互拆
     if presentation:
         items_html = []
         for idx, row in enumerate(rows, start=1):
             title = esc(str(row.get("title") or "—"))
             count = int(row.get("count") or 0)
+            analysis = esc(str(row.get("value_analysis") or "—"))
             pct = max(8.0, round(count / max_count * 100, 1))
             items_html.append(
                 f"""
-            <li class="source-bar-item">
+            <li class="source-deck-item">
               <div class="source-bar-meta">
                 <span class="source-bar-rank">{idx:02d}</span>
-                <span class="source-bar-title">{title}</span>
+                <span class="source-deck-title">{title}</span>
                 <span class="source-bar-count">{count}次</span>
               </div>
               <div class="source-bar-track" aria-hidden="true">
                 <div class="source-bar-fill" style="width:{pct}%"></div>
               </div>
+              <p class="source-deck-analysis">{analysis}</p>
             </li>"""
             )
         return f"""
       <section class="source-section" id="sources">
         <h2>核心信源传播影响力分析</h2>
-        <div class="source-grid source-grid-deck">
-          <div class="card-box source-table-box">
-            <table>
-              <thead>
-                <tr><th>信源渠道</th><th>引用</th><th>渠道价值拆解</th></tr>
-              </thead>
-              <tbody>{body}</tbody>
-            </table>
-          </div>
-          <div class="card-box source-chart-box">
-            <h3>TOP 信源引用次数</h3>
-            <ul class="source-bar-list">{''.join(items_html)}</ul>
-          </div>
-        </div>
+        <ul class="source-deck-list">{''.join(items_html)}</ul>
         <p class="source-conclusion"><strong>核心判断：</strong>{conclusion}</p>
       </section>"""
 

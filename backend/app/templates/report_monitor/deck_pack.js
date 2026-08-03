@@ -467,6 +467,9 @@
     };
     Array.from(body.querySelectorAll(".strategy-problems, .comp-trend-box")).forEach(promote);
     Array.from(body.querySelectorAll(".strategy-grid > *, .source-grid > *, .plan-grid > *")).forEach(promote);
+    // 2026-08-03 - 信源逐条卡片按 li 拆页，勿再表+榜双块互拆
+    Array.from(body.querySelectorAll(".source-deck-list > .source-deck-item")).forEach(promote);
+    body.querySelectorAll(".plan-note").forEach((el) => el.remove());
     body.querySelectorAll(".strategy-grid, .source-grid, .plan-grid").forEach((grid) => {
       if (!grid.children.length) grid.remove();
     });

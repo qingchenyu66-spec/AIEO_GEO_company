@@ -56,11 +56,13 @@ def test_source_chart_deck_full_width_class() -> None:
         },
         presentation=True,
     )
-    assert "source-grid-deck" in html
-    assert "source-bar-list" in html
+    assert "source-deck-list" in html
+    assert "source-deck-item" in html
+    assert "source-deck-analysis" in html
     assert long_title in html
     assert "sourceBarChart" not in html
     assert "source-conclusion" in html
+    assert "source-table-box" not in html
 
 
 def test_trim_rank_trend_empty_edges() -> None:

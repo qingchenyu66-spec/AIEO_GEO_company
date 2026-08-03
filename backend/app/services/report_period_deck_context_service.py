@@ -297,6 +297,8 @@ def build_period_deck_context(
             render_action_plan_html(content_modules.get("action_plan"), client=True),
         ):
             cleaned = _drop_echarts_src(_strip_h2(_strip_outer_section(frag)))
+            # 2026-08-03 - 幻灯 CSS 隐藏 plan-note 但仍被 pack 单独分页 → 空页；与周报一致 strip
+            cleaned = re.sub(r'<p\s+class="note plan-note">.*?</p>\s*', "", cleaned, flags=re.I | re.S)
             if cleaned.strip():
                 tail_parts.append(cleaned)
         tail_title = "信源与优化建议"

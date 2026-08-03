@@ -1634,6 +1634,42 @@ table thead th {
     min-width: 0;
 }
 
+/* 2026-08-03 - 幻灯信源：每条=标题全文+柱+价值拆解，按 li 分页；勿 line-clamp */
+.report-theme-monitor .source-deck-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.report-theme-monitor .source-deck-item {
+    margin: 0;
+    padding: 14px 18px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.08);
+}
+
+.report-theme-monitor .source-deck-title {
+    font-size: 26px !important;
+    line-height: 1.4 !important;
+    font-weight: 650;
+    color: #0b3a6e;
+    word-break: break-word;
+    white-space: normal;
+}
+
+.report-theme-monitor .source-deck-analysis {
+    margin: 12px 0 0;
+    font-size: 28px !important;
+    line-height: 1.5 !important;
+    color: #475569;
+    word-break: break-word;
+    white-space: normal;
+}
+
 /* 2026-07-29 - 信源 TOP：字号/间距收紧，标题两行截断，柱更醒目 */
 .report-theme-monitor .source-bar-list {
     list-style: none;
@@ -1730,6 +1766,7 @@ table thead th {
 
 /* 2026-07-29 - 条目1：.source-conclusion 未进放大规则，默认十几像素像蚂蚁 */
 .report-theme-monitor .source-conclusion,
+.report-theme-monitor .source-deck-analysis,
 .report-theme-monitor .card-box > p,
 .report-theme-monitor .source-section p,
 .report-theme-monitor .strategy-section p,
