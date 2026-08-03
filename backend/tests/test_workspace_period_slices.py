@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from app.services.monitor_service import (
     _diversify_snapshots_by_detect_day,
+    _inclusion_snapshot_has_display_rank,
     _workspace_period_snapshot_pool,
     _workspace_period_snapshots,
     _workspace_schedule_key_bounds,
@@ -97,6 +98,13 @@ def test_diversify_snapshots_by_detect_day_round_robins() -> None:
     diversified = _diversify_snapshots_by_detect_day(rows)
     assert [row["subtask_id"] for row in diversified[:3]] == ["d28a", "d27a", "d26a"]
     assert {row["detect_day"] for row in diversified[:3]} == {"2026-07-28", "2026-07-27", "2026-07-26"}
+
+
+def test_inclusion_ranked_display_requires_resolved_brand_rank() -> None:
+    """有位次 = 第 N 位；mention_position 有值但解析后无 rank 不算有位次。"""
+    assert _inclusion_snapshot_has_display_rank({"brand_rank": 1})
+    assert not _inclusion_snapshot_has_display_rank({"brand_rank": None, "brand_mentioned": True})
+    assert not _inclusion_snapshot_has_display_rank({"brand_rank": None, "brand_mentioned": False})
 
 
 def test_inclusion_pool_total_and_page_slice() -> None:

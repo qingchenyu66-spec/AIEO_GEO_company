@@ -4513,6 +4513,90 @@ def _workspace_period_snapshots(
     return pool[:limit]
 
 
+def _inclusion_snapshot_has_display_rank(row: dict[str, Any]) -> bool:
+    """收录明细「有位次」= UI 展示「第 N 位」，须 hydration 后 brand_rank 非空。"""
+    return row.get("brand_rank") is not None
+
+
+_INCLUSION_HYDRATE_BATCH = 25
+
+
+def _hydrate_inclusion_light_batch(
+    db: Session,
+    page_light: list[dict[str, Any]],
+    *,
+    asset,
+    keyword_groups: list[dict[str, Any]],
+    match_terms: list[str],
+) -> list[dict[str, Any]]:
+    if not page_light:
+        return []
+    page_pks = [int(item["_pk"]) for item in page_light if item.get("_pk") is not None]
+    subtasks = _hydrate_subtasks_in_id_order(
+        db,
+        page_pks,
+        joinedload(GeoMonitorSubtask.task).load_only(
+            GeoMonitorTask.monitor_keywords,
+            GeoMonitorTask.created_at,
+            GeoMonitorTask.total_items,
+            GeoMonitorTask.completed_items,
+        ),
+        load_only(
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.status,
+            GeoMonitorSubtask.mention_context,
+            GeoMonitorSubtask.page_screenshot,
+            GeoMonitorSubtask.reference_list_json,
+            GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.all_rankings_json,
+            GeoMonitorSubtask.sentiment,
+            GeoMonitorSubtask.updated_at,
+        ),
+    )
+    by_pk = {item.id: item for item in subtasks}
+    recent_snapshots: list[dict[str, Any]] = []
+    for light in page_light:
+        item = by_pk.get(int(light["_pk"]))
+        if item is None or item.task is None:
+            row = {k: v for k, v in light.items() if k != "_pk"}
+            row.setdefault("sentiment", None)
+            row.setdefault("answer_excerpt", None)
+            row.setdefault("page_screenshot", None)
+            row.setdefault("source_articles", [])
+            recent_snapshots.append(row)
+            continue
+        monitor_keywords = item.task.monitor_keywords
+        brand_rank, brand_mentioned = _resolve_brand_rank(
+            item,
+            monitor_keywords,
+            match_terms,
+            asset,
+        )
+        recent_snapshots.append({
+            "subtask_id": item.subtask_id,
+            "task_id": item.task_id,
+            "platform": item.platform,
+            "prompt": item.prompt,
+            "keyword_group": light.get("keyword_group"),
+            "monitor_keyword": light.get("monitor_keyword"),
+            "schedule_label": light.get("schedule_label"),
+            "schedule_window_key": light.get("schedule_window_key"),
+            "detect_day": light.get("detect_day"),
+            "prompt_intent": light.get("prompt_intent") or prompt_monitor_intent(item.prompt),
+            "brand_rank": brand_rank,
+            "brand_mentioned": brand_mentioned,
+            "sentiment": _normalize_sentiment_label(item.sentiment),
+            "answer_excerpt": _answer_excerpt(item.mention_context, 100),
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
+            "source_articles": _snapshot_source_articles(item),
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+        })
+    return recent_snapshots
+
+
 def _filter_inclusion_snapshots_by_keyword(
     rows: list[dict[str, Any]],
     keyword: str | None,
@@ -4669,10 +4753,8 @@ def list_inclusion_snapshots(
 
         conditions.append(GeoMonitorSubtask.platform.in_(expand_platform_codes(purchased_set)))
 
-    # ponytail: 池阶段用 mention_position 近似「有位次」；展示行再走完整 _resolve_brand_rank。
-    # 上限：仅有 JSON 榜、列空的行会进「含未提及」而非「有位次」；要绝对同口径再给池阶段装 all_rankings_json。
-    if scope == "ranked":
-        conditions.append(GeoMonitorSubtask.mention_position.is_not(None))
+    # 2026-08-03 - 有位次仍出未提及 - SQL mention_position 与 _resolve_brand_rank 口径不一致，不在 SQL 预筛
+    # ponytail: ranked 在 hydration 后按 brand_rank 过滤；扫描窗可能略大，上限 scan_limit 兜底。
 
     # 调度窗内行数通常可控；仍设天花板防异常租户拖垮
     scan_limit = 8000
@@ -4752,8 +4834,37 @@ def list_inclusion_snapshots(
         diversify_days=True,
     )
     pool = _filter_inclusion_snapshots_by_keyword(pool, keyword)
-    total = len(pool)
+    match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
     offset = (page - 1) * limit
+
+    if scope == "ranked":
+        # 2026-08-03 - 有位次仍出未提及 - 按 hydration 后 brand_rank 计数/分页，勿信 mention_position
+        recent_snapshots: list[dict[str, Any]] = []
+        total_ranked = 0
+        for batch_start in range(0, len(pool), _INCLUSION_HYDRATE_BATCH):
+            batch_light = pool[batch_start: batch_start + _INCLUSION_HYDRATE_BATCH]
+            for row in _hydrate_inclusion_light_batch(
+                db,
+                batch_light,
+                asset=asset,
+                keyword_groups=keyword_groups,
+                match_terms=match_terms,
+            ):
+                if not _inclusion_snapshot_has_display_rank(row):
+                    continue
+                if total_ranked >= offset and len(recent_snapshots) < limit:
+                    recent_snapshots.append(row)
+                total_ranked += 1
+        return {
+            "recent_snapshots": recent_snapshots,
+            "purchased_platforms": purchased_platforms,
+            "rank_scope": scope,
+            "total": total_ranked,
+            "page": page,
+            "page_size": limit,
+        }
+
+    total = len(pool)
     page_light = pool[offset: offset + limit]
     if not page_light:
         return {
@@ -4765,70 +4876,13 @@ def list_inclusion_snapshots(
             "page_size": limit,
         }
 
-    match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
-    page_pks = [int(item["_pk"]) for item in page_light if item.get("_pk") is not None]
-    subtasks = _hydrate_subtasks_in_id_order(
+    recent_snapshots = _hydrate_inclusion_light_batch(
         db,
-        page_pks,
-        joinedload(GeoMonitorSubtask.task).load_only(
-            GeoMonitorTask.monitor_keywords,
-            GeoMonitorTask.created_at,
-            GeoMonitorTask.total_items,
-            GeoMonitorTask.completed_items,
-        ),
-        load_only(
-            GeoMonitorSubtask.subtask_id,
-            GeoMonitorSubtask.task_id,
-            GeoMonitorSubtask.platform,
-            GeoMonitorSubtask.prompt,
-            GeoMonitorSubtask.status,
-            GeoMonitorSubtask.mention_context,
-            GeoMonitorSubtask.page_screenshot,
-            GeoMonitorSubtask.reference_list_json,
-            GeoMonitorSubtask.mention_position,
-            GeoMonitorSubtask.all_rankings_json,
-            GeoMonitorSubtask.sentiment,
-            GeoMonitorSubtask.updated_at,
-        ),
+        page_light,
+        asset=asset,
+        keyword_groups=keyword_groups,
+        match_terms=match_terms,
     )
-    by_pk = {item.id: item for item in subtasks}
-    recent_snapshots: list[dict[str, Any]] = []
-    for light in page_light:
-        item = by_pk.get(int(light["_pk"]))
-        if item is None or item.task is None:
-            row = {k: v for k, v in light.items() if k != "_pk"}
-            row.setdefault("sentiment", None)
-            row.setdefault("answer_excerpt", None)
-            row.setdefault("page_screenshot", None)
-            row.setdefault("source_articles", [])
-            recent_snapshots.append(row)
-            continue
-        monitor_keywords = item.task.monitor_keywords
-        brand_rank, brand_mentioned = _resolve_brand_rank(
-            item,
-            monitor_keywords,
-            match_terms,
-            asset,
-        )
-        recent_snapshots.append({
-            "subtask_id": item.subtask_id,
-            "task_id": item.task_id,
-            "platform": item.platform,
-            "prompt": item.prompt,
-            "keyword_group": light.get("keyword_group"),
-            "monitor_keyword": light.get("monitor_keyword"),
-            "schedule_label": light.get("schedule_label"),
-            "schedule_window_key": light.get("schedule_window_key"),
-            "detect_day": light.get("detect_day"),
-            "prompt_intent": light.get("prompt_intent") or prompt_monitor_intent(item.prompt),
-            "brand_rank": brand_rank,
-            "brand_mentioned": brand_mentioned,
-            "sentiment": _normalize_sentiment_label(item.sentiment),
-            "answer_excerpt": _answer_excerpt(item.mention_context, 100),
-            "page_screenshot": public_screenshot_url(item.page_screenshot),
-            "source_articles": _snapshot_source_articles(item),
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-        })
 
     return {
         "recent_snapshots": recent_snapshots,
