@@ -513,6 +513,8 @@ def render_insight_paragraph(text: str | None) -> str:
 
 def render_tip_list(tips: list[str]) -> str:
     """信源优化建议：与「数据分析与优化建议」同款白卡段落流。"""
+    from html import unescape as html_unescape
+
     cleaned: list[str] = []
     for item in tips:
         tip = str(item).strip()
@@ -529,7 +531,9 @@ def render_tip_list(tips: list[str]) -> str:
         return ""
     cards: list[str] = []
     for index, tip in enumerate(cleaned[:12], start=1):
-        text = tip if tip.startswith("<") else _esc(tip)
+        # 2026-08-04 - 模型若把 <strong> 写进 tip 字符串，_esc 会变成页面上的「代码」；先剥标签再标重点
+        plain = html_unescape(re.sub(r"<[^>]+>", "", tip)).strip()
+        text = _highlight_analysis_plain(plain)
         cards.append(
             '<div class="analysis-block analysis-card pack-item tip-as-analysis">'
             f'<p class="para--short"><span class="tip-card-index">{index:02d}</span>{text}</p>'
@@ -594,11 +598,52 @@ def _normalize_analysis_h2(html: str) -> str:
     return re.sub(r"<h2[^>]*>\s*数据分析与优化建议\s*</h2>", "", cleaned, flags=re.I)
 
 
+def _split_dense_analysis_paragraphs(html: str) -> str:
+    """2026-08-04 - 分析结论超长单段拆成多条 <p>，避免一卡密密麻麻。
+
+    仅按中文句号/分号拆；不碰小数点。模型已输出多段 <p> 时，单段不足 2 个句号则保持原样。
+    """
+    from html import unescape as html_unescape
+
+    body = str(html or "")
+    if not body:
+        return body
+
+    def _split_p(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        inner = match.group(2)
+        plain = html_unescape(re.sub(r"<[^>]+>", "", inner)).strip()
+        # 只认中文句子边界，避免 52.7% 被英文句点误伤（此处本就不拆 .）
+        sents = [s.strip() for s in re.split(r"(?<=[。；])", plain) if s and s.strip()]
+        if len(sents) < 2:
+            return match.group(0)
+        # 已是「一句一卡」量级：勿再拆
+        if len(sents) == 1 or (len(sents) == 2 and len(plain) < 160):
+            return match.group(0)
+        if len(sents) < 3 and len(plain) < 120:
+            return match.group(0)
+        merged: list[str] = []
+        for sent in sents:
+            if merged and len(sent) < 12:
+                merged[-1] = merged[-1] + sent
+            else:
+                merged.append(sent)
+        if len(merged) < 2:
+            return match.group(0)
+        cls = ' class="para--short"'
+        if "para--short" in attrs:
+            return "".join(f"<p{attrs}>{_esc(s)}</p>" for s in merged)
+        return "".join(f"<p{cls}>{_esc(s)}</p>" for s in merged)
+
+    return re.sub(r"<p(\s[^>]*)?>(.*?)</p>", _split_p, body, flags=re.I | re.S)
+
+
 def _wrap_analysis_blocks(html: str) -> str:
-    """按参考图：每段正文独立白卡片；章节 h2 不单独占卡（避免打断卡片节奏）。"""
+    """按参考图：每段正文独立白卡片；章节 h2/h3 保留为标题卡（新提示词三块结构依赖）。"""
     blocks: list[str] = []
+    # 2026-08-04 - 原先丢弃 h2、不认 h3 →「分析结论/攻坚/渠道/P0」标题写不全
     pattern = re.compile(
-        r"(<h2\b[^>]*>.*?</h2>)|(<p\b[^>]*>.*?</p>)|(<ul\b[^>]*>.*?</ul>)|(<ol\b[^>]*>.*?</ol>)",
+        r"(<h2\b[^>]*>.*?</h2>)|(<h3\b[^>]*>.*?</h3>)|(<p\b[^>]*>.*?</p>)|(<ul\b[^>]*>.*?</ul>)|(<ol\b[^>]*>.*?</ol>)",
         re.I | re.S,
     )
     for match in pattern.finditer(html or ""):
@@ -606,6 +651,14 @@ def _wrap_analysis_blocks(html: str) -> str:
         if not chunk:
             continue
         if re.match(r"<h2\b", chunk, re.I):
+            blocks.append(
+                f'<div class="analysis-block analysis-card pack-item analysis-section-head">{chunk}</div>'
+            )
+            continue
+        if re.match(r"<h3\b", chunk, re.I):
+            blocks.append(
+                f'<div class="analysis-block analysis-card pack-item analysis-section-sub">{chunk}</div>'
+            )
             continue
         blocks.append(f'<div class="analysis-block analysis-card pack-item">{chunk}</div>')
     if blocks:
@@ -619,6 +672,7 @@ _EMPHASIS_RED = "#ff6666"
 _EMPHASIS_BLUE = "#66ccff"
 # 行动项里常见落点站点/平台，作次要蓝高亮（长词优先）
 _EMPHASIS_BLUE_TERMS = (
+    "百度百科",
     "百度知道",
     "百家号",
     "搜狐号",
@@ -626,12 +680,33 @@ _EMPHASIS_BLUE_TERMS = (
     "广告门",
     "梅花网",
     "DeepSeek",
+    "通义千问",
+    "百度 AI+",
+    "今日头条",
+    "博客园",
+    "豆丁网",
+    "大众网",
+    "爱企查",
+    "微信公众平台",
     "知乎",
     "夸克",
     "新浪",
     "搜狐",
+    "网易",
     "抖音",
     "微博",
+    "Kimi",
+    "元宝",
+    "豆包",
+)
+_EMPHASIS_BLUE_PHRASES = (
+    "内容分发策略",
+    "内容相关性",
+    "需强化推荐位次",
+    "需增加权威信源引用",
+    "平台覆盖不均",
+    "自媒体和垂直网站覆盖不足",
+    "以合规口径执行",
 )
 
 
@@ -647,6 +722,10 @@ def _highlight_analysis_plain(text: str) -> str:
         return f'「<strong style="color:{color};">{match.group(1)}</strong>」'
 
     esc = re.sub(r"「([^」]{1,48})」", _quote_repl, esc)
+    for phrase in _EMPHASIS_BLUE_PHRASES:
+        token = f'<strong style="color:{_EMPHASIS_BLUE};">{phrase}</strong>'
+        if phrase in esc and token not in esc:
+            esc = esc.replace(phrase, token, 1)
     for term in _EMPHASIS_BLUE_TERMS:
         token = f'<strong style="color:{_EMPHASIS_BLUE};">{term}</strong>'
         if term not in esc or token in esc:
@@ -662,7 +741,94 @@ def _highlight_analysis_plain(text: str) -> str:
             break
         if not replaced:
             continue
+    # 未染色的百分比 / 百分点 → 红
+    def _metric_repl(match: re.Match[str]) -> str:
+        before = esc[: match.start()]
+        if before.count("<strong") > before.count("</strong>"):
+            return match.group(0)
+        return f'<strong style="color:{_EMPHASIS_RED};">{match.group(0)}</strong>'
+
+    esc = re.sub(r"\d+(?:\.\d+)?(?:%|个百分点)", _metric_repl, esc)
     return esc
+
+
+def enrich_analysis_emphasis_html(html: str) -> str:
+    """2026-08-04 - 对齐旧报告标重点：裸 strong 补色，百分比红，站点/动作短语蓝。"""
+    body = str(html or "")
+    if not body:
+        return body
+
+    def _color_bare_strong(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        inner = match.group(2)
+        if re.search(r"color\s*:", attrs, flags=re.I):
+            return match.group(0)
+        plain = re.sub(r"<[^>]+>", "", inner)
+        # 动作/补充语气 → 蓝，其余重点 → 红
+        if re.search(r"需|建议|优先|加强|布局|优化|补充|覆盖不足|相关性|分发", plain):
+            color = _EMPHASIS_BLUE
+        else:
+            color = _EMPHASIS_RED
+        return f'<strong style="color:{color};">{inner}</strong>'
+
+    body = re.sub(
+        r"<strong(\s[^>]*)?>(.*?)</strong>",
+        _color_bare_strong,
+        body,
+        flags=re.I | re.S,
+    )
+
+    def _enrich_text_chunk(chunk: str) -> str:
+        if not chunk or "<" in chunk:
+            # 已是含标签片段时，只在标签外补；简化：对整段做有限替换
+            out = chunk
+        else:
+            out = chunk
+        for phrase in _EMPHASIS_BLUE_PHRASES:
+            token = f'<strong style="color:{_EMPHASIS_BLUE};">{phrase}</strong>'
+            if phrase in out and token not in out:
+                # 避免写进已有 strong
+                out = out.replace(phrase, token, 1)
+        for term in _EMPHASIS_BLUE_TERMS:
+            token = f'<strong style="color:{_EMPHASIS_BLUE};">{term}</strong>'
+            if term not in out or token in out:
+                continue
+            # 跳过已在 strong 内的命中
+            parts: list[str] = []
+            last = 0
+            for match in re.finditer(re.escape(term), out):
+                before = out[: match.start()]
+                if before.count("<strong") > before.count("</strong>"):
+                    continue
+                parts.append(out[last : match.start()])
+                parts.append(token)
+                last = match.end()
+                break
+            else:
+                continue
+            parts.append(out[last:])
+            out = "".join(parts)
+
+        def _metric_repl(match: re.Match[str]) -> str:
+            before = out[: match.start()]
+            if before.count("<strong") > before.count("</strong>"):
+                return match.group(0)
+            return f'<strong style="color:{_EMPHASIS_RED};">{match.group(0)}</strong>'
+
+        out = re.sub(r"\d+(?:\.\d+)?(?:%|个百分点)", _metric_repl, out)
+        return out
+
+    def _enrich_leaf(match: re.Match[str]) -> str:
+        tag, attrs, inner = match.group(1), match.group(2) or "", match.group(3)
+        return f"<{tag}{attrs}>{_enrich_text_chunk(inner)}</{tag}>"
+
+    body = re.sub(
+        r"<(p|li|h2|h3)(\s[^>]*)?>(.*?)</\1>",
+        _enrich_leaf,
+        body,
+        flags=re.I | re.S,
+    )
+    return body
 
 
 def render_priority_actions(rows: list[dict[str, Any]]) -> str:
@@ -750,6 +916,9 @@ def ensure_analysis_action_items(
     body = str(html or "").strip()
     if not body:
         return body
+    # 2026-08-04 - 新提示词已含分析结论/攻坚/渠道路径时勿再灌「围绕语义词」凑条，避免写全后反被注水
+    if re.search(r"分析结论|攻坚优先级|渠道路径", body):
+        return body
     existing = re.findall(r"<li\b[^>]*>.*?</li>", body, flags=re.I | re.S)
     # 粗略只统计「采取措施」相关 ul；若无法定位则按全文 li 计
     section_match = re.search(
@@ -814,12 +983,25 @@ def render_analysis_html(
     fill_titles = list(priority_titles)
     fill_titles.extend(str(x).strip() for x in (source_action_tips or []) if str(x).strip())
 
-    if analysis_html and str(analysis_html).strip():
-        body = sanitize_analysis_html(str(analysis_html).strip())
-        body = ensure_analysis_action_items(body, fill_titles=fill_titles, min_count=8, max_count=10)
+    raw_analysis = str(analysis_html or "").strip()
+    # 2026-08-04 - 新提示词三块（分析结论→攻坚→渠道）时不再置顶短标题行动项、不再凑条
+    use_v2_structure = bool(
+        raw_analysis and re.search(r"分析结论|攻坚优先级|渠道路径", raw_analysis)
+    )
+
+    if raw_analysis:
+        body = sanitize_analysis_html(raw_analysis)
+        body = _split_dense_analysis_paragraphs(body)
+        if not use_v2_structure:
+            body = ensure_analysis_action_items(body, fill_titles=fill_titles, min_count=8, max_count=10)
         body = _normalize_analysis_h2(body)
-        # 4A：措施列表拆成独立段落卡，并与置顶 priority 去重
-        body = _explode_lists_to_paragraphs(body, dedupe_titles=priority_titles)
+        # 4A：措施列表拆成独立段落卡；v2 保留原列表/标题顺序，仅与短标题去重
+        body = _explode_lists_to_paragraphs(
+            body,
+            dedupe_titles=[] if use_v2_structure else priority_titles,
+        )
+        # 2026-08-04 - 对齐旧报告红/蓝标重点
+        body = enrich_analysis_emphasis_html(body)
         body = _wrap_analysis_blocks(body)
     else:
         chunks: list[str] = []
@@ -839,7 +1021,10 @@ def render_analysis_html(
                         )
         body = "\n".join(chunks)
 
-    # 行动项置顶（用户明确要求写到上边）
+    if use_v2_structure:
+        return body
+
+    # 旧五段结构：行动项置顶（历史交付口径）；新三块结构已含攻坚正文，勿再前置短标题卡
     head: list[str] = []
     if priority_actions:
         head.append(render_priority_actions(priority_actions))

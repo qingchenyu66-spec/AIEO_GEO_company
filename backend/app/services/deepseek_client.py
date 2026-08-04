@@ -577,15 +577,26 @@ class DeepseekClient:
             if lead_analytics:
                 json_schema += (
                     ',\n'
-                    '  "analysis_html": "必填；五节解读 HTML（h2 为 1~5 节标题）。'
-                    '第1~4节每节须输出 2~4 个独立 <p>（每段 40~90 字），从不同角度写短板/竞品/平台差异，禁止每节只写一大段；'
-                    '第5节「采取措施建议」须含门户/垂直/问答/自媒体四类，每类下至少 2 条 li，'
-                    '整节合计 8~10 条可执行建议（不得少于 8 条），勿输出【深度】【广度】等标签",\n'
-                    '  "priority_actions": [{"priority":"P0|P1|P2","title":"行动项（40~80字，含对象+做法+场景，禁止写验收口径/承诺指标）","timeline":"30天|60天|90天"}],\n'
+                    '  "analysis_html": "必填；HTML（不要输出「数据分析与优化建议」总标题）。'
+                    '结构固定三块：'
+                    '① <h2>分析结论</h2> 下 6~8 个独立 <p>（每发现一段，禁止合成超长单段），'
+                    '覆盖最强/最弱场景词差距、平台覆盖不均、Top3、信源多样性、竞品对照；'
+                    '定性词后必须紧跟具体数字；'
+                    '重点 <strong style=\\"color:#ff6666;\\">，补充动作 <strong style=\\"color:#66ccff;\\">，h2/h3 不要内联 style；'
+                    '② <h2>攻坚优先级</h2> 下用 <h3>P0</h3>/<h3>P1</h3>/<h3>P2</h3> + <ul><li>：'
+                    'P0 被竞品压制场景/平台（对比数字+双线动作+目标），'
+                    'P1 差距约≤20pt 可追场景，P2 持平防守+信源结构升级；'
+                    '③ <h2>渠道路径</h2> 按问答平台/垂直媒体/门户/自媒体/权威背书五类汇总动作，注明以合规口径执行。'
+                    '量化目标统一写「首要目标：争取将提及率提到约 A%～B%」（均排写「争取将均排提到约 X 以内」）；'
+                    '禁止「30天内提升至X%」「60天目标Y%」「验收口径」等合同式承诺；'
+                    '情感计数以输入为准，合计>0 时禁止写均为0/无情绪数据",\n'
+                    '  "priority_actions": [{"priority":"P0|P1|P2","title":"行动项（40~80字，对象+做法+场景；可用首要目标区间表述，禁止验收口径/死日期单点承诺）","timeline":"30天|60天|90天"}],\n'
                     '  "prompt_commentaries": [{"prompt": "语义词原文", "comment": "80-120字 HTML 短评"}],\n'
                     '  "platform_insight": "分平台差异解读，100-150字",\n'
-                    '  "source_action_tips": ["信源优化建议 10 条；每条 60~110 字；咨询顾问口吻；'
-                    '说明「为何做+做什么+落到哪个站/问法」；禁止以「针对」开头；禁止验收口径/量化承诺"]'
+                    '  "source_action_tips": ["信源优化建议 8~10 条纯文本（禁止 HTML 标签）；'
+                    '每条以「具体域名+引用次数」开篇；2~3 句可执行；'
+                    '覆盖官网/问答/百科/垂直/门户/社媒/文档/监测；挂钩短板语义词；'
+                    '禁止以「针对」开头；禁止验收口径"]'
                 )
         json_schema += "\n}"
 
@@ -595,26 +606,47 @@ class DeepseekClient:
             "不得编造未提供的数据，不得虚构平台或指标。只输出 JSON，不要解释。"
         )
         if lead_analytics:
+            # 2026-08-04 - 售前诊断改用三块结构（分析结论/攻坚优先级/渠道路径），替换旧 1~5 节口径
             system_prompt += (
-                "售前诊断报告需对齐模力指数 HTML 报告："
-                "analysis_html 使用 HTML，每节 h2 标题固定为"
-                "「1. 行业分析」「2. 排名分析」「3. 提及率分析」「4. 引用网站分析」「5. 采取措施建议」，"
-                "不要输出「数据分析与优化建议」总标题。"
-                "重点 strong 红色(#ff6666)，补充 strong 蓝色(#66ccff)，节标题 h2 不要内联 style。"
-                "前文诊断概览已展示 KPI，analysis_html 禁止重复具体 KPI 数字"
-                "（如提及率%、Top3%、平均排名、样本数、信源数），改用「偏低/领先/落后竞品/差距明显」等定性表述。"
+                "售前诊断报告需对齐模力指数 HTML 报告。"
+                "analysis_html 使用 HTML，结构固定为："
+                "「分析结论」→「攻坚优先级（P0/P1/P2）」→「渠道路径」三块 h2；"
+                "不要输出「数据分析与优化建议」总标题，也不要再用「1.行业分析…5.采取措施建议」旧五节标题。"
+                "分析结论：6~8 个发现，每个独立 <p>，禁止超长单段；"
+                "短板/领先/覆盖不足等定性后必须跟具体数字。"
+                "攻坚优先级：h3 为 P0/P1/P2，下列 ul/li；含竞品对比数字、双线动作与首要目标区间。"
+                "渠道路径：按问答平台/垂直媒体/门户/自媒体/权威背书五类写动作，注明以合规口径执行。"
+                "重点 strong 红色(#ff6666)，补充动作/站点 strong 蓝色(#66ccff)，节标题 h2/h3 不要内联 style。"
                 "禁止引用异常/新闻杂讯类信源标题，用域名或网站类型描述。"
-                "第1~4节每节必须拆成 2~4 条独立短段落（多个 <p>），不要每节一大段；"
-                "第5节须用分类 ul/li 列出门户、垂直、问答、自媒体等网站类型建议，合计 8~10 条，每条写清动作与场景；不得少于 8 条。"
-                "priority_actions 须 8~10 条，含 P0/P1/P2、timeline；title 40~80 字写清对象与动作；"
-                "严禁出现「验收口径」「提升X%」「阅读量超过」等承诺式指标。"
-                "source_action_tips 须恰好 10 条、每条 60~110 字：顾问口吻，说明原因+动作+落点站点/问法；"
-                "严禁「针对」开头与空话套话；严禁验收口径。"
+                "priority_actions 须 6~10 条，含 P0/P1/P2、timeline；title 40~80 字写清对象与动作；"
+                "量化目标统一「首要目标：争取将提及率提到约 A%～B%」或均排「约 X 以内」；"
+                "严禁「验收口径」「30天内提升至X%」「60天目标Y%」等合同式承诺。"
+                "source_action_tips 须 8~10 条纯文本（禁止 HTML）：以域名+引用次数开篇；"
+                "顾问口吻说明原因+动作+落点；挂钩短板语义词；严禁「针对」开头与验收口径。"
+                "情感正/中/负以输入计数为准，合计>0 时禁止写均为0/无情绪数据。"
                 "不要输出 analysis_action_tips，不要使用【深度】【广度】【维度】【策略】标签。"
             )
         prompt_section = ""
         if prompt_lines:
             prompt_section = "分语义词表现：\n" + "\n".join(prompt_lines) + "\n\n"
+        # 2026-08-04 - 情绪键中英混用会导致模型误写「均为0」；统一成中文计数再喂给模型
+        from app.services.report_period_content_service import normalize_sentiment_counts
+
+        sent_norm = normalize_sentiment_counts(sentiment_counts)
+        pos_n = int(sent_norm.get("正面") or 0)
+        neu_n = int(sent_norm.get("中性") or 0)
+        neg_n = int(sent_norm.get("负面") or 0)
+        sent_total = pos_n + neu_n + neg_n
+        if sent_total > 0:
+            sentiment_line = (
+                f"情绪分布：正面/中性/负面 = {pos_n}/{neu_n}/{neg_n}"
+                f"（合计 {sent_total}，占比 "
+                f"{round(pos_n * 100 / sent_total, 1)}%/"
+                f"{round(neu_n * 100 / sent_total, 1)}%/"
+                f"{round(neg_n * 100 / sent_total, 1)}%）"
+            )
+        else:
+            sentiment_line = "情绪分布：暂无有效情绪标注样本"
         user_prompt = (
             f"品牌：{brand_name}\n"
             f"企业：{company_name or brand_name}\n"
@@ -627,7 +659,7 @@ class DeepseekClient:
             f"- 正面情绪占比：{kpis.get('positive_rate')}%\n"
             f"- 已完成样本：{kpis.get('completed_count')} 条\n"
             f"- 引用信源数：{kpis.get('source_count')} 个\n\n"
-            f"情绪分布：{sentiment_counts}\n"
+            f"{sentiment_line}\n"
             f"纳入竞品：{('、'.join(competitor_names) if competitor_names else '未配置')}\n\n"
             "各平台表现：\n"
             f"{chr(10).join(platform_lines) or '- 暂无平台明细'}\n\n"

@@ -100,6 +100,27 @@
     return title.includes("核心指标") || !!slide.querySelector(".dark-panel--kpi");
   }
 
+  // 2026-08-04 - 分析页 P0/P1/P2、分析结论等标题卡勿落在页底孤悬
+  function isAnalysisSectionHead(el) {
+    return !!(
+      el &&
+      (el.classList.contains("analysis-section-head") || el.classList.contains("analysis-section-sub"))
+    );
+  }
+
+  function liftOrphanAnalysisHeads(pages) {
+    if (!pages || pages.length < 2) return;
+    for (let i = 0; i < pages.length - 1; i += 1) {
+      const page = pages[i];
+      while (page.length && isAnalysisSectionHead(page[page.length - 1])) {
+        pages[i + 1].unshift(page.pop());
+      }
+    }
+    for (let i = pages.length - 1; i >= 0; i -= 1) {
+      if (!pages[i].length) pages.splice(i, 1);
+    }
+  }
+
   function clampFont(px, factor, minPx) {
     return Math.max(minPx == null ? MIN_FONT_PX : minPx, px * factor);
   }
@@ -379,6 +400,14 @@
     if (title) title.textContent = base ? `${base}（续）` : "（续）";
     slide.after(blank);
     blankBody.appendChild(last);
+    // 2026-08-04 - 剥走末卡后若页尾只剩 P0/P1/P2 标题卡，一并挪到续页顶
+    while (true) {
+      const remain = Array.from(body.querySelectorAll(":scope > .pack-item"));
+      if (!remain.length) break;
+      const tail = remain[remain.length - 1];
+      if (!isAnalysisSectionHead(tail)) break;
+      blankBody.insertBefore(tail, blankBody.firstChild);
+    }
     return 1;
   }
 
@@ -439,6 +468,18 @@
         body.insertBefore(card, tipGrid);
       });
       tipGrid.remove();
+    }
+    // 2026-08-04 - tip-analysis-stack 整坨被包成 1 个 pack-item → 信源建议底卡被 overflow 裁切
+    // 与 tip-card-grid 同口径：先把卡提到 body 下再拆页
+    const tipStack = body.querySelector(":scope > .tip-analysis-stack");
+    if (tipStack) {
+      Array.from(tipStack.querySelectorAll(":scope > .analysis-block, :scope > .tip-card, :scope > .pack-item")).forEach(
+        (card) => {
+          card.classList.add("pack-item");
+          body.insertBefore(card, tipStack);
+        }
+      );
+      tipStack.remove();
     }
     const kids = Array.from(body.children);
     const hasMarked = kids.some(
@@ -641,12 +682,21 @@
     const pages = [];
     let cur = [];
     let h = 0;
-    items.forEach((item) => {
+    items.forEach((item, idx) => {
       const ih = itemHeight(item);
       if (cur.length && h + ih > maxH) {
         pages.push(cur);
         cur = [];
         h = 0;
+      }
+      // 2026-08-04 - 章节标题卡与下一条正文同页：放不下则整组换页，避免页尾孤 P2
+      if (isAnalysisSectionHead(item) && cur.length && idx + 1 < items.length) {
+        const nextH = itemHeight(items[idx + 1]);
+        if (h + ih + Math.min(nextH, maxH) > maxH) {
+          pages.push(cur);
+          cur = [];
+          h = 0;
+        }
       }
       cur.push(item);
       h += Math.min(ih, maxH);
@@ -685,6 +735,8 @@
 
     // 2026-07-27 - 页底表头+一两行孤儿：整块挪到下一页（下一页本就带表头）
     liftOrphanTableTails(pages);
+    // 2026-08-04 - 分析章节标题卡（P0/P1/P2 等）勿孤悬页尾
+    liftOrphanAnalysisHeads(pages);
 
     // 分析页：仅极短尾页并回，避免把两张 tall 页吞成一页导致无分页
     if (slide.dataset.mergeGroup === "analysis" && pages.length === 2) {

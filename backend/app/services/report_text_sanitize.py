@@ -112,6 +112,96 @@ _GARBAGE_SOURCE_RE = re.compile(
 )
 
 
+def soften_diagnosis_goal_phrasing(text: str | None) -> str:
+    """把「N天内提升至X% / 60天目标Y%」收成对外可解释的首要目标区间句。
+
+    2026-08-04 - 客户交付忌死日期+单点承诺 - 统一「首要目标：争取将…提到约A%～B%」
+    先剥标签再改写，避免 <strong>40%以上</strong> 等夹标签导致正则落空。
+    """
+    raw = str(text or "")
+    if not raw:
+        return ""
+
+    def _pct_range(low: float, high: float | None = None) -> str:
+        a = float(low)
+        b = float(high) if high is not None else min(100.0, a + 10.0)
+        if b < a:
+            a, b = b, a
+
+        def _fmt(v: float) -> str:
+            return str(int(v)) if abs(v - int(v)) < 1e-6 else f"{v:.1f}".rstrip("0").rstrip(".")
+
+        if abs(a - b) < 1e-6:
+            b = min(100.0, a + 10.0)
+        return f"{_fmt(a)}%～{_fmt(b)}%"
+
+    def _soften_plain_goal(plain: str) -> str | None:
+        s = plain.strip()
+        if not s.endswith(("。", ".")):
+            s = s + "。"
+        m = re.search(
+            r"目标\s*[:：]\s*\d+\s*天内[，,]?提及率争取提升至\s*"
+            r"(\d+(?:\.\d+)?)\s*%\s*以上\s*[，,]\s*\d+\s*天目标\s*(\d+(?:\.\d+)?)\s*%"
+            r"(?P<tail>[^。]*)[。.]",
+            s,
+        )
+        if m:
+            return f"首要目标：争取将提及率提到约{_pct_range(float(m.group(1)), float(m.group(2)))}{m.group('tail')}。"
+        m = re.search(
+            r"目标\s*[:：]\s*\d+\s*天内[，,]?提及率争取(?:提升至|稳定在)\s*"
+            r"(\d+(?:\.\d+)?)\s*%\s*(?:以上)?"
+            r"(?P<tail>[，,][^。]*)?[。.]",
+            s,
+        )
+        if m:
+            return f"首要目标：争取将提及率提到约{_pct_range(float(m.group(1)))}{m.group('tail') or ''}。"
+        m = re.search(
+            r"目标\s*[:：]\s*\d+\s*天内[，,]?均排争取(?:进入|提升至|提到)\s*"
+            r"(\d+(?:\.\d+)?)\s*以内"
+            r"(?P<tail>[^。]*)[。.]",
+            s,
+        )
+        if m:
+            return f"首要目标：争取将均排提到约{m.group(1)}以内{m.group('tail')}。"
+        m = re.search(
+            r"目标\s*[:：]\s*\d+\s*天内[，,]?品牌相关引用占比(?:提升至|提到)\s*"
+            r"(\d+(?:\.\d+)?)\s*%\s*(?:以上)?"
+            r"(?P<tail>[^。]*)[。.]",
+            s,
+        )
+        if m:
+            return (
+                f"首要目标：争取将品牌相关引用占比提到约"
+                f"{_pct_range(float(m.group(1)))}{m.group('tail')}。"
+            )
+        return None
+
+    def _repl_goal_chunk(match: re.Match[str]) -> str:
+        chunk = match.group(0)
+        plain = _TAG_RE.sub("", chunk)
+        softened = _soften_plain_goal(plain)
+        return softened if softened else chunk
+
+    raw = re.sub(r"目标\s*[:：](?:[^。<]|<[^>]+>)*[。.]", _repl_goal_chunk, raw)
+
+    def _repl_from_to(match: re.Match[str]) -> str:
+        plain = _TAG_RE.sub("", match.group(0))
+        m = re.search(
+            r"提及率从\s*(\d+(?:\.\d+)?)\s*%\s*提升至\s*(\d+(?:\.\d+)?)\s*%",
+            plain,
+        )
+        if not m:
+            return match.group(0)
+        return f"提及率从{m.group(1)}%争取提到约{_pct_range(float(m.group(2)))}"
+
+    raw = re.sub(
+        r"提及率从(?:[^<%]|<[^>]+>)*%\s*提升至(?:[^<%]|<[^>]+>)*%",
+        _repl_from_to,
+        raw,
+    )
+    return raw
+
+
 def sanitize_analysis_html(html: str | None) -> str:
     """清洗 AI 解读 HTML；编号句拆成列表；短段标记不缩进。"""
     from html import escape as html_escape
@@ -121,14 +211,21 @@ def sanitize_analysis_html(html: str | None) -> str:
         return ""
     text = _JS_RE.sub(" ", text)
     text = _GARBAGE_SOURCE_RE.sub("相关聚合页", text)
+    text = soften_diagnosis_goal_phrasing(text)
+
+    # 2026-08-04 - 勿把 52.7% / 1.7 均排里的小数点当成「1. 2.」编号列表（否则分页碎成「整体提及率」「7%」）
+    _num_item = r"\d+[\.、．](?!\d)\s*"
 
     def _expand_p(match: re.Match[str]) -> str:
         inner = match.group(1).strip()
         plain = _TAG_RE.sub("", inner)
         plain = _WS_RE.sub(" ", plain).strip()
-        numbered = re.findall(r"\d+[\.、．]\s*", plain)
+        numbered = re.findall(_num_item, plain)
         if len(numbered) >= 2:
-            parts = re.split(r"(?:(?<=^)|(?<=\s)|(?<=[。；;]))\d+[\.、．]\s*", plain)
+            parts = re.split(
+                rf"(?:(?<=^)|(?<=\s)|(?<=[。；;])){_num_item}",
+                plain,
+            )
             items = [p.strip(" ；;，,") for p in parts if p and p.strip(" ；;，,")]
             if len(items) >= 2:
                 lis = "".join(f"<li>{html_escape(item)}</li>" for item in items[:12])

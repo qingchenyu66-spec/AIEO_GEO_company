@@ -56,7 +56,9 @@ def test_render_analysis_html_wraps_sections() -> None:
     assert html.count("analysis-card") >= 2
     assert "行业段落" in html
     assert "数据分析与优化建议" not in html
-    assert "1. 行业分析" not in html
+    # 2026-08-04 - 节标题保留为 analysis-section-head（旧逻辑丢弃 h2，新三块结构依赖可见标题）
+    assert "1. 行业分析" in html
+    assert "analysis-section-head" in html
     # 行动项：与分析同流白卡，禁止优先级/建议周期表格
     assert "优化电梯语义词" in html
     assert "优先级" not in html
@@ -67,6 +69,28 @@ def test_render_analysis_html_wraps_sections() -> None:
     assert "<ul>" not in html
     assert "行动甲独有建议" in html
     assert html.count("优化电梯语义词") == 1
+
+
+def test_render_analysis_html_keeps_v2_section_heads() -> None:
+    from app.services.report_molizhishu_fragments import render_analysis_html
+
+    html = render_analysis_html(
+        {},
+        analysis_html=(
+            "<h2>分析结论</h2><p>发现一。</p>"
+            "<h2>攻坚优先级</h2><h3>P0</h3><ul><li>优先补短板</li></ul>"
+            "<h2>渠道路径</h2><p>问答平台补内容。</p>"
+        ),
+        priority_actions=[{"priority": "P0", "title": "短标题行动", "timeline": "30天"}],
+    )
+    assert "分析结论" in html
+    assert "攻坚优先级" in html
+    assert "渠道路径" in html
+    assert "analysis-section-head" in html
+    assert "analysis-section-sub" in html
+    # v2：攻坚已在正文，不再前置短标题行动卡
+    assert "短标题行动" not in html
+    assert "优先补短板" in html
 
 
 def test_render_tip_list_no_indent_class() -> None:

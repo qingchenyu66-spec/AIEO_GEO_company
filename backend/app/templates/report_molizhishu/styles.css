@@ -333,17 +333,23 @@ body {
 .tip-analysis-stack {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    /* 2026-08-04 - 信源白卡挨太近 - 加大纵向间距 */
+    gap: 22px;
     width: 100%;
 }
 
 .tip-slide-body .analysis-card.tip-as-analysis {
-    margin: 0;
-    padding: 16px 20px;
+    /* 2026-08-04 - stack 拆开后靠 margin 拉开，勿再贴死 */
+    margin: 0 0 22px;
+    padding: 18px 22px;
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid rgba(0, 92, 180, 0.14);
     box-shadow: 0 6px 18px rgba(0, 20, 40, 0.18);
+}
+
+.tip-slide-body .analysis-card.tip-as-analysis:last-child {
+    margin-bottom: 0;
 }
 
 .tip-slide-body .tip-as-analysis p {
@@ -1085,7 +1091,8 @@ table thead th {
 /* 参考图：一段一卡，白底圆角 + 轻边框 */
 .analysis-slide-body .analysis-block,
 .analysis-slide-body .analysis-card {
-    margin: 0 0 14px;
+    /* 2026-08-04 - 分析白卡纵向挨太近 - 加大卡间距 */
+    margin: 0 0 22px;
     padding: 18px 22px;
     border-radius: 10px;
     background: #ffffff;
@@ -1105,6 +1112,27 @@ table thead th {
     font-size: 32px;
     font-weight: 800;
     color: #092b55;
+}
+
+/* 2026-08-04 - 章节/优先级标题卡：少留白，避免标题独占过大卡片 */
+.analysis-slide-body .analysis-section-head,
+.analysis-slide-body .analysis-section-sub {
+    padding: 10px 18px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.analysis-slide-body .analysis-section-head .analysis-h2,
+.analysis-slide-body .analysis-section-head h2 {
+    margin: 0;
+}
+
+.analysis-slide-body .analysis-section-sub h3 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 800;
+    color: #0b4f7a;
 }
 
 .analysis-priority-block .priority-action-table {

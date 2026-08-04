@@ -487,6 +487,7 @@ def resolve_lead_competitors(db: Session, lead: LeadDiagnosis, *, sync_lead: boo
 
 
 def _serialize_run(run: LeadDiagnosisRun) -> dict[str, Any]:
+    # 2026-08-04 - 临时 lead 的 run 未落库无 created_at - 导出序列化允许空时间戳
     return {
         "id": run.id,
         "schedule_key": run.schedule_key,
@@ -496,8 +497,8 @@ def _serialize_run(run: LeadDiagnosisRun) -> dict[str, Any]:
         "prompt_count": run.prompt_count,
         "platform_count": run.platform_count,
         "error_message": run.error_message,
-        "created_at": run.created_at.isoformat(),
-        "updated_at": run.updated_at.isoformat(),
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
     }
 
 
