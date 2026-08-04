@@ -293,8 +293,11 @@ async function rejectRow(row: OperationApproval) {
     await rejectOperation(row.id, comment)
     ElMessage.success('已驳回')
     await loadRows()
-  } catch {
-    ElMessage.error('驳回失败')
+  } catch (error: unknown) {
+    // 2026-08-04 - 已处理单再驳回只显示「驳回失败」- 透出 detail 并刷新列表
+    const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' && detail ? detail : '驳回失败')
+    await loadRows()
   } finally {
     actingId.value = null
     loading.value = false
