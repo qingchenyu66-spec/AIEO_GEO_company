@@ -14,6 +14,7 @@ from app.services.approval_service import (
     get_approval,
     list_approvals,
     reject_approval,
+    revise_lead_diagnosis_create_approval,
 )
 
 router = APIRouter(prefix="/approvals")
@@ -64,6 +65,28 @@ def approval_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:
         raise_read_endpoint_error(exc, context="approvals.detail")
+
+
+@router.post("/{approval_id}/revise-lead-diagnosis", response_model=ApiResponse[dict])
+def approval_revise_lead_diagnosis(
+    approval_id: int,
+    payload: dict | None = None,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """保存售前诊断新建审批的「审批采用」内容（不含品牌名）。"""
+    if not can_review_approvals(db, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号无权审批")
+    try:
+        data = revise_lead_diagnosis_create_approval(db, current, approval_id, payload or {})
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="approvals.revise_lead_diagnosis")
+    return ApiResponse(data=data)
 
 
 @router.post("/{approval_id}/approve", response_model=ApiResponse[dict])

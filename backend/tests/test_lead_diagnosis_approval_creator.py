@@ -21,9 +21,10 @@ def test_exec_lead_create_uses_requester_as_actor(monkeypatch) -> None:
     )
     captured: dict = {}
 
-    def _fake_create(db, current, payload):  # noqa: ANN001
+    def _fake_create(db, current, payload, **kwargs):  # noqa: ANN001
         captured["user_id"] = current.user.id
         captured["identity_id"] = current.identity.id
+        captured["enforce_position_platforms"] = kwargs.get("enforce_position_platforms", True)
         return {"id": 7, "created_by_user_id": current.user.id}
 
     monkeypatch.setattr(
@@ -47,4 +48,5 @@ def test_exec_lead_create_uses_requester_as_actor(monkeypatch) -> None:
     )
     assert captured["user_id"] == 259
     assert captured["identity_id"] == 99
+    assert captured["enforce_position_platforms"] is False
     assert result["created_by_user_id"] == 259

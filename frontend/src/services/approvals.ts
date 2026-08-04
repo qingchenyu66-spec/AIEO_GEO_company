@@ -24,6 +24,8 @@ export interface OperationApproval {
   tenant_name?: string | null
   target_id?: number | null
   payload?: Record<string, unknown>
+  lead_original_body?: Record<string, unknown> | null
+  lead_adopted_body?: Record<string, unknown> | null
   preview?: ApprovalPreview
   status: 'pending' | 'approved' | 'rejected'
   status_label: string
@@ -59,6 +61,21 @@ export async function getPendingApprovalCount(): Promise<number> {
 
 export async function listApprovals(params?: { status?: string; mine_only?: boolean }): Promise<OperationApproval[]> {
   const response = await http.get('/v1/approvals', { params })
+  return response.data.data
+}
+
+export async function reviseLeadDiagnosisApproval(
+  approvalId: number,
+  body: {
+    competitors?: string[]
+    platforms?: string[]
+    region_codes?: string[]
+    schedule_days?: number
+    prompts?: string[]
+    contact_note?: string | null
+  },
+): Promise<OperationApproval> {
+  const response = await http.post(`/v1/approvals/${approvalId}/revise-lead-diagnosis`, body)
   return response.data.data
 }
 

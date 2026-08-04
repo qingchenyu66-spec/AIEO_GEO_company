@@ -38,6 +38,14 @@ def _body(payload: dict[str, Any] | None) -> dict[str, Any]:
     return body if isinstance(body, dict) else raw
 
 
+def _lead_original_body(payload: dict[str, Any] | None) -> dict[str, Any]:
+    raw = payload or {}
+    original = raw.get("original_body")
+    if isinstance(original, dict):
+        return original
+    return _body(raw)
+
+
 def _join_list(items: list[Any] | None, *, limit: int = 8) -> str:
     values = [str(item).strip() for item in (items or []) if str(item or "").strip()]
     if not values:
@@ -314,30 +322,43 @@ def _report_changes(body: dict[str, Any], *, action: str) -> list[dict[str, str]
     return [_change("操作类型", after="编辑分析报告", kind="info"), _change("报告标题", after=title, kind="update")]
 
 
-def _lead_changes(body: dict[str, Any], *, is_create: bool) -> list[dict[str, str]]:
-    kind = "add" if is_create else "update"
-    rows = [
-        _change("操作类型", after="新建售前诊断" if is_create else "修改售前诊断", kind="info"),
-        _change("品牌名称", after=str(body.get("brand_name") or "—").strip() or "—", kind=kind),
-        _change("竞品", after=_join_list(body.get("competitors"), limit=20), kind=kind),
-        _change("监测地区", after=region_display_labels(body.get("region_codes")), kind=kind),
-        # 2026-08-04 - 审批预览缺诊断平台 - 补中文名；问题逐条列出便于核对
-        _change("诊断平台", after=_lead_platform_display(body.get("platforms")), kind=kind),
-        _change(
-            "诊断天数",
-            after=f"{body.get('schedule_days') or 3} 天",
-            kind=kind,
-        ),
-    ]
+def _lead_field_map(body: dict[str, Any]) -> dict[str, str]:
+    """统一字段展示文案，供原文/采用对照。"""
     prompts = [str(item).strip() for item in (body.get("prompts") or []) if str(item or "").strip()]
+    fields: dict[str, str] = {
+        "品牌名称": str(body.get("brand_name") or "—").strip() or "—",
+        "竞品": _join_list(body.get("competitors"), limit=20),
+        "监测地区": region_display_labels(body.get("region_codes")),
+        "诊断平台": _lead_platform_display(body.get("platforms")),
+        "诊断天数": f"{body.get('schedule_days') or 3} 天",
+    }
     if not prompts:
-        rows.append(_change("检测问题", after="（空）", kind=kind))
+        fields["检测问题"] = "（空）"
     else:
         for index, prompt in enumerate(prompts, start=1):
-            rows.append(_change(f"检测问题 {index}", after=prompt, kind=kind))
+            fields[f"检测问题 {index}"] = prompt
     note = str(body.get("contact_note") or "").strip()
-    if note:
-        rows.append(_change("销售备注", after=note, kind=kind))
+    fields["销售备注"] = note or "（无）"
+    return fields
+
+
+def _lead_changes(body: dict[str, Any], *, is_create: bool, original: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    # 2026-08-04 - 售前诊断审批对照：变更前=销售原文，变更后=审批采用
+    adopted_map = _lead_field_map(body)
+    original_map = _lead_field_map(original or body)
+    keys = list(dict.fromkeys([*original_map.keys(), *adopted_map.keys()]))
+    rows = [
+        _change(
+            "操作类型",
+            after="新建售前诊断" if is_create else "修改售前诊断",
+            kind="info",
+        )
+    ]
+    for key in keys:
+        before = original_map.get(key, "—")
+        after = adopted_map.get(key, "—")
+        kind = "update" if before != after else ("add" if is_create else "info")
+        rows.append(_change(key, before=before, after=after, kind=kind))
     return rows
 
 
@@ -411,9 +432,9 @@ def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, 
         action = {"reports.generate": "create", "reports.update": "update", "reports.publish": "publish"}[key]
         changes = _report_changes(body, action=action)
     elif key == "lead_diagnosis.create":
-        changes = _lead_changes(body, is_create=True)
+        changes = _lead_changes(body, is_create=True, original=_lead_original_body(payload))
     elif key == "lead_diagnosis.update":
-        changes = _lead_changes(body, is_create=False)
+        changes = _lead_changes(body, is_create=False, original=_lead_original_body(payload))
     elif key == "lead_diagnosis.submit_run":
         changes = [
             _change("操作类型", after="提交售前诊断抓取", kind="info"),

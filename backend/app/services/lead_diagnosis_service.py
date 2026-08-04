@@ -690,10 +690,14 @@ def create_lead_diagnosis(
     db: Session,
     current: CurrentSession,
     payload: LeadDiagnosisCreateRequest,
+    *,
+    enforce_position_platforms: bool = True,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
-    assert_lead_platforms_allowed(db, current, list(payload.platforms))
+    # 2026-08-04 - 审批人可勾全量可提交平台；审批回放不再按销售职位白名单拦截
+    if enforce_position_platforms:
+        assert_lead_platforms_allowed(db, current, list(payload.platforms))
     diagnosis_date = payload.diagnosis_date or date.today()
     lead = LeadDiagnosis(
         brand_name=payload.brand_name.strip(),

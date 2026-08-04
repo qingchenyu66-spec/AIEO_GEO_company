@@ -44,6 +44,30 @@ STATUS_LABELS = {
     "rejected": "已驳回",
 }
 
+
+def _payload_body(payload: dict[str, Any] | None) -> dict[str, Any]:
+    raw = payload if isinstance(payload, dict) else {}
+    body = raw.get("body")
+    return dict(body) if isinstance(body, dict) else dict(raw)
+
+
+def normalize_lead_create_approval_payload(
+    payload: dict[str, Any] | None,
+    *,
+    refresh_original: bool = True,
+) -> dict[str, Any]:
+    """售前诊断新建审批：body=审批采用，original_body=销售原文。"""
+    # 2026-08-04 - 审批可改内容但需保留销售原文对照
+    body = _payload_body(payload)
+    raw = payload if isinstance(payload, dict) else {}
+    if refresh_original:
+        original = dict(body)
+    else:
+        prev = raw.get("original_body")
+        original = dict(prev) if isinstance(prev, dict) else dict(body)
+    return {"body": body, "original_body": original}
+
+
 # 仅 PLATFORM_SALES 入队；交付 / 运营 / 管理员直接生效。
 # 下列 operation_key 即使销售也直接执行，禁止接入 queue_or_run 审批。
 SALES_APPROVAL_BYPASS_KEYS = frozenset({
@@ -76,11 +100,6 @@ def can_review_approvals(db: Session, current: CurrentSession) -> bool:
 def ensure_can_review(db: Session, current: CurrentSession) -> None:
     if not can_review_approvals(db, current):
         raise PermissionError("当前账号无权审批操作")
-
-
-def _payload_body(payload: dict[str, Any]) -> dict[str, Any]:
-    body = payload.get("body")
-    return body if isinstance(body, dict) else payload
 
 
 def find_pending_duplicate(
@@ -144,6 +163,9 @@ def create_approval_request(
     tenant_id: int | None = None,
     target_id: int | None = None,
 ) -> OperationApproval:
+    stored = payload
+    if operation_key == "lead_diagnosis.create":
+        stored = normalize_lead_create_approval_payload(payload, refresh_original=True)
     record = OperationApproval(
         operation_key=operation_key,
         module=module,
@@ -151,7 +173,7 @@ def create_approval_request(
         summary=summary.strip() or operation_key,
         tenant_id=tenant_id,
         target_id=target_id,
-        payload_json=payload,
+        payload_json=stored,
         status="pending",
         requester_user_id=current.user.id,
         requester_identity_id=current.identity.id,
@@ -190,6 +212,16 @@ def approval_to_dict(
         "tenant_name": tenant.name if tenant else None,
         "target_id": record.target_id,
         "payload": record.payload_json,
+        "lead_original_body": (
+            (record.payload_json or {}).get("original_body")
+            if record.operation_key == "lead_diagnosis.create" and isinstance(record.payload_json, dict)
+            else None
+        ),
+        "lead_adopted_body": (
+            _payload_body(record.payload_json)
+            if record.operation_key == "lead_diagnosis.create"
+            else None
+        ),
         "preview": build_approval_preview(db, record),
         "status": record.status,
         "status_label": STATUS_LABELS.get(record.status, record.status),
@@ -249,7 +281,11 @@ def queue_or_run(
     )
     if existing is not None:
         existing.summary = summary.strip() or existing.summary
-        existing.payload_json = payload
+        if operation_key == "lead_diagnosis.create":
+            # 销售再次提交：原文与采用都刷新为最新销售稿
+            existing.payload_json = normalize_lead_create_approval_payload(payload, refresh_original=True)
+        else:
+            existing.payload_json = payload
         if tenant_id is not None:
             existing.tenant_id = tenant_id
         if target_id is not None:
@@ -369,6 +405,63 @@ def get_approval(db: Session, current: CurrentSession, approval_id: int) -> Oper
     else:
         ensure_can_review(db, current)
     return record
+
+
+def revise_lead_diagnosis_create_approval(
+    db: Session,
+    current: CurrentSession,
+    approval_id: int,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """审批人保存售前诊断新建单的「审批采用」内容；品牌名不可改，销售原文不动。"""
+    from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest
+
+    ensure_can_review(db, current)
+    record = db.scalar(
+        select(OperationApproval).where(
+            OperationApproval.id == approval_id,
+            OperationApproval.deleted.is_(False),
+        )
+    )
+    if record is None:
+        raise ValueError("审批单不存在")
+    if record.status != "pending":
+        raise ValueError("仅待审批单据可保存修改")
+    if record.operation_key != "lead_diagnosis.create":
+        raise ValueError("当前仅支持修改「售前诊断新建」审批单")
+
+    payload = record.payload_json if isinstance(record.payload_json, dict) else {}
+    original = payload.get("original_body") if isinstance(payload.get("original_body"), dict) else _payload_body(payload)
+    adopted = _payload_body(payload)
+    brand = str(original.get("brand_name") or adopted.get("brand_name") or "").strip()
+    if not brand:
+        raise ValueError("原单缺少品牌名称，无法保存")
+
+    merged = {
+        **adopted,
+        "brand_name": brand,
+        "competitors": patch.get("competitors", adopted.get("competitors")),
+        "platforms": patch.get("platforms", adopted.get("platforms")),
+        "region_codes": patch.get("region_codes", adopted.get("region_codes")),
+        "schedule_days": patch.get("schedule_days", adopted.get("schedule_days")),
+        "prompts": patch.get("prompts", adopted.get("prompts")),
+        "contact_note": patch.get("contact_note", adopted.get("contact_note")),
+        "contact_name": adopted.get("contact_name"),
+        "contact_phone": adopted.get("contact_phone"),
+        "start_immediately": adopted.get("start_immediately", True),
+    }
+    # 校验可提交平台/问题等；品牌强制原文
+    validated = LeadDiagnosisCreateRequest.model_validate(merged)
+    body = validated.model_dump(mode="json")
+    body["brand_name"] = brand
+    record.payload_json = {
+        "body": body,
+        "original_body": dict(original),
+    }
+    record.summary = f"新建售前诊断：{brand}"
+    db.commit()
+    db.refresh(record)
+    return approval_to_dict(db, record)
 
 
 def reject_approval(

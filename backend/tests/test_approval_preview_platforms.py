@@ -125,25 +125,32 @@ def test_lead_changes_include_platforms_days_and_prompts(monkeypatch):
         "app.services.approval_preview_service.region_display_labels",
         lambda codes: "北京市" if codes else "（空）",
     )
-    rows = _lead_changes(
-        {
-            "brand_name": "SAB伟星拉链",
-            "competitors": ["竞品A", "竞品B"],
-            "region_codes": ["110000"],
-            "platforms": ["doubao", "kimi"],
-            "schedule_days": 4,
-            "prompts": ["问题一", "问题二", "问题三"],
-            "contact_note": "备注",
-        },
-        is_create=True,
-    )
-    by_field = {row["field"]: row["after"] for row in rows}
-    assert by_field["品牌名称"] == "SAB伟星拉链"
-    assert "竞品A" in by_field["竞品"]
-    assert by_field["监测地区"] == "北京市"
-    assert by_field["诊断平台"] == "豆包、Kimi"
-    assert by_field["诊断天数"] == "4 天"
-    assert by_field["检测问题 1"] == "问题一"
-    assert by_field["检测问题 2"] == "问题二"
-    assert by_field["检测问题 3"] == "问题三"
-    assert by_field["销售备注"] == "备注"
+    original = {
+        "brand_name": "SAB伟星拉链",
+        "competitors": ["竞品A"],
+        "region_codes": ["110000"],
+        "platforms": ["doubao"],
+        "schedule_days": 3,
+        "prompts": ["问题一", "问题二"],
+        "contact_note": "旧备注",
+    }
+    adopted = {
+        **original,
+        "competitors": ["竞品A", "竞品B"],
+        "platforms": ["doubao", "kimi"],
+        "schedule_days": 4,
+        "prompts": ["问题一", "问题二", "问题三"],
+        "contact_note": "备注",
+    }
+    rows = _lead_changes(adopted, is_create=True, original=original)
+    by_field = {row["field"]: row for row in rows}
+    assert by_field["品牌名称"]["before"] == "SAB伟星拉链"
+    assert by_field["品牌名称"]["after"] == "SAB伟星拉链"
+    assert by_field["竞品"]["before"] == "竞品A"
+    assert "竞品B" in by_field["竞品"]["after"]
+    assert by_field["诊断平台"]["before"] == "豆包"
+    assert by_field["诊断平台"]["after"] == "豆包、Kimi"
+    assert by_field["诊断天数"]["before"] == "3 天"
+    assert by_field["诊断天数"]["after"] == "4 天"
+    assert by_field["检测问题 3"]["after"] == "问题三"
+    assert by_field["销售备注"]["after"] == "备注"
