@@ -270,7 +270,7 @@ function ensureActivePlatform() {
   }
 }
 
-async function loadMatrix(options?: { quiet?: boolean }) {
+async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
   listAbortController?.abort()
   const controller = new AbortController()
   listAbortController = controller
@@ -286,6 +286,7 @@ async function loadMatrix(options?: { quiet?: boolean }) {
       platform: platformFilter.value || undefined,
       keyword: keywordFilter.value.trim() || undefined,
       keyword_group: keywordGroupFilter.value || undefined,
+      skip_cache: options?.skipCache || undefined,
     }, { signal: controller.signal })
     if (seq !== listRequestSeq) return
     // 2026-07-28 - 全平台对比露出历史/未购 - 侧栏与格子只留配置平台
@@ -304,6 +305,8 @@ async function loadMatrix(options?: { quiet?: boolean }) {
     } else {
       ensureActivePlatform()
     }
+    // 2026-08-04 - 缺口忽略后抽屉仍显示漏跑 - 矩阵重拉后同步格子待办
+    syncCellDrawerFromMatrix()
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if ((error as { code?: string })?.code === 'ERR_CANCELED') return
@@ -312,6 +315,28 @@ async function loadMatrix(options?: { quiet?: boolean }) {
     if (seq === listRequestSeq && !quiet) loading.value = false
   }
 }
+
+function syncCellDrawerFromMatrix() {
+  if (!cellDrawerVisible.value || !cellDrawer.value) return
+  const current = cellDrawer.value
+  const refreshed = getCell(current.word, current.date, current.platform)
+  if (!refreshed) {
+    closeCellDrawer()
+    return
+  }
+  cellDrawer.value = refreshed
+  if (todoOnly.value && !refreshed.has_todo) {
+    closeCellDrawer()
+  }
+}
+
+const drawerSlots = computed(() => {
+  const slots = cellDrawer.value?.slots || []
+  if (!todoOnly.value) return slots
+  // 只看待补：已忽略不再占待办列表
+  return slots.filter(slot => !slot.backfill_dismissed && (slot.needs_backfill || slot.is_gap))
+})
+
 
 function scheduleLoadMatrix() {
   if (!canViewBackfill.value) return
@@ -384,16 +409,19 @@ function cellHasTodo(slots: SnapshotBackfillMatrixSlot[]) {
 function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrixCell {
   const ranks: number[] = []
   let failCount = 0
+  let gapCount = 0
   for (const slot of cell.slots) {
+    if (slot.is_gap && !slot.backfill_dismissed) gapCount += 1
     if (slot.mention_position != null && Number.isFinite(Number(slot.mention_position))) {
       ranks.push(Number(slot.mention_position))
     }
-    if (slot.needs_backfill && !slot.has_answer) failCount += 1
+    if (slot.needs_backfill && !slot.has_answer && !slot.backfill_dismissed) failCount += 1
   }
   return {
     ...cell,
     rank: averageRanks(ranks),
     fail_count: failCount,
+    gap_count: gapCount,
     sample_count: cell.slots.length,
     rank_sample_count: ranks.length,
     has_todo: cellHasTodo(cell.slots),
@@ -433,8 +461,51 @@ function patchSlotLocally(
   })
   if (touchedPlatform) refreshPlatformStats(touchedPlatform)
   if (cellDrawer.value) {
-    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date)
+    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date, cellDrawer.value.platform)
     if (refreshed) cellDrawer.value = refreshed
+    if (todoOnly.value && refreshed && !refreshed.has_todo) closeCellDrawer()
+    if (todoOnly.value && !refreshed) closeCellDrawer()
+  }
+  return touched
+}
+
+/** 2026-08-04 - 缺口忽略后仍显示漏跑 - gap 槽无 subtask_id，须按 window_key 本地消掉 */
+function patchGapSlotDismissedLocally(
+  slot: SnapshotBackfillMatrixSlot,
+  subtaskId: string,
+): boolean {
+  const windowKey = String(slot.schedule_window_key || '').trim()
+  const prompt = String(slot.prompt || cellDrawer.value?.word || '').trim()
+  const platform = String(slot.platform || activePlatform.value || '').trim()
+  if (!windowKey && !subtaskId) return false
+  let touchedPlatform = ''
+  let touched = false
+  cells.value = cells.value.map((cell) => {
+    if (platform && cell.platform !== platform) return cell
+    if (prompt && cell.word !== prompt) return cell
+    const idx = cell.slots.findIndex((item) => {
+      if (subtaskId && item.subtask_id === subtaskId) return true
+      if (!windowKey) return false
+      return Boolean(item.is_gap) && String(item.schedule_window_key || '').trim() === windowKey
+    })
+    if (idx < 0) return cell
+    touched = true
+    touchedPlatform = cell.platform
+    const slots = cell.slots.slice()
+    slots[idx] = {
+      ...slots[idx],
+      subtask_id: subtaskId || slots[idx].subtask_id,
+      is_gap: false,
+      needs_backfill: false,
+      backfill_dismissed: true,
+    }
+    return recomputeCell({ ...cell, slots })
+  })
+  if (touchedPlatform) refreshPlatformStats(touchedPlatform)
+  if (cellDrawer.value) {
+    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date, cellDrawer.value.platform)
+    if (refreshed) cellDrawer.value = refreshed
+    if (todoOnly.value && (!refreshed || !refreshed.has_todo)) closeCellDrawer()
   }
   return touched
 }
@@ -556,23 +627,40 @@ function isFailurePending(slot: SnapshotBackfillMatrixSlot) {
 }
 
 async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
-  if (!canSubmitBackfill.value || slot.backfill_dismissed || slot.is_gap || !slot.subtask_id) return
+  // 2026-08-04 - 到期/漏跑缺口格不能忽略 - 先落占位子任务再走同一套 dismiss
+  if (!canSubmitBackfill.value || slot.backfill_dismissed) return
+  if (!slot.is_gap && !slot.subtask_id) return
   try {
-    if (isFailurePending(slot)) {
+    if (isFailurePending(slot) || slot.is_gap) {
       await ElMessageBox.confirm(
         '当前无有效回答，忽略后将不再提醒补录，客户侧仍按未抓取/失败统计（不会补出排名）。确认忽略？',
         '忽略待补录',
         { type: 'warning', confirmButtonText: '确认忽略', cancelButtonText: '取消' },
       )
     }
-    await dismissSnapshotBackfill(slot.subtask_id)
-    // 2026-07-28 - 点开即可忽略 - 清 needs_backfill + 标已忽略，红点按未忽略场次重算
-    patchSlotLocally(slot.subtask_id, {
-      needs_backfill: false,
-      backfill_dismissed: true,
-    })
+    let subtaskId = slot.subtask_id || ''
+    if (slot.is_gap || !subtaskId) {
+      const tenantId = slot.tenant_id ?? (tenantFilter.value === '' ? null : Number(tenantFilter.value))
+      if (!tenantId || !slot.schedule_window_key) {
+        throw new Error('缺少企业或场次信息')
+      }
+      const ensured = await ensureGapBackfillSubtask({
+        tenant_id: tenantId,
+        platform: slot.platform || activePlatform.value,
+        prompt: slot.prompt || cellDrawer.value?.word || '',
+        schedule_window_key: slot.schedule_window_key,
+      })
+      subtaskId = ensured.subtask.subtask_id
+    }
+    await dismissSnapshotBackfill(subtaskId)
+    // 2026-08-04 - 忽略 toast 后抽屉仍漏跑 - gap 无 subtask_id，先本地消槽；矩阵缓存可能仍旧
+    patchGapSlotDismissedLocally(slot, subtaskId)
     ElMessage.success('已忽略，不再提醒')
     emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+    void loadMatrix({ quiet: true, skipCache: true }).then(() => {
+      // 后端若仍吐缺口（缓存/占位未入矩阵），再盖一次本地忽略态
+      patchGapSlotDismissedLocally(slot, subtaskId)
+    })
   } catch (error: unknown) {
     if (error === 'cancel') return
     notifyOperationError(error, '忽略失败')
@@ -1019,7 +1107,7 @@ watch(
           · 均位 {{ rankText(cellDrawer.rank) }}
         </div>
         <div
-          v-for="slot in cellDrawer.slots"
+          v-for="slot in drawerSlots"
           :key="slotKey(slot)"
           class="sb-todo-item"
         >
@@ -1040,7 +1128,7 @@ watch(
               补录
             </button>
             <button
-              v-if="canSubmitBackfill && !slot.backfill_dismissed && !slot.is_gap && slot.subtask_id"
+              v-if="canSubmitBackfill && !slot.backfill_dismissed && (slot.subtask_id || slot.is_gap)"
               type="button"
               class="sb-btn ghost"
               @click="dismissSlot(slot)"

@@ -585,6 +585,8 @@ def monitor_snapshot_backfill_matrix(
     platform: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
     keyword_group: str | None = Query(default=None),
+    # 2026-08-04 - 忽略后矩阵缓存仍返回旧缺口 - 写后刷新可跳过短缓存
+    skip_cache: bool = Query(default=False),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -637,9 +639,10 @@ def monitor_snapshot_backfill_matrix(
         ]
     )
     cache_key = f"snapshot_backfill:mtx:v6:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
-    cached = get_json_cache(cache_key)
-    if isinstance(cached, dict) and "cells" in cached:
-        return ApiResponse(data=cached)
+    if not skip_cache:
+        cached = get_json_cache(cache_key)
+        if isinstance(cached, dict) and "cells" in cached:
+            return ApiResponse(data=cached)
 
     data = list_snapshot_backfill_matrix(
         db,

@@ -10,7 +10,7 @@ __all__ = ["DEFAULT_LEAD_SCHEDULE_TIMES", "LEAD_SCHEDULE_DAYS", "LeadDiagnosis",
 
 
 class LeadDiagnosis(Base):
-    """售前线索诊断：不绑定正式企业，连续三天各三时段共九次抓取后汇总。"""
+    """售前线索诊断：不绑定正式企业，按计划天数×每日时段抓取后汇总。"""
 
     __tablename__ = "geo_lead_diagnosis"
 
@@ -37,13 +37,21 @@ class LeadDiagnosis(Base):
         comment="监测地区编码列表，空数组代表全部区域",
     )
     schedule_times_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="每日抓取时段")
+    # 2026-08-04 - 诊断天数写死三天九次 - 新建可配 3–7 天，默认 3
+    schedule_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=LEAD_SCHEDULE_DAYS,
+        server_default=text(str(LEAD_SCHEDULE_DAYS)),
+        comment="诊断抓取计划天数，默认3，范围3-7",
+    )
     diagnosis_date: Mapped[date] = mapped_column(Date, index=True, nullable=False, comment="诊断日期")
     status: Mapped[str] = mapped_column(
         String(20),
         index=True,
         server_default="pending",
         nullable=False,
-        comment="pending/collecting/ready/failed",
+        comment="pending/collecting/ready/failed/canceled",
     )
     health_score: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="健康分0-100")
     diagnosis_result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="汇总诊断结果")

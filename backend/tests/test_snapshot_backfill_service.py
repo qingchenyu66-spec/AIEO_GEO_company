@@ -1129,6 +1129,8 @@ def test_ensure_gap_backfill_subtask_creates_local_records(db_session) -> None:
     )
     assert subtask.subtask_id.startswith("bfs")
     assert subtask.status == "failed"
+    assert subtask.auto_retry_status == "failed"
+    assert (subtask.auto_retry_count or 0) >= 1
     run = db_session.scalar(
         select(GeoMonitorScheduleRun).where(
             GeoMonitorScheduleRun.tenant_id == tenant.id,
@@ -1147,3 +1149,105 @@ def test_ensure_gap_backfill_subtask_creates_local_records(db_session) -> None:
         current=current,
     )
     assert again.subtask_id == subtask.subtask_id
+
+
+def test_ensure_then_dismiss_clears_gap_todo(db_session, monkeypatch) -> None:
+    """到期漏跑缺口：落占位并忽略后，该词×场次不再以 is_gap 待补出现。"""
+    from datetime import date
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app.services.snapshot_backfill_service import dismiss_snapshot_backfill
+
+    tenant = Tenant(
+        name="缺口忽略",
+        code="tenant-gap-dismiss",
+        deleted=False,
+        service_start_date=date(2026, 1, 1),
+        service_end_date=date(2026, 8, 1),
+    )
+    db_session.add(tenant)
+    db_session.flush()
+    db_session.add(
+        BrandAsset(
+            tenant_id=tenant.id,
+            company_full_name="缺口忽略有限公司",
+            brand_name="缺口忽略品牌",
+            brand_short_name="缺口忽略",
+            monitor_keywords_json=["缺口忽略品牌推荐"],
+            aliases_json=[],
+            product_keywords_json=[],
+            monitored_platforms_json=["doubao"],
+            region_codes_json=[],
+            schedule_times_json=["09:35"],
+            schedule_type="daily_times",
+            schedule_weekdays_json=[],
+            schedule_month_days_json=[],
+            status=True,
+            deleted=False,
+        )
+    )
+    db_session.commit()
+
+    matrix = list_snapshot_backfill_matrix(
+        db_session,
+        tenant_id=tenant.id,
+        detect_date_from=date(2026, 8, 2),
+        detect_date_to=date(2026, 8, 2),
+        keyword="缺口忽略品牌推荐",
+    )
+    gap_slots = [
+        slot
+        for cell in matrix["cells"]
+        for slot in (cell.get("slots") or [])
+        if slot.get("is_gap") and slot.get("schedule_window_key") == "20260802-0935"
+    ]
+    assert len(gap_slots) == 1
+    slot = gap_slots[0]
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营",
+            position_id=None,
+            role_code="PLATFORM_ADMIN",
+        ),
+        user=SimpleNamespace(id=1, display_name="运营", username="ops"),
+    )
+
+    def _fake_get_subtask(db, subtask_id, _current):
+        return db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id))
+
+    def _fake_get_task(db, task_id, _current):
+        return db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
+
+    monkeypatch.setattr("app.services.snapshot_backfill_service.get_monitor_subtask", _fake_get_subtask)
+    monkeypatch.setattr("app.services.snapshot_backfill_service.get_monitor_task", _fake_get_task)
+
+    subtask = ensure_gap_backfill_subtask(
+        db_session,
+        tenant_id=tenant.id,
+        platform=slot["platform"],
+        prompt=slot["prompt"],
+        schedule_window_key=slot["schedule_window_key"],
+        current=current,
+    )
+    dismissed = dismiss_snapshot_backfill(db_session, subtask_id=subtask.subtask_id, current=current)
+    assert dismissed["backfill_dismissed"] is True
+
+    matrix2 = list_snapshot_backfill_matrix(
+        db_session,
+        tenant_id=tenant.id,
+        detect_date_from=date(2026, 8, 2),
+        detect_date_to=date(2026, 8, 2),
+        keyword="缺口忽略品牌推荐",
+    )
+    slots2 = [s for cell in matrix2["cells"] for s in (cell.get("slots") or [])]
+    assert slots2
+    assert all(not s.get("is_gap") for s in slots2)
+    assert all(s.get("backfill_dismissed") for s in slots2)
+    assert all(not s.get("needs_backfill") for s in slots2)
+    assert all(not cell.get("has_todo") for cell in matrix2["cells"])

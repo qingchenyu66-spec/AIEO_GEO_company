@@ -3,10 +3,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.lead_diagnosis_config import (
+    LEAD_SCHEDULE_DAYS,
+    LEAD_SCHEDULE_DAYS_MAX,
+    LEAD_SCHEDULE_DAYS_MIN,
+    clamp_lead_schedule_days,
+)
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 
 
-LeadDiagnosisStatus = Literal["pending", "collecting", "ready", "failed"]
+LeadDiagnosisStatus = Literal["pending", "collecting", "ready", "failed", "canceled"]
 
 
 class LeadDiagnosisCreateRequest(BaseModel):
@@ -20,7 +26,14 @@ class LeadDiagnosisCreateRequest(BaseModel):
     contact_note: str | None = Field(default=None, max_length=500)
     region_codes: list[str] = Field(default_factory=list, max_length=34)
     diagnosis_date: date | None = None
+    # 2026-08-04 - 诊断天数建议 3–7 非必须 - 默认 3，硬限制 1–30
+    schedule_days: int = Field(default=LEAD_SCHEDULE_DAYS, ge=LEAD_SCHEDULE_DAYS_MIN, le=LEAD_SCHEDULE_DAYS_MAX)
     start_immediately: bool = False
+
+    @field_validator("schedule_days")
+    @classmethod
+    def normalize_schedule_days(cls, value: int) -> int:
+        return clamp_lead_schedule_days(value)
 
     @field_validator("prompts")
     @classmethod

@@ -322,6 +322,7 @@ def _lead_changes(body: dict[str, Any], *, is_create: bool) -> list[dict[str, st
         _change("检测问题", after=_join_list(body.get("prompts"), limit=5), kind=kind),
         _change("竞品", after=_join_list(body.get("competitors"), limit=5), kind=kind),
         _change("监测地区", after=region_display_labels(body.get("region_codes")), kind=kind),
+        _change("诊断天数", after=str(body.get("schedule_days") or "3"), kind=kind),
         _change("销售备注", after=str(body.get("contact_note") or "（无）"), kind=kind),
     ]
 

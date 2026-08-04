@@ -54,6 +54,7 @@ export interface SnapshotBackfillQuery {
   offset?: number
   limit?: number
   include_summary?: boolean
+  skip_cache?: boolean
 }
 
 export function subtaskNeedsSnapshotBackfill(subtask: { answer_content?: string | null; status?: string; error_message?: string | null }) {
@@ -197,6 +198,7 @@ export async function getSnapshotBackfillMatrix(
       platform: query.platform || undefined,
       keyword: query.keyword || undefined,
       keyword_group: query.keyword_group || undefined,
+      skip_cache: query.skip_cache || undefined,
     },
   })
   return response.data.data as SnapshotBackfillMatrixResult

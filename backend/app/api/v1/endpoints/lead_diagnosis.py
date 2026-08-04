@@ -12,6 +12,7 @@ from app.services.approval_service import queue_or_run
 from app.services.lead_diagnosis_service import (
     assert_lead_diagnosis_create_allowed,
     build_lead_diagnosis_export,
+    cancel_lead_diagnosis,
     create_lead_diagnosis,
     get_lead_diagnosis,
     list_lead_diagnoses,
@@ -112,6 +113,21 @@ def update_record(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{lead_id}/cancel", response_model=ApiResponse[dict])
+def cancel_record(
+    lead_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """取消进行中的诊断任务，后续场次不再抓取。"""
+    try:
+        return ApiResponse(data=cancel_lead_diagnosis(db, current, lead_id))
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/{lead_id}/submit-run", response_model=ApiResponse[dict])

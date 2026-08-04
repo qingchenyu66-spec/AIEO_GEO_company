@@ -1,7 +1,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import {
+  cancelLeadDiagnosis,
   createLeadDiagnosis,
   downloadLeadDiagnosisExport,
   getLeadDiagnosisDetail,
@@ -57,7 +58,21 @@ export const PROMPT_TEMPLATES = [
 
 export const SCHEDULE_SLOTS = ['09:30', '14:30', '20:30']
 export const SCHEDULE_DAYS = 3
+export const SCHEDULE_DAYS_SUGGEST_MIN = 3
+export const SCHEDULE_DAYS_SUGGEST_MAX = 7
+export const SCHEDULE_DAYS_MIN = 1
+export const SCHEDULE_DAYS_MAX = 30
 export const SCHEDULE_TOTAL = SCHEDULE_DAYS * SCHEDULE_SLOTS.length
+
+export function clampScheduleDays(value: number | null | undefined) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return SCHEDULE_DAYS
+  return Math.min(SCHEDULE_DAYS_MAX, Math.max(SCHEDULE_DAYS_MIN, Math.round(n)))
+}
+
+export function scheduleTotalForDays(days: number) {
+  return clampScheduleDays(days) * SCHEDULE_SLOTS.length
+}
 
 function addDays(isoDate: string, days: number): string {
   const [year, month, day] = isoDate.split('-').map(part => Number.parseInt(part, 10))
@@ -106,8 +121,11 @@ export function useLeadDiagnosis() {
     platforms: [] as string[],
     region_codes: [] as string[],
     contact_note: '',
+    schedule_days: SCHEDULE_DAYS,
     start_immediately: true,
   })
+
+  const createScheduleTotal = computed(() => scheduleTotalForDays(createForm.value.schedule_days))
 
   const diagnosisPlatformOptions = supportedPlatforms
 
@@ -231,11 +249,12 @@ export function useLeadDiagnosis() {
     if (!item) return ''
     const calendarDays = item.schedule_calendar_days ?? item.schedule_days ?? SCHEDULE_DAYS
     const total = item.schedule_total_count ?? SCHEDULE_TOTAL
+    const slotCount = item.schedule_times?.length || SCHEDULE_SLOTS.length
     const endDate = item.plan_end_date
     if (endDate && endDate !== item.diagnosis_date) {
       return `共 ${total} 次抓取，跨 ${calendarDays} 个自然日（${item.diagnosis_date} 至 ${endDate}）；创建当日已过的时段自动跳过并顺延。`
     }
-    return `连续 ${calendarDays} 天、每天三个时段各抓一轮，九次全部完成后自动汇总结论。`
+    return `连续 ${calendarDays} 天、每天 ${slotCount} 个时段各抓一轮，共 ${total} 次全部完成后自动汇总结论。`
   })
 
   const progressPercent = computed(() => {
@@ -322,6 +341,7 @@ export function useLeadDiagnosis() {
       platforms: [],
       region_codes: [],
       contact_note: '',
+      schedule_days: SCHEDULE_DAYS,
       start_immediately: true,
     }
     showCreatePanel.value = true
@@ -390,6 +410,7 @@ export function useLeadDiagnosis() {
         .split(/[,，、]/)
         .map(item => item.trim())
         .filter(Boolean)
+      const days = clampScheduleDays(createForm.value.schedule_days)
       const created = await createLeadDiagnosis({
         brand_name: brand,
         prompts,
@@ -397,6 +418,7 @@ export function useLeadDiagnosis() {
         platforms,
         region_codes: [...createForm.value.region_codes],
         contact_note: createForm.value.contact_note.trim() || undefined,
+        schedule_days: days,
         start_immediately: createForm.value.start_immediately,
       })
       closeCreatePanel()
@@ -408,7 +430,7 @@ export function useLeadDiagnosis() {
         await loadRecords()
         return
       }
-      ElMessage.success('诊断任务已创建，系统将连续三天共九次自动抓取')
+      ElMessage.success(`诊断任务已创建，系统将连续 ${days} 天共 ${scheduleTotalForDays(days)} 次自动抓取`)
       await loadRecords()
       await selectRecord(created.id)
     } catch (error: unknown) {
@@ -441,6 +463,26 @@ export function useLeadDiagnosis() {
       await handleRefresh()
     } catch (error: unknown) {
       notifyOperationError(error, '提交抓取失败')
+    }
+  }
+
+  async function handleCancel() {
+    if (!selectedId.value || !canCreate.value || !detail.value) return
+    if (detail.value.status !== 'pending' && detail.value.status !== 'collecting') return
+    try {
+      await ElMessageBox.confirm(
+        '取消后本任务将停止后续抓取，已完成场次保留。确认取消？',
+        '取消诊断任务',
+        { type: 'warning', confirmButtonText: '确认取消', cancelButtonText: '返回' },
+      )
+      const latest = await cancelLeadDiagnosis(selectedId.value)
+      detail.value = latest
+      await loadRecords({ silent: true })
+      stopPolling()
+      ElMessage.success('已取消，后续场次不再抓取')
+    } catch (error: unknown) {
+      if (error === 'cancel') return
+      notifyOperationError(error, '取消失败')
     }
   }
 
@@ -510,6 +552,7 @@ export function useLeadDiagnosis() {
     createStep,
     detailTab,
     createForm,
+    createScheduleTotal,
     pageMenuName,
     canCreate,
     canExport,
@@ -536,7 +579,13 @@ export function useLeadDiagnosis() {
     promptTemplates: PROMPT_TEMPLATES,
     scheduleSlots: SCHEDULE_SLOTS,
     scheduleDays: SCHEDULE_DAYS,
+    scheduleDaysMin: SCHEDULE_DAYS_MIN,
+    scheduleDaysMax: SCHEDULE_DAYS_MAX,
+    scheduleDaysSuggestMin: SCHEDULE_DAYS_SUGGEST_MIN,
+    scheduleDaysSuggestMax: SCHEDULE_DAYS_SUGGEST_MAX,
     scheduleTotal: SCHEDULE_TOTAL,
+    clampScheduleDays,
+    scheduleTotalForDays,
     runStatusLabels: RUN_STATUS_LABELS,
     statusLabels: LEAD_STATUS_LABELS,
     platformLabelMap,
@@ -559,6 +608,7 @@ export function useLeadDiagnosis() {
     submitCreate,
     handleRefresh,
     handleForceRun,
+    handleCancel,
     handleRunSlot,
     canRunScheduleSlot,
     submittingSlotKey,

@@ -62,7 +62,13 @@ const {
   promptTemplates,
   scheduleSlots,
   scheduleDays,
+  scheduleDaysMin,
+  scheduleDaysMax,
+  scheduleDaysSuggestMin,
+  scheduleDaysSuggestMax,
   scheduleTotal,
+  createScheduleTotal,
+  clampScheduleDays,
   runStatusLabels,
   statusLabels,
   platformLabelMap,
@@ -83,6 +89,7 @@ const {
   nextCreateStep,
   handleRefresh,
   handleForceRun,
+  handleCancel,
   handleRunSlot,
   canRunScheduleSlot,
   submittingSlotKey,
@@ -100,7 +107,7 @@ const analysisSectionTitle = '数据分析与优化建议'
 
 const workflowSteps = [
   { title: '录入客户画像', desc: '品牌、竞品与核心问题', icon: Target },
-  { title: '三天九次采集', desc: `${scheduleDays} 天 × ${scheduleSlots.join(' / ')}`, icon: TimerReset },
+  { title: '多日定时采集', desc: `默认 ${scheduleDays} 天 × ${scheduleSlots.join(' / ')}（可改天数）`, icon: TimerReset },
   { title: '生成诊断结论', desc: '聚合平台表现、排名与引用信源', icon: Sparkles },
   { title: '交付 PDF', desc: '可直接用于售前沟通', icon: FileText },
 ]
@@ -283,6 +290,17 @@ onUnmounted(() => {
               </label>
             </div>
           </div>
+          <label class="lead-field">
+            <span>诊断天数 *（建议 {{ scheduleDaysSuggestMin }}–{{ scheduleDaysSuggestMax }}，默认 {{ scheduleDays }}）</span>
+            <input
+              v-model.number="createForm.schedule_days"
+              type="number"
+              :min="scheduleDaysMin"
+              :max="scheduleDaysMax"
+              step="1"
+              @blur="createForm.schedule_days = clampScheduleDays(createForm.schedule_days)"
+            />
+          </label>
           <label class="lead-field lead-field-wide">
             <span>销售备注</span>
             <textarea v-model="createForm.contact_note" rows="3" placeholder="客户来源、行业背景、意向度、重点关注点" />
@@ -290,7 +308,11 @@ onUnmounted(() => {
         </div>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
-          <span>提交后共 <b>九次</b>抓取（每天 <b>{{ scheduleSlots.join(' / ') }}</b>）；若创建时已错过当日早场，剩余时段顺延，全部完成后可导出 PDF。</span>
+          <span>
+            提交后共 <b>{{ createScheduleTotal }}</b> 次抓取
+            （{{ clampScheduleDays(createForm.schedule_days) }} 天 × 每天 <b>{{ scheduleSlots.join(' / ') }}</b>）；
+            若创建时已错过当日早场，剩余时段顺延，全部完成后可导出 PDF。
+          </span>
         </div>
         <div class="lead-form-actions">
           <button type="button" class="lead-secondary-btn" @click="closeCreatePanel">取消</button>
@@ -314,7 +336,7 @@ onUnmounted(() => {
         </div>
         <label class="lead-check-row">
           <input v-model="createForm.start_immediately" type="checkbox" />
-          <span>创建后立即启动第 1 次抓取（计入九次），其余八次仍按计划自动执行</span>
+          <span>创建后立即启动第 1 次抓取（计入计划次数），其余场次仍按计划自动执行</span>
         </label>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
@@ -434,7 +456,15 @@ onUnmounted(() => {
               <button type="button" class="lead-secondary-btn small" :disabled="detailLoading" @click="handleRefresh">
                 <RefreshCw :size="16" /> 刷新进度
               </button>
-              <button v-if="canCreate && detail?.status !== 'ready'" type="button" class="lead-secondary-btn small" @click="handleForceRun">
+              <button
+                v-if="canCreate && (detail?.status === 'pending' || detail?.status === 'collecting')"
+                type="button"
+                class="lead-secondary-btn small"
+                @click="handleCancel"
+              >
+                取消任务
+              </button>
+              <button v-if="canCreate && detail?.status !== 'ready' && detail?.status !== 'canceled' && detail?.status !== 'failed'" type="button" class="lead-secondary-btn small" @click="handleForceRun">
                 <Zap :size="16" /> 立即抓取下一档
               </button>
               <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-secondary-btn small" :disabled="exporting" @click="handleExport('html')">
@@ -497,7 +527,7 @@ onUnmounted(() => {
 
             <section v-if="detailTab === 'progress'" class="lead-panel">
               <div class="lead-panel-title">
-                <h3>九次抓取计划</h3>
+                <h3>抓取计划</h3>
                 <p>{{ schedulePlanSummary }}</p>
               </div>
               <div class="lead-timeline">
@@ -542,7 +572,7 @@ onUnmounted(() => {
               </div>
               <div v-if="detail.status !== 'ready'" class="lead-form-hint">
                 <Lightbulb :size="16" />
-                <span>诊断尚未完成，请等待九次抓取全部结束或刷新进度。</span>
+                <span>诊断尚未完成，请等待计划抓取全部结束或刷新进度。</span>
               </div>
               <div v-else class="lead-report-layout">
                 <section v-if="rankTrend.length" class="lead-report-section wide">
@@ -753,7 +783,7 @@ onUnmounted(() => {
                   <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>
                   <div><strong>诊断日期</strong><span>{{ detail.diagnosis_date }}</span></div>
                   <div v-if="detail.plan_end_date"><strong>计划截止</strong><span>{{ detail.plan_end_date }}</span></div>
-                  <div v-if="detail.schedule_total_count"><strong>抓取计划</strong><span>共 {{ detail.schedule_total_count }} 次（{{ scheduleDays }} 天 × 每日 {{ scheduleSlots.length }} 档）</span></div>
+                  <div v-if="detail.schedule_total_count"><strong>抓取计划</strong><span>共 {{ detail.schedule_total_count }} 次（{{ detail.schedule_days || scheduleDays }} 天 × 每日 {{ (detail.schedule_times || scheduleSlots).length }} 档）</span></div>
                 </div>
               </div>
               <div class="lead-config-group">

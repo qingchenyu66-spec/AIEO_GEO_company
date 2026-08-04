@@ -1,6 +1,6 @@
 import { http } from './http'
 
-export type LeadDiagnosisStatus = 'pending' | 'collecting' | 'ready' | 'failed'
+export type LeadDiagnosisStatus = 'pending' | 'collecting' | 'ready' | 'failed' | 'canceled'
 
 export interface LeadDiagnosisCreator {
   user_id: number
@@ -73,6 +73,7 @@ export interface CreateLeadDiagnosisPayload {
   contact_phone?: string
   contact_note?: string
   diagnosis_date?: string
+  schedule_days?: number
   start_immediately?: boolean
 }
 
@@ -90,6 +91,11 @@ export async function createLeadDiagnosis(
   payload: CreateLeadDiagnosisPayload,
 ): Promise<LeadDiagnosisDetail | (import('./approvals').OperationApproval & { pending_approval: true })> {
   const response = await http.post('/v1/lead-diagnosis', payload)
+  return response.data.data
+}
+
+export async function cancelLeadDiagnosis(leadId: number): Promise<LeadDiagnosisDetail> {
+  const response = await http.post(`/v1/lead-diagnosis/${leadId}/cancel`)
   return response.data.data
 }
 
@@ -160,4 +166,5 @@ export const LEAD_STATUS_LABELS: Record<LeadDiagnosisStatus, string> = {
   collecting: '抓取中',
   ready: '已完成',
   failed: '失败',
+  canceled: '已取消',
 }

@@ -1,4 +1,4 @@
-"""售前线索诊断：三天九次抓取、汇总统计、PDF 导出。"""
+"""售前线索诊断：按计划天数×每日时段抓取、汇总统计、PDF 导出。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from app.models.tenant import Tenant
 from app.core.lead_diagnosis_config import (
     DEFAULT_LEAD_SCHEDULE_TIMES,
     LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
-    LEAD_SCHEDULE_DAYS,
+    clamp_lead_schedule_days,
 )
 from app.core.masking import mask_phone
 from app.core.region_catalog import normalize_region_codes, region_display_name, region_submission_targets
@@ -310,13 +310,18 @@ def _schedule_slots(lead: LeadDiagnosis) -> list[str]:
     return cleaned or list(DEFAULT_LEAD_SCHEDULE_TIMES)
 
 
+def _schedule_days(lead: LeadDiagnosis) -> int:
+    # 2026-08-04 - 诊断天数可配 - 读库字段，旧单/缺省回落默认 3
+    return clamp_lead_schedule_days(getattr(lead, "schedule_days", None))
+
+
 def _schedule_total_count(lead: LeadDiagnosis) -> int:
     region_count = len(region_submission_targets(lead.region_codes_json))
-    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead)) * region_count
+    return _schedule_days(lead) * len(_schedule_slots(lead)) * region_count
 
 
 def _schedule_rounds_per_region(lead: LeadDiagnosis) -> int:
-    return LEAD_SCHEDULE_DAYS * len(_schedule_slots(lead))
+    return _schedule_days(lead) * len(_schedule_slots(lead))
 
 
 def _schedule_anchor(lead: LeadDiagnosis) -> datetime:
@@ -334,7 +339,7 @@ def _slot_scheduled_at(day: date, slot: str) -> datetime | None:
 
 
 def _iter_schedule_slot_rounds(lead: LeadDiagnosis) -> Iterator[tuple[date, str]]:
-    """按时间顺序产出计入「九次」的 (日期, 时段)，创建前已过的时段跳过并顺延。"""
+    """按时间顺序产出计入计划次数的 (日期, 时段)，创建前已过的时段跳过并顺延。"""
     slots = _schedule_slots(lead)
     rounds_needed = _schedule_rounds_per_region(lead)
     anchor = _schedule_anchor(lead)
@@ -362,7 +367,7 @@ def _plan_end_date(lead: LeadDiagnosis) -> date:
 
 def _schedule_calendar_days(lead: LeadDiagnosis) -> int:
     days = {day for day, _slot in _iter_schedule_slot_rounds(lead)}
-    return len(days) or LEAD_SCHEDULE_DAYS
+    return len(days) or _schedule_days(lead)
 
 
 def _serialize_schedule_plan(lead: LeadDiagnosis) -> list[dict[str, Any]]:
@@ -523,7 +528,7 @@ def _serialize_lead(
         "platforms": list(lead.platforms_json or []),
         "region_codes": normalize_region_codes(lead.region_codes_json or []),
         "schedule_times": _schedule_slots(lead),
-        "schedule_days": LEAD_SCHEDULE_DAYS,
+        "schedule_days": _schedule_days(lead),
         "schedule_calendar_days": _schedule_calendar_days(lead),
         "plan_end_date": _plan_end_date(lead).isoformat(),
         "schedule_total_count": _schedule_total_count(lead),
@@ -683,6 +688,7 @@ def create_lead_diagnosis(
         platforms_json=list(payload.platforms),
         region_codes_json=normalize_region_codes(payload.region_codes),
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
+        schedule_days=clamp_lead_schedule_days(payload.schedule_days),
         diagnosis_date=diagnosis_date,
         status="pending",
         created_by_user_id=current.user.id,
@@ -716,6 +722,29 @@ def update_lead_diagnosis(
         lead.contact_phone = payload.contact_phone.strip() or None
     if payload.contact_note is not None:
         lead.contact_note = payload.contact_note.strip() or None
+    db.commit()
+    return get_lead_diagnosis(db, lead_id, current=current)
+
+
+def cancel_lead_diagnosis(
+    db: Session,
+    current: CurrentSession,
+    lead_id: int,
+) -> dict[str, Any]:
+    """取消进行中的售前诊断：不再进入后续自动/手动抓取。"""
+    # 2026-08-04 - 售前诊断缺取消入口 - 状态改 canceled，踢出 ACTIVE 即停跑
+    require_lead_diagnosis_access(db, current, "can_create")
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    ensure_lead_diagnosis_owner_access(db, current, lead)
+    if lead.status not in ACTIVE_STATUSES:
+        raise ValueError("当前诊断已结束或已取消，无法再取消")
+    lead.status = "canceled"
+    for run in lead.runs or []:
+        if run.status in {"pending", "submitted"}:
+            run.status = "skipped"
+            run.error_message = (run.error_message or "").strip() or "诊断已取消，本场次不再执行"
     db.commit()
     return get_lead_diagnosis(db, lead_id, current=current)
 
@@ -1255,7 +1284,7 @@ def aggregate_lead_diagnosis(
                 brand_name=lead.brand_name,
                 company_name=lead.brand_name,
                 report_type="diagnosis",
-                period_label=f"{lead.diagnosis_date.isoformat()} 起 {LEAD_SCHEDULE_DAYS} 天（{schedule_round_count}/{total_rounds} 次抓取均值）",
+                period_label=f"{lead.diagnosis_date.isoformat()} 起 {_schedule_days(lead)} 天（{schedule_round_count}/{total_rounds} 次抓取均值）",
                 kpis={**kpis, "health_score": health_score},
                 platform_stats=platform_stats,
                 top_sources=top_sources,
@@ -1310,7 +1339,8 @@ def aggregate_lead_diagnosis(
         "company_name": lead.brand_name,
         "period_label": (
             f"{lead.diagnosis_date.isoformat()} 至 {plan_end.isoformat()} · "
-            f"三天九次均值（{schedule_round_count}/{total_rounds} 次有效抓取）"
+            f"{_schedule_days(lead)} 天 × 每日 {len(_schedule_slots(lead))} 档均值"
+            f"（{schedule_round_count}/{total_rounds} 次有效抓取）"
         ),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "kpis": kpis,

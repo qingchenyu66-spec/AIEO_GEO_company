@@ -866,6 +866,9 @@ def subtask_backfill_eligible(subtask: GeoMonitorSubtask, *, pending_only: bool 
         return False
     if pending_only:
         return subtask_needs_snapshot_backfill(subtask)
+    # 2026-08-04 - 已忽略无正文占位被滤掉 - 矩阵丢格后缺口合并又造 is_gap
+    if subtask_backfill_dismissed(subtask):
+        return True
     if subtask_needs_snapshot_backfill(subtask):
         return True
     return bool((subtask.answer_content or "").strip())
@@ -2095,6 +2098,9 @@ def ensure_gap_backfill_subtask(
         prompt=prompt_text,
         status="failed",
         error_message="到期漏跑/无自动监测，待快照补录",
+        # 2026-08-04 - 缺口占位未标重试闭环 - needs_backfill 为假，忽略后矩阵丢格又冒缺口
+        auto_retry_count=1,
+        auto_retry_status="failed",
         raw_result_json={"source": "gap_backfill", "schedule_window_key": window_key},
         updated_at=slot_dt,
     )
