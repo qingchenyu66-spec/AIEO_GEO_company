@@ -330,21 +330,31 @@ def _exec_diagnosis_create(db: Session, current: CurrentSession, record: Operati
 
 
 def _exec_lead_create(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    # 2026-08-04 - 审批通过后若用审批人 current 落库，创建人会变成审批人；改以申请人身份执行
+    del current
+    requester, requester_identity = _requester_actor(db, record)
+    actor = CurrentSession(user=requester, identity=requester_identity)
     payload = LeadDiagnosisCreateRequest.model_validate(data.get("body") or data)
-    return create_lead_diagnosis(db, current, payload)
+    return create_lead_diagnosis(db, actor, payload)
 
 
 def _exec_lead_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    del current
+    requester, requester_identity = _requester_actor(db, record)
+    actor = CurrentSession(user=requester, identity=requester_identity)
     lead_id = int(data.get("lead_id") or record.target_id or 0)
     payload = LeadDiagnosisUpdateRequest.model_validate(data.get("body") or data)
-    return update_lead_diagnosis(db, current, lead_id, payload)
+    return update_lead_diagnosis(db, actor, lead_id, payload)
 
 
 def _exec_lead_submit_run(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    del current
+    requester, requester_identity = _requester_actor(db, record)
+    actor = CurrentSession(user=requester, identity=requester_identity)
     lead_id = int(data.get("lead_id") or record.target_id or 0)
     return submit_due_lead_run(
         db,
-        current,
+        actor,
         lead_id,
         schedule_key=data.get("schedule_key"),
         force=bool(data.get("force")),
