@@ -280,6 +280,19 @@ def require_lead_diagnosis_access(db: Session, current: CurrentSession, action: 
         raise PermissionError("当前身份无售前诊断权限")
 
 
+def assert_lead_platforms_allowed(db: Session, current: CurrentSession, platforms: list[str]) -> None:
+    """2026-08-04 - 诊断平台与职位「平台范围」同口径；白名单为空则不可选任何端。"""
+    from app.services.menu_permission_service import identity_allowed_monitor_platforms
+
+    allowed = set(identity_allowed_monitor_platforms(db, current.identity))
+    if not allowed:
+        raise ValueError("当前职位未配置可诊断平台，请联系管理员在职位管理中勾选平台范围")
+    selected = [str(code or "").strip() for code in platforms if str(code or "").strip()]
+    forbidden = [code for code in selected if code not in allowed]
+    if forbidden:
+        raise ValueError(f"包含未授权诊断平台：{'、'.join(forbidden)}")
+
+
 def ensure_lead_diagnosis_owner_access(db: Session, current: CurrentSession, lead: LeadDiagnosis) -> None:
     """销售只能访问本人创建的售前诊断；运营/管理员不限制。"""
     if not is_sales_identity(db, current.identity):
@@ -678,6 +691,7 @@ def create_lead_diagnosis(
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
+    assert_lead_platforms_allowed(db, current, list(payload.platforms))
     diagnosis_date = payload.diagnosis_date or date.today()
     lead = LeadDiagnosis(
         brand_name=payload.brand_name.strip(),

@@ -4,9 +4,10 @@ from app.services.approval_preview_service import _brand_changes, _platform_labe
 
 
 def test_platform_labels_mixed_shapes():
+    # 字符串平台归一为 FAST_MONITOR_MODE(=search)；预览口径为「快速」
     assert _platform_labels(["doubao", {"code": "kimi", "mode": "search"}]) == [
         "doubao(快速)",
-        "kimi(联网)",
+        "kimi(快速)",
     ]
 
 
@@ -108,3 +109,41 @@ def test_brand_asset_has_changes_false_when_identical(monkeypatch):
     changed = dict(current)
     changed["description"] = "有改动"
     assert brand_asset_has_changes(None, 1, changed) is True
+
+
+def test_lead_changes_include_platforms_days_and_prompts(monkeypatch):
+    from app.services.approval_preview_service import _lead_changes
+
+    monkeypatch.setattr(
+        "app.services.molizhishu_catalog_service.get_supported_platform_catalog",
+        lambda: [
+            {"code": "doubao", "name": "豆包"},
+            {"code": "kimi", "name": "Kimi"},
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.approval_preview_service.region_display_labels",
+        lambda codes: "北京市" if codes else "（空）",
+    )
+    rows = _lead_changes(
+        {
+            "brand_name": "SAB伟星拉链",
+            "competitors": ["竞品A", "竞品B"],
+            "region_codes": ["110000"],
+            "platforms": ["doubao", "kimi"],
+            "schedule_days": 4,
+            "prompts": ["问题一", "问题二", "问题三"],
+            "contact_note": "备注",
+        },
+        is_create=True,
+    )
+    by_field = {row["field"]: row["after"] for row in rows}
+    assert by_field["品牌名称"] == "SAB伟星拉链"
+    assert "竞品A" in by_field["竞品"]
+    assert by_field["监测地区"] == "北京市"
+    assert by_field["诊断平台"] == "豆包、Kimi"
+    assert by_field["诊断天数"] == "4 天"
+    assert by_field["检测问题 1"] == "问题一"
+    assert by_field["检测问题 2"] == "问题二"
+    assert by_field["检测问题 3"] == "问题三"
+    assert by_field["销售备注"] == "备注"

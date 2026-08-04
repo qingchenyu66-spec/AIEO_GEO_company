@@ -316,15 +316,49 @@ def _report_changes(body: dict[str, Any], *, action: str) -> list[dict[str, str]
 
 def _lead_changes(body: dict[str, Any], *, is_create: bool) -> list[dict[str, str]]:
     kind = "add" if is_create else "update"
-    return [
+    rows = [
         _change("操作类型", after="新建售前诊断" if is_create else "修改售前诊断", kind="info"),
-        _change("品牌名称", after=str(body.get("brand_name") or "—"), kind=kind),
-        _change("检测问题", after=_join_list(body.get("prompts"), limit=5), kind=kind),
-        _change("竞品", after=_join_list(body.get("competitors"), limit=5), kind=kind),
+        _change("品牌名称", after=str(body.get("brand_name") or "—").strip() or "—", kind=kind),
+        _change("竞品", after=_join_list(body.get("competitors"), limit=20), kind=kind),
         _change("监测地区", after=region_display_labels(body.get("region_codes")), kind=kind),
-        _change("诊断天数", after=str(body.get("schedule_days") or "3"), kind=kind),
-        _change("销售备注", after=str(body.get("contact_note") or "（无）"), kind=kind),
+        # 2026-08-04 - 审批预览缺诊断平台 - 补中文名；问题逐条列出便于核对
+        _change("诊断平台", after=_lead_platform_display(body.get("platforms")), kind=kind),
+        _change(
+            "诊断天数",
+            after=f"{body.get('schedule_days') or 3} 天",
+            kind=kind,
+        ),
     ]
+    prompts = [str(item).strip() for item in (body.get("prompts") or []) if str(item or "").strip()]
+    if not prompts:
+        rows.append(_change("检测问题", after="（空）", kind=kind))
+    else:
+        for index, prompt in enumerate(prompts, start=1):
+            rows.append(_change(f"检测问题 {index}", after=prompt, kind=kind))
+    note = str(body.get("contact_note") or "").strip()
+    if note:
+        rows.append(_change("销售备注", after=note, kind=kind))
+    return rows
+
+
+def _lead_platform_display(raw: Any) -> str:
+    from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+
+    name_map = {
+        str(item.get("code") or "").strip(): str(item.get("name") or item.get("code") or "").strip()
+        for item in get_supported_platform_catalog()
+        if str(item.get("code") or "").strip()
+    }
+    labels: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict):
+            code = str(item.get("code") or item.get("platform") or "").strip()
+        else:
+            code = str(item or "").strip()
+        if not code:
+            continue
+        labels.append(name_map.get(code) or code)
+    return _join_list(labels, limit=32)
 
 
 def _brand_word_group_changes(body: dict[str, Any]) -> list[dict[str, str]]:

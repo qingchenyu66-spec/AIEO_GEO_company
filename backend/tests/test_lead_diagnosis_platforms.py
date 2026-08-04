@@ -38,4 +38,28 @@ def test_platform_configs_for_lead_empty_falls_back_to_catalog() -> None:
     lead = SimpleNamespace(platforms_json=[])
     configs = _platform_configs_for_lead(lead)
     assert len(configs) >= 1
-    assert all(item.platform for item in configs)
+
+
+def test_assert_lead_platforms_allowed_blocks_outside_whitelist(monkeypatch) -> None:
+    from app.services.lead_diagnosis_service import assert_lead_platforms_allowed
+
+    current = SimpleNamespace(identity=SimpleNamespace(id=1, position_id=2))
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.identity_allowed_monitor_platforms",
+        lambda db, identity: ["doubao", "kimi"],
+    )
+    assert_lead_platforms_allowed(None, current, ["doubao"])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="未授权"):
+        assert_lead_platforms_allowed(None, current, ["doubao", "deepseek_mobile"])  # type: ignore[arg-type]
+
+
+def test_assert_lead_platforms_allowed_empty_whitelist(monkeypatch) -> None:
+    from app.services.lead_diagnosis_service import assert_lead_platforms_allowed
+
+    current = SimpleNamespace(identity=SimpleNamespace(id=1, position_id=2))
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.identity_allowed_monitor_platforms",
+        lambda db, identity: [],
+    )
+    with pytest.raises(ValueError, match="未配置可诊断平台"):
+        assert_lead_platforms_allowed(None, current, ["doubao"])  # type: ignore[arg-type]

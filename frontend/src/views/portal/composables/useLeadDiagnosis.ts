@@ -127,7 +127,15 @@ export function useLeadDiagnosis() {
 
   const createScheduleTotal = computed(() => scheduleTotalForDays(createForm.value.schedule_days))
 
-  const diagnosisPlatformOptions = supportedPlatforms
+  // 2026-08-04 - 诊断平台与职位「平台范围」同口径；空白名单则无可勾选项
+  const diagnosisPlatformOptions = computed(() => {
+    const raw = auth.session?.allowed_monitor_platforms
+    const allow = new Set(
+      Array.isArray(raw) ? raw.map(code => String(code || '').trim()).filter(Boolean) : [],
+    )
+    if (!allow.size) return []
+    return supportedPlatforms.filter(item => allow.has(item.code))
+  })
 
   const pageMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'platform.lead_diagnosis')?.menu_name || '售前诊断'
@@ -353,6 +361,7 @@ export function useLeadDiagnosis() {
   }
 
   function toggleCreatePlatform(code: string) {
+    if (!diagnosisPlatformOptions.value.some(item => item.code === code)) return
     const list = createForm.value.platforms
     const idx = list.indexOf(code)
     if (idx >= 0) list.splice(idx, 1)
@@ -371,6 +380,14 @@ export function useLeadDiagnosis() {
         ElMessage.warning('请填写品牌名称')
         return
       }
+      if (!diagnosisPlatformOptions.value.length) {
+        ElMessage.warning('当前职位未配置可诊断平台，请联系管理员')
+        return
+      }
+      // 去掉白名单外残留勾选
+      createForm.value.platforms = createForm.value.platforms.filter(code =>
+        diagnosisPlatformOptions.value.some(item => item.code === code),
+      )
       if (!createForm.value.platforms.length) {
         ElMessage.warning('请至少勾选一个诊断平台')
         return
@@ -384,9 +401,16 @@ export function useLeadDiagnosis() {
   async function submitCreate() {
     const brand = createForm.value.brand_name.trim()
     const prompts = createForm.value.prompts.map(item => item.trim()).filter(Boolean)
-    const platforms = [...createForm.value.platforms]
+    const platforms = createForm.value.platforms.filter(code =>
+      diagnosisPlatformOptions.value.some(item => item.code === code),
+    )
     if (!brand) {
       ElMessage.warning('请填写品牌名称')
+      createStep.value = 1
+      return
+    }
+    if (!diagnosisPlatformOptions.value.length) {
+      ElMessage.warning('当前职位未配置可诊断平台，请联系管理员')
       createStep.value = 1
       return
     }
