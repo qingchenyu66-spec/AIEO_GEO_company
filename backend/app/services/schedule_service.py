@@ -65,6 +65,59 @@ def brand_word_once_schedule_key(now: datetime | None = None) -> str:
     return f"bwonce-{now:%Y%m%d%H%M%S}"
 
 
+def brand_word_service_start_schedule_key(anchor: date | None = None) -> str:
+    """服务开始首跑窗口：按开始日（或当天）去重，避免 Beat 重复打。"""
+    day = anchor or date.today()
+    return f"bwstart-{day.isoformat().replace('-', '')}"
+
+
+def enumerate_brand_word_service_start_groups(
+    db: Session,
+    *,
+    tenant_id: int,
+    max_prompts: int = 50,
+    now: datetime | None = None,
+) -> Iterator[DueScheduleGroup]:
+    """服务开始首跑：启用中的 once + weekly 品牌词各提交一轮。"""
+    # 2026-08-03 - 到点开跑；once 仅此轮，weekly 之后仍走周一 Beat
+    now = now or datetime.now()
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        return
+    from app.services.tenant_account_service import tenant_service_is_operational
+
+    if not tenant_service_is_operational(tenant, today=now.date()):
+        return
+    asset = db.scalar(
+        select(BrandAsset).where(
+            BrandAsset.tenant_id == tenant_id,
+            BrandAsset.deleted.is_(False),
+            BrandAsset.status.is_(True),
+        )
+    )
+    if asset is None:
+        return
+    keyword_groups = active_brand_word_groups(db, tenant_id)
+    if not keyword_groups:
+        return
+    schedule_key = brand_word_service_start_schedule_key(tenant.service_start_date or now.date())
+    per_group_max_prompts = max(1, max_prompts // max(1, len(keyword_groups)))
+    for group in keyword_groups:
+        for region_code in region_submission_targets(asset.region_codes_json):
+            region_suffix = f"-rg{region_code}" if region_code else ""
+            group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
+            if schedule_run_blocks_due(get_schedule_run(db, tenant_id, group_key), now=now):
+                continue
+            yield DueScheduleGroup(
+                tenant_id=tenant_id,
+                schedule_key=schedule_key,
+                group_key=group_key,
+                max_prompts=per_group_max_prompts,
+                keyword=group.get("monitor_keyword"),
+                region_code=region_code,
+            )
+
+
 def get_schedule_run(db: Session, tenant_id: int, group_key: str) -> GeoMonitorScheduleRun | None:
     return db.scalar(
         select(GeoMonitorScheduleRun).where(
@@ -714,3 +767,74 @@ def run_due_scheduled_tasks(
             break
         results.append(submit_schedule_group(db, current, item))
     return results
+
+
+def kick_brand_word_service_start_for_tenant(
+    db: Session,
+    tenant_id: int,
+    *,
+    max_prompts: int | None = None,
+) -> dict[str, Any]:
+    """服务刚开始：把启用品牌词（once/weekly）各入队/提交一轮。幂等靠 bwstart-* schedule_run。"""
+    max_prompts = max_prompts or settings.celery_scan_submit_max_prompts
+    items = list(enumerate_brand_word_service_start_groups(db, tenant_id=tenant_id, max_prompts=max_prompts))
+    if not items:
+        return {"tenant_id": tenant_id, "status": "ok", "enqueued": 0, "submitted": 0, "skipped": 0}
+
+    if settings.celery_enabled:
+        from app.tasks.monitor import _enqueue_task, _schedule_submit_task_id, submit_schedule_group_task
+
+        enqueued = 0
+        skipped = 0
+        for item in items:
+            existing = get_schedule_run(db, item.tenant_id, item.group_key)
+            is_retry = existing is not None and existing.status == "failed"
+            ok = _enqueue_task(
+                submit_schedule_group_task,
+                task_id=_schedule_submit_task_id(item.group_key, is_retry=is_retry),
+                kwargs={
+                    "tenant_id": item.tenant_id,
+                    "group_key": item.group_key,
+                    "max_prompts": item.max_prompts,
+                    "keyword": item.keyword,
+                },
+            )
+            if ok:
+                enqueued += 1
+            else:
+                skipped += 1
+        return {"tenant_id": tenant_id, "status": "ok", "enqueued": enqueued, "submitted": 0, "skipped": skipped}
+
+    from app.services.platform_session import load_platform_session
+
+    current = load_platform_session(db)
+    submitted = 0
+    skipped = 0
+    for item in items:
+        result = submit_schedule_group(db, current, item)
+        if result.get("status") == "submitted":
+            submitted += 1
+        else:
+            skipped += 1
+    return {"tenant_id": tenant_id, "status": "ok", "enqueued": 0, "submitted": submitted, "skipped": skipped}
+
+
+def maybe_kick_brand_words_after_service_became_active(
+    *,
+    tenant_id: int,
+    became_active: bool,
+) -> None:
+    """企业刚进入服务期时触发品牌词首跑（Celery 优先，失败只打日志）。"""
+    if not became_active:
+        return
+    try:
+        from app.tasks.monitor import kick_brand_word_service_start_task
+
+        kick_brand_word_service_start_task.delay(tenant_id)
+    except Exception:
+        # 无 Celery / broker 抖动时不挡企业保存
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "kick brand word service-start failed tenant_id=%s", tenant_id
+        )

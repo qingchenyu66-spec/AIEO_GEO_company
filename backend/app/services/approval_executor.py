@@ -171,11 +171,15 @@ def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationA
 
 
 def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
+    from app.services.tenant_account_service import tenant_service_is_operational
+
     tenant_id = int(data.get("tenant_id") or record.target_id or 0)
     payload = TenantUpdateRequest.model_validate(data.get("body") or data)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
         raise ValueError("企业不存在")
+    was_operational = tenant_service_is_operational(tenant)
     name = payload.name.strip()
     code = (payload.code or tenant.code or _tenant_code_from_name(name)).strip()
     raise_if_live_tenant_name_or_code_conflict(db, name=name, code=code, exclude_id=tenant_id)
@@ -196,6 +200,10 @@ def _exec_tenant_update(db: Session, current: CurrentSession, record: OperationA
             tenant.stopped_at = datetime.now(UTC)
     sync_tenant_accounts_for_service_state(db, tenant)
     db.flush()
+    maybe_kick_brand_words_after_service_became_active(
+        tenant_id=tenant.id,
+        became_active=tenant_service_is_operational(tenant) and not was_operational,
+    )
     return {"id": tenant.id, "name": tenant.name}
 
 
@@ -218,7 +226,8 @@ def _exec_tenant_delete(db: Session, current: CurrentSession, record: OperationA
 
 
 def _exec_tenant_restore(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
-    from app.models.user_identity import UserIdentity
+    from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
+    from app.services.tenant_account_service import tenant_service_is_operational
 
     tenant_id = int(data.get("tenant_id") or record.target_id or 0)
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
@@ -226,12 +235,17 @@ def _exec_tenant_restore(db: Session, current: CurrentSession, record: Operation
         raise ValueError("企业不存在")
     if tenant.service_end_date and tenant.service_end_date < date.today():
         raise ValueError("服务已到期，请先延长服务期限后再恢复")
+    was_operational = tenant_service_is_operational(tenant)
     tenant.status = _service_status_from_period(tenant.service_start_date, tenant.service_end_date)
     tenant.stop_reason = None
     tenant.stopped_at = None
     tenant.stopped_by = None
     restore_tenant_customer_accounts(db, tenant_id)
     db.flush()
+    maybe_kick_brand_words_after_service_became_active(
+        tenant_id=tenant.id,
+        became_active=tenant_service_is_operational(tenant) and not was_operational,
+    )
     return {"id": tenant.id, "status": tenant.status}
 
 

@@ -1138,6 +1138,10 @@ def management_update_tenant(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="企业不存在")
 
+    from app.services.tenant_account_service import tenant_service_is_operational
+
+    was_operational = tenant_service_is_operational(tenant)
+
     old_name = tenant.name
     old_code = tenant.code
     old_start = tenant.service_start_date
@@ -1188,6 +1192,12 @@ def management_update_tenant(
     )
     db.commit()
     db.refresh(tenant)
+    from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
+
+    maybe_kick_brand_words_after_service_became_active(
+        tenant_id=tenant.id,
+        became_active=tenant_service_is_operational(tenant) and not was_operational,
+    )
     return ApiResponse(data=tenant_to_dict(tenant, db=db))
 
 
@@ -1279,6 +1289,9 @@ def management_restore_tenant(
     if tenant.service_end_date and tenant.service_end_date < date.today():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="服务已到期，请先延长服务期限后再恢复")
 
+    from app.services.tenant_account_service import tenant_service_is_operational
+
+    was_operational = tenant_service_is_operational(tenant)
     tenant.status = service_status_from_period(tenant.service_start_date, tenant.service_end_date)
     tenant.stop_reason = None
     tenant.stopped_at = None
@@ -1287,6 +1300,12 @@ def management_restore_tenant(
 
     write_management_log(db, current, "企业恢复", f"恢复企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
     db.commit()
+    from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
+
+    maybe_kick_brand_words_after_service_became_active(
+        tenant_id=tenant.id,
+        became_active=tenant_service_is_operational(tenant) and not was_operational,
+    )
     db.refresh(tenant)
     return ApiResponse(data=tenant_to_dict(tenant, db=db))
 

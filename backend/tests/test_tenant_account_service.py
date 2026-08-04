@@ -176,3 +176,49 @@ def test_service_gate_skip_message_and_dashboard_filter():
     assert "暂不提交" in msg
     assert is_service_gate_schedule_message("企业服务已停止，不能提交新的监测任务")
     assert not is_service_gate_schedule_message("模力接口超时")
+
+
+def test_activate_due_tenant_services_flips_pending_start(db):
+    from app.services.tenant_account_service import activate_due_tenant_services
+
+    suffix = uuid4().hex[:8]
+    pending = Tenant(
+        name=f"T7-{suffix}",
+        code=f"T7{suffix}",
+        status=False,
+        service_start_date=date.today() - timedelta(days=1),
+        service_end_date=date.today() + timedelta(days=30),
+        stop_reason=None,
+    )
+    manual = Tenant(
+        name=f"T8-{suffix}",
+        code=f"T8{suffix}",
+        status=False,
+        service_start_date=date.today() - timedelta(days=1),
+        service_end_date=date.today() + timedelta(days=30),
+        stop_reason="manual",
+    )
+    future = Tenant(
+        name=f"T9-{suffix}",
+        code=f"T9{suffix}",
+        status=False,
+        service_start_date=date.today() + timedelta(days=5),
+        stop_reason=None,
+    )
+    db.add_all([pending, manual, future])
+    db.flush()
+
+    activated = activate_due_tenant_services(db, today=date.today())
+    ids = {item.id for item in activated}
+    assert pending.id in ids
+    assert manual.id not in ids
+    assert future.id not in ids
+    db.refresh(pending)
+    assert pending.status is True
+    assert pending.stop_reason is None
+
+
+def test_brand_word_service_start_schedule_key():
+    from app.services.schedule_service import brand_word_service_start_schedule_key
+
+    assert brand_word_service_start_schedule_key(date(2026, 8, 4)) == "bwstart-20260804"

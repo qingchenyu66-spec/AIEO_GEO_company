@@ -33,6 +33,8 @@ celery_app.conf.update(
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
         "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
         "app.tasks.monitor.expire_overdue_tenant_services": {"queue": "default"},
+        "app.tasks.monitor.activate_due_tenants_and_kick_brand_words": {"queue": "submit"},
+        "app.tasks.monitor.kick_brand_word_service_start": {"queue": "submit"},
         "app.tasks.monitor.scan_tenant_expiry_notifications": {"queue": "default"},
         "app.tasks.monitor.sync_platform_catalog_daily": {"queue": "default"},
         "app.tasks.monitor.check_platform_availability_weekly": {"queue": "submit"},
@@ -83,6 +85,11 @@ celery_app.conf.update(
         "expire-overdue-tenant-services": {
             "task": "app.tasks.monitor.expire_overdue_tenant_services",
             "schedule": crontab(hour=0, minute=10),
+        },
+        "activate-due-tenants-and-kick-brand-words": {
+            "task": "app.tasks.monitor.activate_due_tenants_and_kick_brand_words",
+            # 2026-08-03 - 服务开始日 00:15 启用企业并开跑品牌词首轮
+            "schedule": crontab(hour=0, minute=15),
         },
         "scan-tenant-expiry-notifications": {
             "task": "app.tasks.monitor.scan_tenant_expiry_notifications",

@@ -164,3 +164,29 @@ def expire_overdue_tenant_services(db: Session, *, today: date | None = None) ->
         handled += 1
     db.flush()
     return handled
+
+
+def activate_due_tenant_services(db: Session, *, today: date | None = None) -> list[Tenant]:
+    """服务开始日到达：把「未开始」企业翻成启用（不碰人工停服/取消/到期）。"""
+    # 2026-08-03 - 到点自动启用，便于品牌词/GEO 调度纳入服务期企业
+    today = today or date.today()
+    rows = list(
+        db.scalars(
+            select(Tenant).where(
+                Tenant.deleted.is_(False),
+                Tenant.status.is_(False),
+                or_(Tenant.stop_reason.is_(None), Tenant.stop_reason == ""),
+                or_(Tenant.service_start_date.is_(None), Tenant.service_start_date <= today),
+                or_(Tenant.service_end_date.is_(None), Tenant.service_end_date >= today),
+            )
+        )
+    )
+    activated: list[Tenant] = []
+    for tenant in rows:
+        tenant.status = True
+        tenant.stop_reason = None
+        tenant.stopped_at = None
+        tenant.stopped_by = None
+        activated.append(tenant)
+    db.flush()
+    return activated

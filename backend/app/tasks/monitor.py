@@ -524,6 +524,69 @@ def expire_overdue_tenant_services_task() -> dict[str, Any]:
     return {"status": "ok", "handled": handled}
 
 
+@celery_app.task(name="app.tasks.monitor.activate_due_tenants_and_kick_brand_words", ignore_result=True)
+def activate_due_tenants_and_kick_brand_words_task() -> dict[str, Any]:
+    """每日：服务开始日到达则启用企业，并开跑一轮品牌词（once/weekly 都跑这一枪）。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    lock_key = _scan_lock_key("activate-tenants-bw-start", bucket_minutes=30)
+    with redis_lock(lock_key, ttl_seconds=1800) as acquired:
+        if not acquired:
+            result = {"status": "locked"}
+            record_beat_scan("app.tasks.monitor.activate_due_tenants_and_kick_brand_words", result)
+            return result
+
+        from app.services.schedule_service import kick_brand_word_service_start_for_tenant
+        from app.services.tenant_account_service import activate_due_tenant_services
+
+        db = SessionLocal()
+        activated_ids: list[int] = []
+        kicks: list[dict[str, Any]] = []
+        try:
+            activated = activate_due_tenant_services(db)
+            db.commit()
+            activated_ids = [item.id for item in activated]
+            for tenant_id in activated_ids:
+                kicks.append(kick_brand_word_service_start_for_tenant(db, tenant_id))
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    result = {
+        "status": "ok",
+        "activated": len(activated_ids),
+        "tenant_ids": activated_ids,
+        "kicks": kicks,
+    }
+    record_beat_scan("app.tasks.monitor.activate_due_tenants_and_kick_brand_words", result)
+    logger.info("activate_due_tenants_and_kick_brand_words activated=%s", len(activated_ids))
+    return result
+
+
+@celery_app.task(name="app.tasks.monitor.kick_brand_word_service_start", ignore_result=True)
+def kick_brand_word_service_start_task(tenant_id: int) -> dict[str, Any]:
+    """单企业服务开始首跑品牌词（管理端改期/恢复后触发）。"""
+    if not settings.celery_enabled:
+        db = SessionLocal()
+        try:
+            from app.services.schedule_service import kick_brand_word_service_start_for_tenant
+
+            return kick_brand_word_service_start_for_tenant(db, int(tenant_id))
+        finally:
+            db.close()
+
+    db = SessionLocal()
+    try:
+        from app.services.schedule_service import kick_brand_word_service_start_for_tenant
+
+        return kick_brand_word_service_start_for_tenant(db, int(tenant_id))
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.monitor.scan_tenant_expiry_notifications", ignore_result=True)
 def scan_tenant_expiry_notifications_task() -> dict[str, Any]:
     """每日按通知规则推送客户即将到期站内铃铛。"""
