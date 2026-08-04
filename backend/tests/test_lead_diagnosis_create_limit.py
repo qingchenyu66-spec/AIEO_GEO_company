@@ -41,4 +41,4 @@ def test_assert_lead_diagnosis_create_allowed_passes_when_no_duplicate() -> None
         "app.services.lead_diagnosis_service.find_recent_lead_diagnosis_by_brand",
         return_value=None,
     ):
-        assert_lead_diagnosis_create_allowed(db, current, "新品牌") is None
+        assert assert_lead_diagnosis_create_allowed(db, current, "新品牌") is None

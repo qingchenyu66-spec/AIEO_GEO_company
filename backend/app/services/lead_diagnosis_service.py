@@ -647,7 +647,8 @@ def find_recent_lead_diagnosis_by_brand(
     brand_name: str,
     within_days: int = LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
 ) -> LeadDiagnosis | None:
-    """同一创建人、同一品牌名在冷却期内是否已有诊断记录。"""
+    """同一创建人、同一品牌名在冷却期内是否已有未取消的诊断记录。"""
+    # 2026-08-04 - 已取消单仍占 7 天冷却，导致无法再提审/审批通过；canceled 不计入
     normalized = normalize_lead_brand_name(brand_name)
     if not normalized or not user_id:
         return None
@@ -656,6 +657,7 @@ def find_recent_lead_diagnosis_by_brand(
         select(LeadDiagnosis)
         .where(
             LeadDiagnosis.deleted.is_(False),
+            LeadDiagnosis.status != "canceled",
             LeadDiagnosis.created_by_user_id == user_id,
             func.lower(func.trim(LeadDiagnosis.brand_name)) == normalized,
             LeadDiagnosis.created_at >= cutoff,
