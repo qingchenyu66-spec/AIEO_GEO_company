@@ -1359,6 +1359,7 @@ def management_users(
     keyword: str | None = None,
     tenant_id: int | None = None,
     identity_type: str | None = None,
+    position_id: int | None = None,
     enabled: bool | None = Query(default=None),
     deleted: bool = False,
     current: CurrentSession = Depends(get_current_session),
@@ -1374,6 +1375,7 @@ def management_users(
         keyword=keyword,
         tenant_id=tenant_id,
         identity_type=identity_type or None,
+        position_id=position_id,
         status=enabled,
         deleted=deleted,
     )

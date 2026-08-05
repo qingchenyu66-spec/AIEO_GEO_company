@@ -1,7 +1,7 @@
 import hashlib
 from datetime import date
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import hash_password
@@ -78,6 +78,7 @@ def list_managed_users(
     keyword: str | None = None,
     tenant_id: int | None = None,
     identity_type: str | None = None,
+    position_id: int | None = None,
     status: bool | None = None,
     deleted: bool = False,
 ) -> list[User]:
@@ -93,17 +94,29 @@ def list_managed_users(
         stmt = stmt.where(User.status.is_(status))
     if keyword and keyword.strip():
         like_value = f"%{keyword.strip()}%"
+        # 2026-08-05 - 搜索框写「职位」但未命中职位名 - keyword 一并匹配 position_name
+        position_ids_by_name = select(Position.id).where(
+            Position.deleted.is_(False),
+            Position.position_name.like(like_value),
+        )
         stmt = stmt.where(
             or_(
                 User.username.like(like_value),
                 User.display_name.like(like_value),
                 User.identities.any(UserIdentity.identity_name.like(like_value)),
+                User.identities.any(UserIdentity.position_id.in_(position_ids_by_name)),
             )
         )
     if tenant_id is not None:
         stmt = stmt.where(User.identities.any(UserIdentity.tenant_id == tenant_id))
+    # 2026-08-05 - 用户列表按职位筛 - 端+职位必须落在同一身份，避免双身份串匹
+    identity_conds = []
     if identity_type:
-        stmt = stmt.where(User.identities.any(UserIdentity.identity_type == identity_type))
+        identity_conds.append(UserIdentity.identity_type == identity_type)
+    if position_id is not None:
+        identity_conds.append(UserIdentity.position_id == position_id)
+    if identity_conds:
+        stmt = stmt.where(User.identities.any(and_(*identity_conds)))
     return list(db.scalars(stmt).unique())
 
 

@@ -2572,7 +2572,7 @@ button:disabled {
 }
 .user-filter-bar {
   display:grid;
-  grid-template-columns: minmax(260px,1.4fr) minmax(200px,1fr) minmax(150px,.75fr) minmax(140px,.7fr) auto auto auto;
+  grid-template-columns: minmax(220px,1.35fr) repeat(4,minmax(128px,.85fr)) auto;
   gap:12px;
   align-items:end;
   margin-bottom:20px;
@@ -2585,6 +2585,14 @@ button:disabled {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.85);
 }
 .user-filter-bar label { min-width:0; }
+.user-filter-bar .user-filter-search { min-width:0; }
+.user-filter-actions {
+  display:flex;
+  align-items:end;
+  gap:8px;
+  flex-wrap:wrap;
+  min-width:0;
+}
 .user-filter-bar label > span {
   display:block;
   margin-bottom:6px;
@@ -4071,6 +4079,7 @@ button:disabled {
   .user-create-page .form-grid,
   .user-create-page .identity-config-box .form-grid { grid-template-columns:1fr; }
   .user-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .user-filter-actions { grid-column:1 / -1; }
   .managed-user-list { grid-template-columns:1fr; }
 }
 
@@ -4095,6 +4104,7 @@ button:disabled {
   .form-grid { grid-template-columns:1fr; }
   .identity-checks { grid-template-columns:1fr; }
   .user-filter-bar { grid-template-columns:1fr; }
+  .user-filter-actions { grid-column:auto; }
   .permission-head { align-items:flex-start; flex-direction:column; }
 }
 
@@ -5329,6 +5339,9 @@ button:disabled {
     grid-template-columns: 1fr;
     gap: 8px;
   }
+  /* 2026-08-05 - 用户列表筛栏加职位后过挤 - 中宽改三列，操作区整行 */
+  .user-filter-bar { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .user-filter-actions { grid-column:1 / -1; }
 }
 
 .platform-badge {

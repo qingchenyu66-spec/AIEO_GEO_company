@@ -380,6 +380,7 @@ export interface ManagedUserQuery {
   keyword?: string
   tenant_id?: number | null
   identity_type?: IdentityType | ''
+  position_id?: number | null
   enabled?: boolean | null
   deleted?: boolean
 }

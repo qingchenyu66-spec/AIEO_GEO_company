@@ -13,6 +13,7 @@ const {
   userTotalPages,
   changeUserPage,
   userFilters,
+  filterPositionOptions,
   tenants,
   loadUserManagement,
   resetUserFilters,
@@ -44,7 +45,7 @@ const {
         </div>
       </div>
       <div class="user-filter-bar">
-        <label>
+        <label class="user-filter-search">
           <span>搜索</span>
           <input v-model="userFilters.keyword" placeholder="姓名 / 账号 / 职位" @keyup.enter="loadUserManagement" />
         </label>
@@ -53,6 +54,7 @@ const {
           <ElSelect
             v-model="userFilters.tenant_id"
             clearable
+            filterable
             placeholder="全部公司"
             class="portal-field-select"
           >
@@ -65,15 +67,32 @@ const {
           </ElSelect>
         </label>
         <label>
-          <span>身份</span>
+          <span>所属端</span>
           <ElSelect
             v-model="userFilters.identity_type"
             clearable
-            placeholder="全部身份"
+            placeholder="全部端"
             class="portal-field-select"
           >
             <ElOption label="平台运营端" value="PLATFORM" />
             <ElOption label="客户企业端" value="CUSTOMER" />
+          </ElSelect>
+        </label>
+        <label>
+          <span>职位</span>
+          <ElSelect
+            v-model="userFilters.position_id"
+            clearable
+            filterable
+            placeholder="全部职位"
+            class="portal-field-select"
+          >
+            <ElOption
+              v-for="position in filterPositionOptions"
+              :key="position.id"
+              :label="position.label"
+              :value="position.id"
+            />
           </ElSelect>
         </label>
         <label>
@@ -88,12 +107,14 @@ const {
             <ElOption label="停用" value="false" />
           </ElSelect>
         </label>
-        <label class="deleted-filter">
-          <input v-model="userFilters.deleted" type="checkbox" />
-          <span>已删除账号</span>
-        </label>
-        <button class="filter-search-btn" @click="loadUserManagement">查询</button>
-        <button class="filter-reset-btn" @click="resetUserFilters">重置</button>
+        <div class="user-filter-actions">
+          <label class="deleted-filter">
+            <input v-model="userFilters.deleted" type="checkbox" />
+            <span>已删除账号</span>
+          </label>
+          <button class="filter-search-btn" @click="loadUserManagement">查询</button>
+          <button class="filter-reset-btn" @click="resetUserFilters">重置</button>
+        </div>
       </div>
       <div class="managed-user-list">
         <div v-if="!loadingUsers && !managementUsers.length" class="empty-users">

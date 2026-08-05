@@ -47,11 +47,32 @@ export function useUserManagement(options: UserManagementOptions) {
     keyword: '',
     tenant_id: null as number | null,
     identity_type: '' as IdentityType | '',
+    position_id: null as number | null,
     enabled: '' as '' | 'true' | 'false',
     deleted: false,
   })
   const userForm = reactive(createUserCreateForm())
   const editForm = reactive(createEmptyIdentityForm())
+
+  // 2026-08-05 - 用户列表按职位筛 - 选项随所属端级联；未选端时带端前缀防同名
+  const filterPositionOptions = computed(() => {
+    const selectedType = userFilters.identity_type
+    const types: IdentityType[] = selectedType ? [selectedType] : ['PLATFORM', 'CUSTOMER']
+    const rows: Array<{ id: number; label: string }> = []
+    for (const type of types) {
+      const prefix = selectedType ? '' : (type === 'PLATFORM' ? '平台 · ' : '客户 · ')
+      for (const position of positions[type]) {
+        rows.push({ id: position.id, label: `${prefix}${position.position_name}` })
+      }
+    }
+    return rows
+  })
+
+  function syncFilterPositionWithIdentityType() {
+    if (userFilters.position_id == null) return
+    const stillValid = filterPositionOptions.value.some(item => item.id === userFilters.position_id)
+    if (!stillValid) userFilters.position_id = null
+  }
 
   function notifyError(error: unknown, context: string) {
     notifyOperationError(error, context, managementErrorMessage)
@@ -76,6 +97,7 @@ export function useUserManagement(options: UserManagementOptions) {
           keyword: userFilters.keyword.trim() || undefined,
           tenant_id: userFilters.tenant_id,
           identity_type: userFilters.identity_type,
+          position_id: userFilters.position_id,
           enabled: userFilters.enabled === '' ? null : userFilters.enabled === 'true',
           deleted: userFilters.deleted,
         }))
@@ -91,6 +113,7 @@ export function useUserManagement(options: UserManagementOptions) {
     userFilters.keyword = ''
     userFilters.tenant_id = null
     userFilters.identity_type = ''
+    userFilters.position_id = null
     userFilters.enabled = ''
     userFilters.deleted = false
     userPage.value = 1
@@ -113,11 +136,19 @@ export function useUserManagement(options: UserManagementOptions) {
       userFilters.keyword,
       userFilters.tenant_id,
       userFilters.identity_type,
+      userFilters.position_id,
       userFilters.enabled,
       userFilters.deleted,
     ] as const,
     () => {
       userPage.value = 1
+    },
+  )
+
+  watch(
+    () => userFilters.identity_type,
+    () => {
+      syncFilterPositionWithIdentityType()
     },
   )
   watch(managementUsers, () => {
@@ -371,6 +402,7 @@ export function useUserManagement(options: UserManagementOptions) {
     passwordDialog,
     resetPassword,
     userFilters,
+    filterPositionOptions,
     userForm,
     editForm,
     notifyError,
