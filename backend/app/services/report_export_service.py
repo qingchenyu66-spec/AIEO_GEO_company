@@ -41,6 +41,7 @@ REPORT_TYPE_LABELS = {
     "monthly": "监测月报",
     "quarterly": "监测季报",
     "annual": "监测年报",
+    "completion": "项目结项报告",
     "comparison": "对比报告",
     "periodic": "周期报告",
 }
@@ -307,6 +308,9 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "contact_phone": content.get("contact_phone") or "",
         "contact_name": content.get("contact_name") or "",
         "competitors": content.get("competitors") or [],
+        # 2026-08-04 - 结项完整版 HTML 读 completion_pack
+        "completion_pack": content.get("completion_pack") or {},
+        "kpis": kpis,
     }
 
 def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
@@ -984,6 +988,11 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
 
         return build_period_deck_html(db, payload, tenant_id=tenant_id, embed_assets=False)
 
+    if report_type == "completion":
+        from app.services.report_completion_html_service import build_completion_report_html
+
+        return build_completion_report_html(payload, platform_names)
+
     if report_type == "diagnosis":
         from app.services.report_molizhishu_html_service import build_molizhishu_html
 
@@ -1012,10 +1021,14 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
             str(report.get("content_hash") or ""),
             str(theme or "b"),
             # 2026-07-28 - 周期改幻灯 / 预览内嵌 deck_pack 后刷缓存
-            PERIOD_DECK_PIPELINE
-            if str(report.get("report_type") or "")
-            in {"weekly", "monthly", "quarterly", "annual"}
-            else "diag-pack-v1",
+            (
+                PERIOD_DECK_PIPELINE
+                if str(report.get("report_type") or "")
+                in {"weekly", "monthly", "quarterly", "annual"}
+                else "completion-pack-v8"
+                if str(report.get("report_type") or "") == "completion"
+                else "diag-pack-v1"
+            ),
         ]
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]

@@ -468,7 +468,7 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
 
 @celery_app.task(name="app.tasks.monitor.scan_due_scheduled_reports", ignore_result=True)
 def scan_due_scheduled_reports() -> dict[str, Any]:
-    """每日扫描并生成到期的周报/月报/季报/年报，直接发布至客户端。"""
+    """每日扫描：周/月/季/年报（按日历）+ 服务到期结项报告，直接发布。"""
     if not settings.celery_enabled:
         return {"status": "disabled"}
 
@@ -487,11 +487,12 @@ def scan_due_scheduled_reports() -> dict[str, Any]:
 
     record_beat_scan("app.tasks.monitor.scan_due_scheduled_reports", result)
     logger.info(
-        "scan_due_scheduled_reports due=%s generated=%s skipped=%s errors=%s",
+        "scan_due_scheduled_reports due=%s generated=%s skipped=%s errors=%s completion=%s",
         result.get("due_types"),
         result.get("generated"),
         result.get("skipped"),
         len(result.get("errors") or []),
+        (result.get("completion") or {}).get("generated"),
     )
     return result
 

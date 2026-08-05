@@ -10,7 +10,7 @@ from app.services.molizhishu_catalog_service import get_supported_platform_catal
 from app.services.report_competitor_visuals import build_competitor_analysis
 
 PERIODIC_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
-ALL_RICH_REPORT_TYPES = PERIODIC_REPORT_TYPES | {"diagnosis"}
+ALL_RICH_REPORT_TYPES = PERIODIC_REPORT_TYPES | {"diagnosis", "completion"}
 REPORT_MODULE_SCHEMA_VERSION = 3
 
 _DIAGNOSIS_COVER_TITLE = "GEO企业诊断报告"
@@ -112,6 +112,13 @@ _TYPE_META: dict[str, dict[str, str]] = {
         "next": "下一年度",
         "cadence": "年度",
         "plan_title": "下一年度品牌传播目标与行动规划",
+    },
+    "completion": {
+        "label": "项目结项报告",
+        "scope": "服务周期",
+        "next": "后续运营周期",
+        "cadence": "结项",
+        "plan_title": "后续常态化运营建议",
     },
     "diagnosis": {
         "label": "企业诊断报告",
@@ -439,6 +446,19 @@ def _action_plan_for_type(
         # 诊断报告不再输出「30 天行动规划」模块，优化建议见 risk_and_strategy。
         goals = []
         actions = []
+    elif report_type == "completion":
+        goals = [
+            "保留服务期内已形成的核心问题集、信源资产与快照证据，作为后续复测基线",
+            f"品牌提及率保持在 {mention:.1f}% 以上，并持续关注短板平台波动",
+            "建立月度复盘机制，跟踪 AI 平台算法变化、竞品新增动作与负面信源",
+            "将高表现监测词沉淀为内容选题库，低表现词进入专项优化池",
+        ]
+        actions = [
+            "资产移交：整理问题集、监测平台、重点信源、报告文件与原始快照，明确后续归属与维护责任",
+            "常态化监测：服务结束后建议按月输出复盘，重点观察提及率、引用率、排名和负面情绪变化",
+            "内容续航：围绕高转化场景词补充 FAQ、案例、对比表、行业指南等可被 AI 引用的结构化素材",
+            "风险预警：对排名下滑、竞品超越、负面信源上升设置预警，避免服务结束后效果自然衰减",
+        ]
     else:
         next_year = (period_end.year + 1) if period_end else 2026
         goals = [
@@ -516,6 +536,8 @@ def build_report_modules(
     competitor_text = "、".join(competitor_names) if competitor_names else "未配置竞品"
     if report_type == "diagnosis":
         cover_report_title = f"GEO{meta['label']}"
+    elif report_type == "completion":
+        cover_report_title = f"{brand_name} GEO服务总结报告"
     else:
         cover_report_title = f"GEO{meta['label']}（{period_label}）"
 
@@ -754,7 +776,7 @@ def build_report_modules(
         "notes": [
             f"本报告数据周期为 {period_range}，基于 {completed} 条监测子任务，经多轮抓取、语义矩阵、多信源交叉校验生成",
             f"数据覆盖 {platform_count or 3} 大 AI 平台及知乎、垂直行业媒体、企业官网等渠道，不含短视频、线下等其他传播渠道",
-            "报告仅供企业内部售前研判、品牌传播策略决策使用，禁止对外商用、转载",
+            "报告仅供企业内部验收、复盘与品牌传播策略决策使用，禁止脱离数据口径对外夸大传播",
             "指标释义：品牌提及率=监测任务中出现品牌名称的占比；平均排名=AI 推荐列表平均位次；引用次数=外部渠道引用品牌相关内容频次",
         ],
     }
@@ -778,7 +800,16 @@ def build_report_modules(
         {"page": 6, "title": "核心信源传播影响力分析"},
         {"page": 7, "title": "风险诊断与分维度优化策略"},
     ]
-    if action_plan:
+    if report_type == "completion":
+        toc = [
+            {"page": 2, "title": "项目概述与服务范围"},
+            {"page": 3, "title": "核心指标与目标达成"},
+            {"page": 4, "title": "GEO 效果证据链"},
+            {"page": 5, "title": "信源与竞品表现"},
+            {"page": 6, "title": "项目复盘与后续建议"},
+            {"page": 7, "title": "数据口径与附录说明"},
+        ]
+    elif action_plan:
         toc.append({"page": 8, "title": action_plan["title"]})
         toc.append({"page": 9, "title": "报告备注说明"})
     else:

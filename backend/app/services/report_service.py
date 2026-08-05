@@ -33,6 +33,7 @@ REPORT_TYPE_LABELS = {
     "monthly": "监测月报",
     "quarterly": "监测季报",
     "annual": "监测年报",
+    "completion": "项目结项报告",
     "comparison": "对比报告",
     "periodic": "周期报告",
 }
@@ -44,7 +45,7 @@ REPORT_STATUS_LABELS = {
 }
 
 # 客户端报告中心仅展示周期监测报告；企业诊断仅供运营内部预览导出。
-CUSTOMER_PORTAL_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
+CUSTOMER_PORTAL_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual", "completion"})
 
 
 def _customer_can_view_report(report: GeoReport) -> bool:
@@ -371,6 +372,7 @@ def _default_report_title(report_type: str, brand_name: str) -> str:
         "monthly": "GEO 监测月报",
         "quarterly": "GEO 监测季报",
         "annual": "GEO 监测年报",
+        "completion": "GEO 项目结项报告",
         "comparison": "竞品对比报告",
         "periodic": "周期监测报告",
     }.get(report_type, "GEO 监测报告")
@@ -415,7 +417,7 @@ def _build_report_content(
         content["period_start"] = period_start.isoformat()
     if period_end is not None:
         content["period_end"] = period_end.isoformat()
-    content["auto_generated"] = report_type in {"weekly", "monthly", "quarterly", "annual"}
+    content["auto_generated"] = report_type in {"weekly", "monthly", "quarterly", "annual", "completion"}
     if report_sections:
         content["report_sections"] = report_sections
     if premium_content:
@@ -777,7 +779,7 @@ def _compose_scheduled_report_bundle(
         end_date=period_end,
     )
     completed_count = int((snapshot.get("kpis") or {}).get("completed_count") or 0)
-    if snapshot_override is None and completed_count <= 0:
+    if snapshot_override is None and completed_count <= 0 and report_type != "completion":
         return None
 
     brand_name = snapshot.get("brand_name") or _tenant_brand_name(db, tenant_id)
@@ -826,6 +828,17 @@ def _compose_scheduled_report_bundle(
         premium_content=premium_content or None,
         report_modules=report_modules,
     )
+    # 2026-08-04 - 结项完整版需要成绩/挑战样本与范围盘点 - 仅 completion 附加 pack
+    if report_type == "completion":
+        from app.services.report_completion_context_service import attach_completion_pack
+
+        content = attach_completion_pack(
+            db,
+            tenant_id,
+            content,
+            period_start=period_start,
+            period_end=period_end,
+        )
 
     return {
         "report_title": report_title,

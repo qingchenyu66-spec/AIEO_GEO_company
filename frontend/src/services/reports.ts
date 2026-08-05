@@ -2,14 +2,14 @@ import { http } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx' | 'html'
 
-export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'diagnosis'] as const
+export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'completion', 'diagnosis'] as const
 
 export function isHtmlTemplateReportType(reportType: string | null | undefined) {
   return HTML_TEMPLATE_REPORT_TYPES.includes((reportType || '') as (typeof HTML_TEMPLATE_REPORT_TYPES)[number])
 }
 
 /** @deprecated 使用 isHtmlTemplateReportType */
-export const PERIOD_HTML_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual'] as const
+export const PERIOD_HTML_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'completion'] as const
 
 export function isPeriodHtmlReportType(reportType: string | null | undefined) {
   return isHtmlTemplateReportType(reportType)
@@ -34,7 +34,7 @@ export async function fetchReportPreviewHtml(reportId: number): Promise<string> 
   return html
 }
 
-export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'comparison' | 'periodic'
+export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'completion' | 'comparison' | 'periodic'
 export type ReportStatus = 'draft' | 'published' | 'archived'
 
 export interface ReportListItem {

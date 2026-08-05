@@ -14,7 +14,7 @@ class GeoReport(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="报告ID")
     tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False, comment="所属企业ID")
     report_title: Mapped[str] = mapped_column(String(200), nullable=False, comment="报告标题")
-    report_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True, comment="报告类型: diagnosis/weekly/monthly/quarterly/annual")
+    report_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True, comment="报告类型: diagnosis/weekly/monthly/quarterly/annual/completion")
     status: Mapped[str] = mapped_column(String(20), default="published", nullable=False, comment="状态: published/archived（历史 draft 已退役）")
     period_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True, comment="周期报告幂等键，如 monthly:2026-07")
     data_summary: Mapped[str | None] = mapped_column(Text, nullable=True, comment="数据摘要")
