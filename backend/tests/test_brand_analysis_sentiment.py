@@ -1,4 +1,4 @@
-﻿"""Brand analysis DeepSeek sentiment helpers."""
+"""Brand analysis DeepSeek sentiment helpers."""
 
 from app.services.brand_analysis_service import (
     BA_DESC_HARD_MAX,
@@ -156,9 +156,15 @@ def test_group_ai_descriptions_keeps_pos_neg_separate():
         answer_content="正文B",
         raw_result_json={},
     )
-    # 文案极近，但情感对立 → 不得合并
-    _mark_deepseek_description(a, "艾迪亚控股集团是正规存续的户外广告营销服务商")
-    _mark_deepseek_description(b, "艾迪亚控股集团是正规存续的户外广告营销服务商公司")
+    # 文案极近，但情感对立 → 不得合并（显式正负，避免继承纠偏把负改中性）
+    _mark_deepseek_descriptions(
+        a,
+        [{"text": "艾迪亚控股集团是正规存续的户外广告营销服务商", "sentiment": "positive"}],
+    )
+    _mark_deepseek_descriptions(
+        b,
+        [{"text": "艾迪亚控股集团是正规存续的户外广告营销服务商公司", "sentiment": "negative"}],
+    )
     rows = _group_ai_descriptions(
         [a, b],
         platform_names={"qianwen": "通义千问", "doubao": "豆包"},
@@ -334,6 +340,115 @@ def test_legacy_risk_string_falls_back_negative():
     by_text = {row["text"]: row["sentiment"] for row in items}
     assert by_text["艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日"] == "negative"
     assert by_text["1998年起深耕营销传播领域"] == "positive"
+
+
+def test_cleared_risk_not_forced_negative():
+    """2026-08-04 - 「无行政处罚」不得因命中「行政处罚」强制负面。"""
+    from app.services.brand_analysis_service import _normalize_description_items
+
+    rows = _normalize_description_items(
+        [{"text": "北京华兴星图教育科技股份有限公司无行政处罚记录", "sentiment": "negative"}],
+        fallback_sentiment="negative",
+    )
+    assert len(rows) == 1
+    assert rows[0]["sentiment"] == "neutral"
+
+
+def test_non_risk_does_not_inherit_parent_negative():
+    """2026-08-04 - 非风险要点勿继承整段负面。"""
+    from app.services.brand_analysis_service import _normalize_description_items
+
+    rows = _normalize_description_items(
+        ["价格透明流程清晰服务响应快"],
+        fallback_sentiment="negative",
+    )
+    assert rows[0]["sentiment"] == "neutral"
+
+
+def test_entity_fact_llm_negative_downgraded():
+    """2026-08-04 - 公司介绍被 LLM 标负 → 纠为中性。"""
+    from app.services.brand_analysis_service import _normalize_description_items
+
+    text = "艾迪亚控股集团核心主体为北京艾迪亚传媒科技集团有限公司，提供户外加线上全媒体传播一站式解决方案"
+    rows = _normalize_description_items(
+        [{"text": text, "sentiment": "negative"}],
+        fallback_sentiment="negative",
+    )
+    assert rows[0]["sentiment"] == "neutral"
+
+
+def test_group_non_risk_majority_not_any_negative():
+    """2026-08-04 - 非风险组多数决；硬风险组仍有负即负。"""
+    from app.services.brand_analysis_service import _brand_aliases
+
+    a = GeoMonitorSubtask(
+        subtask_id="m1",
+        task_id="t1",
+        platform="doubao",
+        mode="standard",
+        prompt="q1",
+        status="completed",
+        sentiment="neutral",
+        answer_content="A",
+        raw_result_json={},
+    )
+    b = GeoMonitorSubtask(
+        subtask_id="m2",
+        task_id="t1",
+        platform="deepseek",
+        mode="standard",
+        prompt="q2",
+        status="completed",
+        sentiment="neutral",
+        answer_content="B",
+        raw_result_json={},
+    )
+    c = GeoMonitorSubtask(
+        subtask_id="m3",
+        task_id="t1",
+        platform="kimi",
+        mode="standard",
+        prompt="q3",
+        status="completed",
+        sentiment="negative",
+        answer_content="C",
+        raw_result_json={},
+    )
+    # 同文案：2 中性 + 1 负面（非风险）→ 组标签中性
+    for item, sent in ((a, "neutral"), (b, "neutral"), (c, "negative")):
+        _mark_deepseek_descriptions(
+            item,
+            [{"text": "价格偏高但交付流程相对清晰", "sentiment": sent}],
+        )
+    rows = _group_ai_descriptions(
+        [a, b, c],
+        platform_names={"doubao": "豆包", "deepseek": "DeepSeek", "kimi": "Kimi"},
+    )
+    assert len(rows) == 1
+    assert rows[0]["sentiment"] == "中性"
+    assert rows[0]["sample_count"] == 3
+
+    risk = GeoMonitorSubtask(
+        subtask_id="m4",
+        task_id="t1",
+        platform="yuanbao",
+        mode="standard",
+        prompt="q4",
+        status="completed",
+        sentiment="positive",
+        answer_content="D",
+        raw_result_json={},
+    )
+    _mark_deepseek_descriptions(
+        risk,
+        [{"text": "艾迪亚（北京）控股集团有限公司吊销日期为2024年8月14日", "sentiment": "negative"}],
+    )
+    risk_rows = _group_ai_descriptions(
+        [risk],
+        platform_names={"yuanbao": "元宝"},
+        brand_aliases=_brand_aliases("艾迪亚控股集团有限公司", "艾迪亚"),
+    )
+    assert risk_rows[0]["sentiment"] == "负面"
 
 
 def test_group_ai_descriptions_one_snapshot_many_points():

@@ -57,6 +57,20 @@ _RISK_DESC_RE = re.compile(
     r"吊销|注销|撤销登记|经营异常|列入异常|行政处罚|严重违法|失信被执行|"
     r"强制清算|不具备合法经营|风险极高|被处罚|弄虚作假|营业执照被"
 )
+# 2026-08-04 - 「无行政处罚」误命中风险词 - 否定前缀清风险
+_CLEARED_RISK_RE = re.compile(
+    r"(?:无|未|没有|并无|无任何|暂无|不存在|未见)"
+    r"[^。；;！!？?]{0,16}?"
+    r"(?:吊销|注销|撤销登记|经营异常|列入异常|行政处罚|严重违法|失信|处罚|强制清算)"
+)
+# 2026-08-04 - 纯主体/业务介绍勿因整段负面误标（勿用「有限公司」等泛匹配）
+_ENTITY_FACT_RE = re.compile(
+    r"(?:核心主体|成立于|总部位于|注册资本|一站式(?:解决方案)?|主营业务|"
+    r"提供.{2,24}(?:解决方案|服务))"
+)
+_NEG_EVAL_CUE_RE = re.compile(
+    r"(?:不推荐|避雷|投诉|翻车|坑|虚假|欺诈|差评|槽点|硬伤|割韭菜|被处罚|弄虚作假)"
+)
 
 
 def _platform_name_map() -> dict[str, str]:
@@ -172,8 +186,25 @@ def _sentiment_key_from_any(raw: str | None) -> str:
     }.get(label, "unknown")
 
 
+def _is_cleared_risk_description(text: str) -> bool:
+    """「无行政处罚 / 未列入异常」等否定合规表述，不算硬风险。"""
+    return bool(_CLEARED_RISK_RE.search(str(text or "")))
+
+
 def _is_risk_description(text: str) -> bool:
-    return bool(_RISK_DESC_RE.search(str(text or "")))
+    s = str(text or "")
+    # 2026-08-04 - 先排除否定合规，再匹配风险词
+    if _is_cleared_risk_description(s):
+        return False
+    return bool(_RISK_DESC_RE.search(s))
+
+
+def _is_neutral_entity_fact(text: str) -> bool:
+    """主体/业务介绍且无负向评价线索 → 宜中性。"""
+    s = str(text or "")
+    if not s or _is_risk_description(s) or _NEG_EVAL_CUE_RE.search(s):
+        return False
+    return bool(_ENTITY_FACT_RE.search(s))
 
 
 def _normalize_description_items(
@@ -189,11 +220,13 @@ def _normalize_description_items(
         fallback = "unknown"
     for item in items or []:
         sentiment = fallback
+        explicit = False
         if isinstance(item, dict):
             text = str(item.get("text") or item.get("description") or "").strip()
             raw_sent = str(item.get("sentiment") or "").strip().lower()
             if raw_sent in SENTIMENT_KEYS:
                 sentiment = raw_sent
+                explicit = True
         else:
             text = str(item or "").strip()
         text = re.sub(r"\s+", "", text)
@@ -207,6 +240,16 @@ def _normalize_description_items(
         # 2026-07-29 - 风险要点强制负面，避免整段正面污染单条标签
         if _is_risk_description(text):
             sentiment = "negative"
+        elif _is_cleared_risk_description(text):
+            # 2026-08-04 - 「无行政处罚」勿强制/保留负面
+            if sentiment == "negative":
+                sentiment = "neutral"
+        elif not explicit and sentiment == "negative" and not _is_risk_description(text):
+            # 2026-08-04 - 非风险要点勿继承整段负面
+            sentiment = "neutral"
+        elif explicit and sentiment == "negative" and _is_neutral_entity_fact(text):
+            # 2026-08-04 - LLM 把公司介绍标负 - 读为中性
+            sentiment = "neutral"
         seen.add(key)
         out.append({"text": text, "sentiment": sentiment})
         if len(out) >= BA_DESC_HARD_MAX:
@@ -386,13 +429,19 @@ def _descriptions_similar(
     return _lcs_run_len(ca, cb, need=BA_DESC_LCS_NEED) >= BA_DESC_LCS_NEED
 
 
-def _dominant_sent_key(tally: dict[str, int]) -> str:
+def _dominant_sent_key(
+    tally: dict[str, int],
+    *,
+    prefer_any_negative: bool = False,
+) -> str:
     if not tally:
         return "unknown"
-    # 2026-07-29 - 组内有负面则优先负面，避免多数正面样本盖住风险要点
-    if int(tally.get("negative") or 0) > 0:
+    # 2026-07-29 - 硬风险组：有负面则优先负面，避免多数正面盖住风险
+    # 2026-08-04 - 非风险组改多数决，避免中性介绍被单条负面拖黑
+    if prefer_any_negative and int(tally.get("negative") or 0) > 0:
         return "negative"
-    return max(tally.items(), key=lambda kv: (kv[1], kv[0] != "unknown"))[0]
+    tie = {"negative": 3, "positive": 2, "neutral": 1, "unknown": 0}
+    return max(tally.items(), key=lambda kv: (kv[1], tie.get(kv[0], 0)))[0]
 
 
 def _sentiments_mergeable(a: str, b: str) -> bool:
@@ -426,7 +475,14 @@ def _merge_similar_description_buckets(
 
     # 预计算 core + bigram 倒排，只对共享字串的候选做近义比对（O(n·k) 代替 O(n²)）
     cores = [_core_description_key(str(b.get("description") or ""), brand_aliases) for b in buckets]
-    sent_keys = [_dominant_sent_key(b["_sent_tally"]) for b in buckets]
+    # 归并候选用组标签：风险组仍「有负即负」，非风险多数决
+    sent_keys = [
+        _dominant_sent_key(
+            b["_sent_tally"],
+            prefer_any_negative=_is_risk_description(str(b.get("description") or "")),
+        )
+        for b in buckets
+    ]
     gram_lists = [list(_char_bigrams(core) or ({core[:1]} if core else set())) for core in cores]
     gram_index: dict[str, list[int]] = {}
     for i, grams in enumerate(gram_lists):
@@ -782,7 +838,11 @@ def _group_ai_descriptions(
     for bucket in buckets:
         tally: dict[str, int] = bucket.pop("_sent_tally")
         platforms: set[str] = bucket.pop("_platforms")
-        dominant = _dominant_sent_key(tally)
+        desc_text = str(bucket.get("description") or "")
+        dominant = _dominant_sent_key(
+            tally,
+            prefer_any_negative=_is_risk_description(desc_text),
+        )
         answers = sorted(
             bucket["answers"],
             key=lambda row: str(row.get("updated_at") or ""),

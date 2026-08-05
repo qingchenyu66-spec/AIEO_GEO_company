@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { RefreshCw, ChevronLeft, ChevronRight } from '@lucide/vue'
-import { ElDialog } from 'element-plus'
+import { RefreshCw, ChevronLeft, ChevronRight, HelpCircle } from '@lucide/vue'
+import { ElDialog, ElTooltip } from 'element-plus'
 import type { ECharts } from 'echarts/core'
 import { withRetry } from '../../../composables/useRetry'
 import { getBrandAsset, type BrandAsset } from '../../../services/brand'
@@ -620,7 +620,19 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="ba-filter-bar">
-        <span class="ba-filter-label">情感筛选</span>
+        <span class="ba-filter-label">
+          情感筛选
+          <!-- 2026-08-04 - 上方样本数与筛选角标口径不同，加问号说明 -->
+          <ElTooltip
+            placement="top"
+            :show-after="200"
+            content="上方「样本」与情感分布图按监测子任务计（一条回答=1）。此处角标按 AI 描述要点计：一条回答可拆出多条要点，故「全部」常大于样本数。"
+          >
+            <button type="button" class="ba-filter-help" aria-label="情感筛选数字说明">
+              <HelpCircle :size="14" />
+            </button>
+          </ElTooltip>
+        </span>
         <div class="ws-board-tabs ba-filter-tabs">
           <button
             v-for="option in sentimentFilterOptions"
@@ -890,9 +902,29 @@ onBeforeUnmount(() => {
 }
 
 .ba-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 13px;
   font-weight: 700;
   color: #0f172a;
+}
+
+.ba-filter-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: help;
+  line-height: 1;
+}
+
+.ba-filter-help:hover {
+  color: #64748b;
 }
 
 .ba-filter-tabs {
