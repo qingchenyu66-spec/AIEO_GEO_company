@@ -19,6 +19,11 @@ import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../ser
 import { getPlatformsForBrandConfig } from '../../../services/platforms'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
+import {
+  readEnterprisePin,
+  sortTenantsWithPin,
+  writeEnterprisePin,
+} from './useEnterprisePin'
 
 export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files'
 
@@ -227,9 +232,53 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     schedule_month_days_text: '',
   })
 
+  // 2026-08-05 - 企业列表置顶仅本人可见 - localStorage 单 id，新置顶覆盖旧的
+  const pinnedTenantId = ref<number | null>(null)
+  const ENTERPRISE_PAGE_SIZE = 10
+  const enterprisePage = ref(1)
+
+  function loadEnterprisePin() {
+    const userId = auth.session?.user?.id
+    const identityId = auth.session?.identity?.id
+    if (!userId || !identityId) {
+      pinnedTenantId.value = null
+      return
+    }
+    pinnedTenantId.value = readEnterprisePin(userId, identityId)
+  }
+
+  function persistEnterprisePin(tenantId: number | null) {
+    pinnedTenantId.value = tenantId
+    const userId = auth.session?.user?.id
+    const identityId = auth.session?.identity?.id
+    if (userId && identityId) writeEnterprisePin(userId, identityId, tenantId)
+  }
+
+  function isEnterprisePinned(tenant: TenantInfo) {
+    return pinnedTenantId.value === tenant.id
+  }
+
+  function pinEnterprise(tenant: TenantInfo) {
+    persistEnterprisePin(tenant.id)
+    enterprisePage.value = 1
+    ElMessage.success('已置顶')
+  }
+
+  function unpinEnterprise(tenant: TenantInfo) {
+    if (pinnedTenantId.value !== tenant.id) return
+    persistEnterprisePin(null)
+    ElMessage.success('已取消置顶')
+  }
+
+  watch(
+    () => [auth.session?.user?.id, auth.session?.identity?.id] as const,
+    () => loadEnterprisePin(),
+    { immediate: true },
+  )
+
   const filteredTenants = computed(() => {
     const keyword = enterpriseFilters.keyword.trim().toLowerCase()
-    return tenants.value.filter(tenant => {
+    const matched = tenants.value.filter(tenant => {
       const keywordMatched = !keyword || `${tenant.name} ${tenant.code}`.toLowerCase().includes(keyword)
       const pending = isTenantPending(tenant) && tenant.stop_reason !== 'canceled'
       const expired = isTenantExpired(tenant)
@@ -247,10 +296,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         || (typeof ownerFilter === 'number' && tenant.owner_user_id === ownerFilter)
       return keywordMatched && statusMatched && ownerMatched
     })
+    // 2026-08-05 - 企业列表个人单条置顶 - 仅当前结果集内提前，不破坏筛选口径
+    return sortTenantsWithPin(matched, pinnedTenantId.value)
   })
 
-  const ENTERPRISE_PAGE_SIZE = 10
-  const enterprisePage = ref(1)
   const enterpriseTotalPages = computed(() =>
     Math.max(1, Math.ceil(filteredTenants.value.length / ENTERPRISE_PAGE_SIZE)),
   )
@@ -1408,6 +1457,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterprisePage,
     enterpriseTotalPages,
     changeEnterprisePage,
+    isEnterprisePinned,
+    pinEnterprise,
+    unpinEnterprise,
     enterpriseFormServiceActive,
     enterpriseFormServiceLabel,
     visibleEnterpriseTabs,

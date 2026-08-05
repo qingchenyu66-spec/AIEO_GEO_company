@@ -179,6 +179,9 @@ const {
   canGenerateEnterpriseReport,
   openReportDialog,
   submitEnterpriseReport,
+  isEnterprisePinned,
+  pinEnterprise,
+  unpinEnterprise,
 } = useBrandAudit({
   onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
   navigateToReportCenter,
@@ -285,30 +288,35 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
             <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
             <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
-            <el-dropdown
-              v-if="canTransferTenantOwner || canGenerateEnterpriseReport || canStopTenantService(tenant) || canRestoreTenantService(tenant) || canPurgeTenant()"
-              trigger="click"
-            >
+            <el-dropdown trigger="click">
               <button type="button" class="icon-action enterprise-more-btn" title="更多操作" aria-label="更多操作">
                 <MoreHorizontal />
               </button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-if="!isEnterprisePinned(tenant)"
+                    @click="pinEnterprise(tenant)"
+                  >置顶</el-dropdown-item>
+                  <el-dropdown-item
+                    v-else
+                    @click="unpinEnterprise(tenant)"
+                  >取消置顶</el-dropdown-item>
                   <el-dropdown-item v-if="canTransferTenantOwner" @click="openTenantTransferDialog(tenant)">转移</el-dropdown-item>
                   <el-dropdown-item v-if="canGenerateEnterpriseReport" @click="openReportDialog(tenant)">报告</el-dropdown-item>
                   <el-dropdown-item
                     v-if="canStopTenantService(tenant)"
-                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport"
+                    :divided="true"
                     @click="removeTenant(tenant)"
                   >{{ stopTenantActionLabel(tenant) }}</el-dropdown-item>
                   <el-dropdown-item
                     v-else-if="canRestoreTenantService(tenant)"
-                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport"
+                    :divided="true"
                     @click="restoreTenantService(tenant)"
                   >恢复服务</el-dropdown-item>
                   <el-dropdown-item
                     v-if="canPurgeTenant()"
-                    :divided="canTransferTenantOwner || canGenerateEnterpriseReport || canStopTenantService(tenant) || canRestoreTenantService(tenant)"
+                    :divided="canStopTenantService(tenant) || canRestoreTenantService(tenant) || canTransferTenantOwner || canGenerateEnterpriseReport"
                     class="enterprise-action-danger"
                     @click="purgeTenantThoroughly(tenant)"
                   >彻底删除</el-dropdown-item>
