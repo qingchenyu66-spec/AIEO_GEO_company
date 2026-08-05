@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
+from app.core.config import settings
 from app.core.region_catalog import region_submission_targets
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
@@ -1717,14 +1718,16 @@ def _schedule_slot_eligible_for_gap(
     *,
     now: datetime | None = None,
 ) -> bool:
-    # 2026-08-03 - 当天未到调度时刻不展示缺口 - 按 slot 时刻判，不用容差窗
-    """缺口补录只对已过调度时刻；当天未到点的场次不展示、不可补。"""
+    """缺口补录：历史日可出；当天须过调度点+容差窗后仍无子任务才标漏跑。"""
     now = now or datetime.now()
     if day > now.date():
         return False
     if day < now.date():
         return True
-    return now >= datetime.combine(day, slot_time)
+    # 2026-08-03 - 当天未到调度时刻不展示缺口 - 按 slot 时刻判，不用容差窗
+    # 2026-08-05 - 过早标漏跑 - 对齐 schedule_tolerance 后再出缺口（已弃用「时刻一到即漏」）
+    grace = max(0, int(settings.schedule_tolerance_minutes or 0))
+    return now >= datetime.combine(day, slot_time) + timedelta(minutes=grace)
 
 
 def _schedule_window_key_eligible_for_gap(

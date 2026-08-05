@@ -639,12 +639,6 @@ table.sb-matrix tbody th {
   box-shadow: 0 4px 12px rgba(0, 0, 0, .08);
 }
 
-.sb-cell small {
-  font-weight: 600;
-  font-size: 10px;
-  opacity: 0.85;
-}
-
 .sb-cell.rank-good {
   background: var(--sb-green-bg);
   color: var(--sb-green);

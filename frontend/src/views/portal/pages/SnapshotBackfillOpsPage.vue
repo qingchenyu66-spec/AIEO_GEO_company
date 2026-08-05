@@ -1006,8 +1006,8 @@ watch(
                           ]"
                           @click="openCell(word, d, p.id)"
                         >
+                          <!-- 2026-08-05 - 矩阵格去掉次数，只留日均位 -->
                           <span>{{ rankText(getCell(word, d, p.id)?.rank) }}</span>
-                          <small>{{ getCell(word, d, p.id)?.sample_count || 0 }}次</small>
                         </button>
                         <span v-else class="sb-cell rank-none is-empty">—</span>
                       </td>
@@ -1053,8 +1053,8 @@ watch(
                       ]"
                       @click="openCell(word, d)"
                     >
+                      <!-- 2026-08-05 - 矩阵格去掉次数，只留日均位 -->
                       <span>{{ rankText(getCell(word, d)?.rank) }}</span>
-                      <small>{{ getCell(word, d)?.sample_count || 0 }}次</small>
                     </button>
                     <span v-else class="sb-cell rank-none is-empty">—</span>
                   </td>
