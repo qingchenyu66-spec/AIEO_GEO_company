@@ -37,9 +37,9 @@ export type SourceRow = SourceStatRow & {
 export type WebsiteRankRow = {
   /** 注册域，如 163.com（已合并 m.163.com / c.m.163.com） */
   domain: string
-  /** 发布方：同域下模力 site 最高票；无 site 退回域名 */
+  /** 发布方名称（域名词典优先；不可靠时退回域名） */
   displayName: string
-  /** 文中主体（露出词 / 其它品牌向 site） */
+  /** 文中主体（露出词 / 被引用串里的品牌向站点名） */
   subjectHint: string
   count: number
   articleCount: number
@@ -57,6 +57,36 @@ const RANK_PAGE_SIZE = 20
 const MULTI_PART_TLDS = new Set([
   'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'co.uk', 'com.hk', 'com.tw',
 ])
+
+/** 注册域 → 发布方（方案 A 主路径） */
+const KNOWN_SITE_LABELS: Record<string, string> = {
+  '163.com': '网易',
+  'toutiao.com': '今日头条',
+  'sohu.com': '搜狐',
+  'sina.com.cn': '新浪',
+  'qq.com': '腾讯',
+  'weibo.com': '微博',
+  'zhihu.com': '知乎',
+  'douyin.com': '抖音',
+  'iesdouyin.com': '抖音',
+  'xiaohongshu.com': '小红书',
+  'bilibili.com': '哔哩哔哩',
+  'baidu.com': '百度',
+  'baike.baidu.com': '百度百科',
+  'ifeng.com': '凤凰网',
+  'smzdm.com': '什么值得买',
+  'to8to.com': '土巴兔装修网',
+  'shangyexinzhi.com': '商业新知',
+  'lieju.com': '济南列举网',
+  'liebiao.com': '列表网',
+  'dzwww.com': '大众网',
+  'zgswcn.com': '中国商报网',
+  'pchouse.com.cn': 'PChouse太平洋家居网',
+  'tianyancha.com': '天眼查',
+  'qcc.com': '企查查',
+}
+
+const PUBLISHER_NAME_HINT = /网|新闻|日报|晚报|时报|媒体|资讯|头条|百科|论坛|博客|视频|电台|电视|客户端|周刊|杂志|值得买/
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -90,16 +120,17 @@ function isChineseSiteLabel(value: string) {
   return /[\u4e00-\u9fff]/.test(value) && !/^https?:\/\//i.test(value.trim())
 }
 
-function normalizeSiteCandidate(raw: string) {
-  return (raw || '').trim().split(/[,，/|、]/)[0]?.trim() || ''
+function knownPublisherLabel(domain: string) {
+  if (KNOWN_SITE_LABELS[domain]) return KNOWN_SITE_LABELS[domain]
+  // 兼容历史子域词条
+  for (const [key, label] of Object.entries(KNOWN_SITE_LABELS)) {
+    if (domain === key || domain.endsWith(`.${key}`)) return label
+  }
+  return ''
 }
 
-/** site 可作发布方：非空、非 URL；纯域名与「域名」列重复则跳过 */
-function isUsableSiteValue(value: string) {
-  const text = normalizeSiteCandidate(value)
-  if (!text || /^https?:\/\//i.test(text)) return false
-  if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(text) && !/[\u4e00-\u9fff]/.test(text)) return false
-  return true
+function normalizeSiteCandidate(raw: string) {
+  return (raw || '').trim().split(/[,，/|、]/)[0]?.trim() || ''
 }
 
 function isBrandLikeName(name: string, brandTokens: string[]) {
@@ -115,17 +146,26 @@ function isBrandLikeName(name: string, brandTokens: string[]) {
   return false
 }
 
+function looksLikePublisherName(name: string, brandTokens: string[]) {
+  if (!isChineseSiteLabel(name)) return false
+  if (isBrandLikeName(name, brandTokens)) return false
+  if (PUBLISHER_NAME_HINT.test(name)) return true
+  // 短名且不像公司主体时，谨慎采信（如「博客园」）
+  return name.length <= 10 && !/公司|集团|投放|传媒$/.test(name)
+}
+
 function resolvePublisherAndSubject(
   domain: string,
   siteVotes: Array<[string, number]>,
   exposureTerms: string[],
   brandTokens: string[],
 ) {
-  // 2026-08-05 - 发布方改为模力 site 最高票；弃用域名词典优先
-  const siteValues = siteVotes
+  // 2026-08-05 - 纯跟 site 最高票会把 163/头条标成品牌名 - 已回退：词典优先 + 非品牌 site
+  const known = knownPublisherLabel(domain)
+  const publisherFromVotes = siteVotes
     .map(([name]) => normalizeSiteCandidate(name))
-    .filter(name => isUsableSiteValue(name))
-  const displayName = siteValues[0] || domain
+    .filter(name => looksLikePublisherName(name, brandTokens))
+  const displayName = known || publisherFromVotes[0] || domain
 
   const subjectFromExposure = exposureTerms.map(t => t.trim()).filter(Boolean)
   const subjectFromVotes = siteVotes
@@ -134,7 +174,7 @@ function resolvePublisherAndSubject(
       name
       && name !== displayName
       && isChineseSiteLabel(name)
-      && isBrandLikeName(name, brandTokens)
+      && (isBrandLikeName(name, brandTokens) || !looksLikePublisherName(name, brandTokens))
     ))
   const subjects = [...subjectFromExposure, ...subjectFromVotes]
     .filter((name, index, arr) => arr.indexOf(name) === index)
@@ -201,9 +241,9 @@ function aggregateByWebsite(rows: SourceRow[], brandTokens: string[] = []): Webs
     entry.articleCount += 1
     entry.has_exposure = entry.has_exposure || row.has_exposure
     entry.categoryCounts[row.category] = (entry.categoryCounts[row.category] || 0) + row.count
-    // 同域 site 投票（发布方取最高票）
+    // 方案 A：仅采信引用 site 字段投票；标题尾部不再充当发布方
     const siteLabel = normalizeSiteCandidate(row.site || '')
-    if (isUsableSiteValue(siteLabel)) {
+    if (siteLabel && isChineseSiteLabel(siteLabel)) {
       entry.siteVotes.set(siteLabel, (entry.siteVotes.get(siteLabel) || 0) + row.count)
     }
     if (row.count > entry.topArticleCount) {
