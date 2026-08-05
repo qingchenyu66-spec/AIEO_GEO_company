@@ -2600,8 +2600,9 @@ button:disabled {
   font-size:12px;
   font-weight:700;
 }
-.user-filter-bar input,
-.user-filter-bar select {
+/* 2026-08-05 - 筛栏 input 误伤 ElSelect 内部输入 - 只样式搜索框，避免框中框/占位不显示 */
+.user-filter-bar .user-filter-search > input,
+.user-filter-bar > label > select {
   width:100%;
   height:36px;
   border:1px solid #d2dfed;
@@ -2612,8 +2613,8 @@ button:disabled {
   padding:0 10px;
   transition:.18s ease;
 }
-.user-filter-bar input:focus,
-.user-filter-bar select:focus { border-color:#4288e8; box-shadow:0 0 0 3px rgba(66,136,232,.1); }
+.user-filter-bar .user-filter-search > input:focus,
+.user-filter-bar > label > select:focus { border-color:#4288e8; box-shadow:0 0 0 3px rgba(66,136,232,.1); }
 .deleted-filter {
   display:flex;
   align-items:center;
@@ -4799,15 +4800,40 @@ button:disabled {
 }
 
 .user-filter-bar .portal-field-select .el-select__wrapper {
-  min-height: 38px;
-  border-radius: 10px;
-  box-shadow: 0 0 0 1px #d8e7f6 inset;
-  background: linear-gradient(180deg, #fff, #f8fbff);
+  min-height: 36px;
+  height: 36px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px #d2dfed inset;
+  background: #fff;
+  padding: 0 10px;
 }
 
 .user-filter-bar .portal-field-select .el-select__wrapper:hover,
 .user-filter-bar .portal-field-select .el-select__wrapper.is-focused {
-  box-shadow: 0 0 0 1px rgba(45, 108, 223, .42) inset;
+  box-shadow: 0 0 0 1px #4288e8 inset;
+}
+
+/* filterable 与非 filterable 外观对齐：去掉内部二次描边 */
+.user-filter-bar .portal-field-select .el-select__selection,
+.user-filter-bar .portal-field-select .el-select__selected-item,
+.user-filter-bar .portal-field-select .el-select__input,
+.user-filter-bar .portal-field-select .el-select__input-wrapper {
+  height: auto;
+  min-height: 0;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0;
+}
+.user-filter-bar .portal-field-select .el-select__placeholder,
+.user-filter-bar .portal-field-select .el-select__selected-item {
+  color: #172840;
+  font-size: 13px;
+  line-height: 22px;
+}
+.user-filter-bar .portal-field-select .el-select__placeholder.is-transparent {
+  color: #9aabbe;
 }
 
 .user-filter-bar label > span {
