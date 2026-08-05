@@ -192,6 +192,7 @@ def _comparison_overall_cards(comparison: dict[str, Any], platform_names: dict[s
     late = overall.get("late") or {}
     early_label = comparison.get("early_label") or "期初窗"
     late_label = comparison.get("late_label") or "期末窗"
+    # 2026-08-05 - 首末窗卡片换行难看 - 日期只写一次，期初/期末分栏，避免「33.8% →」折行
     cards = [
         (
             "品牌提及率",
@@ -215,15 +216,19 @@ def _comparison_overall_cards(comparison: dict[str, Any], platform_names: dict[s
             "窗口样本量",
             _number(early.get("completed")),
             _number(late.get("completed")),
-            "首末窗各自有效样本",
+            "各自有效样本",
         ),
     ]
     body = "".join(
         f"""
-        <div class="score-card">
-          <span>{_text(title)}（{_text(early_label)} → {_text(late_label)}）</span>
-          <b>{early_v} → {late_v}</b>
-          <em>{_text(str(delta))}</em>
+        <div class="cmp-card">
+          <div class="cmp-title">{_text(title)}</div>
+          <div class="cmp-row">
+            <div class="cmp-col"><small>期初</small><strong>{early_v}</strong></div>
+            <div class="cmp-arrow" aria-hidden="true">→</div>
+            <div class="cmp-col"><small>期末</small><strong>{late_v}</strong></div>
+          </div>
+          <div class="cmp-delta">{_text(str(delta))}</div>
         </div>
         """
         for title, early_v, late_v, delta in cards
@@ -258,7 +263,8 @@ def _comparison_overall_cards(comparison: dict[str, Any], platform_names: dict[s
     hl = "".join(f"<li>{_text(item)}</li>" for item in highlights[:4]) or "<li>暂无升降结论</li>"
     return f"""
     <div class="note">{_text(comparison.get("note"))}</div>
-    <div class="score-grid" style="margin-top:16px">{body}</div>
+    <p class="cmp-window">对比窗口：{_text(early_label)} → {_text(late_label)}</p>
+    <div class="cmp-grid">{body}</div>
     <ul class="clean" style="margin-top:14px">{hl}</ul>
     """
 
@@ -537,6 +543,17 @@ h1{{font-size:44px;line-height:1.18;margin:26px 0 14px}} .hero p{{max-width:860p
 .section{{background:#fff;border:1px solid var(--line);border-radius:22px;padding:28px;margin-top:28px;box-shadow:0 18px 48px rgba(40,91,140,.08);page-break-inside:avoid}} .section h2{{font-size:26px;margin:0 0 8px}} .section h3{{font-size:18px;margin:24px 0 12px}} .sub{{color:var(--muted);line-height:1.7;margin:0 0 18px}} .grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}} .grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}} .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:18px}} .kpi{{border:1px solid #dbe9f8;border-radius:18px;padding:18px;background:linear-gradient(180deg,#fff,#f7fbff)}} .kpi span{{display:block;color:var(--muted);font-size:13px}} .kpi b{{display:block;font-size:28px;margin:8px 0;color:#061d3d}} .kpi em{{font-style:normal;color:#079c78;font-size:13px}}
 .hero-result{{margin:18px 0 22px;padding:20px 22px;border-radius:20px;background:linear-gradient(135deg,#effdfb,#eef6ff);border:1px solid #cfe9f5}} .hero-result strong{{display:block;font-size:22px;color:#06345f;margin-bottom:6px}} .hero-result p{{margin:0;color:#4f6d8d;line-height:1.7}}
 .score-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin:18px 0 28px}} .score-card{{border:1px solid #dbe9f8;border-radius:20px;padding:20px;background:linear-gradient(180deg,#ffffff,#f7fbff);position:relative;overflow:hidden}} .score-card:before{{content:"";position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,#16c7b7,#1d6bff)}} .score-card span{{display:block;color:#637899;font-size:13px}} .score-card b{{display:block;font-size:34px;margin:10px 0 8px;color:#061d3d}} .score-card em{{font-style:normal;color:#057961;font-size:13px}}
+.cmp-window{{margin:14px 0 10px;color:#5f7390;font-size:13px;font-weight:600}}
+.cmp-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:0 0 20px}}
+.cmp-card{{border:1px solid #dbe9f8;border-radius:16px;padding:16px 16px 14px;background:#fff;box-shadow:0 8px 24px rgba(15,55,100,.04)}}
+.cmp-title{{color:#5f7390;font-size:13px;font-weight:600;margin-bottom:12px}}
+.cmp-row{{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:8px;min-height:52px}}
+.cmp-col{{min-width:0}} .cmp-col small{{display:block;color:#8aa0b8;font-size:11px;margin-bottom:4px}}
+.cmp-col strong{{display:block;font-size:26px;line-height:1.15;color:#061d3d;font-weight:700;white-space:nowrap}}
+.cmp-arrow{{color:#94a3b8;font-size:18px;padding-bottom:4px;line-height:1}}
+.cmp-delta{{margin-top:10px;color:#057961;font-size:13px;font-weight:600}}
+@media (max-width:1100px){{.cmp-grid{{grid-template-columns:repeat(2,1fr)}}}}
+
 .deliver-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}} .deliver-card{{border:1px solid #dce8f5;border-radius:18px;padding:16px 18px;background:#fbfdff;display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start}} .deliver-card i{{font-style:normal;display:grid;place-items:center;width:34px;height:34px;border-radius:12px;background:#eaf8ff;color:#1261c4;font-weight:800}} .deliver-card b{{display:block;font-size:15px;margin-bottom:5px}} .deliver-card span{{color:#5e7696;line-height:1.6;font-size:13px}}
 .note{{padding:16px 18px;border-left:5px solid var(--teal);background:#effdfb;border-radius:16px;color:#075a58;line-height:1.8}} .warn{{border-left-color:var(--orange);background:#fff8eb;color:#805506}}
 .risk-tag{{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700}}
@@ -551,7 +568,8 @@ table{{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var
 ul.clean{{list-style:none;padding:0;margin:0;display:grid;gap:8px}} ul.clean li{{border:1px solid #dce8f5;border-radius:12px;padding:10px 12px;background:#fbfdff}}
 .footer{{text-align:center;color:var(--muted);font-size:12px;margin:20px 0}}
 @media print{{.wrap{{width:auto;margin:0}}.section{{box-shadow:none;break-inside:avoid}}}}
-@media (max-width:900px){{.meta,.grid4,.grid3,.grid2,.score-grid,.deliver-grid,.toc{{grid-template-columns:1fr}} h1{{font-size:32px}}}}
+@media (max-width:900px){{.meta,.grid4,.grid3,.grid2,.score-grid,.cmp-grid,.deliver-grid,.toc{{grid-template-columns:1fr}} h1{{font-size:32px}} .cmp-col strong{{font-size:22px}}}}
+
 </style>
 </head>
 <body>
