@@ -275,6 +275,7 @@ function platformSentimentBarOption(platforms: BrandAnalysisPlatformBlock[]) {
         data: names.length ? neg : [0],
         barWidth: 14,
         barCategoryGap: '36%',
+        cursor: 'pointer',
         itemStyle: { color: SENTIMENT_COLOR['负面'], borderRadius: [7, 0, 0, 7] },
       },
       {
@@ -283,6 +284,7 @@ function platformSentimentBarOption(platforms: BrandAnalysisPlatformBlock[]) {
         stack: 'pct',
         data: names.length ? neu : [0],
         barWidth: 14,
+        cursor: 'pointer',
         itemStyle: { color: SENTIMENT_COLOR['中性'] },
       },
       {
@@ -291,6 +293,7 @@ function platformSentimentBarOption(platforms: BrandAnalysisPlatformBlock[]) {
         stack: 'pct',
         data: names.length ? pos : [0],
         barWidth: 14,
+        cursor: 'pointer',
         itemStyle: {
           color: SENTIMENT_COLOR['正面'],
           borderRadius: [0, 7, 7, 0],
@@ -300,11 +303,25 @@ function platformSentimentBarOption(platforms: BrandAnalysisPlatformBlock[]) {
   }
 }
 
+function bindPlatformChartClick() {
+  if (!platformChart) return
+  // 2026-08-04 - 平台情感色块点击打开该平台×情感全部快照列表
+  platformChart.off('click')
+  platformChart.on('click', (params: { componentType?: string; seriesName?: string; name?: string }) => {
+    if (params.componentType !== 'series') return
+    const sentiment = String(params.seriesName || '')
+    const platformName = String(params.name || '')
+    if (!sentiment || !platformName || platformName === '暂无') return
+    openPlatformSentimentSnaps(platformName, sentiment)
+  })
+}
+
 async function renderCharts() {
   if (!dashboard.value) return
   await ensureCharts()
   sentimentChart?.setOption(sentimentDonutOption(dashboard.value.sentiment_pie || []), true)
   platformChart?.setOption(platformSentimentBarOption(dashboard.value.platforms || []), true)
+  bindPlatformChartClick()
   await nextTick()
   sentimentChart?.resize()
   platformChart?.resize()
@@ -384,6 +401,28 @@ function closeSnapshot() {
 
 function openDescriptionGroup(row: BrandAnalysisAiDescription) {
   activeGroup.value = row
+  groupVisible.value = true
+}
+
+function openPlatformSentimentSnaps(platformName: string, sentimentLabel: string) {
+  const platform = (dashboard.value?.platforms || []).find(item => item.name === platformName)
+  if (!platform) return
+  const bucketKey =
+    sentimentLabel === '正面' ? 'positive'
+      : sentimentLabel === '中性' ? 'neutral'
+        : sentimentLabel === '负面' ? 'negative'
+          : null
+  if (!bucketKey) return
+  const answers = platform[bucketKey] || []
+  if (!answers.length) return
+  // 复用「关联快照」弹层：展示该平台该情感下全部回答快照
+  activeGroup.value = {
+    description: `${platform.name} · ${sentimentLabel}（${answers.length} 条）`,
+    sentiment: sentimentLabel,
+    sample_count: answers.length,
+    platforms: [{ code: platform.code, name: platform.name }],
+    answers,
+  }
   groupVisible.value = true
 }
 
