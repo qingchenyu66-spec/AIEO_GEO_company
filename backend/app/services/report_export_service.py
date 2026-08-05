@@ -1025,7 +1025,7 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
                 PERIOD_DECK_PIPELINE
                 if str(report.get("report_type") or "")
                 in {"weekly", "monthly", "quarterly", "annual"}
-                else "completion-pack-v8"
+                else "completion-pack-v9"
                 if str(report.get("report_type") or "") == "completion"
                 else "diag-pack-v1"
             ),

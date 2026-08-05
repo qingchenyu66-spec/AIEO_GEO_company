@@ -394,7 +394,7 @@ def build_lifecycle_milestones(
         "late_window": overall.get("late"),
         "early_label": comparison.get("early_label"),
         "late_label": comparison.get("late_label"),
-        "note": "峰值取服务期内日提及率最高的一天；首末窗仍用 7 日均值，避免单日抖动误读。",
+        "note": "峰值取服务期内日提及率最高的一天。单日可与上方 7 日窗均值不同，属正常波动，不是口径冲突。",
     }
 
 

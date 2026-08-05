@@ -138,10 +138,11 @@ def _group_score_table(rows: list[dict[str, Any]]) -> str:
 def _lifecycle_cards(lifecycle: dict[str, Any]) -> str:
     if not lifecycle.get("available"):
         return f'<p class="sub">{_text(lifecycle.get("note") or "暂无期初/峰值/期末数据。")}</p>'
+    # 2026-08-05 - 勿再贴首末窗卡片，与上方「首末窗口对比」重复，易被当成数据冲突
     cards = [
-        ("期初监测日", lifecycle.get("initial") or {}),
-        ("峰值日", lifecycle.get("peak") or {}),
-        ("期末监测日", lifecycle.get("final") or {}),
+        ("期初监测日（单日）", lifecycle.get("initial") or {}),
+        ("峰值日（单日）", lifecycle.get("peak") or {}),
+        ("期末监测日（单日）", lifecycle.get("final") or {}),
     ]
     parts = []
     for title, node in cards:
@@ -150,16 +151,8 @@ def _lifecycle_cards(lifecycle: dict[str, Any]) -> str:
             f"<b>{_pct(node.get('mention_rate'))}</b>"
             f"<em>{_text(node.get('date') or node.get('label') or '-')}</em></div>"
         )
-    early = lifecycle.get("early_window") or {}
-    late = lifecycle.get("late_window") or {}
-    if early or late:
-        parts.append(
-            f'<div class="kpi"><span>首末窗提及率</span>'
-            f"<b>{_pct(early.get('mention_rate'))} → {_pct(late.get('mention_rate'))}</b>"
-            f"<em>{_text(lifecycle.get('early_label') or '期初窗')} / {_text(lifecycle.get('late_label') or '期末窗')}</em></div>"
-        )
     note = lifecycle.get("note") or ""
-    return f'<div class="grid4">{"".join(parts)}</div><p class="sub">{_text(note)}</p>'
+    return f'<div class="grid3">{"".join(parts)}</div><p class="sub">{_text(note)}</p>'
 
 
 def _next_actions_html(actions: dict[str, Any]) -> str:
@@ -621,8 +614,8 @@ ul.clean{{list-style:none;padding:0;margin:0;display:grid;gap:8px}} ul.clean li{
     <h3>首末窗口对比</h3>
     <p class="sub">用有监测数据的前 7 日与末 7 日对比，避免单日抖动；分平台详情见 §06。</p>
     {_comparison_overall_cards(period_comparison, platform_names)}
-    <h3>期初 / 峰值 / 期末</h3>
-    <p class="sub">补充过程轨迹：峰值反映冲高能力，首末窗反映阶段均值，避免只看两端误判。</p>
+    <h3>期初 / 峰值 / 期末（单日）</h3>
+    <p class="sub">以下为有监测数据的单日提及率，与上方「首末 7 日窗均值」口径不同：单日看冲高/收官，窗均值看阶段水平，数字可以不一致。</p>
     {_lifecycle_cards(lifecycle)}
     <h3>高风险问题词</h3>
     <p class="sub">按监测口径自动分级（P0/P1）；共 {_number(risk_count)} 个需关注词。完整词级成绩见 §04。</p>
