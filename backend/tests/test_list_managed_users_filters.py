@@ -33,6 +33,7 @@ def test_list_managed_users_combines_identity_and_position(monkeypatch):
     sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "PLATFORM" in sql
     assert "42" in sql
+    assert "sys_user_identity.deleted is false" in sql.lower()
     assert "identity_type = 'PLATFORM' AND sys_user_identity.position_id = 42" in sql
 
 
@@ -41,3 +42,12 @@ def test_list_managed_users_keyword_matches_position_name(monkeypatch):
     sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "销售" in sql
     assert "position_name" in sql.lower() or "sys_position" in sql.lower()
+    assert "sys_user_identity.deleted is false" in sql.lower()
+
+
+def test_list_managed_users_deleted_account_mode_keeps_deleted_identities(monkeypatch):
+    stmt = _capture_stmt(monkeypatch, deleted=True, position_id=3)
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    # 查已删账号时仍要能按历史身份命中，不强制 identity.deleted=false
+    assert "position_id = 3" in sql
+    assert "sys_user_identity.deleted is false" not in sql

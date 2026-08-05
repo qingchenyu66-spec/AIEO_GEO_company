@@ -92,6 +92,14 @@ def list_managed_users(
         stmt = stmt.where(User.created_by == current_user.id)
     if status is not None:
         stmt = stmt.where(User.status.is_(status))
+
+    # 2026-08-05 - 筛销售却出客户管理员 - 软删身份仍被 any() 命中；正常列表只认未删身份
+    def identity_any(*extra):
+        conds = list(extra)
+        if not deleted:
+            conds.insert(0, UserIdentity.deleted.is_(False))
+        return User.identities.any(and_(*conds) if len(conds) > 1 else conds[0])
+
     if keyword and keyword.strip():
         like_value = f"%{keyword.strip()}%"
         # 2026-08-05 - 搜索框写「职位」但未命中职位名 - keyword 一并匹配 position_name
@@ -103,12 +111,12 @@ def list_managed_users(
             or_(
                 User.username.like(like_value),
                 User.display_name.like(like_value),
-                User.identities.any(UserIdentity.identity_name.like(like_value)),
-                User.identities.any(UserIdentity.position_id.in_(position_ids_by_name)),
+                identity_any(UserIdentity.identity_name.like(like_value)),
+                identity_any(UserIdentity.position_id.in_(position_ids_by_name)),
             )
         )
     if tenant_id is not None:
-        stmt = stmt.where(User.identities.any(UserIdentity.tenant_id == tenant_id))
+        stmt = stmt.where(identity_any(UserIdentity.tenant_id == tenant_id))
     # 2026-08-05 - 用户列表按职位筛 - 端+职位必须落在同一身份，避免双身份串匹
     identity_conds = []
     if identity_type:
@@ -116,7 +124,7 @@ def list_managed_users(
     if position_id is not None:
         identity_conds.append(UserIdentity.position_id == position_id)
     if identity_conds:
-        stmt = stmt.where(User.identities.any(and_(*identity_conds)))
+        stmt = stmt.where(identity_any(*identity_conds))
     return list(db.scalars(stmt).unique())
 
 
