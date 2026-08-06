@@ -330,6 +330,50 @@ def _run_job(job_id: str) -> None:
         db.close()
 
 
+def pregenerate_report_exports(report_id: int, *, theme: str = "b") -> list[dict[str, Any]]:
+    """发布后预热 PDF/Word 导出，复用 export-job 指纹缓存；不阻塞调用方。"""
+    from app.models.report import GeoReport
+    from app.services.report_period_service import HTML_TEMPLATE_REPORT_TYPES
+
+    db = SessionLocal()
+    try:
+        row = db.get(GeoReport, int(report_id))
+        if row is None or row.deleted or str(row.status or "") != "published":
+            return []
+        if str(row.report_type or "") not in HTML_TEMPLATE_REPORT_TYPES:
+            return []
+    finally:
+        db.close()
+
+    jobs: list[dict[str, Any]] = []
+    for export_format in ("pdf", "docx"):
+        try:
+            jobs.append(
+                start_export_job(
+                    kind="report",
+                    ref_id=int(report_id),
+                    export_format=export_format,
+                    owner_user_id=None,
+                    theme=theme,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "pregenerate report export failed report_id=%s format=%s",
+                report_id,
+                export_format,
+                exc_info=True,
+            )
+    if jobs:
+        logger.info(
+            "pregenerate report exports report_id=%s queued=%s cached=%s",
+            report_id,
+            len(jobs),
+            sum(1 for j in jobs if j.get("cached")),
+        )
+    return jobs
+
+
 def start_export_job(
     *,
     kind: ExportKind,

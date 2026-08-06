@@ -347,6 +347,14 @@ def _materialize_report_preview_html(db: Session, report: GeoReport) -> None:
         payload = _serialize_report_row(report)
         payload["report_content"] = report.report_content_json or {}
         materialize_report_html_preview(db, payload)
+        # 2026-08-06 - 发布/更新后异步预热 PDF/Word，首次下载走指纹缓存
+        if str(report.status or "") == "published":
+            try:
+                from app.services.report_export_job_service import pregenerate_report_exports
+
+                pregenerate_report_exports(int(report.id))
+            except Exception as pre_exc:
+                logger.warning("report export pregenerate failed report_id=%s err=%s", report.id, pre_exc)
     except Exception as exc:
         logger.warning("report html materialize failed report_id=%s err=%s", report.id, exc)
 

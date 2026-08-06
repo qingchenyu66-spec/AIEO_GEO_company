@@ -82,6 +82,61 @@ def test_load_meta_prefers_redis_over_stale_local(monkeypatch, tmp_path) -> None
     assert svc._jobs[job_id]["status"] == "ready"
 
 
+def test_pregenerate_report_exports_skips_draft(monkeypatch, tmp_path) -> None:
+    from app.services import report_export_job_service as svc
+
+    calls: list[tuple[int, str]] = []
+
+    class _Row:
+        deleted = False
+        status = "draft"
+        report_type = "weekly"
+
+    class _Db:
+        def get(self, _model, _report_id):
+            return _Row()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(svc, "SessionLocal", _Db)
+    monkeypatch.setattr(
+        svc,
+        "start_export_job",
+        lambda **kw: calls.append((kw["ref_id"], kw["export_format"])) or {"status": "queued"},
+    )
+    assert svc.pregenerate_report_exports(42) == []
+    assert calls == []
+
+
+def test_pregenerate_report_exports_enqueues_pdf_docx(monkeypatch, tmp_path) -> None:
+    from app.services import report_export_job_service as svc
+
+    calls: list[str] = []
+
+    class _Row:
+        deleted = False
+        status = "published"
+        report_type = "monthly"
+
+    class _Db:
+        def get(self, _model, _report_id):
+            return _Row()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(svc, "SessionLocal", _Db)
+    monkeypatch.setattr(
+        svc,
+        "start_export_job",
+        lambda **kw: calls.append(kw["export_format"]) or {"status": "queued", "cached": False},
+    )
+    jobs = svc.pregenerate_report_exports(7)
+    assert len(jobs) == 2
+    assert calls == ["pdf", "docx"]
+
+
 def test_pdf_from_slide_images_accepts_jpeg() -> None:
     from io import BytesIO
 
