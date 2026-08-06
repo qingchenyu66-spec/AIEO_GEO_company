@@ -428,16 +428,26 @@ def render_period_deck_docx_from_bundle(bundle: dict[str, Any]) -> bytes:
     return buf.getvalue()
 
 
+def _resolve_period_bounds(report: dict[str, Any]) -> tuple[date, date]:
+    # 2026-08-06 - 导出 job 的 report 只有 report_content 内 period_*，与 normalize 对齐
+    content = report.get("report_content") or {}
+    period_start = _parse_report_date(report.get("period_start") or content.get("period_start"))
+    period_end = _parse_report_date(report.get("period_end") or content.get("period_end"))
+    if period_start is None or period_end is None:
+        raise ValueError("period report missing period_start/period_end")
+    return period_start, period_end
+
+
 def build_period_deck_docx(db: Session, report: dict[str, Any], *, tenant_id: int) -> bytes:
     # 2026-08-06 - 周期 Word 与 HTML/PDF 同源 bundle，弃用 report_content_json 旧 A4 docx
     report_type = str(report.get("report_type") or "")
     if report_type not in PERIOD_COMPARISON_REPORT_TYPES:
         raise ValueError(f"unsupported period deck docx type: {report_type}")
-    period_start = _parse_report_date(report.get("period_start"))
-    period_end = _parse_report_date(report.get("period_end"))
-    if period_start is None or period_end is None:
-        raise ValueError("period report missing period_start/period_end")
-    generated = _parse_report_date(report.get("generated_at"))
+    period_start, period_end = _resolve_period_bounds(report)
+    content = report.get("report_content") or {}
+    generated = _parse_report_date(
+        report.get("generated_at") or content.get("generated_at") or report.get("created_at")
+    )
     bundle = assemble_period_report_bundle(
         db,
         tenant_id=tenant_id,

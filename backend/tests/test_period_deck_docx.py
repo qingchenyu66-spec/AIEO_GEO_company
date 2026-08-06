@@ -4,7 +4,43 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.services.report_period_deck_docx_service import render_period_deck_docx_from_bundle
+from app.services.report_export_service import _normalize_export_payload
+from app.services.report_period_deck_docx_service import (
+    _resolve_period_bounds,
+    render_period_deck_docx_from_bundle,
+)
+
+
+def test_resolve_period_bounds_from_report_content() -> None:
+    report = {
+        "report_type": "weekly",
+        "report_content": {
+            "period_start": "2026-07-27",
+            "period_end": "2026-08-02",
+        },
+    }
+    start, end = _resolve_period_bounds(report)
+    assert start == date(2026, 7, 27)
+    assert end == date(2026, 8, 2)
+
+
+def test_normalize_export_payload_period_for_deck_docx() -> None:
+    report = {
+        "report_type": "weekly",
+        "tenant_id": 1,
+        "report_title": "GEO 监测周报 (2026-07-27 至 2026-08-02)",
+        "report_content": {
+            "period_start": "2026-07-27",
+            "period_end": "2026-08-02",
+            "generated_at": "2026-08-03",
+        },
+    }
+    payload = _normalize_export_payload(report)
+    assert payload["period_start"] == "2026-07-27"
+    assert payload["period_end"] == "2026-08-02"
+    start, end = _resolve_period_bounds(payload)
+    assert start == date(2026, 7, 27)
+    assert end == date(2026, 8, 2)
 
 
 def test_period_deck_docx_minimal_bundle() -> None:

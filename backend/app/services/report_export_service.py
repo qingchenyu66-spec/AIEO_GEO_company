@@ -1150,7 +1150,8 @@ def build_report_export(
         tenant_id = int(report.get("tenant_id") or 0)
         if tenant_id <= 0:
             raise ValueError("报告缺少 tenant_id")
-        content = build_period_deck_docx(db, report, tenant_id=tenant_id)
+        # 2026-08-06 - 传 normalize 后 payload（含 period_*），与 HTML/PDF 预览一致
+        content = build_period_deck_docx(db, payload, tenant_id=tenant_id)
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         suffix = "docx"
     elif export_format == "docx":
