@@ -1141,10 +1141,21 @@ def build_report_export(
         content = read_or_build_report_html_preview(db, report, theme=theme).encode("utf-8")
         mime = "text/html; charset=utf-8"
         suffix = "html"
-    else:
+    elif export_format == "docx" and report_type in PERIOD_COMPARISON_REPORT_TYPES:
         if db is None:
             raise ValueError("Word 导出需要数据库会话")
-        # 真 DOCX：不再用 HTML 包装假 .doc
+        # 2026-08-06 - 周期 Word 改 deck bundle 原生 docx，与 HTML/PDF 同源
+        from app.services.report_period_deck_docx_service import build_period_deck_docx
+
+        tenant_id = int(report.get("tenant_id") or 0)
+        if tenant_id <= 0:
+            raise ValueError("报告缺少 tenant_id")
+        content = build_period_deck_docx(db, report, tenant_id=tenant_id)
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        suffix = "docx"
+    elif export_format == "docx":
+        if db is None:
+            raise ValueError("Word 导出需要数据库会话")
         content = _build_docx(payload, platform_names)
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         suffix = "docx"
