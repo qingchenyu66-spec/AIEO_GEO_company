@@ -207,12 +207,83 @@ def _extract_answer_from_html(page_html: str, body_text: str) -> str:
     return _clean_answer_text(plain)
 
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _refs_from_html(page_html: str, host: str) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    if host.endswith("doubao.com"):
+        refs = extract_doubao_references(page_html)
+    if refs:
+        return refs
+    for m in re.finditer(r'href=["\'](https?://[^"\']+)["\']', page_html, flags=re.I):
+        href = html.unescape(m.group(1))
+        if _normalize_host(href) == host or _is_icon_or_cdn(href):
+            continue
+        refs.append({"title": href, "site": _normalize_host(href), "url": href})
+    return _dedupe_refs(refs)
+
+
+def _result_from_html(
+    page_html: str,
+    *,
+    host: str,
+    title: str | None = None,
+    body_text: str = "",
+) -> SharePageFetchResult | None:
+    answer = _extract_answer_from_html(page_html, body_text)
+    if _looks_like_share_error_page(answer) or len(answer) < 20:
+        return None
+    return SharePageFetchResult(
+        answer_content=answer,
+        references=_refs_from_html(page_html, host),
+        title=title,
+        source_host=host or None,
+    )
+
+
+def _try_http_fetch(url: str, host: str) -> SharePageFetchResult | None:
+    """SSR 站（豆包 thread 等）优先裸 HTTP，避免起浏览器拖垮提交。"""
+    try:
+        import httpx
+    except ImportError:
+        return None
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(12.0, connect=5.0),
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
+            resp = client.get(url, headers={"User-Agent": _BROWSER_UA, "Accept-Language": "zh-CN,zh;q=0.9"})
+        if resp.status_code >= 400:
+            return None
+        page_html = resp.text or ""
+        title_m = re.search(r"<title[^>]*>([^<]+)</title>", page_html, flags=re.I)
+        title = html.unescape(title_m.group(1)).strip() if title_m else None
+        return _result_from_html(page_html, host=host, title=title or None)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("share page http fetch skipped host=%s err=%s", host, exc)
+        return None
+
+
 def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResult:
-    """Playwright 打开分享页，返回正文 + 信源。"""
+    """抓取分享页正文 + 信源；优先 HTTP，不够再 Playwright。"""
+    import time
+
     value = str(url or "").strip()
     if not value.startswith(("http://", "https://")):
         raise ValueError("分享链接无效")
     host = _normalize_host(value)
+
+    # 2026-08-07 - 补录「提交中」卡十几秒 - 截图已异步，正文仍同步 Playwright+固定 3.5s；SSR 先走 HTTP
+    http_hit = _try_http_fetch(value, host)
+    if http_hit is not None:
+        return http_hit
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -222,42 +293,29 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                ),
+                user_agent=_BROWSER_UA,
                 viewport={"width": 1280, "height": 900},
             )
             page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_timeout(3500)
+            # 正文够长即停，最多再等约 2s（原固定 3.5s）
+            body_text = ""
+            deadline = time.monotonic() + 2.0
+            while True:
+                body_text = page.inner_text("body") or ""
+                if len(_clean_answer_text(body_text)) >= 80:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                page.wait_for_timeout(200)
             title = (page.title() or "").strip() or None
-            body_text = page.inner_text("body") or ""
             page_html = page.content() or ""
         finally:
             browser.close()
 
-    answer = _extract_answer_from_html(page_html, body_text)
-    if _looks_like_share_error_page(answer):
-        raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
-    if len(answer) < 20:
+    result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
+    if result is None:
+        answer = _extract_answer_from_html(page_html, body_text)
+        if _looks_like_share_error_page(answer):
+            raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
         raise ValueError("未能从分享页解析到回答正文，请确认链接可公开访问")
-
-    refs: list[dict[str, Any]] = []
-    if host.endswith("doubao.com"):
-        refs = extract_doubao_references(page_html)
-    if not refs:
-        # 通用：收集非本站外链
-        for m in re.finditer(r'href=["\'](https?://[^"\']+)["\']', page_html, flags=re.I):
-            href = html.unescape(m.group(1))
-            if _normalize_host(href) == host or _is_icon_or_cdn(href):
-                continue
-            refs.append({"title": href, "site": _normalize_host(href), "url": href})
-        refs = _dedupe_refs(refs)
-
-    return SharePageFetchResult(
-        answer_content=answer,
-        references=refs,
-        title=title,
-        source_host=host or None,
-    )
+    return result

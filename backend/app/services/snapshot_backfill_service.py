@@ -53,6 +53,10 @@ from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import rankings_for_storage
 from app.services.schedule_service import schedule_times_for_asset
 from app.services.share_page_fetch_service import fetch_share_page
+from app.services.share_page_screenshot_service import (
+    enqueue_backfill_screenshot,
+    is_image_screenshot_url,
+)
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
     resolve_monitor_task_source,
@@ -646,9 +650,15 @@ def apply_snapshot_backfill(
     previous_answer = subtask.answer_content
     previous_raw = dict(subtask.raw_result_json or {})
     previous_source = previous_raw.get("source")
+    previous_shot = (subtask.page_screenshot or "").strip() or None
 
     clear_subtask_backfill_dismiss(subtask)
-    subtask.page_screenshot = url
+    # 2026-08-07 - 补录同步截图提交卡十几秒 - 提交只写正文，截图 Celery 异步；勿把分享链写入 page_screenshot
+    if previous_shot and is_image_screenshot_url(previous_shot):
+        subtask.page_screenshot = previous_shot
+    else:
+        subtask.page_screenshot = None
+    fetch_meta["screenshot_pending"] = True
     subtask.answer_content = content
     subtask.error_message = None
     subtask.status = "completed"
@@ -718,6 +728,24 @@ def apply_snapshot_backfill(
         run.error_message = None
 
     db.commit()
+    # commit 后再投递，避免 worker 读到未提交行
+    try:
+        mode = enqueue_backfill_screenshot(subtask_id=subtask.subtask_id, snapshot_url=url)
+        # 2026-08-07 - 同步截图另开会话写库后，原 session 仍持旧 raw，再 commit 会盖掉 screenshot_ok
+        db.refresh(subtask)
+        raw2 = dict(subtask.raw_result_json or {})
+        raw2["screenshot_enqueue"] = mode
+        subtask.raw_result_json = raw2
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.refresh(subtask)
+        raw2 = dict(subtask.raw_result_json or {})
+        raw2["screenshot_pending"] = False
+        raw2["screenshot_ok"] = False
+        raw2["screenshot_error"] = f"enqueue_failed:{exc}"[:240]
+        subtask.raw_result_json = raw2
+        db.commit()
+
     from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
@@ -764,6 +792,7 @@ def apply_snapshot_backfill(
         "brand_terms": _brand_terms_for_task(db, task, asset),
         "lead_context": _lead_context_for_task(db, task.task_id),
     }
+
 
 
 def build_backfill_notification_context(

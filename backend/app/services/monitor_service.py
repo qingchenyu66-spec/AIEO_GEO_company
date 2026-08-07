@@ -622,7 +622,18 @@ def _is_valid_citation_source(source: dict[str, Any]) -> bool:
     url = str(source.get("url") or source.get("site") or "").lower()
     if not title_site.strip() and not url.strip():
         return False
-    noisy_tokens = ("window._", "search.quark.cn", "by2=news")
+    # 2026-08-04 - 结项高频信源噪音多 - 补搜索页/文库/短视频聚合站黑名单
+    noisy_tokens = (
+        "window._",
+        "search.quark.cn",
+        "by2=news",
+        "docin.com",
+        "haokan.baidu.com",
+        "quanmin.baidu.com",
+        "aiqicha.baidu.com/details/ranklist",
+        "cnpp.cn",
+        "cnblogs.com",
+    )
     if any(token in title_site or token in url for token in noisy_tokens):
         return False
     # 路径后缀像静态资源则丢弃（避免 ?v=1.css 误伤，只看 path）
@@ -1821,6 +1832,9 @@ def serialize_tasks_for_display(
 
 def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     """转换子任务为前端友好的字典。"""
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    pending = raw.get("screenshot_pending")
+    shot_ok = raw.get("screenshot_ok")
     return {
         "subtask_id": subtask.subtask_id,
         "task_id": subtask.task_id,
@@ -1842,6 +1856,9 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
         "amount": float(subtask.amount) if subtask.amount is not None else None,
         "raw_result": subtask.raw_result_json,
         "updated_at": subtask.updated_at.isoformat() if subtask.updated_at else None,
+        # 2026-08-07 - 异步截图未完成时勿显示「暂无快照请填 URL」
+        "screenshot_pending": bool(pending) if pending is not None else False,
+        "screenshot_ok": shot_ok if isinstance(shot_ok, bool) else None,
     }
 
 

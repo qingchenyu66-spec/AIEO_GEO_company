@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ElDrawer } from 'element-plus'
 import 'element-plus/es/components/drawer/style/css'
 import { ExternalLink } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
-import type { MonitorSubtask } from '../../../services/monitor'
+import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
 import type { SnapshotBackfillPendingItem } from '../../../services/snapshotBackfill'
 import { monitorStatusLabelMap, platformLabelMap, sentimentLabelMap } from '../portalMaps'
 import { formatDateTime, formatMonitorSubtaskRankDetail } from '../portalUtils'
@@ -21,6 +21,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
+  'update:subtask': [value: MonitorSubtask]
   backfill: []
   undismiss: []
 }>()
@@ -36,7 +37,65 @@ const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props
 
 const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
 
+const screenshotPending = computed(() => {
+  if (snapshotLink.value) return false
+  return Boolean(props.subtask?.screenshot_pending)
+})
+
+const screenshotFailed = computed(() => {
+  if (snapshotLink.value || screenshotPending.value) return false
+  return props.subtask?.screenshot_ok === false
+})
+
+const snapshotEmptyHint = computed(() => {
+  // 2026-08-07 - 「暂无快照请填 URL」误导异步截图中的运营 - 按状态分文案
+  if (screenshotPending.value) return '快照生成中，稍后将自动可用'
+  if (screenshotFailed.value) return '快照生成失败，可重新补录分享链接'
+  return '暂无快照'
+})
+
 const isDismissed = computed(() => Boolean(props.item?.backfill_dismissed || props.subtask?.backfill_dismissed))
+
+const pollTimer = ref<ReturnType<typeof setInterval> | null>(null)
+
+function stopShotPoll() {
+  if (pollTimer.value) {
+    clearInterval(pollTimer.value)
+    pollTimer.value = null
+  }
+}
+
+async function refreshSubtaskOnce() {
+  const id = props.subtask?.subtask_id || props.item?.subtask_id
+  if (!id) return
+  try {
+    const next = await getMonitorSubtask(id, { include_ops: true, silentError: true })
+    emit('update:subtask', next)
+    if (externalLink(next.page_screenshot) || next.screenshot_pending === false) {
+      stopShotPoll()
+    }
+  } catch {
+    // silent
+  }
+}
+
+function startShotPoll() {
+  stopShotPoll()
+  if (!props.visible || !screenshotPending.value) return
+  pollTimer.value = setInterval(() => {
+    void refreshSubtaskOnce()
+  }, 3000)
+}
+
+watch(
+  () => [props.visible, screenshotPending.value, props.subtask?.subtask_id] as const,
+  () => {
+    if (props.visible && screenshotPending.value) startShotPoll()
+    else stopShotPoll()
+  },
+)
+
+onUnmounted(stopShotPoll)
 
 function showRankNote() {
   if (props.subtask?.prompt_intent !== 'ranking' && props.item?.prompt_intent !== 'ranking') return false
@@ -156,7 +215,7 @@ const answerPreview = computed(() => {
               <ExternalLink :size="14" />
             </a>
           </dd>
-          <dd v-else class="snapshot-detail-muted">暂无快照链接，补录时请填写分享页 URL</dd>
+          <dd v-else class="snapshot-detail-muted">{{ snapshotEmptyHint }}</dd>
         </div>
         <div v-if="answerPreview" class="is-wide">
           <dt>回答摘要</dt>

@@ -15,9 +15,9 @@ export function safeExternalUrl(raw: string | null | undefined): string | null {
   }
 }
 
-/** 快照代理链接不可当作补录「分享页 URL」回填。 */
+/** 快照代理/补录自截图路径不可当作补录「分享页 URL」回填。 */
 export function isProxiedScreenshotUrl(raw: string | null | undefined): boolean {
   const text = (raw || '').trim()
   if (!text) return false
-  return /\/api\/v1\/media\/shot\//.test(text)
+  return /\/api\/v1\/media\/(?:shot|backfill-shot)\//.test(text)
 }

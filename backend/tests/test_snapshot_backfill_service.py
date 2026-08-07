@@ -496,6 +496,16 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
         "app.services.snapshot_backfill_service.fetch_share_page",
         _fake_fetch,
     )
+    enqueued: list[tuple[str, str]] = []
+
+    def _fake_enqueue(*, subtask_id: str, snapshot_url: str) -> str:
+        enqueued.append((subtask_id, snapshot_url))
+        return "queued"
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.enqueue_backfill_screenshot",
+        _fake_enqueue,
+    )
     result = apply_snapshot_backfill(
         db_session,
         subtask_id="st-backfill",
@@ -506,6 +516,11 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert subtask.answer_content.startswith("1.")
     assert subtask.reference_list_json and subtask.reference_list_json[0]["url"].startswith("https://example.com")
     assert subtask.raw_result_json.get("source") == "manual_snapshot"
+    assert subtask.raw_result_json.get("snapshot_url") == "https://www.doubao.com/thread/abc1234567890"
+    assert subtask.page_screenshot is None
+    assert subtask.raw_result_json.get("screenshot_pending") is True
+    assert subtask.raw_result_json.get("screenshot_enqueue") == "queued"
+    assert enqueued == [("st-backfill", "https://www.doubao.com/thread/abc1234567890")]
     assert subtask.raw_result_json.get("manual_rank_locked") is False
     assert subtask.raw_result_json.get("fetch_reference_count") == 1
 
@@ -517,6 +532,91 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert "问题A" in log.description
     assert "st-backfill" not in log.description
     assert log.operator_name == "运营测试"
+
+
+def test_apply_snapshot_backfill_screenshot_fail_does_not_store_share_link(db_session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.services.share_page_screenshot_service import apply_backfill_screenshot
+    from app.services.snapshot_backfill_service import apply_snapshot_backfill
+    from app.services.share_page_fetch_service import SharePageFetchResult
+
+    task = GeoMonitorTask(
+        task_id="task-backfill-shot-fail",
+        monitor_keywords="品牌A",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["问题A"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-backfill-shot-fail",
+        task_id="task-backfill-shot-fail",
+        platform="doubao",
+        mode="standard",
+        prompt="问题A",
+        status="failed",
+        answer_content=None,
+        page_screenshot="https://www.doubao.com/thread/old-share-link",
+        raw_result_json={},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.fetch_share_page",
+        lambda url, **kwargs: SharePageFetchResult(
+            answer_content="1. 分众传媒\n2. 艾迪亚",
+            references=[],
+            title="fake",
+            source_host="doubao.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.enqueue_backfill_screenshot",
+        lambda **kwargs: "queued",
+    )
+    apply_snapshot_backfill(
+        db_session,
+        subtask_id="st-backfill-shot-fail",
+        snapshot_url="https://www.doubao.com/thread/new-share-link-abcdef",
+        current=current,
+    )
+    assert subtask.answer_content.startswith("1.")
+    assert subtask.raw_result_json.get("snapshot_url") == "https://www.doubao.com/thread/new-share-link-abcdef"
+    assert subtask.page_screenshot is None
+    assert subtask.raw_result_json.get("screenshot_pending") is True
+
+    monkeypatch.setattr(
+        "app.services.share_page_screenshot_service.capture_share_page_screenshot",
+        lambda url, subtask_id=None: (_ for _ in ()).throw(ValueError("截图质量不足")),
+    )
+    result = apply_backfill_screenshot(
+        db_session,
+        subtask_id="st-backfill-shot-fail",
+        snapshot_url="https://www.doubao.com/thread/new-share-link-abcdef",
+    )
+    db_session.refresh(subtask)
+    assert result["status"] == "failed"
+    assert subtask.page_screenshot is None
+    assert subtask.raw_result_json.get("screenshot_ok") is False
+    assert subtask.raw_result_json.get("screenshot_pending") is False
 
 
 def test_apply_snapshot_backfill_rank_only_keeps_snapshot(db_session, monkeypatch) -> None:

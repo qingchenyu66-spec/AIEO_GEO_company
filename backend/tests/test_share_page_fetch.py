@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.services.share_page_fetch_service import _clean_answer_text, extract_doubao_references
+from app.services.share_page_fetch_service import (
+    SharePageFetchResult,
+    _clean_answer_text,
+    _result_from_html,
+    extract_doubao_references,
+    fetch_share_page,
+)
 
 PROBE = Path(__file__).resolve().parents[1] / "_doubao_share_probe.html"
 
@@ -27,3 +33,29 @@ def test_clean_answer_text_strips_ui_noise() -> None:
     assert "打开豆包" not in cleaned
     assert "正文第一段" in cleaned
     assert "正文第二段" in cleaned
+
+
+def test_result_from_html_accepts_doubao_ssr_probe() -> None:
+    if not PROBE.exists():
+        return
+    html = PROBE.read_text(encoding="utf-8")
+    hit = _result_from_html(html, host="www.doubao.com", title="probe")
+    assert hit is not None
+    assert len(hit.answer_content) >= 80
+    assert hit.references
+
+
+def test_fetch_share_page_prefers_http(monkeypatch) -> None:
+    fake = SharePageFetchResult(
+        answer_content="x" * 100,
+        references=[],
+        title="t",
+        source_host="www.doubao.com",
+    )
+    monkeypatch.setattr(
+        "app.services.share_page_fetch_service._try_http_fetch",
+        lambda url, host: fake,
+    )
+    out = fetch_share_page("https://www.doubao.com/thread/abc1234567890")
+    assert out.answer_content == fake.answer_content
+    assert out.title == "t"

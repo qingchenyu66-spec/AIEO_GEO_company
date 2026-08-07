@@ -111,7 +111,11 @@ async function handleSubmit() {
         :disabled="submitting || !canSubmit"
         @click="handleSubmit"
       >
-        {{ submitting ? '提交中…' : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录' }}
+        {{
+          submitting
+            ? (hasShareUrl ? '正在解析分享页…' : '提交中…')
+            : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录'
+        }}
       </button>
     </template>
   </el-dialog>

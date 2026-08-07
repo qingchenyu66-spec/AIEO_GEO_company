@@ -57,6 +57,10 @@ export interface MonitorSubtask {
   prompt: string
   status: string
   page_screenshot: string | null
+  /** 补录后后台截图尚未完成 */
+  screenshot_pending?: boolean
+  /** 后台截图是否成功；未结束时为 null/undefined */
+  screenshot_ok?: boolean | null
   answer_content: string | null
   reference_list: Array<{ title?: string; url?: string; site?: string; index?: number }>
   reference_count?: number
@@ -684,10 +688,14 @@ export async function getMonitorTaskDetail(taskId: string): Promise<MonitorTaskD
   return response.data.data
 }
 
-export async function getMonitorSubtask(subtaskId: string, options?: { include_ops?: boolean }): Promise<MonitorSubtask> {
+export async function getMonitorSubtask(
+  subtaskId: string,
+  options?: { include_ops?: boolean; silentError?: boolean },
+): Promise<MonitorSubtask> {
   const response = await http.get(`/v1/monitor/subtasks/${subtaskId}`, {
     params: options?.include_ops ? { include_ops: true } : undefined,
-  })
+    silentError: options?.silentError,
+  } as GeoHttpRequestConfig)
   return response.data.data
 }
 

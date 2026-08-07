@@ -332,9 +332,8 @@ function syncCellDrawerFromMatrix() {
 
 const drawerSlots = computed(() => {
   const slots = cellDrawer.value?.slots || []
-  if (!todoOnly.value) return slots
-  // 只看待补：已忽略不再占待办列表
-  return slots.filter(slot => !slot.backfill_dismissed && (slot.needs_backfill || slot.is_gap))
+  // 2026-08-07 - 补录完成后待办里「不显示了」- 抽屉保留未忽略场次（含已补录）供点详情；矩阵外层 todoOnly 仍只红待补格
+  return slots.filter(slot => !slot.backfill_dismissed)
 })
 
 
@@ -395,6 +394,8 @@ function cellHasTodo(slots: SnapshotBackfillMatrixSlot[]) {
   // 2026-07-28 - 点开可忽略消红点 - 红点只看未忽略场次日均>3（或无均值）
   const active = slots.filter(slot => !slot.backfill_dismissed)
   if (!active.length) return false
+  // 2026-08-07 - 仅算均位会漏掉「仍有漏跑/失败」- 有缺口或失败待补仍标红
+  if (active.some(slot => slot.is_gap || (slot.needs_backfill && !slot.has_answer))) return true
   const ranks: number[] = []
   for (const slot of active) {
     if (slot.mention_position != null && Number.isFinite(Number(slot.mention_position))) {
@@ -612,7 +613,8 @@ async function openBackfillFromSlot(slot: SnapshotBackfillMatrixSlot) {
       })
       backfillTarget.value = result.subtask
       backfillVisible.value = true
-      await loadMatrix({ quiet: true })
+      await loadMatrix({ quiet: true, skipCache: true })
+      syncCellDrawerFromMatrix()
       return
     }
     backfillTarget.value = await loadSubtask(slot.subtask_id)
@@ -683,7 +685,7 @@ async function undismissFromDetail() {
 }
 
 async function handleSuccess(updatedSubtask?: MonitorSubtask) {
-  const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id
+  const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id || backfillTarget.value?.subtask_id
   let patched = false
   if (updatedSubtask?.subtask_id) {
     patched = patchSlotLocally(updatedSubtask.subtask_id, {
@@ -692,22 +694,28 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
       has_answer: Boolean(updatedSubtask.answer_content),
       status: updatedSubtask.status ?? null,
       error_message: updatedSubtask.error_message ?? null,
+      is_gap: false,
     })
   }
   // 2026-08-03 - 缺口格补录后矩阵仍显示漏跑 - 本地 patch 找不到 is_gap 槽位，须重拉
   if (!patched) {
-    await loadMatrix({ quiet: true })
+    await loadMatrix({ quiet: true, skipCache: true })
+  }
+  syncCellDrawerFromMatrix()
+  // 仅当整格已无未忽略场次才关抽屉；已补录场次仍留在列表里
+  if (cellDrawerVisible.value && drawerSlots.value.length === 0) {
+    closeCellDrawer()
   }
   emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
 
-  if (detailVisible.value && activeId) {
-    if (updatedSubtask?.subtask_id === activeId) {
-      detailSubtask.value = updatedSubtask
-      const baseItem = detailItem.value || backfillItemFromSubtask(updatedSubtask)
-      detailItem.value = mergeSnapshotBackfillItem(baseItem, updatedSubtask)
-    } else {
-      await openDetailById(activeId, detailItem.value)
-    }
+  // 2026-08-07 - 从格子待办补录后待办消失、没有详情入口 - 自动打开详情方便看快照
+  if (updatedSubtask?.subtask_id) {
+    const baseItem = detailItem.value?.subtask_id === updatedSubtask.subtask_id
+      ? detailItem.value
+      : backfillItemFromSubtask(updatedSubtask)
+    await openDetail(mergeSnapshotBackfillItem(baseItem, updatedSubtask))
+  } else if (detailVisible.value && activeId) {
+    await openDetailById(activeId, detailItem.value)
   }
 
   ElMessage.success('快照补录已保存')
@@ -772,7 +780,7 @@ function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
   if (slot.backfill_dismissed) return '已忽略'
   if (slot.needs_backfill && !slot.has_answer) return '失败待补'
   if (slot.needs_backfill) return '待补录'
-  if (slot.has_answer) return '已有结果'
+  if (slot.has_answer) return '已补录'
   return slot.status || '—'
 }
 
@@ -1148,6 +1156,7 @@ watch(
       :item="detailItem"
       :subtask="detailSubtask"
       :can-submit="canSubmitBackfill"
+      @update:subtask="detailSubtask = $event"
       @backfill="openBackfillFromDetail"
       @undismiss="undismissFromDetail"
     />

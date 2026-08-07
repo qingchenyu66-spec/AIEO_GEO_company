@@ -43,6 +43,7 @@ celery_app.conf.update(
         "app.tasks.monitor.sync_announcement_lifecycle": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
+        "app.tasks.snapshot_backfill.capture_backfill_screenshot_task": {"queue": "default"},
         "app.tasks.report_source_value.pregenerate_source_value_task": {"queue": "default"},
         "app.tasks.report_source_value.scan_source_value_pregenerate": {"queue": "default"},
     },
@@ -133,4 +134,5 @@ celery_app.autodiscover_tasks(["app.tasks"])
 import app.tasks.monitor  # noqa: E402, F401
 import app.tasks.monitoring  # noqa: E402, F401
 import app.tasks.knowledge  # noqa: E402, F401
+import app.tasks.snapshot_backfill  # noqa: E402, F401
 import app.tasks.report_source_value  # noqa: E402, F401

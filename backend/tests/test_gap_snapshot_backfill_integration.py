@@ -117,6 +117,10 @@ def test_gap_snapshot_backfill_api_writes_daily_stat_on_business_date(
         )
 
     monkeypatch.setattr("app.services.snapshot_backfill_service.fetch_share_page", _fake_fetch)
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.enqueue_backfill_screenshot",
+        lambda **kwargs: "queued",
+    )
 
     token = _platform_token()
     headers = {"Authorization": f"Bearer {token}"}
