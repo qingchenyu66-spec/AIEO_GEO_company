@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 # 2026-08-07 - 结项进监测幻灯后刷预览/导出指纹
-COMPLETION_DECK_PIPELINE = "completion-deck-v1"
+COMPLETION_DECK_PIPELINE = "completion-deck-v7"
 
 
 def _text(value: Any, fallback: str = "-") -> str:
@@ -43,7 +43,7 @@ def _platform_label(code: str, platform_names: dict[str, str]) -> str:
 def _evidence_cards(rows: list[dict[str, Any]], platform_names: dict[str, str], *, empty: str) -> str:
     if not rows:
         return f'<p class="sub">{_text(empty)}</p>'
-    parts = []
+    cards = []
     for row in rows:
         shot = row.get("screenshot_url")
         shot_html = (
@@ -52,7 +52,7 @@ def _evidence_cards(rows: list[dict[str, Any]], platform_names: dict[str, str], 
             else "无"
         )
         rank = row.get("rank")
-        parts.append(
+        cards.append(
             f"""
         <article class="evidence-card">
           <header><b>{_text(_platform_label(str(row.get('platform') or ''), platform_names))}</b>
@@ -63,7 +63,12 @@ def _evidence_cards(rows: list[dict[str, Any]], platform_names: dict[str, str], 
         </article>
             """
         )
-    return "".join(parts)
+    # 2026-08-07 - 单卡拆 pack 会一页一张大空白；两两成组进 evidence-grid
+    chunks = []
+    for i in range(0, len(cards), 2):
+        pair = "".join(cards[i : i + 2])
+        chunks.append(f'<div class="evidence-grid">{pair}</div>')
+    return "".join(chunks)
 
 
 def _platform_table(rows: list[dict[str, Any]], platform_names: dict[str, str]) -> str:
@@ -161,6 +166,10 @@ def _lifecycle_cards(lifecycle: dict[str, Any]) -> str:
 
 
 def _next_actions_html(actions: dict[str, Any]) -> str:
+    """巩固/攻坚/监测：横条分栏（标题左、条目右），避免三等分竖卡高低不齐裁切。
+
+    2026-08-07 - 原 grid3/三列竖卡：标题孤悬、攻坚过高裁切；嵌套 section 曾截断抽取
+    """
     blocks = [
         ("巩固", actions.get("consolidate") or []),
         ("攻坚", actions.get("attack") or []),
@@ -169,8 +178,13 @@ def _next_actions_html(actions: dict[str, Any]) -> str:
     parts = []
     for title, items in blocks:
         lis = "".join(f"<li>{_text(item)}</li>" for item in items[:6]) or "<li>暂无</li>"
-        parts.append(f'<div class="note"><b>{_text(title)}</b><ol class="action-list">{lis}</ol></div>')
-    return f'<div class="grid3">{"".join(parts)}</div>'
+        # 攻坚条目多：两列排，压低总高度
+        list_cls = "action-list action-list--dense" if title == "攻坚" and len(items) > 3 else "action-list"
+        parts.append(
+            f'<div class="action-row"><h4>{_text(title)}</h4>'
+            f'<ol class="{list_cls}">{lis}</ol></div>'
+        )
+    return f'<div class="action-board">{"".join(parts)}</div>'
 
 
 def _delta_text(value: Any, *, higher_better: bool = True, unit: str = "pt") -> str:
@@ -267,10 +281,9 @@ def _comparison_overall_cards(comparison: dict[str, Any], platform_names: dict[s
             )
     hl = "".join(f"<li>{_text(item)}</li>" for item in highlights[:4]) or "<li>暂无升降结论</li>"
     return f"""
-    <div class="note">{_text(comparison.get("note"))}</div>
-    <p class="cmp-window">对比窗口：{_text(early_label)} → {_text(late_label)}</p>
+    <p class="cmp-window">对比窗口：{_text(early_label)} → {_text(late_label)} · {_text(comparison.get("note") or "")}</p>
     <div class="cmp-grid">{body}</div>
-    <ul class="clean" style="margin-top:14px">{hl}</ul>
+    <ul class="clean cmp-highlights">{hl}</ul>
     """
 
 
@@ -334,12 +347,18 @@ def _bar_rows(rows: list[dict[str, Any]], platform_names: dict[str, str]) -> str
 
 
 def _trend_svg(points: list[dict[str, Any]]) -> str:
+    """提及率趋势：Y 轴刻度 + 点值 + 起/峰/末摘要，避免空白简陋折线。
+
+    2026-08-07 - 原 SVG 无纵轴/无点值，16:9 里显得空；不加 echarts 以免结项抽章节链路变重
+    """
     if len(points) < 2:
         return '<p class="sub">周期内趋势节点不足，完整明细可在报告中心查询。</p>'
     rates = [float(p.get("mention_rate") or 0) for p in points]
+    completed = [int(float(p.get("completed") or 0)) for p in points]
     lo, hi = min(rates), max(rates)
     span = (hi - lo) or 1.0
-    left, right, top, bottom = 48.0, 712.0, 34.0, 226.0
+    # 给纵轴文字留宽，绘图区尽量拉满 viewBox（避免中间一条细折线）
+    left, right, top, bottom = 56.0, 748.0, 28.0, 200.0
     n = len(points) - 1
 
     def xy(i: int, rate: float) -> tuple[float, float]:
@@ -349,28 +368,75 @@ def _trend_svg(points: list[dict[str, Any]]) -> str:
 
     coords = [xy(i, rate) for i, rate in enumerate(rates)]
     line = " L ".join(f"{x:.1f} {y:.1f}" for x, y in coords)
-    area = f"M {coords[0][0]:.1f} {bottom} L " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in coords) + f" L {coords[-1][0]:.1f} {bottom} Z"
-    dots = "".join(
-        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#fff" stroke="#14b8a6" stroke-width="3"/>'
-        for x, y in coords
+    area = (
+        f"M {coords[0][0]:.1f} {bottom} L "
+        + " L ".join(f"{x:.1f} {y:.1f}" for x, y in coords)
+        + f" L {coords[-1][0]:.1f} {bottom} Z"
     )
-    labels = []
-    for idx in {0, len(points) // 2, len(points) - 1}:
-        x, _ = coords[idx]
-        labels.append(
-            f'<text x="{x:.1f}" y="252" text-anchor="middle" class="axis">{_text(points[idx].get("label"))}</text>'
+    peak_i = max(range(len(rates)), key=lambda i: rates[i])
+    trough_i = min(range(len(rates)), key=lambda i: rates[i])
+
+    grid_parts = []
+    for t in range(5):
+        rate = lo + span * t / 4
+        y = bottom - (rate - lo) / span * (bottom - top)
+        grid_parts.append(
+            f'<line x1="{left}" x2="{right}" y1="{y:.1f}" y2="{y:.1f}" class="grid"/>'
+            f'<text x="{left - 8:.1f}" y="{y + 4:.1f}" text-anchor="end" class="axis">{rate:.0f}%</text>'
         )
+
+    dots = []
+    value_labels = []
+    # 点密时隔点标值，峰/谷/首末必标
+    label_idx = set()
+    if len(points) <= 8:
+        label_idx = set(range(len(points)))
+    else:
+        step = max(1, len(points) // 6)
+        label_idx = set(range(0, len(points), step)) | {0, peak_i, trough_i, len(points) - 1}
+    for i, (x, y) in enumerate(coords):
+        dots.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="#fff" stroke="#14b8a6" stroke-width="3"/>'
+        )
+        if i in label_idx:
+            value_labels.append(
+                f'<text x="{x:.1f}" y="{y - 10:.1f}" text-anchor="middle" class="axis axis-value">'
+                f"{rates[i]:.1f}%</text>"
+            )
+
+    x_labels = []
+    x_idx = sorted({0, len(points) // 3, (2 * len(points)) // 3, len(points) - 1, peak_i})
+    for idx in x_idx:
+        x, _ = coords[idx]
+        x_labels.append(
+            f'<text x="{x:.1f}" y="228" text-anchor="middle" class="axis">'
+            f"{_text(points[idx].get('label'))}</text>"
+        )
+
+    start_r, end_r = rates[0], rates[-1]
+    delta = round(end_r - start_r, 1)
+    delta_txt = f"{'+' if delta > 0 else ''}{delta}pt"
+    stats = f"""
+    <div class="trend-stats">
+      <div><span>起点</span><b>{_pct(start_r)}</b><em>{_text(points[0].get('label'))}</em></div>
+      <div><span>峰值</span><b>{_pct(rates[peak_i])}</b><em>{_text(points[peak_i].get('label'))}</em></div>
+      <div><span>终点</span><b>{_pct(end_r)}</b><em>{_text(points[-1].get('label'))}</em></div>
+      <div><span>区间变化</span><b>{_text(delta_txt)}</b><em>样本 {_number(sum(completed))}</em></div>
+    </div>"""
+
     return f"""
-    <svg class="line-chart" viewBox="0 0 760 260" role="img">
-      <defs><linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
-        <stop stop-color="#14b8a6" stop-opacity=".28"/><stop offset="1" stop-color="#14b8a6" stop-opacity="0"/>
-      </linearGradient></defs>
-      <line x1="48" x2="712" y1="226" y2="226" class="grid"/>
-      <line x1="48" x2="712" y1="34" y2="34" class="grid"/>
-      <path d="{area}" fill="url(#g1)"/>
-      <path d="M {line}" fill="none" stroke="#14b8a6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-      {dots}{''.join(labels)}
-    </svg>"""
+    <div class="trend-panel">
+      {stats}
+      <svg class="line-chart" viewBox="0 0 760 240" preserveAspectRatio="none" role="img" aria-label="品牌提及率趋势">
+        <defs><linearGradient id="g1" x1="0" x2="0" y1="0" y2="1">
+          <stop stop-color="#14b8a6" stop-opacity=".28"/><stop offset="1" stop-color="#14b8a6" stop-opacity="0"/>
+        </linearGradient></defs>
+        {''.join(grid_parts)}
+        <path d="{area}" fill="url(#g1)"/>
+        <path d="M {line}" fill="none" stroke="#14b8a6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        {''.join(dots)}{''.join(value_labels)}{''.join(x_labels)}
+      </svg>
+    </div>"""
 
 
 def _prompt_table(rows: list[dict[str, Any]], platform_names: dict[str, str], platform_scope: list[dict[str, Any]]) -> str:
@@ -733,20 +799,22 @@ ul.clean{{list-style:none;padding:0;margin:0;display:grid;gap:8px}} ul.clean li{
 
   <section class="section">
     <h2>08 阶段观察与优化空间</h2>
+    <div class="observe-stack">
     <p class="sub">以下内容用于说明本阶段服务后的客观观察点，并给出可执行的巩固 / 攻坚 / 监测建议初稿。</p>
-    <div class="grid4">
+    <div class="observe-kpis">
       <div class="kpi"><span>有效样本</span><b>{_number(completed)}</b><em>与全文分母一致</em></div>
       <div class="kpi"><span>内容资产</span><b>{_number(completed)}</b><em>有效回答文本口径</em></div>
       <div class="kpi"><span>信源资产</span><b>{_number(assets.get('source_count') or len(top_sources))}</b><em>有效引用信源</em></div>
       <div class="kpi"><span>快照资产</span><b>{_number(screenshots)}</b><em>可回查证据</em></div>
     </div>
-    <div class="grid2">
+    <div class="observe-notes">
       <div class="note warn">平台表现存在差异：部分平台提及率低于整体均值，说明不同模型对信源与行业语境的识别偏好并不一致。</div>
       <div class="note warn">推荐语义仍有提升空间：正面情绪占比 {_pct(kpis.get('positive_rate'))}，说明“被提到”与“被主动推荐”之间仍有差距。</div>
     </div>
-    <h3>后续建议（巩固 / 攻坚 / 监测）</h3>
+    <div class="observe-title">后续建议（巩固 / 攻坚 / 监测）</div>
     <p class="sub">由问题词风险与平台首末窗变化自动生成，可按客户业务再改。</p>
     {_next_actions_html(next_actions)}
+    </div>
     <h3>平台差异</h3>
     {_bar_rows(platform_stats, platform_names)}
   </section>
@@ -787,18 +855,79 @@ ul.clean{{list-style:none;padding:0;margin:0;display:grid;gap:8px}} ul.clean li{
 </html>"""
 
 
+def _is_heading_lead_part(part: str) -> bool:
+    """仅含 h3（及紧随短 intro）的块，易与后表拆开成孤儿标题。"""
+    text = (part or "").strip()
+    if not re.match(r"<h3\b", text, flags=re.I):
+        return False
+    if re.search(
+        r"<(?:table|div class=\"(?:score-grid|deliver-grid|cmp-grid|grid4|grid3|grid2|scope-panel|hero-result|evidence-grid|observe-stack|toc)\b)",
+        text,
+        flags=re.I,
+    ):
+        return False
+    return True
+
+
+def _is_block_body_part(part: str) -> bool:
+    text = (part or "").strip()
+    return bool(
+        re.match(
+            r"<(?:table\b|div class=\"(?:score-grid|deliver-grid|cmp-grid|grid4|grid3|grid2|scope-panel|hero-result|evidence-grid|observe-stack|toc)\b)",
+            text,
+            flags=re.I,
+        )
+    )
+
+
+def _coalesce_heading_orphans(parts: list[str]) -> list[str]:
+    """h3+短说明 与紧随的 table/栅格合并，避免 peel 后标题孤悬页底。
+
+    2026-08-07 - 按 table 切开后「问题词成绩榜」h3 留在趋势图页底压边
+    """
+    if len(parts) < 2:
+        return parts
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        cur = parts[i]
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        if nxt and _is_heading_lead_part(cur) and _is_block_body_part(nxt):
+            out.append(cur + nxt)
+            i += 2
+            continue
+        out.append(cur)
+        i += 1
+    return out
+
+
 def _split_section_pack_parts(body_html: str) -> list[str]:
-    """按 h3 拆成 pack-item，便于 deck_pack 分页；无 h3 则整段一块。"""
+    """按 h3 / 大块组件拆 pack-item，优先拆页，避免 softShrink 压字。
+
+    2026-08-07 - 只按 h3 拆时 §02 等节仍整坨超高，软缩到 16px 级并叠字
+    """
     text = (body_html or "").strip()
     if not text:
         return []
-    chunks = re.split(r"(?=<h3\b)", text, flags=re.I)
+    # 在标题与表格/KPI 栅格/证据卡等块前切开
+    chunks = re.split(
+        r"(?=(?:<h3\b|"
+        r"<table\b|"
+        r"<div class=\"(?:score-grid|deliver-grid|cmp-grid|grid4|grid3|grid2|scope-panel|hero-result|evidence-grid|observe-stack|toc)\b))",
+        text,
+        flags=re.I,
+    )
     parts = [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
+    parts = _coalesce_heading_orphans(parts or [text])
     return parts or [text]
 
 
 def extract_completion_deck_sections(full_html: str) -> list[dict[str, Any]]:
-    """从完整版结项 HTML 抽出各 section，供周报母版逐页渲染。"""
+    """从完整版结项 HTML 抽出各 section，供周报母版逐页渲染。
+
+    注意：用非贪婪匹配到第一个 </section>；章节内部禁止再嵌套 <section>
+    （2026-08-07 - action-col 曾用 section，巩固后攻坚/监测被截断）。
+    """
     sections: list[dict[str, Any]] = []
     for match in re.finditer(
         r"<section\s+class=\"section\">(.*?)</section>",

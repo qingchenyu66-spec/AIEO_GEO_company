@@ -10,10 +10,20 @@
  * - 2026-07-27 - 页底表头+一两行孤儿 / 核心指标被剥成 2/2 - 短表尾整块下挪；核心页只软缩不 peel
  * - 2026-07-27 - 同页两个表头 - ①拆表时误克隆包着 table 的 wrap 导致整表+分组表并存；②短续页并回后合表只留一个 thead
  * - 2026-07-27 - 核心页 KPI 被 maxHeight+overflow 裁切叠字 - 已弃用裁切；一两行仍软缩，太多则剥「核心结论」到续页
- * - 2026-07-28 - 竞品页底只剩表头+一两行 - 前缀过高时整表下挪；浅色标题合并为一行
+ * - 2026-08-06 - 定制优化三/四节表误合并 - merge/coalesce 须同 opt-section-title
+ * - 2026-08-06 - 优化建议去掉所有「（续）」文案；tail 续页不加 block-title
  */
 (() => {
   // 2026-07-28 - 预览与 PDF 共用本脚本；PDF 仍 evaluate 时防二次拆页
+  // 2026-08-07 - 字体未就绪就 pack 会量高偏矮，加载后裁切叠字；预览延后，PDF 用 SYNC 重跑
+  if (document.documentElement.dataset.geoDeckPacked === "1" && !window.__GEO_DECK_PACK_SYNC__) {
+    return {
+      skipped: true,
+      slides: document.querySelectorAll(".slide").length,
+    };
+  }
+
+  function runPack() {
   if (document.documentElement.dataset.geoDeckPacked === "1") {
     return {
       skipped: true,
@@ -226,7 +236,10 @@
       .querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")
       .forEach((body) => {
         const slide = body.closest(".slide");
-        const preferPeel = slide?.getAttribute("data-merge-group") === "competitor";
+        const preferPeel =
+          slide?.getAttribute("data-merge-group") === "competitor" ||
+          // 2026-08-07 - 结项页优先拆页，勿 softShrink 压到叠字
+          String(slide?.getAttribute("data-merge-group") || "").startsWith("completion-");
         const r = softShrinkFit(body, {
           keepTogether: keepTogetherSlide(slide),
           preferPeel,
@@ -329,6 +342,87 @@
     const peeledParas = peelConclusionParagraphs(slide);
     if (peeledParas) return peeledParas;
 
+    ensurePackItems(body);
+    const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
+
+    // 2026-08-07 - 多块时先整块下挪；原先优先剥表行，KPI+表同页仍裁切且标题易孤悬
+    if (items.length > 1) {
+      const last = items[items.length - 1];
+      const blank = slide.cloneNode(true);
+      const blankBody = bodyEl(blank);
+      if (!blankBody) return 0;
+      blankBody.innerHTML = "";
+      blank.querySelector(".analysis-time-pill")?.remove();
+      blank.setAttribute("data-pack", "1");
+      if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
+      const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "")
+        .replace(/（续）\s*$/, "")
+        .trim();
+      const title = blank.querySelector(".slide-title");
+      if (title) title.textContent = base || (slide.dataset.mergeGroup === "tail" ? "优化建议" : "");
+      slide.after(blank);
+      blankBody.appendChild(last);
+      // 2026-08-07 - 剥走内容后若仅剩 h3/短 intro，一并挪到续页，避免「后续建议」空页
+      const leftItems = Array.from(body.querySelectorAll(":scope > .pack-item"));
+      const isSparsePack = (el) => {
+        const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text || text.length > 120) return false;
+        return !!el.querySelector("h3, h4, p.sub") && !el.querySelector("table, .action-board, .evidence-grid, .cmp-grid, .score-grid, .grid4, ol, ul");
+      };
+      if (leftItems.length && leftItems.every(isSparsePack)) {
+        leftItems.forEach((el) => blankBody.insertBefore(el, blankBody.firstChild));
+        if (!body.querySelector(":scope > .pack-item")) slide.remove();
+      }
+      return 1;
+    }
+
+    // 单 pack-item 内多子节点：按下块剥，避免整坨无法拆
+    if (items.length === 1) {
+      // 2026-08-07 - §08 observe-stack 勿拆开，否则又变「指标半页 + 建议半页」
+      if (items[0].querySelector(":scope > .observe-stack, .observe-stack")) {
+        return 0;
+      }
+      const kids = Array.from(items[0].children).filter((el) => el.nodeType === 1);
+      if (kids.length >= 2) {
+        const lastKid = kids[kids.length - 1];
+        const blank = slide.cloneNode(true);
+        const blankBody = bodyEl(blank);
+        if (!blankBody) return 0;
+        blankBody.innerHTML = "";
+        blank.querySelector(".analysis-time-pill")?.remove();
+        blank.setAttribute("data-pack", "1");
+        if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
+        const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "")
+          .replace(/（续）\s*$/, "")
+          .trim();
+        const title = blank.querySelector(".slide-title");
+        if (title) title.textContent = base || (slide.dataset.mergeGroup === "tail" ? "优化建议" : "");
+        const wrap = document.createElement("div");
+        wrap.className = "pack-item";
+        wrap.appendChild(lastKid);
+        // 剥走末块后若只剩标题/短 intro，一并带上续页
+        const remain = Array.from(items[0].children).filter((el) => el.nodeType === 1);
+        const sparseLead = (el) => {
+          const tag = el.tagName;
+          if (tag === "H3" || tag === "H4") return true;
+          if (tag === "P" && (el.classList.contains("sub") || ((el.textContent || "").trim().length < 90))) return true;
+          return false;
+        };
+        if (remain.length && remain.every(sparseLead)) {
+          const frag = document.createDocumentFragment();
+          remain.forEach((el) => frag.appendChild(el));
+          wrap.insertBefore(frag, wrap.firstChild);
+        }
+        blankBody.appendChild(wrap);
+        slide.after(blank);
+        if (!items[0].children.length) {
+          items[0].remove();
+          if (!body.querySelector(":scope > .pack-item")) slide.remove();
+        }
+        return 1;
+      }
+    }
+
     const table = body.querySelector("table");
     const tbody = table && table.tBodies[0];
     if (tbody && tbody.rows.length >= 2) {
@@ -352,16 +446,21 @@
       blank.querySelector(".analysis-time-pill")?.remove();
       blank.setAttribute("data-pack", "1");
       if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
-      const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
+      const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "")
+        .replace(/（续）\s*$/, "")
+        .trim();
       const title = blank.querySelector(".slide-title");
-      if (title) title.textContent = base ? `${base}（续）` : "（续）";
+      // 2026-08-06 - 客户要求去掉「（续）」；同标题多页靠 renumber (1/n)
+      if (title) title.textContent = base || (slide.dataset.mergeGroup === "tail" ? "优化建议" : "");
 
       const wrap = document.createElement("div");
       wrap.className = "pack-item ranking-unit";
-      const cont = document.createElement("div");
-      cont.className = "block-title";
-      cont.textContent = "（续）";
-      wrap.appendChild(cont);
+      if (slide.dataset.mergeGroup !== "tail") {
+        const cont = document.createElement("div");
+        cont.className = "block-title";
+        cont.textContent = "（续）";
+        wrap.appendChild(cont);
+      }
       const t = document.createElement("table");
       t.className = table.className;
       if (table.tHead) t.appendChild(table.tHead.cloneNode(true));
@@ -374,23 +473,7 @@
       return 1;
     }
 
-    ensurePackItems(body);
-    const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
-    if (items.length <= 1) return 0;
-    const last = items[items.length - 1];
-    const blank = slide.cloneNode(true);
-    const blankBody = bodyEl(blank);
-    if (!blankBody) return 0;
-    blankBody.innerHTML = "";
-    blank.querySelector(".analysis-time-pill")?.remove();
-    blank.setAttribute("data-pack", "1");
-    if (slide.dataset.mergeGroup) blank.dataset.mergeGroup = slide.dataset.mergeGroup;
-    const base = stripPageSuffix(slide.querySelector(".slide-title")?.textContent || "");
-    const title = blank.querySelector(".slide-title");
-    if (title) title.textContent = base ? `${base}（续）` : "（续）";
-    slide.after(blank);
-    blankBody.appendChild(last);
-    return 1;
+    return 0;
   }
 
   function fixRemainingOverflow() {
@@ -515,6 +598,7 @@
 
   function explodeOversizedTables(body, maxH) {
     const fitH = maxH;
+    const slide = body.closest(".slide");
     const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
     let separatedPrefix = false;
     items.forEach((item) => {
@@ -605,7 +689,9 @@
         wrap.className = "pack-item ranking-unit";
         if (gIdx === 0) {
           prefixEls.forEach((el) => wrap.appendChild(el));
-        } else {
+        } else if (slide && slide.dataset.mergeGroup !== "tail") {
+          // 2026-08-06 - 优化建议勿插入「（续）」block-title
+          // 2026-08-07 - explode 内误用未定义 slide（字号加大后才踩中）- 改为 body.closest
           const cont = document.createElement("div");
           cont.className = "block-title";
           cont.textContent = "（续）";
@@ -653,6 +739,10 @@
   /**
    * 2026-07-27 - 同页两个表头 - 短续页并回后相邻表块各带 thead；拼成一张表只留一个表头
    */
+  function optSectionTitle(body) {
+    return (body?.querySelector(".opt-section-title")?.textContent || "").trim();
+  }
+
   function coalesceAdjacentTables(body) {
     if (!body) return;
     let guard = 0;
@@ -665,6 +755,10 @@
         const tableA = a.querySelector("table");
         const tableB = b.querySelector("table");
         if (!tableA || !tableB || !tableA.tBodies[0] || !tableB.tBodies[0]) continue;
+        // 2026-08-06 - 定制优化各节误并表（三/四混页）- 仅同 opt-section-title 可合
+        const secA = optSectionTitle(a);
+        const secB = optSectionTitle(b);
+        if (secA && secB && secA !== secB) continue;
         const contB = (b.querySelector(".block-title")?.textContent || "").includes("续");
         const bothUnit =
           a.classList.contains("ranking-unit") && b.classList.contains("ranking-unit");
@@ -801,6 +895,8 @@
         const a = slides[i];
         const b = slides[i + 1];
         if (a.dataset.mergeGroup !== b.dataset.mergeGroup) continue;
+        // 2026-08-06 - 优化建议已一节一 slide，mergeSparse 会把三/四叠同页并重复标题
+        if (a.dataset.mergeGroup === "tail") continue;
         if (a.classList.contains("slide--thanks") || b.classList.contains("slide--thanks")) continue;
         const bodyA = bodyEl(a);
         const bodyB = bodyEl(b);
@@ -838,6 +934,8 @@
         const tableA = tableAEarly;
         const tableB = tableBEarly;
         let appendedViaTable = false;
+        const optA = optSectionTitle(bodyA);
+        const optB = optSectionTitle(bodyB);
         if (
           sameSection &&
           tableA &&
@@ -845,6 +943,10 @@
           tableA.tBodies[0] &&
           tableB.tBodies[0]
         ) {
+          // 2026-08-06 - tail 外层同「优化建议」误把四节表行并进三节
+          if (optA && optB && optA !== optB) {
+            continue;
+          }
           const rowsA = tableA.tBodies[0].rows.length;
           const rowsB = tableB.tBodies[0].rows.length;
           // 合并后行数过多仍会被 overflow:hidden 裁切；尾页≤3 行允许略放宽
@@ -972,4 +1074,26 @@
     peeled,
     stillClipped: stillBad,
   };
+  } // end runPack
+
+  // PDF Playwright：字体就绪后带 SYNC 再 evaluate，清掉内嵌脚本的抢跑结果
+  if (window.__GEO_DECK_PACK_SYNC__) {
+    delete window.__GEO_DECK_PACK_SYNC__;
+    delete document.documentElement.dataset.geoDeckPacked;
+    return runPack();
+  }
+
+  // 预览：等字体再拆页
+  const schedule = () => {
+    const finish = () => {
+      window.__geoDeckPackResult = runPack();
+    };
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => requestAnimationFrame(finish));
+    } else {
+      requestAnimationFrame(finish);
+    }
+  };
+  schedule();
+  return { deferred: true };
 })();

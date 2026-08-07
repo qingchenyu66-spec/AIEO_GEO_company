@@ -452,7 +452,14 @@ def build_period_deck_pdf(
                 tick();
             }})"""
         )
-        # 预览 HTML 已内嵌 deck_pack；evaluate 再跑一次会被 dataset 短路
+        # 预览 HTML 已内嵌 deck_pack（等 fonts 后异步跑）；此处强制同步重跑，避免字体加载前量高导致裁切
+        # 2026-08-07 - 结项字号加大后，抢跑 pack 会 stillClipped
+        page.evaluate(
+            """() => {
+                window.__GEO_DECK_PACK_SYNC__ = true;
+                delete document.documentElement.dataset.geoDeckPacked;
+            }"""
+        )
         pack_result = page.evaluate(_pack_js())
         logger.info("period monitor deck pack result=%s", pack_result)
 

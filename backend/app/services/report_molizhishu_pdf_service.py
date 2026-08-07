@@ -197,6 +197,13 @@ def build_molizhishu_pdf(
             ])"""
         )
         page.wait_for_timeout(200)
+        # 2026-08-07 - 与周期 deck 一致：字体就绪后 SYNC 重跑，避免内嵌抢跑
+        page.evaluate(
+            """() => {
+                window.__GEO_DECK_PACK_SYNC__ = true;
+                delete document.documentElement.dataset.geoDeckPacked;
+            }"""
+        )
         pack_result = page.evaluate(_pack_js())
         logger.info("molizhishu deck pack result=%s", pack_result)
         page.wait_for_timeout(150)

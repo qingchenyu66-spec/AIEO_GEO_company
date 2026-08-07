@@ -17,6 +17,31 @@ def test_split_section_pack_parts_by_h3() -> None:
     assert "<h3>B</h3>" in parts[2]
 
 
+def test_split_section_pack_parts_by_blocks() -> None:
+    body = (
+        "<p class='sub'>intro</p>"
+        "<div class=\"score-grid\">s</div>"
+        "<table><tr><td>t</td></tr></table>"
+        "<div class=\"evidence-grid\"><article class=\"evidence-card\">e</article></div>"
+    )
+    parts = _split_section_pack_parts(body)
+    assert len(parts) == 4
+    assert "score-grid" in parts[1]
+    assert parts[2].startswith("<table")
+    assert "evidence-grid" in parts[3]
+
+
+def test_coalesce_h3_with_following_table() -> None:
+    body = (
+        "<h3>品牌提及率趋势</h3><p class='sub'>c</p><svg></svg>"
+        "<h3>问题词成绩榜</h3><p class='sub'>s</p>"
+        "<table><tr><td>1</td></tr></table>"
+    )
+    parts = _split_section_pack_parts(body)
+    assert any("问题词成绩榜" in p and "<table" in p for p in parts)
+    assert not any(p.strip().endswith("</p>") and "问题词成绩榜" in p and "<table" not in p for p in parts)
+
+
 def test_extract_completion_deck_sections() -> None:
     html = """
     <html><body><main>
