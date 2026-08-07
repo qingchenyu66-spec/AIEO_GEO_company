@@ -989,9 +989,10 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
         return build_period_deck_html(db, payload, tenant_id=tenant_id, embed_assets=False)
 
     if report_type == "completion":
-        from app.services.report_completion_html_service import build_completion_report_html
+        # 2026-08-07 - 结项预览改周报 16:9 母版，章节从完整版整包抽出
+        from app.services.report_period_deck_pdf_service import build_completion_deck_html
 
-        return build_completion_report_html(payload, platform_names)
+        return build_completion_deck_html(payload, platform_names, embed_assets=False)
 
     if report_type == "diagnosis":
         from app.services.report_molizhishu_html_service import build_molizhishu_html
@@ -1012,6 +1013,7 @@ def report_preview_html_path(report_id: int) -> Path:
 def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
     """预览与导出共用：报告更新时间 / 状态 / 主题变化即失效旧缓存。"""
     from app.services.report_period_deck_context_service import PERIOD_DECK_PIPELINE
+    from app.services.report_completion_html_service import COMPLETION_DECK_PIPELINE
 
     raw = "|".join(
         [
@@ -1025,7 +1027,7 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
                 PERIOD_DECK_PIPELINE
                 if str(report.get("report_type") or "")
                 in {"weekly", "monthly", "quarterly", "annual"}
-                else "completion-pack-v10"
+                else COMPLETION_DECK_PIPELINE
                 if str(report.get("report_type") or "") == "completion"
                 else "diag-pack-v1"
             ),
@@ -1120,6 +1122,18 @@ def build_report_export(
             raise ValueError("周期报告 PDF 导出需要数据库会话")
         # 2026-07-28 - 周期 PDF 改监测幻灯截图；旧 A4 build_period_report_pdf 保留未删
         # 2026-07-29 - 传入原始 report（含 id/updated_at），复用预览 HTML 落盘缓存
+        from app.services.report_period_deck_pdf_service import build_period_deck_pdf
+
+        tenant_id = int(report.get("tenant_id") or 0)
+        if tenant_id <= 0:
+            raise ValueError("报告缺少 tenant_id")
+        content = build_period_deck_pdf(db, report, tenant_id=tenant_id, theme=theme)
+        mime = "application/pdf"
+        suffix = "pdf"
+    elif export_format == "pdf" and report_type == "completion":
+        # 2026-08-07 - 结项 PDF 与预览同走监测幻灯逐页截图（不再 Premium A4）
+        if db is None:
+            raise ValueError("结项报告 PDF 导出需要数据库会话")
         from app.services.report_period_deck_pdf_service import build_period_deck_pdf
 
         tenant_id = int(report.get("tenant_id") or 0)

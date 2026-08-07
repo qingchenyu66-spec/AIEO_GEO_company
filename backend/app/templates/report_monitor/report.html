@@ -54,6 +54,21 @@
             </div>
         </section>
 
+        {% if completion_mode %}
+        {# 2026-08-07 - 结项整包进周报母版：封面 + 原 §01–09 幻灯 + 致谢 #}
+        {% for sec in completion_sections %}
+        <section class="slide slide--light" data-pack="1" data-merge-group="completion-{{ loop.index }}">
+            <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
+            <h2 class="slide-title">{{ sec.title }}</h2>
+            <div class="overlay light-content pack-body slide-body--dense completion-deck-body">
+                {% for part in sec.parts %}
+                <div class="pack-item">{{ part | safe }}</div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endfor %}
+        {% else %}
+
         <section class="slide slide--dark">
             <img class="master-bg" src="{{ monitor_assets.dark }}" alt="" loading="lazy" decoding="async">
             {# 2026-07-29 - 核心指标页「本期核心表现」冗余 - 去掉副标题，只留环比主标题 #}
@@ -150,18 +165,16 @@
         </section>
 
         {% if has_tail %}
+        {% for part in tail_parts %}
         <section class="slide slide--light" data-pack="1" data-merge-group="tail">
             <img class="master-bg" src="{{ monitor_assets.light }}" alt="" loading="lazy" decoding="async">
-            <h2 class="slide-title">{{ tail_title }}</h2>
+            <h2 class="slide-title">{{ tail_part_titles[loop.index0] if tail_part_titles else tail_title }}</h2>
             <p class="slide-subtitle">{{ tail_subtitle }}</p>
-            <div class="overlay light-content pack-body">
-                {% for part in tail_parts %}
-                <div class="pack-item">{{ part | safe }}</div>
-                {% else %}
-                <div class="pack-item">{{ tail_html | safe }}</div>
-                {% endfor %}
+            <div class="overlay light-content pack-body slide-body--dense">
+                <div class="pack-item opt-pack-item">{{ part | safe }}</div>
             </div>
         </section>
+        {% endfor %}
         {% endif %}
 
         {% if has_disclaimer %}
@@ -173,6 +186,7 @@
                 {{ disclaimer_html | safe }}
             </div>
         </section>
+        {% endif %}
         {% endif %}
 
         <section class="slide slide--thanks">

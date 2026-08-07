@@ -1756,6 +1756,126 @@ table thead th {
     align-items: start;
 }
 
+.custom-opt-section {
+    margin: 0;
+}
+
+.custom-opt-block + .custom-opt-block {
+    margin-top: 22px;
+}
+
+.custom-opt-block .opt-section-title {
+    margin: 0 0 14px;
+}
+
+/* 2026-08-06 - 优化 tail 节名已在 slide-title 蓝条，正文 h3 与（续）页重复 */
+.slide[data-merge-group="tail"] .opt-section-title {
+    display: none;
+}
+
+/* 2026-08-06 - 残留 peel「（续）」标题一律隐藏 */
+.slide[data-merge-group="tail"] .block-title {
+    display: none;
+}
+
+.custom-opt-block .opt-list {
+    margin: 8px 0 0;
+    padding-left: 36px;
+}
+
+.custom-opt-block .opt-list li {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.opt-table-wrap {
+    margin-top: 12px;
+    /* 2026-08-06 - hidden 会裁切首列末字（拉齐） */
+    overflow: visible;
+}
+
+.opt-table td,
+.opt-table th {
+    vertical-align: middle;
+    word-break: break-word;
+    line-height: 1.45;
+    overflow: visible;
+}
+
+/* 2026-08-06 - 已有词组首列拉齐，避免末字被裁半截 */
+.opt-table td:first-child,
+.opt-table th:first-child {
+    white-space: nowrap;
+    word-break: keep-all;
+}
+
+/* 2026-08-06 - 对齐 Word 原表：细线、浅蓝表头、无圆角阴影、首列 rowspan */
+.opt-table--doc {
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    border: 1px solid #a8b8c8 !important;
+    background: #ffffff;
+}
+
+.opt-table--doc thead th {
+    background: #d6eaf8 !important;
+    color: #1a334d !important;
+    font-weight: 700;
+    text-align: center;
+    border: 1px solid #a8b8c8 !important;
+    padding: 12px 14px !important;
+}
+
+.opt-table--doc tbody td {
+    background: #ffffff !important;
+    border: 1px solid #a8b8c8 !important;
+    padding: 12px 14px !important;
+    vertical-align: middle;
+}
+
+.opt-table--doc tbody tr:nth-child(even) td,
+.opt-table--doc tbody tr:nth-child(odd) td {
+    background: #ffffff !important;
+}
+
+.opt-table--doc .opt-col-dir {
+    text-align: center;
+    font-weight: 700;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.opt-table--doc .opt-col-kw {
+    text-align: left;
+    vertical-align: top;
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.55;
+}
+
+.opt-table--doc .opt-col-reason,
+.opt-table--doc .opt-col-tip {
+    text-align: left;
+    vertical-align: middle;
+    white-space: normal;
+}
+
+.opt-table--keywords .opt-col-dir {
+    width: 12%;
+}
+
+.opt-table--keywords .opt-col-kw {
+    width: 22%;
+}
+
+.opt-table--keywords .opt-col-reason,
+.opt-table--keywords .opt-col-tip {
+    width: 33%;
+}
+
 .strategy-grid,
 .plan-grid {
     display: grid;
@@ -1950,3 +2070,145 @@ table thead th {
     white-space: normal;
 }
 
+
+/* 2026-08-07 - 结项章节塞进周报 light 页：压缩字号与网格，避免 16:9 溢出 */
+.completion-deck-body {
+    --navy: #062348;
+    --blue: #1d6bff;
+    --teal: #16c7b7;
+    --muted: #637899;
+    --line: #dce8f5;
+    color: var(--navy);
+    font-size: 22px;
+    line-height: 1.45;
+}
+.completion-deck-body .sub,
+.completion-deck-body p.sub {
+    color: var(--muted);
+    font-size: 20px;
+    line-height: 1.5;
+    margin: 0 0 14px;
+}
+.completion-deck-body h3 {
+    font-size: 24px;
+    margin: 16px 0 10px;
+    color: #0b3a66;
+}
+.completion-deck-body .grid4,
+.completion-deck-body .score-grid,
+.completion-deck-body .cmp-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 10px 0 16px;
+}
+.completion-deck-body .grid3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+.completion-deck-body .grid2,
+.completion-deck-body .deliver-grid,
+.completion-deck-body .toc {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.completion-deck-body .kpi,
+.completion-deck-body .score-card,
+.completion-deck-body .cmp-card,
+.completion-deck-body .deliver-card,
+.completion-deck-body .toc div,
+.completion-deck-body .scope-panel,
+.completion-deck-body .evidence-card,
+.completion-deck-body .note,
+.completion-deck-body .hero-result {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.82);
+}
+.completion-deck-body .kpi span,
+.completion-deck-body .score-card span,
+.completion-deck-body .cmp-title {
+    display: block;
+    color: var(--muted);
+    font-size: 16px;
+}
+.completion-deck-body .kpi b,
+.completion-deck-body .score-card b,
+.completion-deck-body .cmp-col strong {
+    display: block;
+    font-size: 28px;
+    margin: 6px 0 4px;
+    color: #061d3d;
+}
+.completion-deck-body .kpi em,
+.completion-deck-body .score-card em,
+.completion-deck-body .cmp-delta {
+    font-style: normal;
+    color: #057961;
+    font-size: 15px;
+}
+.completion-deck-body table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    font-size: 18px;
+}
+.completion-deck-body th,
+.completion-deck-body td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #e8f0f8;
+    vertical-align: top;
+}
+.completion-deck-body th {
+    background: #f3f8fe;
+    color: #46617f;
+    font-weight: 600;
+}
+.completion-deck-body .tag,
+.completion-deck-body .scope-tag,
+.completion-deck-body .risk-tag {
+    display: inline-flex;
+    margin: 3px 4px 3px 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 15px;
+    background: #edfdf8;
+    border: 1px solid #b9eedf;
+    color: #057961;
+}
+.completion-deck-body .evidence-card p {
+    max-height: 120px;
+    overflow: hidden;
+    font-size: 18px;
+    line-height: 1.45;
+}
+.completion-deck-body .bar-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 80px;
+    gap: 10px;
+    align-items: center;
+    margin: 8px 0;
+    font-size: 18px;
+}
+.completion-deck-body .bar-track {
+    height: 10px;
+    background: #eaf1f8;
+    border-radius: 999px;
+    overflow: hidden;
+}
+.completion-deck-body .bar-track i {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+}
+.completion-deck-body .line-chart {
+    width: 100%;
+    height: auto;
+    max-height: 280px;
+}

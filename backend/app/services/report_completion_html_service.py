@@ -2,12 +2,17 @@
 
 2026-08-04 - 收编桌面「生产数据完整版」骨架；成绩样本改本品牌先露出，竞品领先进挑战区
 2026-08-04 - 「结果完整度」改称任务回填完整度，不放成绩总览主 KPI
+2026-08-07 - 结项改走监测周报 16:9 母版；正文章节整包进幻灯，不砍 completion 内容
 """
 
 from __future__ import annotations
 
 import html
+import re
 from typing import Any
+
+# 2026-08-07 - 结项进监测幻灯后刷预览/导出指纹
+COMPLETION_DECK_PIPELINE = "completion-deck-v1"
 
 
 def _text(value: Any, fallback: str = "-") -> str:
@@ -780,3 +785,81 @@ ul.clean{{list-style:none;padding:0;margin:0;display:grid;gap:8px}} ul.clean li{
 </main>
 </body>
 </html>"""
+
+
+def _split_section_pack_parts(body_html: str) -> list[str]:
+    """按 h3 拆成 pack-item，便于 deck_pack 分页；无 h3 则整段一块。"""
+    text = (body_html or "").strip()
+    if not text:
+        return []
+    chunks = re.split(r"(?=<h3\b)", text, flags=re.I)
+    parts = [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
+    return parts or [text]
+
+
+def extract_completion_deck_sections(full_html: str) -> list[dict[str, Any]]:
+    """从完整版结项 HTML 抽出各 section，供周报母版逐页渲染。"""
+    sections: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"<section\s+class=\"section\">(.*?)</section>",
+        full_html or "",
+        flags=re.I | re.S,
+    ):
+        inner = match.group(1)
+        title_m = re.search(r"<h2[^>]*>(.*?)</h2>", inner, flags=re.I | re.S)
+        raw_title = re.sub(r"<[^>]+>", "", title_m.group(1) if title_m else "").strip()
+        title = html.unescape(raw_title) or "章节"
+        body = re.sub(r"<h2[^>]*>.*?</h2>", "", inner, count=1, flags=re.I | re.S).strip()
+        parts = _split_section_pack_parts(body)
+        if not parts:
+            continue
+        sections.append({"title": title, "parts": parts})
+    return sections
+
+
+def build_completion_deck_meta(
+    payload: dict[str, Any],
+    platform_names: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """封面/竞品/平台条：与周报 cover 同槽。"""
+    platform_names = platform_names or {}
+    brand_name = str(payload.get("brand_name") or payload.get("company_name") or "客户企业")
+    period_label = str(payload.get("period_label") or "服务周期")
+    generated_at = str(payload.get("generated_at") or "")[:16].replace("T", " ")
+    pack = dict(payload.get("completion_pack") or {})
+    competitors = pack.get("competitors") or payload.get("competitors") or []
+    names: list[str] = []
+    for item in competitors if isinstance(competitors, list) else []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("brand_name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name:
+            names.append(name)
+    platform_scope = list(pack.get("platform_scope") or [])
+    platform_codes = [
+        str(row.get("platform") or "").strip()
+        for row in platform_scope
+        if str(row.get("platform") or "").strip()
+    ]
+    if not platform_codes:
+        for row in list(pack.get("platform_stats") or payload.get("platform_stats") or []):
+            code = str((row or {}).get("platform") or "").strip()
+            if code:
+                platform_codes.append(code)
+    chip_names = [platform_names.get(code) or code for code in platform_codes]
+    # 与周报 cover 一致：每行最多 4 个 chip
+    rows: list[list[str]] = []
+    for i in range(0, len(chip_names), 4):
+        rows.append(chip_names[i : i + 4])
+    if not rows:
+        rows = [["—"]]
+    return {
+        "page_title": f"{brand_name} · 项目结项报告",
+        "brand_name": brand_name,
+        "type_label": "项目结项报告",
+        "period_range": period_label,
+        "generated_at": generated_at or "—",
+        "competitor_text": "、".join(names) if names else "—",
+        "platform_chip_rows": rows,
+    }

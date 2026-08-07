@@ -212,10 +212,9 @@ def build_period_deck_context(
 
     type_label = TYPE_LABELS.get(report_type, "GEO 监测报告")
     generated_at = generated.strftime("%Y-%m-%d")
-    prev_scope = _prev_period_scope(report_type)
-    # 2026-07-29 - 条目8：KPI/词/竞品/平台副标题按周月季年换「上周/上月…」
-    kpi_slide_title = f"核心指标 · 环比{prev_scope}"
-    ring_subtitle = f"环比{prev_scope}"
+    # 2026-08-06 - 幻灯主/副标题去掉「环比上月」等前缀口径
+    kpi_slide_title = "核心指标"
+    ring_subtitle = ""
 
     trend_raw = (
         render_trend_html(trend, echarts_src="", presentation=True) if (trend.get("points")) else ""
@@ -279,6 +278,7 @@ def build_period_deck_context(
 
     # 2026-07-29 - 条目2：tail 拆多 pack-item，避免整块超高被 overflow 裁切
     tail_parts: list[str] = []
+    tail_part_titles: list[str] = []
     if report_type == "weekly":
         weekly_html = _drop_echarts_src(
             _strip_h2(_strip_outer_section(render_weekly_focus_html(content_modules, client=True)))
@@ -289,19 +289,25 @@ def build_period_deck_context(
             tail_parts.append(weekly_html)
         tail_title = "本周关注"
     else:
-        for frag in (
-            render_source_influence_html(
-                content_modules.get("source_influence") or {}, presentation=True
-            ),
-            render_risk_strategy_html(content_modules.get("risk_and_strategy") or {}, client=True),
-            render_action_plan_html(content_modules.get("action_plan"), client=True),
-        ):
-            cleaned = _drop_echarts_src(_strip_h2(_strip_outer_section(frag)))
-            # 2026-08-03 - 幻灯 CSS 隐藏 plan-note 但仍被 pack 单独分页 → 空页；与周报一致 strip
-            cleaned = re.sub(r'<p\s+class="note plan-note">.*?</p>\s*', "", cleaned, flags=re.I | re.S)
-            if cleaned.strip():
-                tail_parts.append(cleaned)
-        tail_title = "信源与优化建议"
+        from app.services.report_custom_optimization_service import (
+            optimization_part_slide_title,
+            optimization_parts_from_modules,
+        )
+
+        custom_parts = optimization_parts_from_modules(content_modules)
+        if custom_parts:
+            # 2026-08-06 - 客户定制优化建议 docx → 原 tail 位，按 pack-item 拆页
+            tail_parts = [_drop_echarts_src(_strip_h2(_strip_outer_section(p))) for p in custom_parts]
+            tail_title = "优化建议"
+            tail_part_titles = [optimization_part_slide_title(p, tail_title) for p in tail_parts]
+        else:
+            tail_parts = []
+            tail_title = ""
+            tail_part_titles = []
+    if report_type == "weekly" and tail_parts:
+        tail_part_titles = [tail_title] * len(tail_parts)
+    elif report_type != "weekly" and not tail_parts:
+        tail_part_titles = []
     tail_html = "".join(tail_parts)
 
     disclaimer_html = _strip_h2(
@@ -351,11 +357,14 @@ def build_period_deck_context(
         "platform_html": _platform_table_html(comparison),
         "platform_subtitle": ring_subtitle,
         "tail_title": tail_title,
-        "tail_subtitle": "落地建议",
+        "tail_subtitle": "",
         "tail_html": tail_html,
         "tail_parts": tail_parts,
+        "tail_part_titles": tail_part_titles,
         "has_tail": bool(tail_parts),
         "disclaimer_html": disclaimer_html,
         "disclaimer_subtitle": "数据口径说明",
         "has_disclaimer": bool(disclaimer_html.strip()),
+        "completion_mode": False,
+        "completion_sections": [],
     }

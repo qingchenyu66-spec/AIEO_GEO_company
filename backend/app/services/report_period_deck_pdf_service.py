@@ -253,6 +253,84 @@ def render_period_deck_html_from_bundle(
         # 预览禁用 file:// @font-face（blob 加载不了，还会干扰缓存判定）
         context["font_face_css"] = ""
     context["monitor_assets"] = assets
+    context.setdefault("completion_mode", False)
+    context.setdefault("completion_sections", [])
+    return _jinja_env().get_template("report.html").render(**context)
+
+
+def build_completion_deck_html(
+    payload: dict[str, Any],
+    platform_names: dict[str, str] | None = None,
+    *,
+    embed_assets: bool = True,
+) -> str:
+    """结项报告：周报 16:9 母版 + 现有结项正文章节整包入幻灯。"""
+    # 2026-08-07 - 结项改用监测周报模板，内容从完整版 HTML 抽出不砍块
+    from app.services.report_completion_html_service import (
+        COMPLETION_DECK_PIPELINE,
+        build_completion_deck_meta,
+        build_completion_report_html,
+        extract_completion_deck_sections,
+    )
+    from app.services.report_premium_font_service import build_font_face_css
+
+    platform_names = platform_names or {}
+    full_html = build_completion_report_html(payload, platform_names)
+    sections = extract_completion_deck_sections(full_html)
+    meta = build_completion_deck_meta(payload, platform_names)
+    if embed_assets:
+        assets = _monitor_asset_urls()
+        font_css = build_font_face_css()
+    else:
+        assets = _monitor_asset_http_urls()
+        font_css = ""
+    context = {
+        "page_title": meta["page_title"],
+        "font_face_css": font_css,
+        "pipeline": COMPLETION_DECK_PIPELINE,
+        "brand_name": meta["brand_name"],
+        "type_label": meta["type_label"],
+        "period_range": meta["period_range"],
+        "generated_at": meta["generated_at"],
+        "competitor_text": meta["competitor_text"],
+        "platform_chip_rows": meta["platform_chip_rows"],
+        "monitor_assets": assets,
+        "completion_mode": True,
+        "completion_sections": sections,
+        "echarts_inline": "",
+        "echarts_src": "",
+        # 非结项分支占位，避免模板缺变量
+        "kpi_slide_title": "",
+        "kpi_html": "",
+        "sample_meta_html": "",
+        "conclusions_html": "",
+        "preface_html": "",
+        "preface_subtitle": "",
+        "has_trend": False,
+        "trend_subtitle": "",
+        "trend_head_html": "",
+        "trend_table_html": "",
+        "keyword_html": "",
+        "keyword_subtitle": "",
+        "has_matrix": False,
+        "matrix_html": "",
+        "matrix_subtitle": "",
+        "competitor_html": "",
+        "competitor_head_html": "",
+        "competitor_actions_html": "",
+        "competitor_table_html": "",
+        "competitor_subtitle": "",
+        "platform_html": "",
+        "platform_subtitle": "",
+        "has_tail": False,
+        "tail_parts": [],
+        "tail_part_titles": [],
+        "tail_title": "",
+        "tail_subtitle": "",
+        "has_disclaimer": False,
+        "disclaimer_html": "",
+        "disclaimer_subtitle": "",
+    }
     return _jinja_env().get_template("report.html").render(**context)
 
 
