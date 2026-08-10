@@ -1260,6 +1260,12 @@ def build_source_analysis_summary(
     asset = get_brand_asset(db, resolved)
     exposure = brand_exposure_terms(asset, active_keyword_groups(db, resolved))
     purchased = set(tenant_purchased_platforms(db, resolved, asset))
+    # 2026-08-07 - 观察号信源聚合限 kimi/元宝
+    from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
+
+    allow = observer_platforms_for_session(current)
+    if allow is not None:
+        purchased = set(narrow_platform_codes(purchased, allow))
     bundle = get_customer_source_stats_bundle(
         db,
         resolved,
@@ -1275,6 +1281,8 @@ def build_source_analysis_summary(
             since = (datetime.now().date() - timedelta(days=30))
             rows = aggregate_platform_stats(db, tenant_ids=[resolved], since=since)
             if rows:
+                if allow is not None:
+                    rows = [row for row in rows if str(row.get("platform") or "") in allow]
                 platform_stats = sort_platform_items(rows)
     except Exception:
         logger.exception("source analysis platform_stats failed tenant_id=%s", resolved)
@@ -3611,10 +3619,21 @@ def ranking_matrix(
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, resolved_tenant_id)
     purchased_platforms = tenant_purchased_platforms(db, resolved_tenant_id, asset) if asset else []
+    # 2026-08-07 - 观察号矩阵列仅 kimi/元宝
+    from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
+
+    purchased_platforms = narrow_platform_codes(
+        purchased_platforms,
+        observer_platforms_for_session(current),
+    )
     daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
     selected_platform = None if all_platforms else platform_filter
+    allow = observer_platforms_for_session(current)
+    if selected_platform and allow is not None and selected_platform not in allow:
+        selected_platform = None
+        all_platforms = True
 
     # 快路径：按 schedule_key 业务日取 task，避免 45 天宽窗扫 2000 条
     range_start_day = range_start.date()
@@ -4207,6 +4226,7 @@ def _workspace_brief_from_daily_stats(
 ) -> dict[str, Any]:
     """ponytail: 日统计快路径 + 词热度/词×平台轻量聚合；不含快照/信源。"""
     from app.services.monitor_stats_service import (
+        filter_daily_stat_rows_by_platforms,
         list_daily_stats_for_tenant,
         platform_bucket_from_stat_rows,
         workspace_kpi_trends_from_stats,
@@ -4214,11 +4234,15 @@ def _workspace_brief_from_daily_stats(
     )
 
     daily_stat_by_day: dict[str, list] = {}
-    for row in list_daily_stats_for_tenant(
-        db,
-        tenant_id,
-        since=trend_start.date(),
-        until=range_end.date(),
+    for row in filter_daily_stat_rows_by_platforms(
+        list_daily_stats_for_tenant(
+            db,
+            tenant_id,
+            since=trend_start.date(),
+            until=range_end.date(),
+        ),
+        # 2026-08-07 - 本期结论/趋势按 purchased（观察号已收窄为 kimi/元宝）重算
+        purchased_platforms,
     ):
         daily_stat_by_day.setdefault(row.stat_date.isoformat(), []).append(row)
 
@@ -4306,7 +4330,13 @@ def _workspace_brief_from_daily_stats(
         )
         for code in purchased_platforms
     ]
-    kpi_trends = workspace_kpi_trends_from_stats(db, tenant_id, trend_start, trend_end)
+    kpi_trends = workspace_kpi_trends_from_stats(
+        db,
+        tenant_id,
+        trend_start,
+        trend_end,
+        platforms=purchased_platforms,
+    )
 
     plan = schedule_plan_summary(asset)
     schedule_times = plan.get("schedule_times") or []
@@ -5429,6 +5459,14 @@ def workspace_brief(
         ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
         purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
 
+    # 2026-08-07 - 观察号工作台口径只含 kimi/元宝
+    from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
+
+    purchased_platforms = narrow_platform_codes(
+        purchased_platforms,
+        observer_platforms_for_session(current),
+    )
+
     from app.services.monitor_stats_service import has_daily_stats
 
     # 日预聚合仅含 geo；品牌词必须走原始子任务路径
@@ -5462,6 +5500,7 @@ def workspace_brief(
     purchased_set = set(purchased_platforms)
 
     from app.services.monitor_stats_service import (
+        filter_daily_stat_rows_by_platforms,
         has_daily_stats,
         list_daily_stats_for_tenant,
         platform_bucket_from_stat_rows,
@@ -5473,11 +5512,14 @@ def workspace_brief(
     daily_stat_by_day: dict[str, list] = {}
     trend_span_days = (trend_end.date() - trend_start.date()).days + 1
     if use_daily_stats:
-        for row in list_daily_stats_for_tenant(
-            db,
-            tenant_id,
-            since=trend_start.date(),
-            until=range_end.date(),
+        for row in filter_daily_stat_rows_by_platforms(
+            list_daily_stats_for_tenant(
+                db,
+                tenant_id,
+                since=trend_start.date(),
+                until=range_end.date(),
+            ),
+            purchased_platforms,
         ):
             daily_stat_by_day.setdefault(row.stat_date.isoformat(), []).append(row)
 
@@ -5746,7 +5788,13 @@ def workspace_brief(
         for code in purchased_platforms
     ]
     kpi_trends = (
-        workspace_kpi_trends_from_stats(db, tenant_id, trend_start, trend_end)
+        workspace_kpi_trends_from_stats(
+            db,
+            tenant_id,
+            trend_start,
+            trend_end,
+            platforms=purchased_platforms,
+        )
         if use_daily_stats and daily_stat_by_day
         else _build_workspace_kpi_trends(daily_ranking, daily_exposure, trend_start, trend_end)
     )

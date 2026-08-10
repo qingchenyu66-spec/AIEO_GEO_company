@@ -150,7 +150,7 @@ def workspace_brief_cache_key(
     end_key = end_date or "default"
     scope_key = scope if scope in ("full", "summary") else "full"
     purpose_key = purpose if purpose in ("geo", "brand_word") else "geo"
-    return f"monitor:workspace-brief:v12:{tenant_id}:{start_key}:{end_key}:{scope_key}:{purpose_key}"
+    return f"monitor:workspace-brief:v13:{tenant_id}:{start_key}:{end_key}:{scope_key}:{purpose_key}"
 
 
 def celery_monitor_cache_key() -> str:

@@ -932,6 +932,10 @@ def build_brand_analysis_dashboard(
         or "监测品牌"
     )
     purchased = _purchased_platforms_for_brand_words(db, resolved)
+    # 2026-08-07 - 观察号品牌分析仅 kimi/元宝
+    from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
+
+    purchased = narrow_platform_codes(purchased, observer_platforms_for_session(current))
     purchased_set = set(purchased)
     names = _platform_name_map()
 

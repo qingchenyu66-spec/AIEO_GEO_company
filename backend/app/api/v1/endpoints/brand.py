@@ -80,9 +80,14 @@ def brand_asset(
         competitors = list_competitors(db, resolved_tenant_id)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="brand.asset")
+    # 2026-08-07 - 观察号读资产时收窄平台展示，勿改库内已购全集
+    from app.services.observer_account import observer_platforms_for_session, scope_asset_platforms_dict
+
+    asset_payload = asset_to_dict(asset, keyword_groups, brand_word_groups)
+    asset_payload = scope_asset_platforms_dict(asset_payload, observer_platforms_for_session(current))
     return ApiResponse(data={
         "tenant_id": resolved_tenant_id,
-        "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
+        "asset": asset_payload,
         "competitors": [competitor_to_dict(item) for item in competitors],
     })
 

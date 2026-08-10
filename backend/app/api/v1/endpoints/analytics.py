@@ -31,6 +31,7 @@ from app.services.sentiment_keyword_service import build_sentiment_keywords
 from app.services.sentiment_wordcloud_image_service import generate_sentiment_wordcloud_image
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.services.menu_permission_service import has_identity_menu_permission
+from app.services.observer_account import clamp_platform_query
 
 from app.core.chinese_stop_words import WORDCLOUD_STOP_WORDS
 
@@ -103,6 +104,8 @@ def sentiment_keywords(
     """品牌情绪词——按正/负面回答提取短语，供词云展示与快照下钻。"""
     try:
         resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        # 2026-08-07 - 观察号强制 kimi/元宝，再进缓存键
+        platform, platforms = clamp_platform_query(current, platform, platforms)
         cache_key = sentiment_keywords_cache_key(
             current.identity.identity_type,
             resolved_tenant_id,
@@ -112,7 +115,7 @@ def sentiment_keywords(
             start_date=start_date.isoformat() if start_date else None,
             end_date=end_date.isoformat() if end_date else None,
             # 2026-07-31 - S3 邻近窗口+短语极性上线，旧缓存键失效
-            prompt=f"{prompt or 'all'}|llm={int(llm)}|v=s3b",
+            prompt=f"{prompt or 'all'}|llm={int(llm)}|v=s3d",
             limit=limit,
         )
 
@@ -176,6 +179,8 @@ def competitor_compare(
     """品牌洞察——提及率/排名/情绪趋势及竞品对比。"""
     try:
         resolved_tenant_id = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        # 2026-08-07 - 观察号强制 kimi/元宝，再进缓存键
+        platform, platforms = clamp_platform_query(current, platform, platforms)
         cache_tenant = resolved_tenant_id if resolved_tenant_id is not None else "platform"
         cache_key = competitor_compare_cache_key(
             current.identity.identity_type,

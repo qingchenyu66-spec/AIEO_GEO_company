@@ -444,8 +444,28 @@ let monitorSummaryInflight: Promise<MonitorSummary> | null = null
 let monitorSummaryInflightKey: string | null = null
 const MONITOR_SUMMARY_TTL_MS = 60_000
 
+/** 读缓存必须区分账号，否则观察号会吃到同企业主账号的全平台 brief。 */
+function portalSessionCacheScope() {
+  try {
+    const raw = localStorage.getItem('geo-auth-session')
+    if (!raw) return 'anon'
+    const session = JSON.parse(raw) as {
+      user?: { id?: number; username?: string }
+      identity?: { id?: number }
+    }
+    const userId = session?.user?.id ?? ''
+    const identityId = session?.identity?.id ?? ''
+    const username = String(session?.user?.username || '').trim()
+    return `${userId}:${identityId}:${username || '-'}`
+  } catch {
+    return 'anon'
+  }
+}
+
 export function invalidateMonitorSummaryCache() {
   monitorSummaryCache = null
+  monitorSummaryInflight = null
+  monitorSummaryInflightKey = null
 }
 
 export async function getMonitorSummary(
@@ -454,7 +474,8 @@ export async function getMonitorSummary(
   config?: GeoHttpRequestConfig,
 ): Promise<MonitorSummary> {
   const now = Date.now()
-  const cacheKey = tenantId ? `t:${tenantId}` : 'default'
+  // 2026-08-07 - summary 缓存按账号隔离，避免观察号串主账号数据
+  const cacheKey = `${portalSessionCacheScope()}|${tenantId ? `t:${tenantId}` : 'default'}`
   if (!force && monitorSummaryCache && monitorSummaryCache.key === cacheKey && monitorSummaryCache.expiresAt > now) {
     return monitorSummaryCache.data
   }
@@ -505,7 +526,9 @@ let workspaceBriefInflight: Promise<WorkspaceBrief> | null = null
 let workspaceBriefInflightKey: string | null = null
 
 function workspaceBriefCacheKey(params?: WorkspaceBriefQuery) {
+  // 2026-08-07 - 缓存键缺账号时，观察号会复用同企业主账号 45s 内的全平台数据
   return [
+    portalSessionCacheScope(),
     params?.tenant_id ?? 'self',
     params?.start_date || '',
     params?.end_date || '',
@@ -517,6 +540,14 @@ function workspaceBriefCacheKey(params?: WorkspaceBriefQuery) {
 
 export function invalidateWorkspaceBriefCache() {
   workspaceBriefCacheMap.clear()
+  workspaceBriefInflight = null
+  workspaceBriefInflightKey = null
+}
+
+/** 登录/切身份/登出时清掉门户读缓存，避免串号。 */
+export function invalidatePortalMonitorReadCaches() {
+  invalidateMonitorSummaryCache()
+  invalidateWorkspaceBriefCache()
 }
 
 function readWorkspaceBriefCache(key: string, now: number) {

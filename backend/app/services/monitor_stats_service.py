@@ -54,7 +54,6 @@ def _is_transient_daily_stat_conflict(exc: BaseException) -> bool:
     return False
 
 
-
 def _schedule_window_date(schedule_ctx: dict[str, Any] | None) -> date | None:
     window_key = str((schedule_ctx or {}).get("schedule_window_key") or "").strip()
     if len(window_key) >= 8 and window_key[:8].isdigit():
@@ -348,7 +347,6 @@ def _rebuild_daily_stat_for_platform_day(
         raise last_exc
 
 
-
 def refresh_stats_for_task(db: Session, task_id: str) -> None:
     """同步完成后，按任务子项刷新日统计（幂等重建该任务涉及检测日）。"""
     task = db.scalar(
@@ -591,6 +589,19 @@ def workspace_metrics_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[st
     }
 
 
+def filter_daily_stat_rows_by_platforms(
+    rows: list[GeoMonitorDailyStat],
+    platforms: list[str] | set[str] | frozenset[str] | None,
+) -> list[GeoMonitorDailyStat]:
+    """按平台白名单过滤日统计行；platforms 空/None 表示不过滤。"""
+    if not platforms:
+        return list(rows)
+    allow = {str(code).strip() for code in platforms if str(code).strip()}
+    if not allow:
+        return list(rows)
+    return [row for row in rows if str(row.platform or "").strip() in allow]
+
+
 def period_bucket_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[str, int | float | None]:
     """周期报告趋势桶：与 _aggregate_bucket 字段对齐；无样本时率类为 None。"""
     metrics = workspace_metrics_from_stat_rows(rows)
@@ -615,6 +626,8 @@ def workspace_kpi_trends_from_stats(
     tenant_id: int,
     range_start: datetime,
     range_end: datetime,
+    *,
+    platforms: list[str] | set[str] | frozenset[str] | None = None,
 ) -> list[dict[str, int | str | float | None]]:
     rows = list_daily_stats_for_tenant(
         db,
@@ -622,6 +635,8 @@ def workspace_kpi_trends_from_stats(
         since=range_start.date(),
         until=range_end.date(),
     )
+    # 2026-08-07 - 观察号趋势按已授权平台重算，勿用全平台日表
+    rows = filter_daily_stat_rows_by_platforms(rows, platforms)
     by_day: dict[str, list[GeoMonitorDailyStat]] = {}
     for row in rows:
         by_day.setdefault(row.stat_date.isoformat(), []).append(row)

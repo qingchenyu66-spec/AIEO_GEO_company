@@ -53,6 +53,7 @@ from app.services.snapshot_backfill_service import (
 )
 from app.services.brand_service import get_brand_asset, keyword_group_to_dict, list_keyword_groups
 from app.services.molizhishu_client import MolizhishuApiError
+from app.services.observer_account import clamp_platform_query, observer_cache_suffix
 from app.services.menu_permission_service import (
     has_identity_menu_permission,
     require_platform_menu_permission,
@@ -243,6 +244,11 @@ def monitor_ranking_matrix(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None
+    # 2026-08-07 - 观察号排名矩阵仅 kimi/元宝
+    platform, _platforms = clamp_platform_query(current, platform, None)
+    if _platforms and not platform:
+        # 多平台白名单时矩阵按「全部已授权」口径，由服务内 purchased 收窄
+        platform = None
     try:
         cache_tenant = (
             scoped_tenant_id
@@ -277,7 +283,7 @@ def monitor_ranking_matrix(
                 monitor_keyword=monitor_keyword,
                 exposure_term=exposure_term,
                 limit_rows=limit_rows,
-            )
+            ) + observer_cache_suffix(current)
 
             def _build() -> dict:
                 return ranking_matrix(
@@ -357,7 +363,8 @@ def monitor_workspace_brief(
 
     start_key = start_date.isoformat() if start_date else None
     end_key = end_date.isoformat() if end_date else None
-    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key, scope, purpose)
+    # 2026-08-07 - 观察号与主账号分缓存，避免平台收窄互相污染
+    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key, scope, purpose) + observer_cache_suffix(current)
     try:
         data = get_or_build_json_cache(
             cache_key,

@@ -374,6 +374,52 @@ def pregenerate_report_exports(report_id: int, *, theme: str = "b") -> list[dict
     return jobs
 
 
+def pregenerate_lead_diagnosis_exports(lead_id: int, *, theme: str = "b") -> list[dict[str, Any]]:
+    """售前诊断 ready 后预热 PDF/HTML（与页面下载按钮一致），复用指纹缓存。
+
+    2026-08-07 - 周期报有预生成、售前没有；补齐同口径，首次下载少等。
+    """
+    from app.models.lead_diagnosis import LeadDiagnosis
+
+    db = SessionLocal()
+    try:
+        row = db.get(LeadDiagnosis, int(lead_id))
+        if row is None or row.deleted or str(row.status or "") != "ready":
+            return []
+        if not row.diagnosis_result_json:
+            return []
+    finally:
+        db.close()
+
+    jobs: list[dict[str, Any]] = []
+    for export_format in ("pdf", "html"):
+        try:
+            jobs.append(
+                start_export_job(
+                    kind="lead_diagnosis",
+                    ref_id=int(lead_id),
+                    export_format=export_format,
+                    owner_user_id=None,
+                    theme=theme,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "pregenerate lead diagnosis export failed lead_id=%s format=%s",
+                lead_id,
+                export_format,
+                exc_info=True,
+            )
+    if jobs:
+        logger.info(
+            "pregenerate lead diagnosis exports lead_id=%s queued=%s cached=%s",
+            lead_id,
+            len(jobs),
+            sum(1 for j in jobs if j.get("cached")),
+        )
+    return jobs
+
+
 def start_export_job(
     *,
     kind: ExportKind,

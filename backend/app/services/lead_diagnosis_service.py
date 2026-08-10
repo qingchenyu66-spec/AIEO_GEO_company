@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -37,7 +38,8 @@ from app.services.report_text_sanitize import consolidate_top_sources, sanitize_
 from app.services.molizhishu_catalog_service import filter_submittable_platforms, get_supported_platform_catalog
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import TERMINAL_STATUSES, submit_standalone_monitor_task
-from app.services.report_export_service import build_report_export
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
@@ -600,6 +602,10 @@ def list_lead_diagnoses(db: Session, current: CurrentSession, *, keyword: str | 
         db,
         {row.created_by_user_id for row in rows if row.created_by_user_id},
     ) if show_creator else {}
+    # 2026-08-07 - 列表「完成轮次」与监测任务对齐，避免不点刷新一直停在一轮
+    for row in rows:
+        if row.status in ACTIVE_STATUSES:
+            _sync_lead_run_statuses_from_tasks(db, row)
     return [
         _serialize_lead(
             row,
@@ -622,6 +628,11 @@ def get_lead_diagnosis(
     lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
+    # 2026-08-07 - 打开详情即回写已完成轮次，勿等手动刷新
+    if lead.status in ACTIVE_STATUSES:
+        _sync_lead_run_statuses_from_tasks(db, lead)
+        maybe_finalize_lead_diagnosis(db, lead_id)
+        lead = _load_lead_diagnosis(db, lead_id) or lead
     show_creator = current is not None and can_view_lead_creator_info(db, current)
     creator = None
     if show_creator and lead.created_by_user_id:
@@ -993,6 +1004,39 @@ def _task_map(db: Session, lead: LeadDiagnosis) -> dict[str, GeoMonitorTask]:
     return {row.task_id: row for row in rows}
 
 
+def _run_status_from_terminal_task(task: GeoMonitorTask) -> tuple[str, str | None]:
+    """监测任务已终态时，推导对应 LeadDiagnosisRun 状态与错误信息。"""
+    if int(task.completed_items or 0) > 0:
+        return "completed", None
+    return "failed", (task.last_error or "监测任务未产生有效结果")
+
+
+def _sync_lead_run_statuses_from_tasks(db: Session, lead: LeadDiagnosis, *, commit: bool = True) -> bool:
+    """把已终态的监测任务回写到 LeadDiagnosisRun.status。
+
+    2026-08-07 - 多轮已抓完页面仍显示一轮：列表/详情只读 run 表，不同步 task；
+    仅手动 /refresh 才对齐。读路径与 Celery finalize 共用此回写。
+    """
+    tasks = _task_map(db, lead)
+    changed = False
+    for run in lead.runs or []:
+        if run.status in RUN_TERMINAL or not run.task_id:
+            continue
+        task = tasks.get(run.task_id)
+        if task is None:
+            continue
+        if task.status not in TERMINAL_STATUSES:
+            continue
+        new_status, err = _run_status_from_terminal_task(task)
+        run.status = new_status
+        if new_status == "failed" and not run.error_message:
+            run.error_message = err
+        changed = True
+    if changed and commit:
+        db.commit()
+    return changed
+
+
 def refresh_lead_diagnosis_runs(
     db: Session,
     lead_id: int,
@@ -1004,21 +1048,7 @@ def refresh_lead_diagnosis_runs(
     lead = _load_lead_diagnosis(db, lead_id)
     if lead is None:
         raise ValueError("售前诊断不存在")
-    tasks = _task_map(db, lead)
-    changed = False
-    for run in lead.runs or []:
-        if run.status in RUN_TERMINAL or not run.task_id:
-            continue
-        task = tasks.get(run.task_id)
-        if task is None:
-            continue
-        if task.status in TERMINAL_STATUSES:
-            run.status = "completed" if task.completed_items > 0 else "failed"
-            if run.status == "failed" and not run.error_message:
-                run.error_message = task.last_error or "监测任务未产生有效结果"
-            changed = True
-    if changed:
-        db.commit()
+    _sync_lead_run_statuses_from_tasks(db, lead)
     maybe_finalize_lead_diagnosis(db, lead_id)
     return get_lead_diagnosis(db, lead_id, current=current)
 
@@ -1079,7 +1109,18 @@ def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
     lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
     lead.status = "ready"
     db.commit()
+    _kick_lead_export_pregenerate(lead_id)
     return True
+
+
+def _kick_lead_export_pregenerate(lead_id: int) -> None:
+    """ready 后异步预热导出；失败不影响主流程。"""
+    try:
+        from app.services.report_export_job_service import pregenerate_lead_diagnosis_exports
+
+        pregenerate_lead_diagnosis_exports(int(lead_id))
+    except Exception as exc:
+        logger.warning("lead diagnosis export pregenerate failed lead_id=%s err=%s", lead_id, exc)
 
 
 def refresh_lead_diagnosis_after_backfill(db: Session, task_id: str) -> None:
@@ -1124,6 +1165,8 @@ def refresh_lead_diagnosis_after_backfill(db: Session, task_id: str) -> None:
         lead.diagnosis_result_json = result
         lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
         db.commit()
+        # 2026-08-07 - 补录重算后结果变了，重新预热导出指纹
+        _kick_lead_export_pregenerate(lead.id)
 
 
 def _load_subtasks_by_task_ids(db: Session, task_ids: list[str]) -> list[GeoMonitorSubtask]:
@@ -1750,6 +1793,7 @@ def import_tenant_lead_diagnosis(
     lead.status = "ready"
     db.commit()
     db.refresh(lead)
+    _kick_lead_export_pregenerate(lead.id)
     return lead
 
 
@@ -1831,6 +1875,8 @@ def finalize_due_lead_diagnoses(db: Session) -> dict[str, Any]:
     )
     finalized = 0
     for lead in rows:
+        # 2026-08-07 - finalize 前先回写 run，否则 task 已完成仍卡在 submitted
+        _sync_lead_run_statuses_from_tasks(db, lead)
         if maybe_finalize_lead_diagnosis(db, lead.id):
             finalized += 1
     return {"finalized": finalized, "checked": len(rows)}

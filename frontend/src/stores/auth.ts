@@ -3,6 +3,7 @@ import {
   loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi,
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
+import { invalidatePortalMonitorReadCaches } from '../services/monitor'
 
 const STORAGE_KEY = 'geo-auth-session'
 
@@ -43,6 +44,8 @@ export const useAuthStore = defineStore('auth', {
   },
   actions: {
     saveSession(session: AuthSession) {
+      // 2026-08-07 - 切账号不清工作台内存缓存会串全平台数据到观察号
+      invalidatePortalMonitorReadCaches()
       this.session = session
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stripToken(session)))
       this.pendingTicket = ''
@@ -83,6 +86,7 @@ export const useAuthStore = defineStore('auth', {
       this.pendingTicket = ''
       this.pendingIdentities = []
       localStorage.removeItem(STORAGE_KEY)
+      invalidatePortalMonitorReadCaches()
     },
   },
 })

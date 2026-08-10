@@ -290,7 +290,7 @@ export function useLeadDiagnosis() {
     if (!selectedId.value || detail.value?.status === 'ready' || detail.value?.status === 'failed') return
     pollTimer = setInterval(() => {
       if (selectedId.value) void refreshSilently(selectedId.value)
-    }, 20000)
+    }, 10000) // 2026-08-07 - 20s 太慢，多轮抓完仍像只完成一轮
   }
 
   async function refreshSilently(id: number) {

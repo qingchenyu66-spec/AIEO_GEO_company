@@ -243,6 +243,13 @@ def normalize_allowed_monitor_platforms(raw: list[str] | None) -> list[str]:
 
 def identity_allowed_monitor_platforms(db: Session, identity: UserIdentity) -> list[str]:
     """会话用：直接读职位平台白名单（按职位不同）；无职位则空。"""
+    # 2026-08-07 - 艾迪亚观察号写死平台白名单 - 优先于职位 JSON，避免空职位漏约束
+    from app.services.observer_account import observer_platforms_for_user_id
+
+    forced = observer_platforms_for_user_id(db, identity.user_id)
+    if forced is not None:
+        return normalize_allowed_monitor_platforms(list(forced))
+
     # 2026-07-30 - 不再用 models.can_update 当大门；白名单即权限
     if not identity.position_id:
         return []
@@ -342,6 +349,11 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
     items = list(by_code.values())
     items = [item for item in items if not is_retired_menu_code(item.menu_code)]
+    # 2026-08-07 - 观察号会话剔除推广链接/品牌诊断
+    from app.services.observer_account import OBSERVER_HIDDEN_MENU_CODES, observer_platforms_for_user_id
+
+    if observer_platforms_for_user_id(db, identity.user_id) is not None:
+        items = [item for item in items if item.menu_code not in OBSERVER_HIDDEN_MENU_CODES]
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
 
