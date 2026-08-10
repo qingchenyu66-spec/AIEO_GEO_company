@@ -394,21 +394,30 @@ def _build_molizhishu_ranking_rows(
 
     day_brand_rank: dict[str, float] = {}
     for day in day_keys:
-        avg = _avg_rank_for_entity_in_batch(by_day[day], brand, is_brand=True)
-        if avg is not None:
-            day_brand_rank[day] = avg
+        # 2026-08-10 - 与明细表同口径用显式 rank；normalize 会把多名次收成 1，导致最优/最差塌缩
+        ranks: list[float] = []
+        for item in by_day[day]:
+            for entry in item.all_rankings_json or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = ranking_entry_name(entry)
+                if not name or not names_match(name, brand):
+                    continue
+                rank = ranking_entry_explicit_rank(entry)
+                if rank is not None:
+                    ranks.append(float(rank))
+        if ranks:
+            day_brand_rank[day] = round(sum(ranks) / len(ranks), 1)
 
     latest_day = day_keys[-1]
     best_day = min(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
     worst_day = max(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
 
-    export_plan: list[tuple[str, str, bool]] = [
+    export_plan = [
         (latest_day, "最近", False),
         (best_day, "最优", best_day != latest_day),
+        (worst_day, "最差", worst_day not in {latest_day, best_day}),
     ]
-    # 2026-08-10 - 仅一天有排名时最优=最差同值同日，表重复无信息量，不再输出「最差」
-    if worst_day != best_day:
-        export_plan.append((worst_day, "最差", worst_day != latest_day))
 
     result: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
@@ -449,6 +458,26 @@ def _build_molizhishu_ranking_rows(
                     "collected_at": day,
                 }
             )
+    # 2026-08-10 - 最优与最差同名同日同名次时去掉「最差」，避免明细表无信息量重复
+    best_keys = {
+        (str(row.get("name") or ""), str(row.get("rank_display") or ""), str(row.get("collected_at") or ""))
+        for row in result
+        if str(row.get("type_label") or "") == "最优"
+    }
+    if best_keys:
+        result = [
+            row
+            for row in result
+            if not (
+                str(row.get("type_label") or "") == "最差"
+                and (
+                    str(row.get("name") or ""),
+                    str(row.get("rank_display") or ""),
+                    str(row.get("collected_at") or ""),
+                )
+                in best_keys
+            )
+        ]
     return result
 
 
