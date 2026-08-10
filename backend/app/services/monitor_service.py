@@ -1233,6 +1233,58 @@ def get_customer_source_stats_bundle(
     )
 
 
+def scope_source_analysis_bundle(
+    bundle: dict[str, Any],
+    allow: frozenset[str] | None,
+) -> dict[str, Any]:
+    """按平台白名单裁剪信源聚合结果（不改日物化写入口径）。
+
+    2026-08-10 - 观察号若把 purchased 缩进 config_fp，uk(tenant,day) 全失效并踩踏全量物化；
+    改为读全量后再滤。行 count 仍是跨端合计，多端同 URL 会略偏高；要精确需按端拆 count。
+    """
+    if allow is None:
+        return bundle
+
+    def _scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for row in rows or []:
+            plats = [str(p) for p in (row.get("platforms") or []) if str(p) in allow]
+            if not plats:
+                continue
+            cloned = dict(row)
+            cloned["platforms"] = sort_platform_codes(plats)
+            out.append(cloned)
+        return out
+
+    by_plat = bundle.get("source_citation_trend_by_platform") or {}
+    scoped_by = {str(k): v for k, v in by_plat.items() if str(k) in allow}
+    daily_counts: dict[str, int] = {}
+    for trend in scoped_by.values():
+        for pt in (trend or {}).get("points") or []:
+            day_key = str(pt.get("day_key") or "")
+            if not day_key:
+                continue
+            daily_counts[day_key] = daily_counts.get(day_key, 0) + int(pt.get("value") or 0)
+    citation_range_end = customer_display_cutoff()
+    positive_days = [date.fromisoformat(k) for k, v in daily_counts.items() if int(v or 0) > 0]
+    citation_range_start = datetime.combine(
+        min(positive_days) if positive_days else citation_range_end.date(),
+        time.min,
+    )
+    return {
+        **bundle,
+        "source_stats": _scope_rows(list(bundle.get("source_stats") or [])),
+        "source_stats_all": _scope_rows(list(bundle.get("source_stats_all") or [])),
+        "source_citation_trend": _build_source_citation_trend(
+            daily_counts,
+            range_start=citation_range_start,
+            range_end=citation_range_end,
+            only_with_data=True,
+        ),
+        "source_citation_trend_by_platform": scoped_by,
+    }
+
+
 def build_source_analysis_summary(
     db: Session,
     current: CurrentSession,
@@ -1249,6 +1301,7 @@ def build_source_analysis_summary(
         get_brand_asset,
         tenant_purchased_platforms,
     )
+    from app.services.observer_account import observer_platforms_for_session
     from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 
     resolved = resolve_and_guard_analytics_tenant(
@@ -1260,18 +1313,15 @@ def build_source_analysis_summary(
     asset = get_brand_asset(db, resolved)
     exposure = brand_exposure_terms(asset, active_keyword_groups(db, resolved))
     purchased = set(tenant_purchased_platforms(db, resolved, asset))
-    # 2026-08-07 - 观察号信源聚合限 kimi/元宝
-    from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
-
+    # 2026-08-10 - 观察号平台收窄放在 bundle 读后过滤，purchased 保持租户全量以免日物化指纹失效
     allow = observer_platforms_for_session(current)
-    if allow is not None:
-        purchased = set(narrow_platform_codes(purchased, allow))
     bundle = get_customer_source_stats_bundle(
         db,
         resolved,
         purchased_platforms=purchased,
         exposure_terms=exposure,
     )
+    bundle = scope_source_analysis_bundle(bundle, allow)
 
     platform_stats: list[dict[str, Any]] = []
     try:
