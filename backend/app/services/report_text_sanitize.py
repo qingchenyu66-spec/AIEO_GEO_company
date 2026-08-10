@@ -112,6 +112,34 @@ _GARBAGE_SOURCE_RE = re.compile(
 )
 
 
+# 2026-08-10 - 方案A：禁「有情绪样本」分母，避免与情感顶卡全样本占比打架
+_KNOWN_SENTIMENT_DENOM_RE = re.compile(
+    r"在\s*\d+\s*条有情绪样本中[，,]?",
+)
+_NEG_SHARE_RE = re.compile(r"负面情绪占比\s*\d+(?:\.\d+)?\s*%")
+_POS_SHARE_RE = re.compile(r"正面情绪占比\s*\d+(?:\.\d+)?\s*%")
+
+
+def align_sentiment_share_phrasing(
+    text: str | None,
+    *,
+    counts: dict[str, int] | None = None,
+) -> str:
+    """情绪占比统一全样本分母；可传入 counts 重写正/负面占比数字。"""
+    raw = str(text or "")
+    if not raw:
+        return ""
+    out = _KNOWN_SENTIMENT_DENOM_RE.sub("", raw)
+    if counts:
+        total = sum(int(v or 0) for v in counts.values()) or 0
+        if total > 0:
+            neg_pct = round(int(counts.get("负面") or 0) * 100 / total, 1)
+            pos_pct = round(int(counts.get("正面") or 0) * 100 / total, 1)
+            out = _NEG_SHARE_RE.sub(f"负面情绪占比{neg_pct}%", out)
+            out = _POS_SHARE_RE.sub(f"正面情绪占比{pos_pct}%", out)
+    return out
+
+
 def soften_diagnosis_goal_phrasing(text: str | None) -> str:
     """把「N天内提升至X% / 60天目标Y%」收成对外可解释的首要目标区间句。
 
