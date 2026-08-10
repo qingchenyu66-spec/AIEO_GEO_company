@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import time as time_mod
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError, OperationalError, PendingRollbackError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.brand import BrandAsset
@@ -21,6 +23,36 @@ from app.services.schedule_context import (
 
 from app.services.monitor_sample_metrics import SUCCESS_STATUSES as TERMINAL_STATUSES
 logger = logging.getLogger(__name__)
+
+# 2026-08-10 - 周末 sync 并发写 daily_stat 死锁致 PendingRollback - 先算后写 + 按 key commit 重试
+_DAILY_STAT_WRITE_RETRIES = 3
+
+
+def _is_transient_daily_stat_conflict(exc: BaseException) -> bool:
+    """MySQL 死锁/锁等待/唯一键竞态（可安全重试重建）。"""
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        args = getattr(cur, "args", ()) or ()
+        code = args[0] if args else None
+        if code in (1213, 1205, 1062):
+            return True
+        msg = str(cur).lower()
+        if (
+            "deadlock" in msg
+            or "lock wait timeout" in msg
+            or "duplicate entry" in msg
+            or "unique constraint" in msg
+        ):
+            return True
+        nxt = cur.__cause__
+        if nxt is None:
+            orig = getattr(cur, "orig", None)
+            nxt = orig if isinstance(orig, BaseException) else None
+        cur = nxt
+    return False
+
 
 
 def _schedule_window_date(schedule_ctx: dict[str, Any] | None) -> date | None:
@@ -165,6 +197,42 @@ def upsert_daily_stat_row(
     row.citation_count = max(0, (row.citation_count or 0) + citation_delta)
 
 
+def _write_daily_stat_row(
+    db: Session,
+    *,
+    tenant_id: int,
+    stat_date: date,
+    platform: str,
+    metrics: dict[str, int],
+) -> None:
+    """短临界区：DELETE 后按汇总结果写回（completed=0 则只删）。SAVEPOINT 内可重试。"""
+    db.execute(
+        delete(GeoMonitorDailyStat).where(
+            GeoMonitorDailyStat.tenant_id == tenant_id,
+            GeoMonitorDailyStat.stat_date == stat_date,
+            GeoMonitorDailyStat.platform == platform,
+        )
+    )
+    # ponytail: 同会话多次重建同一 key 时，先 flush 掉 DELETE，否则未落库的旧 INSERT 会撞唯一键
+    db.flush()
+    if int(metrics.get("completed") or 0) <= 0:
+        return
+    db.add(
+        GeoMonitorDailyStat(
+            tenant_id=tenant_id,
+            stat_date=stat_date,
+            platform=platform,
+            completed_count=metrics["completed"],
+            mentioned_count=metrics["mentioned"],
+            top3_count=metrics["top3"],
+            rank_sum=metrics["rank_sum"],
+            rank_count=metrics["rank_count"],
+            citation_count=metrics["citation"],
+        )
+    )
+    db.flush()
+
+
 def _rebuild_daily_stat_for_platform_day(
     db: Session,
     *,
@@ -173,16 +241,6 @@ def _rebuild_daily_stat_for_platform_day(
     platform: str,
 ) -> None:
     """按企业+检测日+平台，汇总全部已返回子任务重建日统计。"""
-    db.execute(
-        delete(GeoMonitorDailyStat).where(
-            GeoMonitorDailyStat.tenant_id == tenant_id,
-            GeoMonitorDailyStat.stat_date == stat_date,
-            GeoMonitorDailyStat.platform == platform,
-        )
-    )
-    db.flush()
-    # ponytail: 同会话多次重建同一 key 时，先 flush 掉 DELETE，否则未落库的旧 INSERT 会撞唯一键
-    db.flush()
     # 预筛 created_at/updated_at 邻近窗口，避免整表终态子任务进内存再滤业务日
     pad_start = datetime.combine(stat_date - timedelta(days=3), time.min)
     pad_end = datetime.combine(stat_date + timedelta(days=14), time.max)
@@ -204,73 +262,91 @@ def _rebuild_daily_stat_for_platform_day(
             )
         )
     )
-    if not subtasks:
-        return
-    task_ids = list({item.task_id for item in subtasks if item.task_id})
-    schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
-    lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
-    asset = get_brand_asset(db, tenant_id)
-
     metrics = {"completed": 0, "mentioned": 0, "top3": 0, "rank_sum": 0, "rank_count": 0, "citation": 0}
-    from app.services.brand_service import active_keyword_groups
-    from app.services.monitor_service import (
-        _is_valid_citation_source,
-        _ranking_match_terms,
-        kpi_rank_for_subtask,
-    )
+    if subtasks:
+        task_ids = list({item.task_id for item in subtasks if item.task_id})
+        schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
+        lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
+        asset = get_brand_asset(db, tenant_id)
 
-    try:
-        groups = active_keyword_groups(db, tenant_id) if asset is not None else []
-    except Exception:
-        # ponytail: 单测/残缺库无词组表时退回资产别名，勿拖垮日统计重建
-        groups = []
-    tenant_terms = _ranking_match_terms(asset, groups) if asset is not None else []
-    for item in subtasks:
-        task = item.task
-        if task is None:
-            continue
-        detect_day = _detect_stat_date(
-            item,
-            task,
-            schedule_run=schedule_runs_map.get(item.task_id),
-            lead_run=lead_runs_map.get(item.task_id),
-            asset=asset,
+        from app.services.brand_service import active_keyword_groups
+        from app.services.monitor_service import (
+            _is_valid_citation_source,
+            _ranking_match_terms,
+            kpi_rank_for_subtask,
         )
-        if detect_day != stat_date:
-            continue
-        metrics["completed"] += 1
-        terms = list(tenant_terms)
-        kw = str(task.monitor_keywords or "").strip()
-        if kw and kw not in terms:
-            terms.append(kw)
-        rank = kpi_rank_for_subtask(item, task.monitor_keywords, terms, asset)
-        if rank is not None:
-            metrics["mentioned"] += 1
-            metrics["rank_sum"] += int(rank)
-            metrics["rank_count"] += 1
-            if float(rank) <= 3:
-                metrics["top3"] += 1
-        refs = item.reference_list_json or []
-        if isinstance(refs, list):
-            metrics["citation"] += sum(
-                1 for src in refs if isinstance(src, dict) and _is_valid_citation_source(src)
+
+        try:
+            groups = active_keyword_groups(db, tenant_id) if asset is not None else []
+        except Exception:
+            # ponytail: 单测/残缺库无词组表时退回资产别名，勿拖垮日统计重建
+            groups = []
+        tenant_terms = _ranking_match_terms(asset, groups) if asset is not None else []
+        for item in subtasks:
+            task = item.task
+            if task is None:
+                continue
+            detect_day = _detect_stat_date(
+                item,
+                task,
+                schedule_run=schedule_runs_map.get(item.task_id),
+                lead_run=lead_runs_map.get(item.task_id),
+                asset=asset,
             )
-    if metrics["completed"] == 0:
-        return
-    db.add(
-        GeoMonitorDailyStat(
-            tenant_id=tenant_id,
-            stat_date=stat_date,
-            platform=platform,
-            completed_count=metrics["completed"],
-            mentioned_count=metrics["mentioned"],
-            top3_count=metrics["top3"],
-            rank_sum=metrics["rank_sum"],
-            rank_count=metrics["rank_count"],
-            citation_count=metrics["citation"],
-        )
-    )
-    db.flush()
+            if detect_day != stat_date:
+                continue
+            metrics["completed"] += 1
+            terms = list(tenant_terms)
+            kw = str(task.monitor_keywords or "").strip()
+            if kw and kw not in terms:
+                terms.append(kw)
+            rank = kpi_rank_for_subtask(item, task.monitor_keywords, terms, asset)
+            if rank is not None:
+                metrics["mentioned"] += 1
+                metrics["rank_sum"] += int(rank)
+                metrics["rank_count"] += 1
+                if float(rank) <= 3:
+                    metrics["top3"] += 1
+            refs = item.reference_list_json or []
+            if isinstance(refs, list):
+                metrics["citation"] += sum(
+                    1 for src in refs if isinstance(src, dict) and _is_valid_citation_source(src)
+                )
+
+    # 先读后写缩短持锁；每 key 独立 commit，死锁/唯一键竞态时 rollback 后重试写段
+    # ponytail: 调用方本就在 sync/补录 commit 之后刷日统计，单 key commit 不扩大事务边界
+    last_exc: BaseException | None = None
+    for attempt in range(_DAILY_STAT_WRITE_RETRIES):
+        try:
+            _write_daily_stat_row(
+                db,
+                tenant_id=tenant_id,
+                stat_date=stat_date,
+                platform=platform,
+                metrics=metrics,
+            )
+            db.commit()
+            return
+        except (OperationalError, IntegrityError, PendingRollbackError) as exc:
+            last_exc = exc
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if not _is_transient_daily_stat_conflict(exc) or attempt + 1 >= _DAILY_STAT_WRITE_RETRIES:
+                raise
+            logger.warning(
+                "daily_stat write conflict retry tenant=%s day=%s platform=%s attempt=%s err=%s",
+                tenant_id,
+                stat_date,
+                platform,
+                attempt + 1,
+                exc,
+            )
+            time_mod.sleep(0.05 * (2**attempt))
+    if last_exc is not None:
+        raise last_exc
+
 
 
 def refresh_stats_for_task(db: Session, task_id: str) -> None:

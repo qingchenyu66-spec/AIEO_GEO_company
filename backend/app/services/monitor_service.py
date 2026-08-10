@@ -1750,7 +1750,12 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
         refresh_stats_for_task(db, task_id)
         db.commit()
     except Exception as exc:
+        # 2026-08-10 - daily_stat 死锁后会话 PendingRollback，勿让后续 get_monitor_task 再炸
         logger.warning("refresh_stats_for_task failed task_id=%s error=%s", task_id, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
     # ponytail: 日统计落库后再清缓存，避免冷读打到旧 daily_stat
     invalidate_monitor_summary_cache(task.tenant_id)
     try:

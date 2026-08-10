@@ -1,9 +1,11 @@
 """Tests for monitor daily stat aggregation."""
 
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -11,7 +13,11 @@ from app.core.database import Base
 from app.models.brand import BrandAsset
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorDailyStat, GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
-from app.services.monitor_stats_service import refresh_stats_for_task
+from app.services.monitor_stats_service import (
+    _is_transient_daily_stat_conflict,
+    _rebuild_daily_stat_for_platform_day,
+    refresh_stats_for_task,
+)
 
 
 @pytest.fixture()
@@ -99,8 +105,6 @@ def test_refresh_stats_merges_multiple_tasks_for_same_day_platform(db_session) -
     refresh_stats_for_task(db_session, "task-b")
     db_session.commit()
 
-    from sqlalchemy import select
-
     row = db_session.scalar(
         select(GeoMonitorDailyStat).where(
             GeoMonitorDailyStat.tenant_id == tenant_id,
@@ -117,3 +121,71 @@ def test_refresh_stats_merges_multiple_tasks_for_same_day_platform(db_session) -
     metrics = workspace_metrics_from_stat_rows([row])
     assert metrics["top3_rate"] == 60.0  # 3/5
     assert metrics["brand_mention_rate"] == 60.0
+
+
+def test_is_transient_daily_stat_conflict_detects_deadlock() -> None:
+    class FakeOrig(Exception):
+        def __init__(self):
+            super().__init__(1213, "Deadlock found when trying to get lock; try restarting transaction")
+
+    err = OperationalError("INSERT", {}, FakeOrig())
+    assert _is_transient_daily_stat_conflict(err) is True
+    assert _is_transient_daily_stat_conflict(ValueError("nope")) is False
+
+
+def test_rebuild_daily_stat_retries_on_deadlock(db_session) -> None:
+    """自检：写段首次模拟 MySQL 1213，重试后应落库成功，不影响汇总口径。"""
+    tenant_id = 119
+    day = datetime(2026, 8, 8, 9, 32, 0)
+    _add_task_with_subtasks(
+        db_session,
+        task_id="task-deadlock",
+        tenant_id=tenant_id,
+        platform="doubao",
+        stat_day=day,
+        mention_positions=[1, 2],
+    )
+    # detect_stat_date 优先 task.created_at
+    task = db_session.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == "task-deadlock"))
+    assert task is not None
+    task.created_at = day
+    db_session.commit()
+
+    calls = {"n": 0}
+    real_write = _write_daily_stat_row_ref()
+
+    def flaky_write(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OperationalError(
+                "INSERT",
+                {},
+                Exception(1213, "Deadlock found when trying to get lock; try restarting transaction"),
+            )
+        return real_write(*args, **kwargs)
+
+    with patch("app.services.monitor_stats_service._write_daily_stat_row", side_effect=flaky_write):
+        _rebuild_daily_stat_for_platform_day(
+            db_session,
+            tenant_id=tenant_id,
+            stat_date=day.date(),
+            platform="doubao",
+        )
+
+    row = db_session.scalar(
+        select(GeoMonitorDailyStat).where(
+            GeoMonitorDailyStat.tenant_id == tenant_id,
+            GeoMonitorDailyStat.platform == "doubao",
+            GeoMonitorDailyStat.stat_date == day.date(),
+        )
+    )
+    assert calls["n"] == 2
+    assert row is not None
+    assert row.completed_count == 2
+    assert row.mentioned_count == 2
+
+
+def _write_daily_stat_row_ref():
+    from app.services.monitor_stats_service import _write_daily_stat_row
+
+    return _write_daily_stat_row
