@@ -20,6 +20,26 @@ fi
 git checkout main
 git pull --ff-only origin main
 
+# 2026-08-10 - 知识库预览 400「文件不存在于存储目录」：backend/storage 被 mkdir 成空目录，冲掉指向 /data/geo/storage 的软链
+echo "==> ensure backend/storage -> /data/geo/storage"
+DATA_STORAGE="/data/geo/storage"
+APP_STORAGE="$ROOT/backend/storage"
+mkdir -p "$DATA_STORAGE"
+if [[ -L "$APP_STORAGE" ]]; then
+  :
+elif [[ -d "$APP_STORAGE" ]]; then
+  rsync -a --ignore-existing "$APP_STORAGE"/ "$DATA_STORAGE"/
+  mv "$APP_STORAGE" "${APP_STORAGE}.broken-$(date +%Y%m%d%H%M%S)"
+  ln -sfn "$DATA_STORAGE" "$APP_STORAGE"
+  echo "restored symlink $APP_STORAGE -> $DATA_STORAGE"
+elif [[ ! -e "$APP_STORAGE" ]]; then
+  ln -sfn "$DATA_STORAGE" "$APP_STORAGE"
+fi
+if [[ ! -L "$APP_STORAGE" ]] || [[ "$(readlink -f "$APP_STORAGE")" != "$(readlink -f "$DATA_STORAGE")" ]]; then
+  echo "ERROR: $APP_STORAGE must be symlink to $DATA_STORAGE" >&2
+  exit 1
+fi
+
 echo "==> alembic upgrade"
 cd "$ROOT/backend"
 # shellcheck disable=SC1091

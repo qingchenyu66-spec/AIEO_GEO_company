@@ -13,9 +13,16 @@ npm run build
 test -f dist/index.html
 echo FRONTEND_BUILD_OK
 
-# Storage dirs
-mkdir -p /opt/geo/AIEO_GEO/backend/storage/knowledge /opt/geo/AIEO_GEO/backend/storage/logs
-chown -R www-data:www-data /opt/geo/AIEO_GEO/backend/storage || true
+# Storage dirs（持久化在 /data/geo/storage；勿 mkdir 空 backend/storage 冲掉软链）
+mkdir -p /data/geo/storage/knowledge /data/geo/storage/logs
+if [[ ! -L /opt/geo/AIEO_GEO/backend/storage ]]; then
+  if [[ -d /opt/geo/AIEO_GEO/backend/storage ]]; then
+    rsync -a --ignore-existing /opt/geo/AIEO_GEO/backend/storage/ /data/geo/storage/
+    mv /opt/geo/AIEO_GEO/backend/storage "/opt/geo/AIEO_GEO/backend/storage.broken-$(date +%Y%m%d%H%M%S)"
+  fi
+  ln -sfn /data/geo/storage /opt/geo/AIEO_GEO/backend/storage
+fi
+chown -R www-data:www-data /data/geo/storage || true
 
 # systemd units
 cat > /etc/systemd/system/geo-api.service <<'EOF'
