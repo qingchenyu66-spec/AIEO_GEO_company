@@ -10,19 +10,9 @@
  * - 2026-07-27 - 页底表头+一两行孤儿 / 核心指标被剥成 2/2 - 短表尾整块下挪；核心页只软缩不 peel
  * - 2026-07-27 - 同页两个表头 - ①拆表时误克隆包着 table 的 wrap 导致整表+分组表并存；②短续页并回后合表只留一个 thead
  * - 2026-07-27 - 核心页 KPI 被 maxHeight+overflow 裁切叠字 - 已弃用裁切；一两行仍软缩，太多则剥「核心结论」到续页
- * - 2026-08-10 - HTML 预览/另存抢跑 pack（字体未就绪）→ 分析/信源整页不拆被 overflow 裁半行，P1/P2 像「没了」- 对齐 monitor：fonts.ready 后再拆，PDF SYNC 重跑
  */
 (() => {
   // 2026-07-28 - 预览与 PDF 共用本脚本；PDF 仍 evaluate 时防二次拆页
-  // 2026-08-10 - 字体未就绪就 pack 会量高偏矮，加载后裁切叠字；预览延后，PDF 用 SYNC 重跑
-  if (document.documentElement.dataset.geoDeckPacked === "1" && !window.__GEO_DECK_PACK_SYNC__) {
-    return {
-      skipped: true,
-      slides: document.querySelectorAll(".slide").length,
-    };
-  }
-
-  function runPack() {
   if (document.documentElement.dataset.geoDeckPacked === "1") {
     return {
       skipped: true,
@@ -820,8 +810,8 @@
           tableBEarly && tableBEarly.tBodies[0] ? tableBEarly.tBodies[0].rows.length : 0;
         // A：映射表尾页 ≤3 行强制并回，不受高度 MERGE_RATIO 卡住
         const domainForceTail = isDomain && rowsBEarly > 0 && rowsBEarly <= 5;
-        // 分析页尾页勿过激并回：0.62 易把 P1/P2 吞回首屏再被 overflow 裁切
-        const leftoverRatio = a.dataset.mergeGroup === "analysis" ? 0.36 : isDomain ? 0.55 : 0.48;
+        // 分析页尾页更积极并回，避免「文字一页 + 优先级表一页」
+        const leftoverRatio = a.dataset.mergeGroup === "analysis" ? 0.62 : isDomain ? 0.55 : 0.48;
         const bIsLeftover = hb <= maxH * leftoverRatio;
         const bothSparse =
           ha <= maxH * SPARSE_RATIO && hb <= maxH * SPARSE_RATIO;
@@ -917,26 +907,4 @@
     peeled,
     stillClipped: stillBad,
   };
-  } // end runPack
-
-  // PDF Playwright：字体就绪后带 SYNC 再 evaluate，清掉内嵌脚本的抢跑结果
-  if (window.__GEO_DECK_PACK_SYNC__) {
-    delete window.__GEO_DECK_PACK_SYNC__;
-    delete document.documentElement.dataset.geoDeckPacked;
-    return runPack();
-  }
-
-  // 预览/另存 HTML：等字体再拆页，避免分析/信源底行压字、P1/P2 被裁没
-  const schedule = () => {
-    const finish = () => {
-      window.__geoDeckPackResult = runPack();
-    };
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(() => requestAnimationFrame(finish));
-    } else {
-      requestAnimationFrame(finish);
-    }
-  };
-  schedule();
-  return { deferred: true };
 })();

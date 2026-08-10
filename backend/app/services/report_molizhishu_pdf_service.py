@@ -26,8 +26,8 @@ _SLIDE_HEIGHT_PX = 1417
 _PDF_PAGE_W_PT = _SLIDE_WIDTH_PX * 72 / 96
 _PDF_PAGE_H_PT = _SLIDE_HEIGHT_PX * 72 / 96
 # 指纹用：改导出链路时 bump，避免命中旧缓存
-# jpeg-pages-v6：HTML 预览 fonts.ready 后再 pack，避免分析/信源底行压字
-_PDF_PIPELINE = "jpeg-pages-v6"
+# jpeg-pages-v5：核心页禁止 KPI 裁切；结论过多拆续页；封面 chip 换行
+_PDF_PIPELINE = "jpeg-pages-v5"
 _JPEG_SCREENSHOT_QUALITY = 90
 
 _tls = threading.local()
@@ -41,13 +41,7 @@ def _playwright_local():
 
 
 def _pack_js() -> str:
-    # 2026-08-10 - evaluate 时强制 SYNC，避免拿到 {deferred:true}；预览内嵌仍走 fonts.ready
-    body = (_TEMPLATE_DIR / "deck_pack.js").read_text(encoding="utf-8")
-    return (
-        "window.__GEO_DECK_PACK_SYNC__ = true;"
-        "delete document.documentElement.dataset.geoDeckPacked;"
-        + body
-    )
+    return (_TEMPLATE_DIR / "deck_pack.js").read_text(encoding="utf-8")
 
 
 def _idea_asset_stamp() -> str:
