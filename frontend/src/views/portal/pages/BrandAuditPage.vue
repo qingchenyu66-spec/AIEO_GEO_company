@@ -106,6 +106,8 @@ const {
   enterpriseTotalPages,
   changeEnterprisePage,
   enterpriseFormServiceActive,
+  brandAsset,
+  canSubmitBrandAssetProfile,
   enterpriseFormServiceLabel,
   visibleEnterpriseTabs,
   canEditEnterpriseTab,
@@ -358,7 +360,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </div>
         <div class="detail-actions">
           <button class="filter-reset-btn" @click="backToEnterpriseList">返回列表</button>
-          <button v-if="canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)" class="primary-btn small-btn" :disabled="loadingBrand" @click="() => submitBrandAsset()">保存当前配置</button>
+          <button
+            v-if="canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)"
+            class="primary-btn small-btn"
+            :disabled="loadingBrand || !canSubmitBrandAssetProfile"
+            @click="() => submitBrandAsset()"
+          >保存当前配置</button>
         </div>
       </div>
       <div class="enterprise-detail-tabs">
@@ -383,7 +390,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
       </div>
       <div v-if="enterpriseDetailTab === 'profile' && (canEditEnterpriseTab('profile') || canEditRegions)" class="section-save-actions keyword-save-actions">
-        <button class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('企业资料已保存')">保存企业资料</button>
+        <button class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('企业资料已保存')">保存企业资料</button>
       </div>
       <section v-if="enterpriseDetailTab === 'keywords'" class="keyword-group-panel">
         <div class="panel-head">
@@ -520,7 +527,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div v-if="!keywordGroupRows.length" class="mini-empty">暂无监测词组，请先新增一个。</div>
         </div>
         <div class="section-save-actions keyword-save-actions">
-          <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测词配置已保存')">保存监测词配置</button>
+          <button v-if="canEditEnterpriseTab('keywords')" class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('监测词配置已保存')">保存监测词配置</button>
         </div>
       </section>
       <section v-if="enterpriseDetailTab === 'brand_words'" class="keyword-group-panel">
@@ -649,13 +656,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div v-if="!brandWordGroupRows.length" class="mini-empty">暂无品牌词组，请先新增一个。</div>
         </div>
         <div class="section-save-actions keyword-save-actions">
-          <button v-if="canEditEnterpriseTab('brand_words')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandWordGroups('品牌词配置已保存')">保存品牌词配置</button>
+          <button
+            v-if="canEditEnterpriseTab('brand_words')"
+            class="filter-search-btn"
+            :disabled="loadingBrand || !brandAsset"
+            @click="submitBrandWordGroups('品牌词配置已保存')"
+          >保存品牌词配置</button>
+          <p v-if="!brandAsset" class="mini-empty compact-empty">请先保存企业资料，再配置品牌词</p>
         </div>
       </section>
       <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">
         <div class="panel-head">
           <div><h2>自动监测计划</h2><p>每天在下方配置的时间点自动提交检测任务。</p></div>
-          <button v-if="canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
+          <button v-if="canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
         </div>
         <div class="brand-form-grid">
           <div class="schedule-time-picker">

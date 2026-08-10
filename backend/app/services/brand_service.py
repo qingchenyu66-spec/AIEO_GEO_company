@@ -474,8 +474,9 @@ def save_brand_word_groups(
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
     _guard_tenant_write(db, current, tenant_id)
     asset = get_brand_asset(db, tenant_id)
+    # 2026-08-10 - 品牌词只依赖企业资料资产，不要求先配监测词
     if asset is None:
-        raise ValueError("请先保存企业资料或监测词配置，再配置品牌词")
+        raise ValueError("请先保存企业资料，再配置品牌词")
 
     # 2026-07-30 - 平台编辑权=职位白名单；有权则仅改授权端
     allowed_set = set(identity_allowed_monitor_platforms(db, current.identity))

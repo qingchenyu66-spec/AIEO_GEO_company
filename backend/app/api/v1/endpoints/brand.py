@@ -159,7 +159,10 @@ def upsert_brand_word_groups(
         "platform.audit",
         "platform.audit.keywords",
     ])
-    tenant_id = payload.tenant_id
+    tenant_id = resolve_and_guard_tenant_id(db, current, payload.tenant_id)
+    # 2026-08-10 - 销售入队前就校验资产，避免无企业资料的品牌词审批单
+    if get_brand_asset(db, tenant_id) is None:
+        raise ValueError("请先保存企业资料，再配置品牌词")
 
     def _execute():
         asset, submit_rows = save_brand_word_groups(db, payload, current)

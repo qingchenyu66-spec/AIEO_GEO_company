@@ -337,6 +337,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     if (enterpriseFormServiceState.value === 'pending') return '未开始'
     return enterpriseFormServiceState.value === 'active' ? '服务中' : '已停服'
   })
+  // 2026-08-10 - 企业资料仅企业全称必填；监测词/平台/计划等均可后补
+  const brandAssetProfileMissing = computed(() => {
+    const missing: string[] = []
+    if (brandForm.company_full_name.trim().length < 2) missing.push('企业全称（至少2个字）')
+    return missing
+  })
+  const canSubmitBrandAssetProfile = computed(() => brandAssetProfileMissing.value.length === 0)
 
   function isTenantExpired(tenant: TenantInfo) {
     if (!tenant.service_end_date) return false
@@ -856,8 +863,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function submitBrandAsset(successText = '品牌资产已保存') {
-    if (!brandForm.company_full_name.trim()) {
-      ElMessage.warning('请先填写企业全称')
+    // 2026-08-10 - 监测词组非必填；企业资料只需全称即可落资产，勿再卡「至少一个词组」
+    const missing = brandAssetProfileMissing.value
+    if (missing.length) {
+      ElMessage.warning(`请先完善：${missing.join('、')}`)
       return
     }
     const keywordGroups = keywordGroupRows.value
@@ -876,10 +885,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         }
       })
       .filter(group => group.monitor_keywords.length)
-    if (!keywordGroups.length) {
-      ElMessage.warning('请至少配置一个监测词组')
-      return
-    }
     const missingPlatforms = keywordGroups.find(group => group.status && !group.platforms.length)
     if (missingPlatforms && canEditModels.value) {
       ElMessage.warning('每个启用的监测词组至少选择一个监测平台')
@@ -943,6 +948,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   async function submitBrandWordGroups(successText = '品牌词配置已保存') {
     if (!brandForm.tenant_id) {
       ElMessage.warning('请先选择企业')
+      return
+    }
+    // 2026-08-10 - 无企业资产时禁止提交/入队，避免审批通过再报「请先保存企业资料」
+    if (!brandAsset.value) {
+      ElMessage.warning('请先保存企业资料，再配置品牌词')
       return
     }
     const groups = brandWordGroupRows.value
@@ -1461,6 +1471,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     pinEnterprise,
     unpinEnterprise,
     enterpriseFormServiceActive,
+    brandAssetProfileMissing,
+    canSubmitBrandAssetProfile,
     enterpriseFormServiceLabel,
     visibleEnterpriseTabs,
     canViewEnterpriseTab,
