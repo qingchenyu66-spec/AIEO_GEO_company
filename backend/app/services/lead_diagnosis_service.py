@@ -1188,36 +1188,29 @@ def _ensure_lead_diagnosis_sentiments(
     lead: LeadDiagnosis,
     subtasks: list[GeoMonitorSubtask],
 ) -> list[GeoMonitorSubtask]:
-    """售前诊断聚合前 DeepSeek/规则二次情感补标（与品牌词同套）。
-
-    保持调用方传入的子任务集合（例如单平台导出），勿扩大成全 lead。
-    """
+    """售前诊断聚合前 DeepSeek/规则二次情感补标（与品牌词同套）。"""
     from app.services.brand_analysis_service import parse_brand_word_sentiments_with_deepseek
 
     if not subtasks:
         return subtasks
-    wanted_ids = [str(item.subtask_id) for item in subtasks if item.subtask_id]
     brand_name = str(lead.brand_name or "").strip() or "监测品牌"
     tenant_id = int(lead.converted_tenant_id or 0)
-    working = list(subtasks)
     # 2026-08-10 - 售前 standalone 任务无 tenant，同步回调从不补标；聚合前补齐
     for _ in range(30):
         meta = parse_brand_word_sentiments_with_deepseek(
             db,
             tenant_id=tenant_id,
             brand_name=brand_name,
-            subtasks=working,
+            subtasks=subtasks,
             max_items=48,
             upgrade_rule=True,
         )
         parsed = int(meta.get("parsed") or 0)
         left = int(meta.get("pending_left") or 0)
-        refreshed = _load_subtasks(db, lead)
-        by_id = {str(item.subtask_id): item for item in refreshed}
-        working = [by_id[sid] for sid in wanted_ids if sid in by_id]
         if parsed <= 0 or left <= 0:
             break
-    return working
+        subtasks = _load_subtasks(db, lead)
+    return _load_subtasks(db, lead)
 
 
 def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | None]:
