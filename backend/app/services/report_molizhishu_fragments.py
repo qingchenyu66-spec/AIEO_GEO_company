@@ -543,13 +543,16 @@ def render_tip_list(tips: list[str]) -> str:
 
 
 def render_prompt_comment(text: str | None) -> str:
+    from html import unescape as html_unescape
+
     content = str(text or "").strip()
     if not content:
         return ""
-    if content.startswith("<"):
-        return f'<div class="prompt-comment">{content}</div>'
-    # 点评多为短句，默认不缩进
-    return f'<p class="prompt-comment para--short">{_esc(content)}</p>'
+    # 2026-08-10 - 模型常塞 <strong style=...>，原样转义后页面露「源码」；剥标签再统一高亮
+    plain = html_unescape(re.sub(r"<[^>]+>", "", content)).strip()
+    if not plain:
+        return ""
+    return f'<p class="prompt-comment para--short">{_highlight_analysis_plain(plain)}</p>'
 
 
 def render_chart_block(title: str, src: str) -> str:

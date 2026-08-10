@@ -402,11 +402,13 @@ def _build_molizhishu_ranking_rows(
     best_day = min(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
     worst_day = max(day_brand_rank, key=day_brand_rank.get) if day_brand_rank else latest_day
 
-    export_plan = [
+    export_plan: list[tuple[str, str, bool]] = [
         (latest_day, "最近", False),
         (best_day, "最优", best_day != latest_day),
-        (worst_day, "最差", worst_day not in {latest_day, best_day}),
     ]
+    # 2026-08-10 - 仅一天有排名时最优=最差同值同日，表重复无信息量，不再输出「最差」
+    if worst_day != best_day:
+        export_plan.append((worst_day, "最差", worst_day != latest_day))
 
     result: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
@@ -426,6 +428,8 @@ def _build_molizhishu_ranking_rows(
                     continue
                 canonical = canonical_ranking_name(name, brand, competitors)
                 aggregated.setdefault(canonical, []).append(float(rank))
+        if not aggregated:
+            continue
         for name, ranks in sorted(aggregated.items(), key=lambda row: min(row[1])):
             rank_value = round(sum(ranks) / len(ranks), 1)
             dedupe = (label, name, rank_value, day)

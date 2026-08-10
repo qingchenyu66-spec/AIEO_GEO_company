@@ -154,8 +154,11 @@ def _collect_entity_series(
     ]
     series_data: list[dict[str, Any]] = []
     max_rank = 1.0
+    slot_count = len(trend_rows)
     for name in entities[:8]:
         points: list[tuple[int, float]] = []
+        # 2026-08-10 - 无提及时段画空心点，避免稀疏题整图「空白像少数据」
+        absent: list[int] = []
         for point_index, row in enumerate(trend_rows):
             entities_map = row.get("entities") or {}
             value = entities_map.get(name)
@@ -164,13 +167,21 @@ def _collect_entity_series(
             if value is not None:
                 points.append((point_index, float(value)))
                 max_rank = max(max_rank, float(value))
-        if not points:
+            else:
+                absent.append(point_index)
+        if not points and not absent:
+            continue
+        # 全程未提及：仍画空心点占位，图例可对上
+        if not points and absent and slot_count:
+            pass
+        elif not points:
             continue
         style = entity_visual_style(name, brand_name=brand)
         series_data.append(
             {
                 "name": name,
                 "points": points,
+                "absent": absent,
                 "style": style,
                 "is_brand": names_match(name, brand),
             }
@@ -196,35 +207,65 @@ def _draw_entity_lines(
             ax.set_title(title, fontsize=11, color=theme.chart_title)
         return []
 
-    point_count = max(len(item["points"]) for item in series_data)
+    point_count = max((len(item["points"]) for item in series_data), default=0)
     sparse = point_count <= 3
     y_bottom = max(max_rank + 1.2, 6.0)
+    # 未提及空心点落在轴底内侧，不与真实名次抢位
+    absent_y = y_bottom - 0.35
 
     ax.axhline(3.0, color="#21b981", linestyle="--", linewidth=0.9, alpha=0.45, zorder=1)
     handles = []
     for series_idx, item in enumerate(series_data):
         points = item["points"]
-        px, py = zip(*points)
         is_brand = bool(item["is_brand"])
         color = item["style"].color
-        (line,) = ax.plot(
-            px,
-            py,
-            color=color,
-            linestyle=item["style"].line_style,
-            marker=item["style"].marker,
-            linewidth=2.8 if is_brand else 1.7,
-            markersize=(9 if sparse else 7) if is_brand else (7 if sparse else 5),
-            label=item["name"],
-            zorder=4 if is_brand else 2,
-            solid_capstyle="round",
-        )
-        handles.append(line)
-        if is_brand and not compact:
-            ax.fill_between(px, py, y_bottom, color=color, alpha=0.08, zorder=1)
+        # 同分同点错开一点，避免四家叠成「只看见蓝点」
+        jitter = (series_idx - (len(series_data) - 1) / 2) * 0.06
+        if points:
+            px = [p[0] + jitter for p in points]
+            py = [p[1] for p in points]
+            (line,) = ax.plot(
+                px,
+                py,
+                color=color,
+                linestyle=item["style"].line_style,
+                marker=item["style"].marker,
+                linewidth=2.8 if is_brand else 1.7,
+                markersize=(9 if sparse else 7) if is_brand else (7 if sparse else 5),
+                label=item["name"],
+                zorder=4 if is_brand else 2,
+                solid_capstyle="round",
+            )
+            handles.append(line)
+            if is_brand and not compact:
+                ax.fill_between(px, py, y_bottom, color=color, alpha=0.08, zorder=1)
+        else:
+            # 仅空心占位时仍进图例
+            (line,) = ax.plot(
+                [],
+                [],
+                color=color,
+                linestyle=item["style"].line_style,
+                marker=item["style"].marker,
+                label=item["name"],
+            )
+            handles.append(line)
+        absent = list(item.get("absent") or [])
+        if absent and not compact:
+            ax.scatter(
+                [idx + jitter for idx in absent],
+                [absent_y] * len(absent),
+                s=(64 if is_brand else 42),
+                facecolors="none",
+                edgecolors=color,
+                linewidths=1.6 if is_brand else 1.2,
+                marker=item["style"].marker,
+                zorder=3 if is_brand else 2,
+                alpha=0.85,
+            )
         # 每个有排名的点都标注数值（竞品此前只标首/尾/最优，导致「有些点不显示」）
         if compact:
-            label_points = [points[-1]] if is_brand else []
+            label_points = [points[-1]] if (is_brand and points) else []
         else:
             label_points = list(points)
         series_offset = (series_idx % 3) * 3
@@ -234,7 +275,7 @@ def _draw_entity_lines(
             )
             ax.annotate(
                 rank_text,
-                (px_val, py_val),
+                (px_val + jitter, py_val),
                 textcoords="offset points",
                 xytext=(0, 8 + series_offset),
                 ha="center",

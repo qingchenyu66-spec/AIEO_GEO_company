@@ -131,6 +131,54 @@
     }
   }
 
+  function packItemPlain(el) {
+    return String(el?.textContent || "")
+      .replace(/\s+/g, "")
+      .trim();
+  }
+
+  function isEmptyPackItem(el) {
+    if (!el) return true;
+    if (isAnalysisSectionHead(el)) return false;
+    if (el.querySelector("table, img, canvas, svg")) return false;
+    return packItemPlain(el).length < 2;
+  }
+
+  // 2026-08-10 - 剥页后只剩 P0 标题 / 空白卡：并回上一页或删空卡，禁止「只有 P0」尾页
+  function collapseSparseAnalysisTails(pages) {
+    if (!pages || pages.length < 2) return;
+    let guard = 0;
+    while (guard++ < 20 && pages.length >= 2) {
+      const last = pages[pages.length - 1];
+      const cleaned = last.filter((el) => !isEmptyPackItem(el));
+      if (cleaned.length !== last.length) {
+        pages[pages.length - 1] = cleaned;
+        if (!cleaned.length) {
+          pages.pop();
+          continue;
+        }
+      }
+      const onlyHeads = cleaned.every(isAnalysisSectionHead);
+      const thinTail =
+        cleaned.length <= 2 &&
+        cleaned.some(isAnalysisSectionHead) &&
+        cleaned.every((el) => isAnalysisSectionHead(el) || isEmptyPackItem(el));
+      if (onlyHeads || thinTail) {
+        pages[pages.length - 2] = pages[pages.length - 2].concat(cleaned);
+        pages.pop();
+        continue;
+      }
+      break;
+    }
+  }
+
+  function stripEmptyPackItems(body) {
+    if (!body) return;
+    Array.from(body.querySelectorAll(":scope > .pack-item")).forEach((el) => {
+      if (isEmptyPackItem(el)) el.remove();
+    });
+  }
+
   function clampFont(px, factor, minPx) {
     return Math.max(minPx == null ? MIN_FONT_PX : minPx, px * factor);
   }
@@ -694,10 +742,14 @@
     let h = 0;
     items.forEach((item, idx) => {
       const ih = itemHeight(item);
+      const isLast = idx === items.length - 1;
       if (cur.length && h + ih > maxH) {
-        pages.push(cur);
-        cur = [];
-        h = 0;
+        // 2026-08-10 - 末项标题卡勿独占新页（否则出现「只有 P0」尾页）
+        if (!(isLast && isAnalysisSectionHead(item))) {
+          pages.push(cur);
+          cur = [];
+          h = 0;
+        }
       }
       // 2026-08-04 - 章节标题卡与下一条正文同页：放不下则整组换页，避免页尾孤 P2
       if (isAnalysisSectionHead(item) && cur.length && idx + 1 < items.length) {
@@ -747,6 +799,8 @@
     liftOrphanTableTails(pages);
     // 2026-08-04 - 分析章节标题卡（P0/P1/P2 等）勿孤悬页尾
     liftOrphanAnalysisHeads(pages);
+    // 2026-08-10 - 禁止尾页只剩 P0/空卡
+    collapseSparseAnalysisTails(pages);
 
     // 分析页：仅极短尾页并回，避免把两张 tall 页吞成一页导致无分页
     if (slide.dataset.mergeGroup === "analysis" && pages.length === 2) {
@@ -899,6 +953,7 @@
   mergeSparse();
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
     (body) => {
+      stripEmptyPackItems(body);
       rewrapTipCards(body);
       coalesceAdjacentTables(body);
     }
@@ -906,6 +961,33 @@
   // 先软缩（有下限）；仍裁切则整行剥续页
   const softFit = fitSoftOverflows();
   const peeled = fixRemainingOverflow();
+  Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
+    (body) => {
+      stripEmptyPackItems(body);
+    }
+  );
+  // 剥页后再收一遍「只有标题」的分析尾页
+  (() => {
+    const byGroup = new Map();
+    Array.from(document.querySelectorAll(".slide[data-merge-group='analysis']")).forEach((slide) => {
+      const body = bodyEl(slide);
+      if (!body) return;
+      const items = Array.from(body.querySelectorAll(":scope > .pack-item"));
+      if (!items.length) return;
+      const onlyHeads = items.every(isAnalysisSectionHead);
+      const thin =
+        items.length <= 2 &&
+        items.some(isAnalysisSectionHead) &&
+        items.every((el) => isAnalysisSectionHead(el) || isEmptyPackItem(el));
+      if (!(onlyHeads || thin)) return;
+      const prev = slide.previousElementSibling;
+      if (!prev || prev.dataset.mergeGroup !== "analysis") return;
+      const prevBody = bodyEl(prev);
+      if (!prevBody) return;
+      items.forEach((el) => prevBody.appendChild(el));
+      slide.remove();
+    });
+  })();
   renumberPackedTitles();
   const stillBad = Array.from(
     document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")

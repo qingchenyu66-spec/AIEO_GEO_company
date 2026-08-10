@@ -603,7 +603,8 @@ def build_molizhishu_report_context(payload: dict[str, Any], platform_names: dic
             city_matrix.get("prompts") or [],
             city_matrix.get("rows") or [],
         ),
-        "show_city_table": bool(city_matrix.get("rows")),
+        # 2026-08-10 - 售前诊断常仅「全部区域」一行，城市表无信息量；不下发
+        "show_city_table": False,
         "ranking_blocks": ranking_blocks,
         "mention_blocks": mention_blocks,
         "source_overview_slides": source_overview_slides,
