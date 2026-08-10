@@ -1183,36 +1183,6 @@ def _load_subtasks(db: Session, lead: LeadDiagnosis) -> list[GeoMonitorSubtask]:
     return _load_subtasks_by_task_ids(db, task_ids)
 
 
-def _ensure_lead_diagnosis_sentiments(
-    db: Session,
-    lead: LeadDiagnosis,
-    subtasks: list[GeoMonitorSubtask],
-) -> list[GeoMonitorSubtask]:
-    """售前诊断聚合前 DeepSeek/规则二次情感补标（与品牌词同套）。"""
-    from app.services.brand_analysis_service import parse_brand_word_sentiments_with_deepseek
-
-    if not subtasks:
-        return subtasks
-    brand_name = str(lead.brand_name or "").strip() or "监测品牌"
-    tenant_id = int(lead.converted_tenant_id or 0)
-    # 2026-08-10 - 售前 standalone 任务无 tenant，同步回调从不补标；聚合前补齐
-    for _ in range(30):
-        meta = parse_brand_word_sentiments_with_deepseek(
-            db,
-            tenant_id=tenant_id,
-            brand_name=brand_name,
-            subtasks=subtasks,
-            max_items=48,
-            upgrade_rule=True,
-        )
-        parsed = int(meta.get("parsed") or 0)
-        left = int(meta.get("pending_left") or 0)
-        if parsed <= 0 or left <= 0:
-            break
-        subtasks = _load_subtasks(db, lead)
-    return _load_subtasks(db, lead)
-
-
 def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | None]:
     return {task_id: task.region_code_json for task_id, task in tasks.items()}
 
@@ -1224,8 +1194,6 @@ def aggregate_lead_diagnosis(
     task_region_map: dict[str, list[str] | None] | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
-    if db is not None:
-        subtasks = _ensure_lead_diagnosis_sentiments(db, lead, subtasks)
     competitors = [str(item).strip() for item in (lead.competitors_json or []) if str(item).strip()]
     if db is not None:
         competitors = resolve_lead_competitors(db, lead)
@@ -1426,37 +1394,6 @@ def aggregate_lead_diagnosis(
         except (DeepseekApiError, RuntimeError):
             ai_insights = {"highlights": rule_highlights}
             analysis_html = None
-
-    # 2026-08-10 - 方案A：口碑摘要强制全样本分母，清掉「有情绪样本」话术，与情感顶卡一致
-    from app.services.report_period_content_service import (
-        normalize_sentiment_counts,
-        sentiment_summary_from_counts,
-    )
-    from app.services.report_text_sanitize import align_sentiment_share_phrasing
-
-    sent_for_copy = normalize_sentiment_counts(sentiment_counts)
-    diagnosis_block["sentiment_summary"] = sentiment_summary_from_counts(
-        sent_for_copy,
-        diagnosis=diagnosis_block,
-    )
-    for _key in ("strength_points", "weakness_points", "recommendation"):
-        diagnosis_block[_key] = align_sentiment_share_phrasing(
-            diagnosis_block.get(_key),
-            counts=sent_for_copy,
-        )
-    if analysis_html:
-        analysis_html = align_sentiment_share_phrasing(analysis_html, counts=sent_for_copy)
-    if isinstance(ai_insights.get("highlights"), list):
-        ai_insights["highlights"] = [
-            align_sentiment_share_phrasing(item, counts=sent_for_copy)
-            for item in ai_insights["highlights"]
-        ]
-    for _ek in ("platform_insight",):
-        if report_enrichment.get(_ek):
-            report_enrichment[_ek] = align_sentiment_share_phrasing(
-                report_enrichment.get(_ek),
-                counts=sent_for_copy,
-            )
 
     diagnosis_block["health_score"] = health_score
     kpis["health_score"] = health_score

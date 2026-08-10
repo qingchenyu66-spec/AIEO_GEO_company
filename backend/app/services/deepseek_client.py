@@ -623,36 +623,30 @@ class DeepseekClient:
                 "严禁「验收口径」「30天内提升至X%」「60天目标Y%」等合同式承诺。"
                 "source_action_tips 须 8~10 条纯文本（禁止 HTML）：以域名+引用次数开篇；"
                 "顾问口吻说明原因+动作+落点；挂钩短板语义词；严禁「针对」开头与验收口径。"
-                "情感正/中/负/未识别以输入计数为准，合计>0 时禁止写均为0/无情绪数据。"
-                # 2026-08-10 - 方案A：情绪占比与顶卡同口径，禁止「有情绪样本」作分母
-                "情绪占比一律以全部有效样本为分母（含未识别/未知），"
-                "禁止写「在N条有情绪样本中」或把未识别剔除后再算正负面占比；"
-                "百分比必须与下方情绪分布行一致。"
+                "情感正/中/负以输入计数为准，合计>0 时禁止写均为0/无情绪数据。"
                 "不要输出 analysis_action_tips，不要使用【深度】【广度】【维度】【策略】标签。"
             )
         prompt_section = ""
         if prompt_lines:
             prompt_section = "分语义词表现：\n" + "\n".join(prompt_lines) + "\n\n"
         # 2026-08-04 - 情绪键中英混用会导致模型误写「均为0」；统一成中文计数再喂给模型
-        # 2026-08-10 - 方案A：占比分母含「未知」，与情感顶卡/全样本 KPI 对齐
         from app.services.report_period_content_service import normalize_sentiment_counts
 
         sent_norm = normalize_sentiment_counts(sentiment_counts)
         pos_n = int(sent_norm.get("正面") or 0)
         neu_n = int(sent_norm.get("中性") or 0)
         neg_n = int(sent_norm.get("负面") or 0)
-        unk_n = int(sent_norm.get("未知") or 0)
-        sent_total = pos_n + neu_n + neg_n + unk_n
+        sent_total = pos_n + neu_n + neg_n
         if sent_total > 0:
             sentiment_line = (
-                f"情绪分布（分母=全部有效样本 {sent_total}，含未识别）："
-                f"正面 {pos_n}（{round(pos_n * 100 / sent_total, 1)}%）/"
-                f"中性 {neu_n}（{round(neu_n * 100 / sent_total, 1)}%）/"
-                f"负面 {neg_n}（{round(neg_n * 100 / sent_total, 1)}%）/"
-                f"未识别 {unk_n}（{round(unk_n * 100 / sent_total, 1)}%）"
+                f"情绪分布：正面/中性/负面 = {pos_n}/{neu_n}/{neg_n}"
+                f"（合计 {sent_total}，占比 "
+                f"{round(pos_n * 100 / sent_total, 1)}%/"
+                f"{round(neu_n * 100 / sent_total, 1)}%/"
+                f"{round(neg_n * 100 / sent_total, 1)}%）"
             )
         else:
-            sentiment_line = "情绪分布：暂无有效样本"
+            sentiment_line = "情绪分布：暂无有效情绪标注样本"
         user_prompt = (
             f"品牌：{brand_name}\n"
             f"企业：{company_name or brand_name}\n"

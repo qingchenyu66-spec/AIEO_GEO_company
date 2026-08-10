@@ -1114,33 +1114,10 @@ def build_brand_analysis_dashboard(
 def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) -> None:
     """监测任务同步完成后二次解析情感；品牌词另抽 AI 描述。"""
     purpose = str(getattr(task, "purpose", "") or "")
-    if purpose not in {"brand_word", "geo"}:
+    if purpose not in {"brand_word", "geo"} or not task.tenant_id:
         return
-    brand_name = "监测品牌"
-    tenant_id = int(task.tenant_id or 0)
-    if task.tenant_id:
-        asset = get_brand_asset(db, task.tenant_id)
-        brand_name = (
-            (asset.company_full_name if asset else None)
-            or (asset.brand_name if asset else None)
-            or "监测品牌"
-        )
-    else:
-        # 2026-08-10 - 售前诊断 standalone 无 tenant_id，原先直接 return 导致从不 DeepSeek 补标
-        from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
-
-        lead = db.scalar(
-            select(LeadDiagnosis)
-            .join(LeadDiagnosisRun, LeadDiagnosisRun.lead_diagnosis_id == LeadDiagnosis.id)
-            .where(
-                LeadDiagnosisRun.task_id == task.task_id,
-                LeadDiagnosis.deleted.is_(False),
-            )
-        )
-        if lead is None:
-            return
-        brand_name = str(lead.brand_name or "").strip() or "监测品牌"
-        tenant_id = int(lead.converted_tenant_id or 0)
+    asset = get_brand_asset(db, task.tenant_id)
+    brand_name = (asset.company_full_name if asset else None) or (asset.brand_name if asset else None) or "监测品牌"
     subtasks = list(
         db.scalars(
             select(GeoMonitorSubtask).where(
@@ -1154,7 +1131,7 @@ def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) ->
     # 2026-07-30 - GEO 同步后补二次情感，竞品情绪趋势不再只信模力中性
     parse_brand_word_sentiments_with_deepseek(
         db,
-        tenant_id=tenant_id,
+        tenant_id=task.tenant_id,
         brand_name=str(brand_name),
         subtasks=subtasks,
         max_items=BA_SENTIMENT_MAX_PER_REQUEST if purpose == "brand_word" else 48,
@@ -1164,7 +1141,7 @@ def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) ->
         return
     parse_brand_word_descriptions_with_deepseek(
         db,
-        tenant_id=tenant_id,
+        tenant_id=task.tenant_id,
         brand_name=str(brand_name),
         subtasks=subtasks,
     )
