@@ -75,7 +75,8 @@ def backfill_screenshot_dir() -> Path:
     if raw:
         path = Path(raw)
     else:
-        path = Path(__file__).resolve().parents[2] / "data" / "backfill_screenshots"
+        # 2026-08-10 - 补录截图会涨；默认进 storage（生产软链 /data/geo/storage），勿再写系统盘 data/
+        path = Path(__file__).resolve().parents[2] / "storage" / "backfill_screenshots"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     # Stuck "parsing" rows older than this are marked failed by beat sweeper.
     knowledge_parse_timeout_minutes: int = 10
 
-    # 补录自截图本地目录（空=backend/data/backfill_screenshots）
+    # 补录自截图目录（空=backend/storage/backfill_screenshots；生产经软链落 /data/geo/storage）
     backfill_screenshot_dir: str = ""
 
     # 快照补录通知规则（系统配置菜单 · 通知规则 可改）
