@@ -289,12 +289,16 @@ def build_period_deck_context(
             tail_parts.append(weekly_html)
         tail_title = "本周关注"
     else:
-        from app.services.report_custom_optimization_service import (
-            optimization_part_slide_title,
-            optimization_parts_from_modules,
-        )
-
-        custom_parts = optimization_parts_from_modules(content_modules)
+        # 2026-08-12 - 缺模块时勿整单导出失败；无定制稿则空 tail
+        try:
+            from app.services.report_custom_optimization_service import (
+                optimization_part_slide_title,
+                optimization_parts_from_modules,
+            )
+        except ImportError:
+            custom_parts = []
+        else:
+            custom_parts = optimization_parts_from_modules(content_modules)
         if custom_parts:
             # 2026-08-06 - 客户定制优化建议 docx → 原 tail 位，按 pack-item 拆页
             tail_parts = [_drop_echarts_src(_strip_h2(_strip_outer_section(p))) for p in custom_parts]
