@@ -354,8 +354,20 @@ def _header_matches_company(column: str) -> bool:
 
 
 def _header_matches_rank(column: str) -> bool:
+    raw = str(column or "")
+    # 2026-08-12 - 「品牌名单（排名不分先后）」含「排名」勿当名次列；括号会被 clean 剥掉
+    if "不分先后" in raw:
+        return False
     norm = _normalize_table_header(column)
     return any(token.casefold() in norm for token in _TABLE_RANK_HEADERS)
+
+
+def _table_headers_mark_unordered(header_cells: list[str]) -> bool:
+    """表头声明名单无序时，格内/跨行出现序都不是推荐位次。
+
+    2026-08-12 - _clean_item_name 会剥掉「（排名不分先后）」括号，须查原文
+    """
+    return any("不分先后" in str(cell or "") for cell in header_cells)
 
 
 def _resolve_table_columns(header_cells: list[str]) -> tuple[int | None, int | None]:
@@ -449,6 +461,9 @@ def _parse_markdown_table_block(
     company_col, rank_col = _resolve_table_columns(header_cells)
     if company_col is None:
         return False
+    # 2026-08-12 - 「排名不分先后」多源名单勿摊成结构化名次（派雅被抬到10/25）
+    if _table_headers_mark_unordered(header_cells):
+        return True
     row_rank = 0
     parsed_any = False
     for row in parsed_lines[1:]:

@@ -3575,6 +3575,7 @@ def _line_local_brand_enum_rank(
     2026-08-12 - 选型句「→ 找天赐、艾迪亚」仅 2 品牌也要行内序
     2026-08-12 - markdown 表行卖点加粗勿当行内枚举（动码表行虚第2）；表序走系统名称列
     2026-08-12 - 「还有像A和B」补充并列非负面 → 2 品牌行内第2（勿空位次/全文虚高）
+    2026-08-12 - 「频繁出现的品牌（如A、B）」按格序；勿被不分先后长榜盖掉
     """
     from app.services.ranking_parser import (
         _is_markdown_table_line,
@@ -3607,7 +3608,8 @@ def _line_local_brand_enum_rank(
         if re.search(
             r"[→➡]|找[\u4e00-\u9fffA-Za-z]{2,}|"
             r"对号入座|怎么选|按需求|"
-            r"还有像|补充一点|等特色|特色品牌",
+            r"还有像|补充一点|等特色|特色品牌|"
+            r"频繁出现|头部选择",
             raw_line,
         ):
             need = min(2, min_brands)
@@ -4383,7 +4385,9 @@ def _resolve_brand_rank_detail(
     )
     # 2026-07-27 - 正文无露出却 structured 虚抬名次 - 榜命中须同时正文有品牌
     # 结构化命中也须落在非负面正文（避免假货句被解析进榜）
-    if has_brand_in_rankable and rank_from_list is not None:
+    # 2026-08-12 - 「排名不分先后」对比表入库长榜勿当推荐位次；位次改走行内枚举（派雅频繁出现第2）
+    unordered_list_table = bool(re.search(r"\|[^\n]*不分先后[^\n]*\|", rankable_text))
+    if has_brand_in_rankable and rank_from_list is not None and not unordered_list_table:
         category = list_category or _matched_brand_category(subtask, brand_terms, rank_from_list)
         basis = "table" if "|" in rankable_text and "企业" in rankable_text else "section"
         candidates.append(

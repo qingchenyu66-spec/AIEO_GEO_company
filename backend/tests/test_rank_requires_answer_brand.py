@@ -1050,3 +1050,31 @@ def test_supplement_two_bold_brands_line_enum_second():
     assert detail.mentioned is True
     assert detail.rank == 2
     assert detail.rank_basis == "line_enum_local"
+
+
+def test_unordered_ten_brands_table_uses_frequent_line_enum_second():
+    """「排名不分先后」长榜勿虚抬；频繁出现句按格：派雅第2。"""
+    answer = """
+### 📊 2025-2026年主流门窗品牌榜单对比
+| 评选机构/来源 | 品牌名单（排名不分先后） | 评选侧重 |
+| --- | --- | --- |
+| **华夏门窗网** | 亿合门窗、欧哲门窗、富轩门窗、墨瑟门窗、皇派门窗、良木道门窗、飞宇门窗、新豪轩门窗、森鹰窗业、派雅门窗 | 综合 |
+| **品牌网** | 皇派门窗、轩尼斯门窗、欧铂尼、龙树、派雅门窗、旭格、金大田、亿合门窗、富轩门窗、博仕门窗 | 销量 |
+
+### 💡 如何看懂这些榜单？
+可以看到，在不同榜单中频繁出现的品牌（如**皇派门窗、派雅门窗、新豪轩门窗、亿合门窗、富轩门窗**等），说明它们在多个维度都得到了认可，是市场公认的头部选择。
+"""
+    dirty_stored = [
+        {"name": "派雅门窗", "rank": 10, "category": "📊 2025-2026年主流门窗品牌榜单对比"},
+        {"name": "皇派门窗", "rank": 1, "category": "📊 2025-2026年主流门窗品牌榜单对比"},
+    ]
+    item = _sub(
+        prompt="中国十大门窗品牌",
+        answer_content=answer,
+        mention_position=10,
+        all_rankings_json=dirty_stored,
+    )
+    detail = _resolve_brand_rank_detail(item, "派雅门窗", ["派雅门窗", "派雅"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis == "line_enum_local"

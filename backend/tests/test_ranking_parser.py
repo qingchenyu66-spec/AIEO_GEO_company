@@ -902,6 +902,21 @@ def test_parse_tsv_brand_table_yidun_first():
     assert rank == 1
 
 
+def test_parse_skips_unordered_brand_list_table():
+    """2026-08-12 - 表头「排名不分先后」不产出结构化名次。"""
+    text = """
+### 📊 2025-2026年主流门窗品牌榜单对比
+| 评选机构/来源 | 品牌名单（排名不分先后） | 评选侧重 |
+| --- | --- | --- |
+| **华夏门窗网** | 亿合门窗、欧哲门窗、富轩门窗、派雅门窗 | 综合 |
+| **品牌网** | 皇派门窗、派雅门窗、亿合门窗 | 销量 |
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "派雅门窗" not in names
+    assert "皇派门窗" not in names
+
+
 def test_markdown_system_name_column_ranks_fifth():
     """系统名称列产品表：动码为第5行。"""
     text = """
