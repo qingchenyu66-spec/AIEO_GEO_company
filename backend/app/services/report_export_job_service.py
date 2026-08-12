@@ -181,6 +181,9 @@ def _report_fingerprint(db, report_id: int, export_format: str, theme: str) -> s
             asset = f"{_asset_stamp()}|mode={_PDF_EXPORT_MODE}"
         else:
             asset = _molizhishu_asset_stamp()
+    elif export_format == "html":
+        # 2026-08-12 - HTML 下载改内联；旧外链缓存指纹不变会一直复用坏文件
+        asset = "html-embed-v1"
     raw = f"report|{report_id}|{export_format}|{theme}|{stamp}|{asset}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
