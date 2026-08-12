@@ -1002,6 +1002,36 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
     raise ValueError(f"unsupported html preview report type: {report_type}")
 
 
+def build_report_html_download(db: Session, report: dict[str, Any], *, theme: str = "b") -> str:
+    """报告中心 HTML 下载：内联母版图+echarts，桌面 file:// 可离线打开。
+
+    2026-08-12 - 下载曾复用预览外链快照 → 本地打开图表库未加载、背景板丢失
+    """
+    payload = _normalize_export_payload(report)
+    platform_names = _platform_label_map()
+    report_type = str(payload.get("report_type") or "")
+    tenant_id = int(report.get("tenant_id") or 0)
+
+    if report_type in PERIOD_COMPARISON_REPORT_TYPES:
+        if tenant_id <= 0:
+            raise ValueError("报告缺少 tenant_id")
+        from app.services.report_period_deck_pdf_service import build_period_deck_html
+
+        return build_period_deck_html(db, payload, tenant_id=tenant_id, embed_assets=True)
+
+    if report_type == "completion":
+        from app.services.report_period_deck_pdf_service import build_completion_deck_html
+
+        return build_completion_deck_html(payload, platform_names, embed_assets=True)
+
+    if report_type == "diagnosis":
+        from app.services.report_molizhishu_html_service import build_molizhishu_html
+
+        return build_molizhishu_html(payload, platform_names, theme=theme)
+
+    raise ValueError(f"unsupported html download report type: {report_type}")
+
+
 REPORT_PREVIEW_ROOT = Path(__file__).resolve().parents[2] / "storage" / "report-preview"
 _PREVIEW_FP_RE = re.compile(r"<!--\s*geo-preview-fp:([^\s]+)\s*-->")
 
@@ -1151,8 +1181,8 @@ def build_report_export(
             raise ValueError("HTML 导出暂仅支持售前诊断与周期监测报告")
         if db is None:
             raise ValueError("HTML 导出需要数据库会话")
-        # 与预览共用同一落盘快照（指纹失效后重建），避免预览/导出两套数据
-        content = read_or_build_report_html_preview(db, report, theme=theme).encode("utf-8")
+        # 2026-08-12 - 下载内联资源；预览仍用外链快照（免 11MB 拖死）
+        content = build_report_html_download(db, report, theme=theme).encode("utf-8")
         mime = "text/html; charset=utf-8"
         suffix = "html"
     elif export_format == "docx" and report_type in PERIOD_COMPARISON_REPORT_TYPES:
