@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import BrandAsset, _is_industry_monitor_keyword, ranking_task_is_industry_scoped
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
-from app.services.monitor_service import BrandRankResolution, _subtask_answer_plaintext
+from app.services.monitor_service import BrandRankResolution, _answer_body_for_rank, _brand_appears_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +182,18 @@ def resolve_rank_with_optional_llm(
     if not should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task):
         return resolution
 
+    answer_text = _answer_body_for_rank(subtask)
+    if not _brand_appears_in_text(answer_text, brand_terms):
+        return resolution
+
     llm_result = extract_brand_rank_with_llm(
         brand_terms=brand_terms,
         monitor_keyword=monitor_keyword,
         prompt=str(subtask.prompt or ""),
-        answer_text=_subtask_answer_plaintext(subtask),
+        answer_text=answer_text,
     )
+    if llm_result is not None and llm_result.mentioned and llm_result.evidence:
+        if llm_result.evidence not in answer_text:
+            # 2026-08-11 - LLM evidence 不在正文 - 丢弃，防 context 串味
+            llm_result = None
     return apply_llm_rank_fallback(resolution, llm_result)

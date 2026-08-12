@@ -48,13 +48,30 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_optional_llm)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
 
-    recompute_subtask_rank_from_answer(MagicMock(), subtask, task, override_mention_position=None)
+    recompute_subtask_rank_from_answer(
+        MagicMock(), subtask, task, override_mention_position=None, force=True
+    )
 
     assert seen["mp_during_resolve"] is None
     assert "rank_resolution" not in seen["raw"]
     assert seen["raw"].get("manual_rank_locked") is False
     assert subtask.mention_position == 1
     assert subtask.raw_result_json.get("rank_resolution", {}).get("rank") == 1
+
+
+def test_recompute_skips_manual_snapshot_unless_forced() -> None:
+    """2026-08-12 - 补录勿洗 - 无 force 时保留 manual_snapshot 原位次。"""
+    subtask = SimpleNamespace(
+        mention_position=3,
+        raw_result_json={"source": "manual_snapshot", "manual_rank_locked": False},
+        answer_content="万唯听力不错",
+        all_rankings_json=[],
+        prompt="教辅推荐",
+    )
+    task = SimpleNamespace(tenant_id=None, monitor_keywords="万唯", raw_request_json={})
+    recompute_subtask_rank_from_answer(MagicMock(), subtask, task)
+    assert subtask.mention_position == 3
+    assert subtask.raw_result_json.get("source") == "manual_snapshot"
 
 
 def test_preferred_column_table_rank_first_row() -> None:
@@ -112,5 +129,7 @@ def test_preferred_column_ignores_prose_can_prefer_bullet() -> None:
         raw_result_json={},
     )
     detail = _resolve_brand_rank_detail(subtask, "新风系统品牌推荐", ["霍尼韦尔"], asset=None)
-    assert detail.rank == 2
-    assert detail.rank_basis in {"table", "section", None} or detail.source in {"structured", "appearance"}
+    # 2026-08-12 - B/类内：「预算有限」下点名霍尼韦尔 → section_local 第1，优于旧全文虚高
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"

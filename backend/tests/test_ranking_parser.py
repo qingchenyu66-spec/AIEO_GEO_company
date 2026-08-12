@@ -849,3 +849,95 @@ def test_parse_markdown_table_keeps_br_cells_on_same_row():
     rank, matched = find_best_brand_rank(entries, lambda name: "霍尼韦尔" in name)
     assert matched is True
     assert rank == 2
+
+
+def test_parse_tsv_share_page_brand_table():
+    """2026-08-12 - DeepSeek 分享页制表符品牌表须进榜（伊盾第3）。"""
+    text = """
+📊 2025-2026年主流门窗品牌榜单概览
+
+下表汇总了这些品牌在不同权威榜单中的上榜情况：
+
+品牌名称	核心特点/定位	主要上榜榜单及荣誉
+派雅门窗	“深舒适”人居理念，高端系统门窗领导品牌-
+2026年“大雁奖”-
+4
+、2025年《品牌网》榜单-
+
+皇派门窗	杭州亚运会官方指定门窗，高端隔音门窗-
+1
+-
+11
+2026年“大雁奖”-
+
+伊盾门窗	安全系统门窗开创者，专注全屋高端铝合金系统门窗-
+2026年十大门窗品牌排行榜-
+2
+
+新豪轩门窗	从铝型材到玻璃全自主生产，智能生产基地超400亩-
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert names[:4] == ["派雅门窗", "皇派门窗", "伊盾门窗", "新豪轩门窗"]
+    assert "品牌名称" not in names
+    rank, matched = find_best_brand_rank(entries, lambda name: "伊盾" in name)
+    assert matched is True
+    assert rank == 3
+
+
+def test_parse_tsv_brand_table_yidun_first():
+    """2026-08-12 - 实力品牌速览 TSV：伊盾首行应为第1。"""
+    text = """
+🏆 主流门窗实力品牌速览
+品牌	核心定位与特色	关键数据与荣誉
+伊盾门窗	安全系统门窗开创者-
+派雅门窗	“深舒适” 门窗标杆，行业老牌-
+皇派门窗	高端隔音门窗领军者-
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert names[:3] == ["伊盾门窗", "派雅门窗", "皇派门窗"]
+    rank, matched = find_best_brand_rank(entries, lambda name: "伊盾" in name)
+    assert matched is True
+    assert rank == 1
+
+
+def test_markdown_system_name_column_ranks_fifth():
+    """系统名称列产品表：动码为第5行。"""
+    text = """
+### 几款有代表性的系统
+| 系统名称 | 核心特点 | 适合谁 | 粗略价格参考 |
+| --- | --- | --- | --- |
+| **章管家** | **实体章管控老牌厂商** 说明 | 中大型企业 | 年费 |
+| **契约锁** | **电子签章+实体章一体化** | 央国企 | 定制报价 |
+| **爱国小男孩（云章）** | **物联网印章先行者** | 企业 | 定制报价 |
+| **云玺量子（钉钉生态）** | **与钉钉深度融合** | 中小企业 | 定制报价 |
+| **动码印章** | **物电同源，强防伪溯源** 说明 | 高要求场景 | 定制报价 |
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "动码印章" in names
+    rank, matched = find_best_brand_rank(entries, lambda name: "动码" in name)
+    assert matched is True
+    assert rank == 5
+    # 同表内位次按行序，不被节标题占坑抬高
+    table_only = [item for item in entries if item.get("name") in {
+        "章管家", "契约锁", "爱国小男孩", "云玺量子", "动码印章",
+    }]
+    assert [item["rank"] for item in table_only] == [1, 2, 3, 4, 5]
+
+def test_markdown_system_slash_product_header_ranks():
+    """系统/产品 表头同样按首列行序。"""
+    text = """
+| 系统/产品 | 核心特点 | 适用场景参考 |
+| :--- | :--- | :--- |
+| **章管家** | 软硬一体 | 分支多 |
+| **契约锁** | 电子化 | 央企 |
+| **爱国小男孩** | 物联网 | 集中保管 |
+| **动码印章** | 物电同源 | 防伪 |
+"""
+    entries = parse_answer_rankings(text)
+    rank, matched = find_best_brand_rank(entries, lambda name: "动码" in name)
+    assert matched is True
+    assert rank == 4
+

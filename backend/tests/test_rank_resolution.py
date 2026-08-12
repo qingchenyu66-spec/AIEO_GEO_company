@@ -92,13 +92,17 @@ def test_resolve_appearance_top3_still_kept(monkeypatch) -> None:
 
 
 def test_resolve_scheme_x_picks_frontmost_among_rules(monkeypatch) -> None:
-    """结构化12 + 库内1 → 取最前1。"""
+    """B：已去掉旧 api 回退；仅结构化 12 时取 12。"""
     monkeypatch.setattr(
         "app.services.monitor_service._find_brand_in_rankings",
         lambda *args, **kwargs: (12, True, "单元/同步试卷"),
     )
     monkeypatch.setattr("app.services.monitor_service._appearance_order_rank", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.services.monitor_service._brand_appears_in_text", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "app.services.monitor_service._configured_exposure_term_in_text",
+        lambda *args, **kwargs: True,
+    )
     monkeypatch.setattr("app.services.monitor_service._matched_brand_category", lambda *a, **k: "单元/同步试卷")
 
     subtask = SimpleNamespace(
@@ -110,8 +114,8 @@ def test_resolve_scheme_x_picks_frontmost_among_rules(monkeypatch) -> None:
         raw_result_json={},
     )
     detail = _resolve_brand_rank_detail(subtask, "万唯", ["万唯"], asset=None)
-    assert detail.rank == 1
-    assert detail.source == "api"
+    assert detail.rank == 12
+    assert detail.source == "structured"
 
 
 def test_resolve_scheme_x_structured_beats_worse_api(monkeypatch) -> None:
@@ -158,7 +162,7 @@ def test_resolve_brand_rank_detail_persisted_llm_competes_not_exclusive() -> Non
     """已存 LLM 不再短路；无更好规则时仍可用 LLM 位次。"""
     subtask = SimpleNamespace(
         prompt="LED广告公司推荐",
-        answer_content="1. 竞品A\n2. 竞品B",
+        answer_content="1. 竞品A\n2. 竞品B\n西南：艾迪亚控股也值得看。",
         mention_context=None,
         all_rankings_json=[],
         mention_position=4,
@@ -170,7 +174,7 @@ def test_resolve_brand_rank_detail_persisted_llm_competes_not_exclusive() -> Non
                 "confidence": 0.91,
                 "category": "区域优质工程商",
                 "rank_basis": "section_bullet",
-                "evidence": "西南：艾迪亚控股",
+                "evidence": "西南：艾迪亚控股也值得看。",
             }
         },
     )

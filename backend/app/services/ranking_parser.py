@@ -287,6 +287,9 @@ def _is_markdown_table_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
+    # 2026-08-12 - 分享页荣誉碎行「-」勿当 markdown 表行，否则会掐断 TSV 品牌表
+    if "|" not in stripped:
+        return False
     if stripped.startswith("|") and "|" in stripped[1:]:
         return True
     return bool(re.match(r"^[\|\s:\-]+$", stripped))
@@ -320,6 +323,11 @@ _TABLE_COMPANY_HEADERS = (
     "供应商",
     "服务商",
     "供应商梯队",
+    # 2026-08-12 - DeepSeek「系统名称|核心特点」产品表未认公司列 → 动码吃不到主表第5
+    "系统名称",
+    "产品名称",
+    "产品名",
+    "软件名称",
 )
 _TABLE_COMPANY_FALLBACK = ("公司", "企业", "品牌", "供应商", "服务商", "厂商")
 _TABLE_COMPANY_HEADER_EXCLUDE = ("诉求", "红线", "场景", "能力", "标签", "适合", "指标", "数值", "说明", "特点")
@@ -338,6 +346,9 @@ def _header_matches_company(column: str) -> bool:
     if any(hint in norm for hint in _TABLE_COMPANY_HEADER_EXCLUDE):
         return False
     if any(token.casefold() in norm for token in _TABLE_COMPANY_HEADERS):
+        return True
+    # 2026-08-12 - 「系统/产品」「推荐品牌」等变体
+    if "系统" in norm and any(x in norm for x in ("产品", "名称", "软件")):
         return True
     return any(token in norm for token in _TABLE_COMPANY_FALLBACK)
 
@@ -467,6 +478,79 @@ def _parse_markdown_table_block(
     return parsed_any
 
 
+def _split_tsv_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in str(line or "").split("\t")]
+
+
+def _is_tsv_table_header_line(line: str) -> bool:
+    """分享页制表符表头：品牌名称\\t核心特点\\t…
+
+    2026-08-12 - 数据行「…领导品牌」含「品牌」勿当表头，否则公司列偏到描述列
+    """
+    if "\t" not in (line or ""):
+        return False
+    cells = _split_tsv_cells(line)
+    if len(cells) < 2:
+        return False
+    company_col, _rank_col = _resolve_table_columns(cells)
+    if company_col is None:
+        return False
+    header_cell = cells[company_col]
+    norm = _normalize_table_header(header_cell)
+    if not norm or len(norm) > 12:
+        return False
+    # 首列已是具体品牌名，且「品牌」命中在其它列 → 数据行
+    first = _clean_item_name(cells[0])
+    if (
+        first
+        and _looks_like_company_list_name(first)
+        and company_col != 0
+        and not any(token.casefold() in _normalize_table_header(cells[0]) for token in _TABLE_COMPANY_HEADERS)
+        and _normalize_table_header(cells[0]) not in {"品牌", "企业", "公司", "厂商"}
+    ):
+        return False
+    if any(token.casefold() in norm for token in _TABLE_COMPANY_HEADERS):
+        return True
+    if norm in {"品牌", "企业", "公司", "厂商", "机构"}:
+        return True
+    return False
+
+
+def _is_tsv_table_noise_line(line: str) -> bool:
+    """分享页表格被拆开的荣誉/脚注行，不当选手、也不结束表。"""
+    text = str(line or "").strip()
+    if not text:
+        return True
+    if "\t" in text:
+        return False
+    if text in {"-", "—", "–"}:
+        return True
+    if text.isdigit():
+        return True
+    if text.startswith(("、", "，", ",")):
+        return True
+    if re.match(r"^20\d{2}年", text) and len(text) <= 40:
+        return True
+    return False
+
+
+def _tsv_row_company_names(line: str, company_col: int) -> list[str]:
+    cells = _split_tsv_cells(line)
+    if company_col >= len(cells):
+        return []
+    names = _split_table_company_cell(cells[company_col])
+    # 表头噪声（偶发被当成数据行）
+    skip = {
+        _normalize_table_header(h)
+        for h in (*_TABLE_COMPANY_HEADERS, "品牌", "企业", "公司")
+    }
+    return [
+        name
+        for name in names
+        if _normalize_table_header(name) not in skip and not _looks_like_table_category_label(name)
+    ]
+
+
 def _split_combined_header_brands(text: str) -> list[str]:
     """### 艾迪亚控股、澜翼传媒、麦迪威广告 → 多个品牌名（同段并列排名）。"""
     cleaned = re.sub(r"^#+\s*", "", (text or "").strip())
@@ -557,6 +641,9 @@ def _is_category_header(line: str) -> bool:
     if SECTION_TITLE_RE.match(stripped):
         content = re.sub(r"^[一二三四五六七八九十百]+[、.．]\s*", "", stripped)
         return len(content) <= 40 and not content.endswith("。")
+    # 2026-08-12 - 分享页「主流门窗品牌榜单概览 / 实力品牌速览」无 # 也要当段
+    if re.search(r"(?:榜单概览|品牌速览|实力品牌速览|主流门窗品牌)", stripped) and len(stripped) <= 60:
+        return True
     return False
 
 
@@ -708,6 +795,9 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         results.append({"name": cleaned, "rank": rank, "category": bucket})
 
     table_buffer: list[str] = []
+    # 2026-08-12 - DeepSeek 分享页制表符品牌表（非 markdown |）也要进结构化榜
+    tsv_mode = False
+    tsv_company_col = 0
 
     def flush_table_buffer() -> None:
         nonlocal table_buffer
@@ -720,18 +810,54 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         )
         table_buffer = []
 
+    def end_tsv_mode() -> None:
+        nonlocal tsv_mode, tsv_company_col
+        tsv_mode = False
+        tsv_company_col = 0
+
     for raw_line in normalized.splitlines():
         line = raw_line.strip()
         if not line:
             flush_table_buffer()
+            # 分享页表行间常插空行/荣誉碎行，保持 tsv_mode
             continue
         if _is_markdown_table_line(line):
+            end_tsv_mode()
             table_buffer.append(line)
             continue
         flush_table_buffer()
 
+        # 已在 TSV 表内：先当数据行，避免描述含「品牌」被误判为新表头
+        if tsv_mode and "\t" in line:
+            names = _tsv_row_company_names(line, tsv_company_col)
+            if names:
+                for name in names:
+                    append_item(name, None, category=current_section or current_category)
+                continue
+
+        if _is_tsv_table_header_line(line):
+            cells = _split_tsv_cells(line)
+            company_col, _rank_col = _resolve_table_columns(cells)
+            if company_col is not None:
+                tsv_mode = True
+                tsv_company_col = company_col
+            continue
+
+        if tsv_mode:
+            if _is_tsv_table_noise_line(line):
+                continue
+            # 非制表符：新段标题则结束表；短碎行跳过；长散文结束表后落入后续逻辑
+            header = _parse_markdown_header(line)
+            if header or _is_category_header(line) or LIST_ITEM_RE.match(line):
+                end_tsv_mode()
+            elif len(line) <= 40:
+                continue
+            else:
+                end_tsv_mode()
+
         header = _parse_markdown_header(line)
         if header:
+            end_tsv_mode()
             level, content = header
             numbered_company = _company_from_numbered_heading(content)
             if numbered_company:
@@ -793,6 +919,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             continue
 
         if _is_category_header(line):
+            end_tsv_mode()
             stripped = re.sub(r"^\*\*|\*\*$", "", line.strip())
             stripped = re.sub(r"^【|】$", "", stripped).strip()
             numbered_company = _company_from_numbered_heading(stripped)
@@ -836,6 +963,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             continue
 
     flush_table_buffer()
+    end_tsv_mode()
 
     if not results:
         for match in PROSE_RANK_RE.finditer(normalized):

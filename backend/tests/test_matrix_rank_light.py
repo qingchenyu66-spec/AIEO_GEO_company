@@ -45,6 +45,7 @@ def test_kpi_rank_prefers_normalized_structured_over_dirty_auto_mention():
 
     # 模力脏榜：全员 rank=1；规范化后按出场序重编号，品牌应在第 4
     item = _subtask(
+        answer_content="推荐顺序：甲、乙、丙、艾迪亚控股集团有限公司。",
         all_rankings_json=[
             {"name": "甲", "rank": 1},
             {"name": "乙", "rank": 1},
@@ -66,6 +67,7 @@ def test_kpi_rank_prefers_normalized_structured_over_dirty_auto_mention():
 def test_light_path_trusts_non_suspicious_mention_without_reconcile():
     """位次≠1 且榜单未扎堆时，轻量路径不强制结构化对账。"""
     item = _subtask(
+        answer_content="榜单里有艾迪亚控股集团。",
         all_rankings_json=[
             {"name": "甲", "rank": 1},
             {"name": "艾迪亚控股集团", "rank": 2},
@@ -88,6 +90,7 @@ def test_light_path_trusts_non_suspicious_mention_without_reconcile():
 def test_matrix_unloaded_raw_skips_reconcile_trusts_mention():
     """A′：矩阵未 load raw_result_json 时不对账，避免补录第1被文末产品改成22。"""
     item = _subtask(
+        answer_content="首选推荐万唯教辅。",
         all_rankings_json=[
             {"name": "甲", "rank": 1},
             {"name": "乙", "rank": 2},
@@ -123,6 +126,7 @@ def test_structured_reconcile_rejects_late_product_jump():
 
 def test_reconcile_guard_keeps_mention_when_list_rank_jumps():
     item = _subtask(
+        answer_content="首选推荐万唯。",
         all_rankings_json=[
             {"name": "甲", "rank": 1},
             {"name": "乙", "rank": 2},
@@ -167,6 +171,7 @@ def test_normalize_cache_reuses_same_rankings_payload():
 
 def test_display_rank_falls_back_to_structured_when_mention_missing():
     item = _subtask(
+        answer_content="本段推荐艾迪亚控股集团。",
         all_rankings_json=[{"name": "艾迪亚控股集团", "rank": 2}],
         mention_position=None,
     )
@@ -191,4 +196,29 @@ def test_matrix_light_does_not_need_answer_content():
     detail = _resolve_brand_rank_detail_matrix_light(item, None, ["艾迪亚"], None)
     assert detail.rank == 1
     assert detail.mentioned is True
+    assert detail.source == "stored"
+
+
+def test_detail_full_parse_does_not_override_stored_mention():
+    """2026-08-12 - 有库内位次时详情不得全文重算成别的数，否则展开会 7→2。"""
+    item = _subtask(
+        prompt="初一同步辅导书推荐",
+        answer_content="""
+## 四、分学科专项补充
+### 小四门（道法、历史、地理、生物）
+1. 日常同步：教材帮即可。
+2. 背诵：**《万唯小四门》**，考点速记。
+""",
+        all_rankings_json=[],
+        mention_position=7,
+        raw_result_json={"rank_resolution": {"source": "appearance", "rank": 7}},
+    )
+    detail = _read_display_brand_rank(
+        item,
+        "万唯",
+        ["万唯", "万唯小四门"],
+        None,
+        allow_full_parse=True,
+    )
+    assert detail.rank == 7
     assert detail.source == "stored"
