@@ -150,29 +150,51 @@ def _refresh_one(db: Session, subtask: GeoMonitorSubtask, *, apply: bool) -> dic
         row["error"] = str(exc)[:240]
         return row
     refs = _filter_citation_sources(hit.references or [])
-    if not _refs_quality_ok(refs, page_host=(hit.source_host or "")):
-        row["action"] = "skip_weak_fetch"
+    if _refs_quality_ok(refs, page_host=(hit.source_host or "")):
+        # 2026-08-14 - 只刷新信源，不动正文/位次/manual_rank_locked
+        subtask.reference_list_json = refs or None
+        subtask.citation_list_json = None
+        raw = dict(subtask.raw_result_json or {})
+        meta = dict(raw.get("backfill_meta") or {}) if isinstance(raw.get("backfill_meta"), dict) else {}
+        meta.update(
+            {
+                "refs_refreshed_at": datetime.now().isoformat(timespec="seconds"),
+                "refs_before": before,
+                "refs_after": len(refs),
+                "refs_refresh_host": hit.source_host,
+            }
+        )
+        raw["backfill_meta"] = meta
+        raw["fetch_reference_count"] = len(refs)
+        subtask.raw_result_json = raw
+        db.add(subtask)
+        row["action"] = "updated"
+        row["refs_after"] = len(refs)
+        return row
+    # 2026-08-14 - 千问 my.cn 很多分享无材料面板；旧「1 条平台首页」应清掉而非保留
+    if junk and before <= 1:
+        subtask.reference_list_json = None
+        subtask.citation_list_json = None
+        raw = dict(subtask.raw_result_json or {})
+        meta = dict(raw.get("backfill_meta") or {}) if isinstance(raw.get("backfill_meta"), dict) else {}
+        meta.update(
+            {
+                "refs_cleared_at": datetime.now().isoformat(timespec="seconds"),
+                "refs_before": before,
+                "refs_after": 0,
+                "refs_clear_reason": "refetch_no_quality_refs",
+            }
+        )
+        raw["backfill_meta"] = meta
+        raw["fetch_reference_count"] = 0
+        subtask.raw_result_json = raw
+        db.add(subtask)
+        row["action"] = "cleared_junk"
+        row["refs_after"] = 0
         row["refs_fetched"] = len(refs)
         return row
-    # 2026-08-14 - 只刷新信源，不动正文/位次/manual_rank_locked
-    subtask.reference_list_json = refs or None
-    subtask.citation_list_json = None
-    raw = dict(subtask.raw_result_json or {})
-    meta = dict(raw.get("backfill_meta") or {}) if isinstance(raw.get("backfill_meta"), dict) else {}
-    meta.update(
-        {
-            "refs_refreshed_at": datetime.now().isoformat(timespec="seconds"),
-            "refs_before": before,
-            "refs_after": len(refs),
-            "refs_refresh_host": hit.source_host,
-        }
-    )
-    raw["backfill_meta"] = meta
-    raw["fetch_reference_count"] = len(refs)
-    subtask.raw_result_json = raw
-    db.add(subtask)
-    row["action"] = "updated"
-    row["refs_after"] = len(refs)
+    row["action"] = "skip_weak_fetch"
+    row["refs_fetched"] = len(refs)
     return row
 
 
@@ -225,10 +247,17 @@ def main() -> None:
             if not tenant_ids:
                 invalidate_monitor_summary_cache(bust_overview=True)
         updated = sum(1 for r in report if r.get("action") == "updated")
+        cleared = sum(1 for r in report if r.get("action") == "cleared_junk")
         failed = sum(1 for r in report if r.get("action") == "fetch_failed")
         print(
             json.dumps(
-                {"done": True, "processed": len(report), "updated": updated, "fetch_failed": failed},
+                {
+                    "done": True,
+                    "processed": len(report),
+                    "updated": updated,
+                    "cleared_junk": cleared,
+                    "fetch_failed": failed,
+                },
                 ensure_ascii=False,
             )
         )
