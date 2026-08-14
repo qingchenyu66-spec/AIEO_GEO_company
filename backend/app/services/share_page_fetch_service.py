@@ -461,6 +461,8 @@ def _needs_browser_for_refs(host: str) -> bool:
             "deepseek.com",
             "deepseek.cn",
             "qianwen.com",
+            # 2026-08-14 - 生产补录多为 qianwen.my.cn，不走浏览器就抽不到材料链
+            "qianwen.my.cn",
             "tongyi.aliyun.com",
             "yuanbao.tencent.com",
             "yb.tencent.com",

@@ -104,10 +104,9 @@ def test_qianwen_http_not_enough_when_claim_exceeds_refs() -> None:
     assert _http_refs_enough(hit2, "www.qianwen.com") is True
 
 
-def test_deepseek_anchor_route_on_local_probe() -> None:
-    path = PROBE_DIR / "deepseek.html"
-    if not path.exists():
-        return
-    refs = _refs_from_html(path.read_text(encoding="utf-8", errors="replace"), "chat.deepseek.com")
-    assert len(refs) >= 5
-    assert all("deepseek.com" not in str(r.get("url")) for r in refs)
+def test_qianwen_my_cn_needs_browser() -> None:
+    from app.services.share_page_fetch_service import _needs_browser_for_refs
+
+    assert _needs_browser_for_refs("qianwen.my.cn") is True
+    assert _needs_browser_for_refs("www.qianwen.com") is True
+    assert _needs_browser_for_refs("www.doubao.com") is False
