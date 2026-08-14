@@ -637,7 +637,7 @@ onUnmounted(() => {
           <span
             class="ws-board-title-tip"
             tabindex="0"
-            data-tip="格子分数 = 该监控词在该平台样本中品牌被提及的比例 × 100（工作台轻量统计；有提及位次即计为提及）。— 表示该词×平台暂无样本。"
+            data-tip="格子分数 = 该监控词在该平台样本中品牌提及率 × 100（与综合露出同口径：有效排名非空才计提及）。— 表示该词×平台暂无样本。"
           >?</span>
         </div>
         <div v-if="showHeatmapLoading" class="ws-board-mini-empty">热力图加载中…</div>

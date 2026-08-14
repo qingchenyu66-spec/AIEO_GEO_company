@@ -10,7 +10,7 @@ from typing import Any
 from kombu.exceptions import OperationalError
 
 from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session, joinedload, load_only
+from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
@@ -6704,9 +6704,8 @@ def _workspace_keyword_platform_light(
 ) -> dict[str, Any]:
     """ponytail: 词热度 + 词×平台提及率；不走 ranking_matrix（limit 2000 + 复杂位次）。
 
-    口径：区间内 mention_position 非空视为提及；按监控主词×平台聚合。
-    周期按调度业务日（schedule_key 日期前缀），与日统计/KPI 一致；禁止裸 updated_at
-   （补录改写后会出现「KPI 随周期变、热力不变」）。
+    口径：与综合露出/日表一致，kpi_rank_for_subtask 非空才算提及（纠正脏 mention_position）。
+    周期按调度业务日（schedule_key 日期前缀）；禁止裸 updated_at。
     """
     keywords = _workspace_monitor_keyword_labels(keyword_groups)
     platforms = list(purchased_platforms or [])
@@ -6760,46 +6759,62 @@ def _workspace_keyword_platform_light(
 
     bucket: dict[tuple[str, str], dict[str, int]] = {}
     if task_ids:
-        mentioned_expr = case((GeoMonitorSubtask.mention_position.isnot(None), 1), else_=0)
-        rows = list(
-            db.execute(
-                select(
-                    GeoMonitorSubtask.platform,
-                    GeoMonitorSubtask.prompt,
-                    func.count().label("total"),
-                    func.coalesce(func.sum(mentioned_expr), 0).label("mentioned"),
-                )
+        # 购买 deepseek 时把 deepseek_mobile 计入 deepseek 列，避免漏数
+        from app.core.platform_order import platforms_compatible
+
+        asset = get_brand_asset(db, tenant_id)
+        try:
+            groups_for_terms = active_keyword_groups(db, tenant_id) if asset is not None else []
+        except Exception:
+            groups_for_terms = list(keyword_group_rows or [])
+        if not groups_for_terms:
+            groups_for_terms = list(keyword_group_rows or [])
+        tenant_terms = _ranking_match_terms(asset, groups_for_terms) if asset is not None else []
+
+        # 2026-08-14 - 方案 A：词×平台与饼图同用 kpi_rank；弃用裸 mention_position（润科豆包曾 90.5 vs 85.7）
+        subtasks = list(
+            db.scalars(
+                select(GeoMonitorSubtask)
                 .where(
                     GeoMonitorSubtask.task_id.in_(task_ids),
                     GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-                    GeoMonitorSubtask.platform.in_(platforms),
                 )
-                .group_by(GeoMonitorSubtask.platform, GeoMonitorSubtask.prompt)
-            ).all()
+                .options(selectinload(GeoMonitorSubtask.task))
+            )
         )
-        for platform, prompt, total, mentioned in rows:
-            # 购买 deepseek 时把 deepseek_mobile 计入 deepseek 列，避免漏数
-            from app.core.platform_order import platforms_compatible
-
+        for item in subtasks:
+            plat = str(item.platform or "").strip()
             canon = None
-            if platform in purchased_set:
-                canon = platform
+            if plat in purchased_set:
+                canon = plat
             else:
                 for code in purchased_set:
-                    if platforms_compatible(platform, code):
+                    if platforms_compatible(plat, code):
                         canon = code
                         break
             if canon is None:
                 continue
-            if prompt_monitor_intent(prompt) != "ranking":
+            if prompt_monitor_intent(item.prompt) != "ranking":
                 continue
-            keyword = _workspace_match_monitor_keyword(prompt or "", keyword_group_rows, keywords)
+            keyword = _workspace_match_monitor_keyword(item.prompt or "", keyword_group_rows, keywords)
             if not keyword:
                 continue
             key = (keyword, canon)
             stats = bucket.setdefault(key, {"mentioned": 0, "total": 0})
-            stats["total"] += int(total or 0)
-            stats["mentioned"] += int(mentioned or 0)
+            stats["total"] += 1
+            task = item.task
+            terms = list(tenant_terms)
+            mk = str(getattr(task, "monitor_keywords", None) or "").strip() if task else ""
+            if mk and mk not in terms:
+                terms.append(mk)
+            rank = kpi_rank_for_subtask(
+                item,
+                getattr(task, "monitor_keywords", None) if task else None,
+                terms,
+                asset,
+            )
+            if rank is not None:
+                stats["mentioned"] += 1
 
     data: list[list[float | int]] = []
     keyword_avgs: list[float] = []
