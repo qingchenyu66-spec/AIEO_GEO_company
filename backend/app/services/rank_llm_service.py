@@ -164,8 +164,13 @@ def rank_resolution_to_json(resolution: BrandRankResolution) -> dict[str, Any]:
 
 
 def persist_rank_resolution(subtask: GeoMonitorSubtask, resolution: BrandRankResolution) -> None:
+    from datetime import datetime
+
     raw = dict(subtask.raw_result_json or {})
-    raw["rank_resolution"] = rank_resolution_to_json(resolution)
+    payload = rank_resolution_to_json(resolution)
+    # 2026-08-14 - 落库权威元数据带解析时间，补跑/详情可审计
+    payload["parsed_at"] = datetime.now().isoformat(timespec="seconds")
+    raw["rank_resolution"] = payload
     subtask.raw_result_json = raw
 
 

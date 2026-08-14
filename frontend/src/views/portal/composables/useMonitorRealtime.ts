@@ -657,6 +657,11 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       latestSchedule,
       dayCount: periodKpis?.dayCount ?? 0,
       sampleCount: periodKpis?.sampleCount ?? null,
+      mentionedCount: periodKpis?.mentionedCount ?? null,
+      noneRankCount:
+        periodKpis?.sampleCount != null && periodKpis?.mentionedCount != null
+          ? Math.max(0, periodKpis.sampleCount - periodKpis.mentionedCount)
+          : null,
       columnCount: matrix?.columns.length ?? 0,
       avgRank: periodKpis?.avgRank ?? null,
       mentionRate: periodKpis?.mentionRate ?? null,
@@ -1116,6 +1121,17 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       if (seq !== snapshotDetailSeq) return
       if (!subtask) throw new Error('missing')
       detailSubtask.value = subtask
+      // 2026-08-14 - 会话回填：详情落库后的有效位次写回当前快照，收起不再闪回「—」
+      if (
+        subtask.mention_position != null
+        && Number.isFinite(Number(subtask.mention_position))
+        && snapshot.mention_position == null
+      ) {
+        snapshot.mention_position = Number(subtask.mention_position)
+      }
+      if (typeof subtask.brand_mentioned === 'boolean') {
+        snapshot.brand_mentioned = subtask.brand_mentioned
+      }
     } catch (error: unknown) {
       if (seq !== snapshotDetailSeq) return
       if (snapshot.page_screenshot) {

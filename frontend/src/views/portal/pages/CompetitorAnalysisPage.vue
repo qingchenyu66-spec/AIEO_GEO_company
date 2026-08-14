@@ -14,7 +14,7 @@ import {
 import { ElDialog } from 'element-plus'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
-import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
+import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { inferDeviceLabel } from '../composables/useWorkspaceBoardExtras'
 import { useBrandInsights, type CompetitorDatePreset } from '../composables/useCompetitorAnalysis'
 import { parseAnswerBlocks } from '../answerBlocks'
@@ -47,6 +47,7 @@ const {
   brandRow,
   brandSentimentRow,
   sampleTotal,
+  brandSampleTotal,
   insight,
   sentimentTrendRows,
   sentimentKeywordTab,
@@ -114,15 +115,9 @@ const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?
 
 const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at))
 
-const snapshotSourceRows = computed(() => {
-  const subtask = snapshotSubtask.value
-  const list = subtask?.reference_list?.length ? subtask.reference_list : subtask?.citation_list
-  return (list || []).slice(0, 12).map((source, index) => ({
-    key: `${source.index ?? index}-${source.url || source.title || index}`,
-    href: externalLink(source.url),
-    ...citationSourceDisplay(source),
-  }))
-})
+const snapshotSourceTracks = computed(() =>
+  buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
+)
 </script>
 
 <template>
@@ -214,7 +209,7 @@ const snapshotSourceRows = computed(() => {
       <article class="brand-insights-kpi">
         <span>本品牌提及率</span>
         <b>{{ brandRow?.mention ?? 0 }}%</b>
-        <em>{{ brandRow?.mention_count ?? 0 }} / {{ sampleTotal }} 样本</em>
+        <em>{{ brandRow?.mention_count ?? 0 }} / {{ brandSampleTotal }} 样本</em>
       </article>
       <article class="brand-insights-kpi">
         <span>首位提及率</span>
@@ -224,7 +219,8 @@ const snapshotSourceRows = computed(() => {
       <article class="brand-insights-kpi">
         <span>平均排名</span>
         <b>{{ formatRank(brandRow?.rank) }}</b>
-        <em>越小越靠前</em>
+        <!-- 2026-08-14 - 本品牌与竞品排名口径不同，显式挂有排名样本覆盖 -->
+        <em>{{ brandRow?.rank_sample_count ?? 0 }} / {{ brandSampleTotal }} 有排名</em>
       </article>
       <article class="brand-insights-kpi">
         <span>正面情绪占比</span>
@@ -463,10 +459,25 @@ const snapshotSourceRows = computed(() => {
           </div>
         </div>
         <div v-else class="ws-board-mini-empty">暂无回答正文</div>
-        <div v-if="snapshotSourceRows.length" class="ws-board-drawer-sources">
-          <div class="ws-board-drawer-body-head">引用信源 · {{ snapshotSourceRows.length }}</div>
+        <div v-if="snapshotSourceTracks.citations.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">正文引用 · {{ snapshotSourceTracks.citations.length }}</div>
           <a
-            v-for="row in snapshotSourceRows"
+            v-for="row in snapshotSourceTracks.citations"
+            :key="row.key"
+            class="ws-board-source-link"
+            :class="{ 'is-plain': !row.href }"
+            :href="row.href || undefined"
+            :target="row.href ? '_blank' : undefined"
+            :rel="row.href ? 'noopener noreferrer' : undefined"
+          >
+            <span class="ws-board-source-title">{{ row.title }}</span>
+            <span v-if="row.site" class="ws-board-source-site">{{ row.site }}</span>
+          </a>
+        </div>
+        <div v-if="snapshotSourceTracks.references.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">参考来源 · {{ snapshotSourceTracks.references.length }}</div>
+          <a
+            v-for="row in snapshotSourceTracks.references"
             :key="row.key"
             class="ws-board-source-link"
             :class="{ 'is-plain': !row.href }"

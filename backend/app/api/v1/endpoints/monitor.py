@@ -804,6 +804,13 @@ def monitor_subtask_detail(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    # 2026-08-14 - 详情只补空落库后再只读展示，收起/刷新与矩阵同源
+    from app.services.monitor_service import ensure_subtask_rank_persisted
+
+    if ensure_subtask_rank_persisted(db, subtask, task):
+        db.add(subtask)
+        db.commit()
+        db.refresh(subtask)
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = _keyword_groups_for_tenant(db, task.tenant_id)
     display = serialize_subtask_for_display(

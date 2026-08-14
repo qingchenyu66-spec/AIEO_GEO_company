@@ -7,16 +7,12 @@ import PlatformBadge from '../../../components/PlatformBadge.vue'
 import RankingMatrixChartPanel from '../components/RankingMatrixChartPanel.vue'
 import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../services/monitor'
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
-import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
+import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { externalLink } from '../portalUtils'
 import { useMonitorRealtime } from '../composables/useMonitorRealtime'
 
-function citationRows(list: MonitorSubtask['reference_list'] | undefined) {
-  return (list || []).slice(0, 8).map((source, index) => ({
-    key: `${source.index ?? index}-${source.url || source.title || index}`,
-    href: externalLink(source.url),
-    ...citationSourceDisplay(source),
-  }))
+function sourceTracks(subtask: MonitorSubtask | null | undefined) {
+  return buildSourceTrackRows(subtask, { limit: 8, linkOf: externalLink })
 }
 
 const {
@@ -136,15 +132,26 @@ const showRankNote = computed(() => {
   const intent = subtask.prompt_intent ?? detailContext.value?.cell?.prompt_intent
   const raw = subtask.raw_mention_position
   const rank = subtask.mention_position
-  return intent === 'ranking' && raw != null && raw !== rank
+  // 2026-08-12 - 仅「正文无露出→展示空」时出黄条；勿把全文重算 8→3 误报成矩阵「-」
+  return intent === 'ranking' && raw != null && rank == null
 })
 
 function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorSubtask | null) {
   if (!subtask || subtask.subtask_id !== snapshot.subtask_id) return false
   const intent = subtask.prompt_intent ?? snapshot.prompt_intent
   const raw = subtask.raw_mention_position ?? snapshot.raw_mention_position
-  const rank = subtask.mention_position ?? snapshot.mention_position
-  return intent === 'ranking' && raw != null && raw !== rank
+  const rank = subtask.mention_position
+  // 2026-08-12 - 与 showRankNote 同口径，避免标题 8、正文 3 时还提示矩阵「-」
+  return intent === 'ranking' && raw != null && rank == null
+}
+
+/** 展开轮次后标题与指标共用详情重算位次，避免快照轻量 8 vs 详情全文 3 */
+function snapshotListRank(snapshot: RankingMatrixCellSnapshot) {
+  const subtask = detailSubtask.value
+  if (subtask && subtask.subtask_id === snapshot.subtask_id) {
+    return formatRank(subtask.mention_position)
+  }
+  return formatRank(snapshot.mention_position)
 }
 </script>
 
@@ -298,7 +305,10 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         <div class="realtime-hero-metric">
           <span>成功样本</span>
           <b>{{ heroMetrics.sampleCount != null ? heroMetrics.sampleCount : '—' }}</b>
-          <em>{{ heroMetrics.columnCount }} 个监测词 · {{ heroMetrics.scopeLabel }}</em>
+          <em v-if="heroMetrics.sampleCount != null">
+            有效位次 {{ heroMetrics.mentionedCount ?? 0 }} · 无有效位次 {{ heroMetrics.noneRankCount ?? 0 }}
+          </em>
+          <em v-else>{{ heroMetrics.columnCount }} 个监测词 · {{ heroMetrics.scopeLabel }}</em>
         </div>
         <div class="realtime-hero-metric">
           <span>平均排名</span>
@@ -604,7 +614,7 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
               <span class="realtime-drawer-accordion-main">
                 <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}{{ scheduleSourceLabel(snapshot.schedule_source) }}</strong>
                 <small>
-                  排名 {{ formatRank(snapshot.mention_position) }}
+                  排名 {{ snapshotListRank(snapshot) }}
                   · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
                   <template v-if="snapshot.page_screenshot"> · 含快照</template>
                 </small>
@@ -633,11 +643,24 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
                 </p>
                 <pre v-if="detailSubtask.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
                 <p v-else-if="detailSubtask.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
-                <div v-if="detailSubtask.reference_list?.length" class="realtime-drawer-sources">
-                  <b>引用信源</b>
+                <div v-if="sourceTracks(detailSubtask).citations.length" class="realtime-drawer-sources">
+                  <b>正文引用</b>
                   <a
-                    v-for="row in citationRows(detailSubtask.reference_list)"
-                    :key="`${detailSubtask.subtask_id}-${row.key}`"
+                    v-for="row in sourceTracks(detailSubtask).citations"
+                    :key="row.key"
+                    :href="row.href || undefined"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span>{{ row.title }}</span>
+                    <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+                  </a>
+                </div>
+                <div v-if="sourceTracks(detailSubtask).references.length" class="realtime-drawer-sources">
+                  <b>参考来源</b>
+                  <a
+                    v-for="row in sourceTracks(detailSubtask).references"
+                    :key="row.key"
                     :href="row.href || undefined"
                     target="_blank"
                     rel="noopener noreferrer"
@@ -673,11 +696,24 @@ function snapshotRankNote(snapshot: RankingMatrixCellSnapshot, subtask: MonitorS
         <pre v-if="detailSubtask?.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
         <p v-else-if="detailSubtask?.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
 
-        <div v-if="detailSubtask?.reference_list?.length" class="realtime-drawer-sources">
-          <b>引用信源</b>
+        <div v-if="detailSubtask && sourceTracks(detailSubtask).citations.length" class="realtime-drawer-sources">
+          <b>正文引用</b>
           <a
-            v-for="row in citationRows(detailSubtask.reference_list)"
-            :key="`${detailSubtask.subtask_id}-${row.key}`"
+            v-for="row in sourceTracks(detailSubtask).citations"
+            :key="row.key"
+            :href="row.href || undefined"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span>{{ row.title }}</span>
+            <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+          </a>
+        </div>
+        <div v-if="detailSubtask && sourceTracks(detailSubtask).references.length" class="realtime-drawer-sources">
+          <b>参考来源</b>
+          <a
+            v-for="row in sourceTracks(detailSubtask).references"
+            :key="row.key"
             :href="row.href || undefined"
             target="_blank"
             rel="noopener noreferrer"

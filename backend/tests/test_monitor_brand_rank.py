@@ -22,7 +22,43 @@ class _FakeRankBackfillSession:
         return self._subtasks
 
 
-def test_fill_subtask_ranks_recomputes_existing_wrong_rank() -> None:
+def test_fill_subtask_ranks_only_fills_null_by_default() -> None:
+    """2026-08-14 - 默认只补空，已有错误位次不覆盖（force 才重算）。"""
+    task = SimpleNamespace(
+        task_id="task-1",
+        tenant_id=None,
+        monitor_keywords="BrandCo",
+        raw_request_json={},
+    )
+    dirty = SimpleNamespace(
+        task_id="task-1",
+        prompt="best vendor ranking",
+        answer_content="1. CompetitorCo\n2. BrandCo\n3. OtherCo",
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=8,
+        raw_result_json={},
+    )
+    empty = SimpleNamespace(
+        task_id="task-1",
+        prompt="best vendor ranking",
+        answer_content="1. CompetitorCo\n2. BrandCo\n3. OtherCo",
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=None,
+        raw_result_json={},
+    )
+
+    changed = fill_missing_subtask_ranks_for_task(_FakeRankBackfillSession([dirty, empty]), task)
+
+    assert dirty.mention_position == 8
+    assert empty.mention_position == 2
+    assert changed == 1
+    assert empty.raw_result_json["rank_resolution"]["source"] == "structured"
+    assert "parsed_at" in empty.raw_result_json["rank_resolution"]
+
+
+def test_fill_subtask_ranks_force_recomputes_existing() -> None:
     task = SimpleNamespace(
         task_id="task-1",
         tenant_id=None,
@@ -39,11 +75,14 @@ def test_fill_subtask_ranks_recomputes_existing_wrong_rank() -> None:
         raw_result_json={},
     )
 
-    changed = fill_missing_subtask_ranks_for_task(_FakeRankBackfillSession([subtask]), task)
+    changed = fill_missing_subtask_ranks_for_task(
+        _FakeRankBackfillSession([subtask]),
+        task,
+        force_recompute=True,
+    )
 
     assert changed == 1
     assert subtask.mention_position == 2
-    assert subtask.raw_result_json["rank_resolution"]["source"] == "structured"
 
 
 def test_filter_matrix_columns_for_scope_keeps_only_prompt_set() -> None:

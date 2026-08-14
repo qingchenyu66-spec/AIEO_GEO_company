@@ -15,7 +15,7 @@ import {
   type BrandAnalysisPlatformBlock,
   type MonitorSubtask,
 } from '../../../services/monitor'
-import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
+import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
 import { loadEchartsRuntime } from '../../../utils/echartsLoader'
 import { useAuthStore } from '../../../stores/auth'
@@ -438,14 +438,9 @@ async function openAnswerFromGroup(row: BrandAnalysisAnswer) {
 const snapshotAnswerBlocks = computed(() => parseAnswerBlocks(snapshotSubtask.value?.answer_content || ''))
 const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at || null))
 const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?.page_screenshot || '') || '')
-const snapshotSourceRows = computed(() => {
-  const list = snapshotSubtask.value?.reference_list || []
-  return list.map((source, index) => ({
-    key: `${index}-${source.url || source.title || ''}`,
-    href: externalLink(source.url),
-    ...citationSourceDisplay(source),
-  }))
-})
+const snapshotSourceTracks = computed(() =>
+  buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
+)
 
 function sentimentCount(label: string) {
   const counts = dashboard.value?.sentiment_counts || {}
@@ -815,10 +810,25 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-else class="ws-board-mini-empty">暂无回答正文</div>
-        <div v-if="snapshotSourceRows.length" class="ws-board-drawer-sources">
-          <div class="ws-board-drawer-body-head">引用信源 · {{ snapshotSourceRows.length }}</div>
+        <div v-if="snapshotSourceTracks.citations.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">正文引用 · {{ snapshotSourceTracks.citations.length }}</div>
           <a
-            v-for="row in snapshotSourceRows"
+            v-for="row in snapshotSourceTracks.citations"
+            :key="row.key"
+            class="ws-board-source-link"
+            :class="{ 'is-plain': !row.href }"
+            :href="row.href || undefined"
+            :target="row.href ? '_blank' : undefined"
+            :rel="row.href ? 'noopener noreferrer' : undefined"
+          >
+            <span class="ws-board-source-title">{{ row.title }}</span>
+            <span v-if="row.site" class="ws-board-source-site">{{ row.site }}</span>
+          </a>
+        </div>
+        <div v-if="snapshotSourceTracks.references.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">参考来源 · {{ snapshotSourceTracks.references.length }}</div>
+          <a
+            v-for="row in snapshotSourceTracks.references"
             :key="row.key"
             class="ws-board-source-link"
             :class="{ 'is-plain': !row.href }"

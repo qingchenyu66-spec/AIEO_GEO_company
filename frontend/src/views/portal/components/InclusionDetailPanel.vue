@@ -10,7 +10,7 @@ import {
   type MonitorSubtask,
   type WorkspaceSnapshot,
 } from '../../../services/monitor'
-import { citationSourceDisplay } from '../../../utils/sourceSiteLabel'
+import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { notifyOperationError } from '../../../utils/requestError'
 import { parseAnswerBlocks } from '../answerBlocks'
 import { formatDateTime, formatRank, externalLink } from '../portalUtils'
@@ -91,15 +91,9 @@ const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?
 
 const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at))
 
-const snapshotSourceRows = computed(() => {
-  const subtask = snapshotSubtask.value
-  const list = subtask?.reference_list?.length ? subtask.reference_list : subtask?.citation_list
-  return (list || []).slice(0, 12).map((source, index) => ({
-    key: `${source.index ?? index}-${source.url || source.title || index}`,
-    href: externalLink(source.url),
-    ...citationSourceDisplay(source),
-  }))
-})
+const snapshotSourceTracks = computed(() =>
+  buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
+)
 
 watch(totalPages, (pages) => {
   if (page.value > pages) page.value = pages
@@ -308,10 +302,25 @@ watch(
           </div>
         </div>
         <div v-else class="ws-board-mini-empty">暂无回答正文</div>
-        <div v-if="snapshotSourceRows.length" class="ws-board-drawer-sources">
-          <div class="ws-board-drawer-body-head">引用信源 · {{ snapshotSourceRows.length }}</div>
+        <div v-if="snapshotSourceTracks.citations.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">正文引用 · {{ snapshotSourceTracks.citations.length }}</div>
           <a
-            v-for="row in snapshotSourceRows"
+            v-for="row in snapshotSourceTracks.citations"
+            :key="row.key"
+            class="ws-board-source-link"
+            :class="{ 'is-plain': !row.href }"
+            :href="row.href || undefined"
+            :target="row.href ? '_blank' : undefined"
+            :rel="row.href ? 'noopener noreferrer' : undefined"
+          >
+            <span class="ws-board-source-title">{{ row.title }}</span>
+            <span v-if="row.site" class="ws-board-source-site">{{ row.site }}</span>
+          </a>
+        </div>
+        <div v-if="snapshotSourceTracks.references.length" class="ws-board-drawer-sources">
+          <div class="ws-board-drawer-body-head">参考来源 · {{ snapshotSourceTracks.references.length }}</div>
+          <a
+            v-for="row in snapshotSourceTracks.references"
             :key="row.key"
             class="ws-board-source-link"
             :class="{ 'is-plain': !row.href }"

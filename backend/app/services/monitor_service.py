@@ -197,8 +197,17 @@ def _task_brand_terms_for_rank(db: Session, task: GeoMonitorTask) -> list[str]:
     return brand_terms
 
 
-def fill_missing_subtask_ranks_for_task(db: Session, task: GeoMonitorTask) -> int:
-    """对「排名类 + 正文含品牌」子任务本地补算；正文无品牌则清掉非人工位次。"""
+def fill_missing_subtask_ranks_for_task(
+    db: Session,
+    task: GeoMonitorTask,
+    *,
+    force_recompute: bool = False,
+) -> int:
+    """对「排名类 + 正文含品牌」子任务补算位次。
+
+    2026-08-14 - 默认只补空：库内已有非人工位次不覆盖，避免详情/矩阵/补录互相洗数；
+    force_recompute=True 才整单重算（运维脚本）。无品牌露出仍清掉非人工脏位次。
+    """
     subtasks = list(
         db.scalars(
             select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id == task.task_id)
@@ -225,11 +234,48 @@ def fill_missing_subtask_ranks_for_task(db: Session, task: GeoMonitorTask) -> in
                 subtask.mention_position = None
                 changed += 1
             continue
+        # 2026-08-14 - 只补空：已有位次默认信任库，根治「展开重算覆盖」
+        if not force_recompute and subtask.mention_position is not None:
+            continue
         before = subtask.mention_position
         recompute_subtask_rank_from_answer(db, subtask, task)
         if subtask.mention_position != before:
             changed += 1
     return changed
+
+
+def ensure_subtask_rank_persisted(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+) -> bool:
+    """详情/补跑：仅当库内位次为空时校正并落库。返回是否发生写入。
+
+    2026-08-14 - GET 详情可触发只补空写回，读写分离于「默认不覆盖已有值」
+    """
+    if is_manual_snapshot_subtask(subtask):
+        return False
+    if prompt_monitor_intent(subtask.prompt) != "ranking":
+        return False
+    if not str(subtask.answer_content or "").strip():
+        return False
+    if subtask.mention_position is not None:
+        return False
+    brand_terms = _task_brand_terms_for_rank(db, task)
+    if brand_terms and not _configured_exposure_term_in_text(
+        _answer_body_for_rank(subtask), brand_terms
+    ):
+        # 无露出：显式落 null resolution，避免详情全文路径与矩阵分叉
+        from app.services.rank_llm_service import persist_rank_resolution
+
+        persist_rank_resolution(
+            subtask,
+            BrandRankResolution(rank=None, mentioned=False, source="none", confidence=0.95),
+        )
+        return True
+    before = subtask.mention_position
+    recompute_subtask_rank_from_answer(db, subtask, task)
+    return subtask.mention_position != before
 
 
 def _apply_remote_task_counts(task: GeoMonitorTask, status_data: dict[str, Any]) -> None:
@@ -659,8 +705,16 @@ def _is_valid_citation_source(source: dict[str, Any]) -> bool:
     if any(token in title_site or token in url for token in noisy_tokens):
         return False
     # 路径后缀像静态资源则丢弃（避免 ?v=1.css 误伤，只看 path）
+    # 2026-08-14 - DeepSeek 引用列表混入 css/png/json - 补 .json，写入/展示统一拦
     path = url.split("?", 1)[0]
-    if any(path.endswith(ext) for ext in (".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".woff", ".woff2", ".ttf")):
+    if any(
+        path.endswith(ext)
+        for ext in (
+            ".css", ".js", ".mjs", ".map", ".json",
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+            ".woff", ".woff2", ".ttf", ".eot",
+        )
+    ):
         return False
     asset_hosts = (
         "byteimg.com",
@@ -672,10 +726,36 @@ def _is_valid_citation_source(source: dict[str, Any]) -> bool:
         "googleapis.com",
         "gstatic.com",
         "cloudflare.com/ajax",
+        # 2026-08-14 - DeepSeek 站静态域名整站不当信源
+        "fe-static.deepseek.com",
+        "cdn.deepseek.com",
+        # 2026-08-14 - 阿里系 CDN 裸域无后缀也会进引用（g.alicdn / img.alicdn）
+        "alicdn.com",
+        "taobaocdn.com",
+        "tbcdn.cn",
     )
     if any(bit in url for bit in asset_hosts):
         return False
     return True
+
+
+def _filter_citation_sources(refs: Any) -> list[dict[str, Any]]:
+    """写入/展示共用：只保留有效引用 dict。"""
+    if not isinstance(refs, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in refs:
+        if isinstance(item, dict):
+            if _is_valid_citation_source(item):
+                out.append(item)
+            continue
+        text = str(item or "").strip()
+        if not text:
+            continue
+        row = {"url": text, "title": text}
+        if _is_valid_citation_source(row):
+            out.append(row)
+    return out
 
 
 def _light_source_articles_from_refs(refs: Any, *, limit: int = 3) -> list[dict[str, str]]:
@@ -723,20 +803,37 @@ def _is_relevant_source(source: dict[str, Any], terms: list[str]) -> bool:
         return False
     if not terms:
         return True
-    title_site = " ".join(str(source.get(key) or "") for key in ("title", "site")).lower()
+    # 2026-08-13 - 方案 A：相关判定与露出词一致，补 summary（仍不抓网页）
+    from app.services.citation_page_match import citation_local_match_text
+
+    title_site = citation_local_match_text(source)
     url = str(source.get("url") or "").lower()
     domain_terms = [term for term in terms if "." in term]
     company_terms = [term for term in terms if "." not in term]
-    if any(term in title_site for term in company_terms):
+    if any(term.lower() in title_site for term in company_terms):
         return True
-    return any(term in url for term in domain_terms)
+    return any(term.lower() in url for term in domain_terms)
 
 
-def _matched_source_keywords(source: dict[str, Any], keywords: list[str]) -> list[str]:
-    """提取来源中实际命中的监控词。"""
-    text = " ".join(str(source.get(key) or "") for key in ("title", "site", "url")).lower()
-    matched = [keyword for keyword in keywords if keyword.lower() in text]
-    return list(dict.fromkeys(matched))
+def _matched_source_keywords(
+    source: dict[str, Any],
+    keywords: list[str],
+    *,
+    allow_page_fetch: bool = False,
+    fetch_budget: list[int] | None = None,
+) -> list[str]:
+    """提取来源中实际命中的监控词。
+
+    2026-08-13 - 方案 A：本地补 summary；物化时可抓网页标题/摘要/正文片段
+    """
+    from app.services.citation_page_match import matched_source_keywords
+
+    return matched_source_keywords(
+        source,
+        keywords,
+        allow_page_fetch=allow_page_fetch,
+        fetch_budget=fetch_budget,
+    )
 
 
 def _aggregate_source_stats(
@@ -763,7 +860,9 @@ def _aggregate_source_stats(
 
 def _finalize_source_stat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # ponytail: 响应/缓存体积上限；排行页只需头部，超过可后续再做分页接口
-    ranked = sorted(rows, key=lambda item: item["count"], reverse=True)[:500]
+    # 2026-08-14 - 日物化旧脏 CDN 在读路径再滤，避免信源页绕过抽屉过滤
+    cleaned = [row for row in rows if isinstance(row, dict) and _is_valid_citation_source(row)]
+    ranked = sorted(cleaned, key=lambda item: item["count"], reverse=True)[:500]
     for row in ranked:
         row["platforms"] = sort_platform_codes(row["platforms"])[:6]
         row["exposure_terms"] = row["exposure_terms"][:8]
@@ -779,12 +878,16 @@ def _aggregate_source_stats_pair_maps(
     subtask_tenant_map: dict[int, int],
     purchased_platforms_by_tenant: dict[int, set[str]],
     exposure_terms_by_tenant: dict[int, list[str]],
+    allow_page_fetch: bool = False,
+    page_fetch_budget: int = 40,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, int], dict[str, dict[str, int]]]:
     """一次遍历产出未截断的 url→行 map（供日级物化合并）+ 日趋势计数。"""
     branded_map: dict[str, dict[str, Any]] = {}
     all_map: dict[str, dict[str, Any]] = {}
     source_daily_counts: dict[str, int] = {}
     source_daily_counts_by_platform: dict[str, dict[str, int]] = {}
+    # 2026-08-13 - 方案 A：单日物化抓网页上限，避免重建卡死
+    fetch_budget = [max(0, int(page_fetch_budget))] if allow_page_fetch else None
 
     def _touch_row(
         bucket: dict[str, dict[str, Any]],
@@ -840,7 +943,12 @@ def _aggregate_source_stats_pair_maps(
             if not url:
                 continue
             key = str(url).split("?")[0]
-            matched_exposure = _matched_source_keywords(source, exposure_terms)
+            matched_exposure = _matched_source_keywords(
+                source,
+                exposure_terms,
+                allow_page_fetch=allow_page_fetch,
+                fetch_budget=fetch_budget,
+            )
             biz_day = business_day_by_id.get(item.id)
             _touch_row(
                 all_map,
@@ -994,8 +1102,8 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
     subtask.remote_time = item.get("time")
     subtask.page_screenshot = item.get("pageScreenshot") or None
     subtask.answer_content = incoming_answer or subtask.answer_content
-    subtask.reference_list_json = item.get("referenceList")
-    subtask.citation_list_json = item.get("citationList")
+    subtask.reference_list_json = _filter_citation_sources(item.get("referenceList")) or None
+    subtask.citation_list_json = _filter_citation_sources(item.get("citationList")) or None
     subtask.reasoning_process_json = item.get("reasoningProcess")
     subtask.recommended_questions_json = item.get("recommendedQuestions")
     subtask.media_content_json = item.get("mediaContent")
@@ -1330,10 +1438,14 @@ def build_source_analysis_summary(
     current: CurrentSession,
     *,
     tenant_id: int | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    platform: str | None = None,
 ) -> dict[str, Any]:
     """信源分析页专用轻载荷：只聚合信源，不扫监测任务/子任务大表。
 
     2026-07-30 - 信源页等整包 summary ~7s - 独立接口走日物化缓存
+    2026-08-14 - 支持起止日/平台：区间内重算 count 与趋势，勿前端假筛累计
     """
     from app.services.brand_service import (
         active_keyword_groups,
@@ -1341,8 +1453,10 @@ def build_source_analysis_summary(
         get_brand_asset,
         tenant_purchased_platforms,
     )
+    from app.services.monitor_source_rollup_service import _bundle_from_day_rows
     from app.services.observer_account import observer_platforms_for_session
     from app.services.tenant_scope import resolve_and_guard_analytics_tenant
+    from app.models.monitor import GeoMonitorSourceDaily
 
     resolved = resolve_and_guard_analytics_tenant(
         db,
@@ -1355,30 +1469,88 @@ def build_source_analysis_summary(
     purchased = set(tenant_purchased_platforms(db, resolved, asset))
     # 2026-08-10 - 观察号平台收窄放在 bundle 读后过滤，purchased 保持租户全量以免日物化指纹失效
     allow = observer_platforms_for_session(current)
-    bundle = get_customer_source_stats_bundle(
+
+    cutoff_day = customer_display_cutoff().date()
+    end_d = min(end_date, cutoff_day) if end_date is not None else cutoff_day
+    start_d = start_date
+    if start_d is not None and start_d > end_d:
+        start_d = end_d
+
+    # 先暖全日物化缓存（截止昨日），再按区间合并，保证缺日会被补齐
+    get_customer_source_stats_bundle(
         db,
         resolved,
         purchased_platforms=purchased,
         exposure_terms=exposure,
     )
+    day_rows = list(
+        db.scalars(
+            select(GeoMonitorSourceDaily).where(
+                GeoMonitorSourceDaily.tenant_id == resolved,
+                GeoMonitorSourceDaily.stat_date <= end_d,
+                *([GeoMonitorSourceDaily.stat_date >= start_d] if start_d is not None else []),
+            )
+        )
+    )
+    bundle = _bundle_from_day_rows(
+        day_rows,
+        cutoff_day=end_d,
+        range_start_day=start_d,
+    )
     bundle = scope_source_analysis_bundle(bundle, allow)
+    platform_code = str(platform or "").strip()
+    if platform_code:
+        # ponytail: 多端同 URL 的 count 仍是跨端合计；精确分端需日物化拆 count
+        def _plat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for row in rows or []:
+                plats = [str(p) for p in (row.get("platforms") or [])]
+                if platform_code not in plats:
+                    continue
+                cloned = dict(row)
+                cloned["platforms"] = sort_platform_codes([platform_code])
+                out.append(cloned)
+            return out
+
+        by_plat = bundle.get("source_citation_trend_by_platform") or {}
+        plat_trend = by_plat.get(platform_code) or {
+            "start_at": None,
+            "end_at": None,
+            "points": [],
+        }
+        bundle = {
+            **bundle,
+            "source_stats": _plat_rows(list(bundle.get("source_stats") or [])),
+            "source_stats_all": _plat_rows(list(bundle.get("source_stats_all") or [])),
+            "source_citation_trend": plat_trend,
+            "source_citation_trend_by_platform": {platform_code: plat_trend},
+        }
 
     platform_stats: list[dict[str, Any]] = []
     try:
         from app.services.monitor_stats_service import aggregate_platform_stats, has_daily_stats
 
         if has_daily_stats(db, [resolved]):
-            since = (datetime.now().date() - timedelta(days=30))
-            rows = aggregate_platform_stats(db, tenant_ids=[resolved], since=since)
+            since = start_d if start_d is not None else (end_d - timedelta(days=29))
+            rows = aggregate_platform_stats(
+                db,
+                tenant_ids=[resolved],
+                since=since,
+                until=end_d,
+            )
             if rows:
                 if allow is not None:
                     rows = [row for row in rows if str(row.get("platform") or "") in allow]
+                if platform_code:
+                    rows = [row for row in rows if str(row.get("platform") or "") == platform_code]
                 platform_stats = sort_platform_items(rows)
     except Exception:
         logger.exception("source analysis platform_stats failed tenant_id=%s", resolved)
 
     return {
         "tenant_id": resolved,
+        "start_date": start_d.isoformat() if start_d else None,
+        "end_date": end_d.isoformat(),
         "source_stats": bundle.get("source_stats") or [],
         "source_stats_all": bundle.get("source_stats_all") or [],
         "source_citation_trend": bundle.get("source_citation_trend") or {
@@ -1947,8 +2119,8 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
         "status": subtask.status,
         "page_screenshot": public_screenshot_url(subtask.page_screenshot),
         "answer_content": subtask.answer_content,
-        "reference_list": subtask.reference_list_json or [],
-        "citation_list": subtask.citation_list_json or [],
+        "reference_list": _filter_citation_sources(subtask.reference_list_json),
+        "citation_list": _filter_citation_sources(subtask.citation_list_json),
         "recommended_questions": subtask.recommended_questions_json or [],
         "error_message": subtask.error_message,
         "mention_position": subtask.mention_position,
@@ -1967,7 +2139,7 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
 
 def serialize_summary_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     """汇总页使用的轻量子任务序列化，避免加载回答正文和原始结果大字段。"""
-    reference_count = len(subtask.reference_list_json or [])
+    reference_count = len(_filter_citation_sources(subtask.reference_list_json))
     return {
         "subtask_id": subtask.subtask_id,
         "platform": subtask.platform,
@@ -4976,7 +5148,11 @@ def serialize_subtask_for_display(
     asset: BrandAsset | None = None,
     keyword_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Serialize subtask with brand-aware rank for customer-facing views."""
+    """Serialize subtask with brand-aware rank for customer-facing views.
+
+    2026-08-14 - 展示只读库内权威（allow_full_parse=False）；缺位次靠 ensure/补跑落库，
+    禁止详情全文现算与矩阵轻量路径分叉。
+    """
     data = serialize_subtask(subtask)
     ranking_terms = _ranking_match_terms(asset, keyword_groups)
     detail = _read_display_brand_rank(
@@ -4984,7 +5160,7 @@ def serialize_subtask_for_display(
         monitor_keywords,
         ranking_terms,
         asset,
-        allow_full_parse=True,
+        allow_full_parse=False,
     )
     data["raw_mention_position"] = subtask.mention_position
     data["brand_mentioned"] = detail.mentioned
@@ -5456,6 +5632,7 @@ def _round_metrics_from_rows(
     negative_count = sum(1 for row in exposure_rows if row.get("sentiment") == "负面")
     return {
         "ranking_sample_count": ranking_total,
+        "mentioned_count": ranking_mentioned,
         "brand_mention_rate": round(ranking_mentioned / ranking_total * 100, 1) if ranking_total else 0.0,
         "avg_brand_rank": round(sum(rank_values) / len(rank_values), 1) if rank_values else None,
         "top3_rate": _top3_rate_from_ranking_rows(ranking_rows),
@@ -5809,6 +5986,8 @@ def _workspace_brief_from_daily_stats(
         "schedule_plan": plan,
         "kpis": {
             "ranking_sample_count": kpi_metrics["ranking_sample_count"],
+            # 2026-08-13 - 本期结论展示提及 N/M，与竞品页同源分子
+            "mentioned_count": int(kpi_metrics.get("mentioned_count") or 0),
             "brand_mention_rate": kpi_metrics["brand_mention_rate"],
             "avg_brand_rank": kpi_metrics["avg_brand_rank"],
             "top3_rate": kpi_metrics["top3_rate"],
@@ -6822,6 +7001,8 @@ def _workspace_brief_full_from_daily_stats(
     top_sources = sorted(latest_day_source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
     for row in top_sources:
         row["platforms"] = sort_platform_codes(row["platforms"])[:4]
+    # 2026-08-14 - summary 路径与 full 一致：信源数量=最新日全部引用
+    source_count_total = sum(int(row.get("count") or 0) for row in latest_day_source_map.values())
 
     recent_snapshots = _workspace_period_snapshots(
         snapshot_candidates,
@@ -6870,7 +7051,7 @@ def _workspace_brief_full_from_daily_stats(
         "exposure_sample_count": exposure_sample_count,
         "negative_count": negative_count,
         "negative_rate": negative_rate,
-        "source_count": sum(row["count"] for row in top_sources),
+        "source_count": source_count_total,
     })
 
     competitor_count = int(kpis.get("competitor_count") or 0)
@@ -7296,6 +7477,10 @@ def workspace_brief(
         top_sources = sorted(source_map.values(), key=lambda row: row["count"], reverse=True)[:5]
     for row in top_sources:
         row["platforms"] = sort_platform_codes(row["platforms"])[:4]
+    # 2026-08-14 - 「信源数量」= 最新日全部引用次数，勿只加 Top5（与列表卡片区分）
+    source_count_total = sum(int(row.get("count") or 0) for row in latest_day_source_map.values())
+    if source_count_total <= 0:
+        source_count_total = sum(int(row.get("count") or 0) for row in source_map.values())
 
     recent_snapshots = _workspace_period_snapshots(
         snapshot_candidates,
@@ -7378,13 +7563,14 @@ def workspace_brief(
         "schedule_plan": plan,
         "kpis": {
             "ranking_sample_count": ranking_total,
+            "mentioned_count": int(display_metrics.get("mentioned_count") or 0),
             "brand_mention_rate": brand_mention_rate,
             "avg_brand_rank": avg_brand_rank,
             "top3_rate": top3_rate,
             "exposure_sample_count": exposure_sample_count,
             "negative_count": negative_count,
             "negative_rate": negative_rate,
-            "source_count": sum(row["count"] for row in top_sources),
+            "source_count": source_count_total,
             "keyword_group_count": len(keyword_groups),
             "competitor_count": competitor_count,
         },
