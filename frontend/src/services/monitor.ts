@@ -308,6 +308,7 @@ export interface WorkspaceBriefSchedule {
 
 export interface WorkspaceBriefKpis {
   ranking_sample_count: number
+  mentioned_count?: number
   brand_mention_rate: number
   avg_brand_rank: number | null
   top3_rate: number
