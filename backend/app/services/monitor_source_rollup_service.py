@@ -104,12 +104,15 @@ def rebuild_source_daily_for_day(
         if tid:
             source_tenant_map[item.id] = int(tid)
 
+    # 2026-08-13 - 方案 A：日物化开启抓网页补露出词（读路径聚合仍默认不抓）
     branded_map, all_map, daily_counts, daily_by_platform = _aggregate_source_stats_pair_maps(
         source_items,
         business_day_by_id=source_day_by_id,
         subtask_tenant_map=source_tenant_map,
         purchased_platforms_by_tenant={tenant_id: purchased_platforms},
         exposure_terms_by_tenant={tenant_id: exposure_terms},
+        allow_page_fetch=True,
+        page_fetch_budget=40,
     )
     day_key = stat_date.isoformat()
     branded_day_count = int(daily_counts.get(day_key) or 0)
@@ -253,13 +256,23 @@ def _bundle_from_day_rows(
     day_rows: list[GeoMonitorSourceDaily],
     *,
     cutoff_day: date,
+    range_start_day: date | None = None,
 ) -> dict[str, Any]:
     from app.services.monitor_service import (
         _build_source_citation_trend,
         _build_source_citation_trends_by_platform,
         _finalize_source_stat_rows,
-        customer_display_cutoff,
+        _is_valid_citation_source,
     )
+
+    def _filter_url_map(raw: Any) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        if not isinstance(raw, dict):
+            return out
+        for key, row in raw.items():
+            if isinstance(row, dict) and _is_valid_citation_source(row):
+                out[str(key)] = row
+        return out
 
     branded_maps: list[dict[str, dict[str, Any]]] = []
     all_maps: list[dict[str, dict[str, Any]]] = []
@@ -268,10 +281,15 @@ def _bundle_from_day_rows(
     for row in day_rows:
         if row.stat_date > cutoff_day:
             continue
+        # 2026-08-14 - 按区间合并日物化，count/趋势与「近7天」一致
+        if range_start_day is not None and row.stat_date < range_start_day:
+            continue
         day_key = row.stat_date.isoformat()
-        branded_maps.append(row.branded_json if isinstance(row.branded_json, dict) else {})
-        all_maps.append(row.all_json if isinstance(row.all_json, dict) else {})
-        count = int(row.daily_branded_count or 0)
+        filtered_branded = _filter_url_map(row.branded_json)
+        filtered_all = _filter_url_map(row.all_json)
+        branded_maps.append(filtered_branded)
+        all_maps.append(filtered_all)
+        count = sum(int(item.get("count") or 0) for item in filtered_branded.values())
         if count > 0:
             source_daily_counts[day_key] = count
         plat_map = row.daily_by_platform_json if isinstance(row.daily_by_platform_json, dict) else {}
@@ -282,12 +300,15 @@ def _bundle_from_day_rows(
             bucket = source_daily_by_platform.setdefault(str(platform), {})
             bucket[day_key] = n
 
-    citation_range_end = customer_display_cutoff()
-    positive_days = [date.fromisoformat(k) for k, v in source_daily_counts.items() if int(v or 0) > 0]
-    citation_range_start = datetime.combine(
-        min(positive_days) if positive_days else citation_range_end.date(),
-        time.min,
-    )
+    citation_range_end = datetime.combine(cutoff_day, time.max)
+    if range_start_day is not None:
+        citation_range_start = datetime.combine(range_start_day, time.min)
+    else:
+        positive_days = [date.fromisoformat(k) for k, v in source_daily_counts.items() if int(v or 0) > 0]
+        citation_range_start = datetime.combine(
+            min(positive_days) if positive_days else cutoff_day,
+            time.min,
+        )
     return {
         "source_stats": _finalize_source_stat_rows(list(_merge_url_maps(branded_maps).values())),
         "source_stats_all": _finalize_source_stat_rows(list(_merge_url_maps(all_maps).values())),
@@ -348,6 +369,8 @@ def _backfill_source_daily_from_history(
             subtask_tenant_map={i.id: tenant_map[i.id] for i in items if i.id in tenant_map},
             purchased_platforms_by_tenant={tenant_id: purchased_platforms},
             exposure_terms_by_tenant={tenant_id: exposure_terms},
+            allow_page_fetch=True,
+            page_fetch_budget=40,
         )
         day_key = day.isoformat()
         platform_day = {

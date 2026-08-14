@@ -221,6 +221,9 @@ def competitor_compare(
 @router.get("/source-stats", response_model=ApiResponse[dict])
 def source_stats(
     tenant_id: int | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    platform: str | None = None,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -235,7 +238,14 @@ def source_stats(
                 or has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export")
             ):
                 raise PermissionError("无权查看信源分析")
-        data = build_source_analysis_summary(db, current, tenant_id=tenant_id)
+        data = build_source_analysis_summary(
+            db,
+            current,
+            tenant_id=tenant_id,
+            start_date=start_date,
+            end_date=end_date,
+            platform=platform,
+        )
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="analytics.source_stats")

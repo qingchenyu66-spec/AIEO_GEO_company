@@ -186,11 +186,6 @@ function resolvePublisherAndSubject(
   }
 }
 
-function sliceTrendPoints<T extends { label: string; value: number }>(points: T[], days: number) {
-  if (!points.length || days >= points.length) return points
-  return points.slice(points.length - days)
-}
-
 function mapSourceRows(
   rows: SourceStatRow[],
   brandOfficialHost: string | null | undefined,
@@ -366,22 +361,15 @@ export function useSourceAnalysis(options?: {
 
   function applySourceFilters(rows: SourceRow[], options?: { ignoreCategory?: boolean }) {
     const keyword = keywordFilter.value.trim().toLowerCase()
-    const now = Date.now()
-    const dayMs = 86400000
-    const rangeDays = datePreset.value === 'all' ? null : Number(datePreset.value)
-    const rangeStart = rangeDays ? now - rangeDays * dayMs : null
     const ignoreCategory = options?.ignoreCategory === true
     return rows.filter(source => {
-      const platformMatched = platformFilter.value === 'all'
-        || (source.platforms || []).includes(platformFilter.value)
+      // 2026-08-14 - 日期/平台已由后端按区间重算；前端只留关键词与分类
       const categoryMatched = ignoreCategory
         || categoryFilter.value === 'all'
         || source.category === categoryFilter.value
       const text = `${source.title || ''} ${(source.exposure_terms || []).join(' ')} ${(source.questions || []).join(' ')} ${source.url || ''}`.toLowerCase()
       const keywordMatched = !keyword || text.includes(keyword)
-      const sourceTime = source.latest_time ? new Date(source.latest_time).getTime() : null
-      const dateMatched = !rangeStart || (sourceTime != null && sourceTime >= rangeStart)
-      return platformMatched && categoryMatched && keywordMatched && dateMatched
+      return categoryMatched && keywordMatched
     }).sort((a, b) => b.count - a.count)
   }
 
@@ -577,19 +565,11 @@ export function useSourceAnalysis(options?: {
       ? trendByPlatform?.[selected]
       : sourceSummary.value?.source_citation_trend
     const backendPoints = backendTrend?.points || []
-    if (backendPoints.length) {
-      const points = datePreset.value === 'all'
-        ? backendPoints
-        : sliceTrendPoints(
-          backendPoints,
-          datePreset.value === '7' ? 7 : 30,
-        )
-      return points.map(point => ({
-        label: point.label,
-        value: point.value,
-      }))
-    }
-    return []
+    // 2026-08-14 - 后端已按区间裁剪，勿再 slice 假截全历史尾巴
+    return backendPoints.map(point => ({
+      label: point.label,
+      value: point.value,
+    }))
   })
 
   const structureChartRows = computed(() => {
@@ -636,9 +616,13 @@ export function useSourceAnalysis(options?: {
       const queryTenant = Number(tenantText)
       const tenantId = previewId
         ?? (Number.isFinite(queryTenant) ? queryTenant : undefined)
-      sourceSummary.value = await getSourceStats(
-        tenantId != null ? { tenant_id: tenantId } : undefined,
-      )
+      const range = inclusionDateRange.value
+      sourceSummary.value = await getSourceStats({
+        ...(tenantId != null ? { tenant_id: tenantId } : {}),
+        start_date: range.startDate,
+        end_date: range.endDate,
+        ...(platformFilter.value !== 'all' ? { platform: platformFilter.value } : {}),
+      })
       void force
     } catch (error: unknown) {
       ElMessage.error(`信源数据加载失败：${errorMessage(error)}`)
@@ -692,6 +676,10 @@ export function useSourceAnalysis(options?: {
     rankPage.value = 1
     articlePage.value = 1
     if (domainFilter.value) domainFilter.value = ''
+  })
+  // 2026-08-14 - 切日期/平台重新请求后端区间聚合
+  watch([datePreset, platformFilter], () => {
+    void loadSummary()
   })
   watch(rankTotalPages, pages => {
     if (rankPage.value > pages) rankPage.value = pages
