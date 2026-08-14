@@ -3,7 +3,7 @@
 豆包：SSR 内嵌 search_query_result / text_card。
 Kimi：分享页内嵌 web_search 的 title/url/siteName。
 DeepSeek：Playwright 水合后抽回答区外链。
-千问：点开「参考了 N 篇」+「查看全部」后再抽锚点。
+千问：优先 chat2-api share/info 的 web_source；失败再 Playwright 点「N篇来源」。
 元宝：JSON title/url（必要时点开引用面板）。
 """
 
@@ -52,6 +52,7 @@ _PLATFORM_SELF_HOSTS = (
     "deepseek.cn",
     "qianwen.com",
     "qianwen.my.cn",
+    "qianwen.v6.ai",
     "tongyi.aliyun.com",
     "yuanbao.tencent.com",
     "yb.tencent.com",
@@ -266,6 +267,155 @@ def extract_kimi_references(page_html: str) -> list[dict[str, Any]]:
     return _dedupe_refs(rows)
 
 
+def _is_qianwen_share_host(host: str) -> bool:
+    host_l = (host or "").lower()
+    return any(
+        host_l.endswith(h)
+        for h in ("qianwen.com", "qianwen.my.cn", "qianwen.v6.ai", "tongyi.aliyun.com")
+    )
+
+
+def _parse_qianwen_share_ids(url: str) -> tuple[str, str] | None:
+    """从分享链解析 (share_id, biz_id)。"""
+    from urllib.parse import parse_qs, urlparse
+
+    value = str(url or "").strip()
+    if not value:
+        return None
+    parsed = urlparse(value)
+    qs = parse_qs(parsed.query or "")
+    share_id = (qs.get("share_id") or [""])[0].strip()
+    biz_id = (qs.get("biz_id") or ["ai_qwen"])[0].strip() or "ai_qwen"
+    if not share_id:
+        m = re.search(r"/share/chat/([A-Za-z0-9_-]+)", parsed.path or "")
+        if m:
+            share_id = m.group(1)
+    if not share_id:
+        return None
+    return share_id, biz_id
+
+
+def extract_qianwen_web_sources(payload: Any) -> list[dict[str, Any]]:
+    """从千问 share/info JSON 抽取 type=web_source 的 title/url/name。"""
+    rows: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            typ = str(node.get("type") or "").strip().lower()
+            url = str(node.get("raw_url") or node.get("url") or "").strip()
+            title = str(node.get("title") or "").strip()
+            site = str(node.get("name") or node.get("sc_name") or "").strip()
+            if typ == "web_source" or (url.startswith("http") and title and ("raw_url" in node or typ.endswith("source"))):
+                if url.startswith("http") and not _is_icon_or_cdn(url):
+                    rows.append(
+                        {
+                            "title": title or site or _normalize_host(url) or url,
+                            "url": url,
+                            "site": site or _normalize_host(url),
+                        }
+                    )
+            for val in node.values():
+                walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    return _dedupe_refs(rows)
+
+
+def _extract_qianwen_answer_text(payload: Any) -> str:
+    """尽量从 share/info 里抽出助手正文。"""
+    chunks: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            mime = str(node.get("mime_type") or "")
+            content = node.get("content")
+            status = str(node.get("status") or "")
+            if mime.startswith("text/") and isinstance(content, str) and content.strip():
+                if status in ("", "complete") or "complete" in status:
+                    chunks.append(content.strip())
+            for val in node.values():
+                walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    # 取最长一段，避免用户问题短文本盖住回答
+    chunks.sort(key=len, reverse=True)
+    for text in chunks:
+        cleaned = _clean_answer_text(text)
+        if len(cleaned) >= 80:
+            return cleaned
+    return _clean_answer_text(chunks[0]) if chunks else ""
+
+
+def _try_qianwen_share_api(url: str) -> SharePageFetchResult | None:
+    """2026-08-14 - 千问分享页 DOM 无 href；信源在 chat2-api share/info 的 web_source。"""
+    ids = _parse_qianwen_share_ids(url)
+    if not ids:
+        return None
+    share_id, biz_id = ids
+    try:
+        import httpx
+    except ImportError:
+        return None
+    api = "https://chat2-api.qianwen.com/api/v1/share/info?pr=qwen&fr=mac"
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
+            resp = client.post(
+                api,
+                headers={
+                    "User-Agent": _BROWSER_UA,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Referer": url,
+                    "Origin": "https://qianwen.my.cn",
+                },
+                json={"share_id": share_id, "biz_id": biz_id},
+            )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("qianwen share/info skipped share_id=%s err=%s", share_id, exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    # 2026-08-14 - code=0 是成功；勿写 `code or -1`（0 会被当成假）
+    if payload.get("code") != 0:
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    refs = extract_qianwen_web_sources(data)
+    answer = _extract_qianwen_answer_text(data)
+    title = None
+    if isinstance(data, dict):
+        title = str(data.get("title") or "").strip() or None
+    # 助手正文常在非 text/plain 节点；有信源时至少用标题撑住结果
+    if len(answer) < 80 and title and len(title) > len(answer):
+        # 仍优先保留较长正文；标题仅兜底
+        pass
+    if len(answer) < 20 and title:
+        answer = title
+    if len(answer) < 20 and not refs:
+        return None
+    if _looks_like_share_error_page(answer) and not refs:
+        return None
+    return SharePageFetchResult(
+        answer_content=answer or (title or ""),
+        references=refs,
+        title=title,
+        source_host=_normalize_host(url) or "qianwen.my.cn",
+        claimed_refs=len(refs) or None,
+    )
+
+
 def extract_anchor_references(page_html: str, *, page_host: str = "") -> list[dict[str, Any]]:
     """从回答区外链锚点抽信源（DeepSeek/千问/元宝展开后常见）。"""
     rows: list[dict[str, Any]] = []
@@ -463,6 +613,7 @@ def _needs_browser_for_refs(host: str) -> bool:
             "qianwen.com",
             # 2026-08-14 - 生产补录多为 qianwen.my.cn，不走浏览器就抽不到材料链
             "qianwen.my.cn",
+            "qianwen.v6.ai",
             "tongyi.aliyun.com",
             "yuanbao.tencent.com",
             "yb.tencent.com",
@@ -473,7 +624,7 @@ def _needs_browser_for_refs(host: str) -> bool:
 
 
 def _expand_citation_panels(page: Any) -> None:
-    """点开千问/元宝等「参考了 N 篇」面板，并点「查看全部」让折叠信源进 DOM。"""
+    """点开千问/元宝等「参考了 N 篇 / N篇来源」面板，并点「查看全部」。"""
     selectors = (
         '[data-toolbar-type="citation"]',
         'button:has-text("引用")',
@@ -482,6 +633,10 @@ def _expand_citation_panels(page: Any) -> None:
         'div:has-text("参考了")',
         'span:has-text("篇材料")',
         'span:has-text("篇资料")',
+        # 2026-08-14 - 千问 my.cn 分享页是「7篇来源/7条来源」，不是「参考了N篇」
+        'text=/\\d+\\s*篇来源/',
+        'text=/\\d+\\s*条来源/',
+        '[class*="reference"]',
         'text=/参考了\\s*\\d+\\s*篇/',
         '[aria-label*="引用"]',
         '[aria-label*="参考"]',
@@ -519,10 +674,26 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
         raise ValueError("分享链接无效")
     host = _normalize_host(value)
 
+    # 2026-08-14 - 千问分享信源在 share/info API，优先直调；正文过短时继续走 HTTP/浏览器补正文
+    qianwen_api_refs: list[dict[str, Any]] | None = None
+    qianwen_api_title: str | None = None
+    if _is_qianwen_share_host(host):
+        api_hit = _try_qianwen_share_api(value)
+        if api_hit is not None and _refs_quality_ok(api_hit.references, page_host=host):
+            if len(api_hit.answer_content or "") >= 80:
+                return api_hit
+            qianwen_api_refs = list(api_hit.references or [])
+            qianwen_api_title = api_hit.title
+
     # 2026-08-07 - 补录「提交中」卡十几秒 - 截图已异步，正文仍同步 Playwright；SSR 先走 HTTP
     # 2026-08-14 - 非豆包若 HTTP 信源质量差/条数低于「参考了N篇」，继续 Playwright 点开引用面板再抽
     http_hit = _try_http_fetch(value, host)
     if http_hit is not None and _http_refs_enough(http_hit, host):
+        if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
+            http_hit.references = qianwen_api_refs
+            http_hit.claimed_refs = len(qianwen_api_refs)
+            if qianwen_api_title and not http_hit.title:
+                http_hit.title = qianwen_api_title
         return http_hit
 
     try:
@@ -557,7 +728,28 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
             browser.close()
 
     result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
+    if result is not None and qianwen_api_refs and not _refs_quality_ok(result.references, page_host=host):
+        result.references = qianwen_api_refs
+        result.claimed_refs = len(qianwen_api_refs)
+        if qianwen_api_title and not result.title:
+            result.title = qianwen_api_title
+    if result is None and qianwen_api_refs:
+        # 正文走浏览器失败时，至少保住 API 信源 + 标题
+        body = _extract_answer_from_html(page_html, body_text)
+        if len(body) < 20 and qianwen_api_title:
+            body = qianwen_api_title
+        if len(body) >= 20:
+            result = SharePageFetchResult(
+                answer_content=body,
+                references=qianwen_api_refs,
+                title=title or qianwen_api_title,
+                source_host=host or None,
+                claimed_refs=len(qianwen_api_refs),
+            )
     if result is None and http_hit is not None:
+        if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
+            http_hit.references = qianwen_api_refs
+            http_hit.claimed_refs = len(qianwen_api_refs)
         return http_hit
     if result is None:
         answer = _extract_answer_from_html(page_html, body_text)

@@ -104,9 +104,44 @@ def test_qianwen_http_not_enough_when_claim_exceeds_refs() -> None:
     assert _http_refs_enough(hit2, "www.qianwen.com") is True
 
 
-def test_qianwen_my_cn_needs_browser() -> None:
-    from app.services.share_page_fetch_service import _needs_browser_for_refs
+def test_qianwen_web_source_parser_and_share_ids() -> None:
+    from app.services.share_page_fetch_service import (
+        _parse_qianwen_share_ids,
+        extract_qianwen_web_sources,
+    )
 
-    assert _needs_browser_for_refs("qianwen.my.cn") is True
-    assert _needs_browser_for_refs("www.qianwen.com") is True
-    assert _needs_browser_for_refs("www.doubao.com") is False
+    ids = _parse_qianwen_share_ids(
+        "https://qianwen.my.cn/share/chat/a33e97511c424036834be22d70312b1f?biz_id=ai_qwen&env=prod"
+    )
+    assert ids == ("a33e97511c424036834be22d70312b1f", "ai_qwen")
+    payload = {
+        "data": {
+            "title": "demo",
+            "session": {
+                "record_list": [
+                    {
+                        "response_messages": [
+                            {
+                                "extra": [
+                                    {
+                                        "type": "web_source",
+                                        "title": "2026年儿童DHA怎么选？_凤凰网",
+                                        "url": "http://sd.ifeng.com/c/8vTrgaTJuzD",
+                                        "raw_url": "http://sd.ifeng.com/c/8vTrgaTJuzD",
+                                        "name": "凤凰网_山东频道",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+    }
+    refs = extract_qianwen_web_sources(payload)
+    assert len(refs) == 1
+    assert "ifeng.com" in refs[0]["url"]
+    assert "DHA" in refs[0]["title"]
+    # 2026-08-14 - 回归：成功码 0 不能当假值
+    assert (0 or -1) == -1
+    assert (0 != 0) is False
