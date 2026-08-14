@@ -325,25 +325,50 @@ def extract_qianwen_web_sources(payload: Any) -> list[dict[str, Any]]:
 
 
 def _extract_qianwen_answer_text(payload: Any) -> str:
-    """尽量从 share/info 里抽出助手正文。"""
+    """尽量从 share/info 里抽出助手正文。
+
+    2026-08-14 - 仅认 mime text/* 会漏 response_messages[].content（无 mime 的助手段），
+    补录落到标题短串并盖掉旧正文；JSON 大包/信源 summary 不计入。
+    """
     chunks: list[str] = []
+
+    def _maybe_add(text: Any) -> None:
+        value = str(text or "").strip()
+        if len(value) < 20:
+            return
+        if value.startswith("{") or value.startswith("["):
+            return
+        chunks.append(value)
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
+            messages = node.get("response_messages")
+            if isinstance(messages, list):
+                for item in messages:
+                    if isinstance(item, dict):
+                        _maybe_add(item.get("content"))
             mime = str(node.get("mime_type") or "")
             content = node.get("content")
             status = str(node.get("status") or "")
             if mime.startswith("text/") and isinstance(content, str) and content.strip():
                 if status in ("", "complete") or "complete" in status:
-                    chunks.append(content.strip())
-            for val in node.values():
+                    _maybe_add(content)
+            for key, val in node.items():
+                if key in {
+                    "response_messages",
+                    "content",
+                    "summary",
+                    "page_content",
+                    "material_detail",
+                    "final_material_detail",
+                }:
+                    continue
                 walk(val)
         elif isinstance(node, list):
             for item in node:
                 walk(item)
 
     walk(payload)
-    # 取最长一段，避免用户问题短文本盖住回答
     chunks.sort(key=len, reverse=True)
     for text in chunks:
         cleaned = _clean_answer_text(text)

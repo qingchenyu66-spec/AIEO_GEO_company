@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app.services.share_page_fetch_service import (
@@ -106,6 +107,7 @@ def test_qianwen_http_not_enough_when_claim_exceeds_refs() -> None:
 
 def test_qianwen_web_source_parser_and_share_ids() -> None:
     from app.services.share_page_fetch_service import (
+        _extract_qianwen_answer_text,
         _parse_qianwen_share_ids,
         extract_qianwen_web_sources,
     )
@@ -145,3 +147,55 @@ def test_qianwen_web_source_parser_and_share_ids() -> None:
     # 2026-08-14 - 回归：成功码 0 不能当假值
     assert (0 or -1) == -1
     assert (0 != 0) is False
+
+    # 2026-08-14 - 无 mime 的 response_messages[].content 也要抽到，勿只剩标题
+    long_answer = (
+        "为孩子挑选DHA，需关注原料来源、纯度、配方和安全性。"
+        "以下推荐几款口碑与实力俱佳的产品，按年龄段和需求分类。"
+        "0-3岁婴幼儿：首选纯净藻油，守护娇嫩肠胃。"
+        "3岁以上学龄儿童可按含量与认证继续对比选择。"
+    )
+    extract_payload = {
+        "data": {
+            "title": "儿童DHA品牌推荐：0-3岁藻油精选",
+            "session": {
+                "record_list": [
+                    {
+                        "response_messages": [
+                            {"content": "儿童DHA品牌推荐"},
+                            {
+                                "meta_data": {
+                                    "sources": [
+                                        {
+                                            "content": {
+                                                "list": [
+                                                    {
+                                                        "summary": "x" * 200,
+                                                        "page_content": "{" + ("y" * 100) + "}",
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                            {"content": long_answer},
+                        ],
+                        "extra_info": {
+                            "chat_odps": {
+                                "material_detail": {
+                                    "final_material_detail": json.dumps(
+                                        [{"HostName": "淘宝网"} for _ in range(20)]
+                                    )
+                                }
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    }
+    extracted = _extract_qianwen_answer_text(extract_payload)
+    assert "挑选DHA" in extracted
+    assert len(extracted) >= 80
+    assert "淘宝网" not in extracted

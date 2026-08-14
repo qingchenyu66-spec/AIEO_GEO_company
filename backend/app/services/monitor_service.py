@@ -3067,10 +3067,19 @@ def _answer_body_for_rank(subtask: GeoMonitorSubtask) -> str:
 
 
 def _answer_loaded_for_rank_gate(subtask: GeoMonitorSubtask) -> bool:
-    """读路径：answer_content 已加载才做「正文必须含品牌」门禁；未加载则跳过以免 N+1。"""
-    if not hasattr(subtask, "answer_content"):
-        return False
-    return _orm_attr_loaded(subtask, "answer_content")
+    """读路径：answer_content 已加载才做「正文必须含品牌」门禁；未加载则跳过以免 N+1。
+
+    2026-08-14 - 禁止 hasattr(instance, 'answer_content')：会触发 SQLAlchemy deferred 懒加载，
+    矩阵轻量误开门禁，折叠「—」与详情 manual 锁「1」分叉并写回 snapshot 改 KPI。
+    """
+    try:
+        from sqlalchemy import inspect as sa_inspect
+
+        insp = sa_inspect(subtask)
+    except Exception:
+        # 单测 SimpleNamespace 等非 ORM：仅实例 __dict__ 已带正文才开门禁
+        return "answer_content" in getattr(subtask, "__dict__", {})
+    return "answer_content" not in insp.unloaded
 
 
 def _configured_exposure_term_in_text(text: str | None, brand_terms: list[str]) -> bool:

@@ -222,3 +222,52 @@ def test_detail_full_parse_does_not_override_stored_mention():
     )
     assert detail.rank == 7
     assert detail.source == "stored"
+
+
+def test_answer_loaded_gate_does_not_hasattr_lazy_load():
+    """2026-08-14 - hasattr(answer_content) 会拉 deferred，矩阵误开门禁。"""
+    from app.services.monitor_service import _answer_loaded_for_rank_gate
+
+    state = {"loaded": False}
+
+    class _DeferredAnswer:
+        def __get__(self, obj, owner):
+            if obj is None:
+                return self
+            state["loaded"] = True
+            return "儿童DHA品牌推荐：0-3岁藻油精选 - 千问"
+
+    class _Row:
+        answer_content = _DeferredAnswer()
+
+    row = _Row()
+    assert _answer_loaded_for_rank_gate(row) is False
+    assert state["loaded"] is False
+    _ = row.answer_content
+    assert state["loaded"] is True
+
+
+def test_light_unloaded_answer_trusts_mention_even_if_short_title():
+    """矩阵未加载正文时不得因短标题无露出词把库内位次打成 —。"""
+    # 故意不带 answer_content，模拟矩阵 light hydrate
+    item = SimpleNamespace(
+        prompt="儿童DHA品牌推荐",
+        mention_position=1,
+        mention_context=None,
+        all_rankings_json=[],
+        raw_result_json={"source": "manual_snapshot", "manual_rank_locked": True},
+    )
+
+    def _loaded(obj, key):
+        return False
+
+    with patch("app.services.monitor_service._orm_attr_loaded", side_effect=_loaded):
+        detail = _read_display_brand_rank(
+            item,
+            "儿童DHA品牌推荐",
+            ["宝得聪"],
+            None,
+            allow_full_parse=False,
+        )
+    assert detail.rank == 1
+    assert detail.source == "stored"
