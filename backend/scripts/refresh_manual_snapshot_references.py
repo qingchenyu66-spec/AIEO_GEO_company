@@ -88,31 +88,43 @@ def _looks_like_junk_refs(subtask: GeoMonitorSubtask, share_url: str) -> bool:
 
 
 def _iter_candidates(db: Session, *, days: int, limit: int) -> list[GeoMonitorSubtask]:
+    # 2026-08-14 - 全表 ORDER BY 大 JSON 行会炸 sort buffer - 先用 JSON_EXTRACT 收窄
     since = datetime.now() - timedelta(days=days)
-    rows = list(
-        db.scalars(
-            select(GeoMonitorSubtask)
-            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-            .where(
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorSubtask.updated_at >= since,
-            )
-            .order_by(GeoMonitorSubtask.updated_at.desc())
-            .limit(max(limit * 20, 500))
-        )
+    from sqlalchemy import text
+
+    sql = text(
+        """
+        SELECT s.subtask_id
+        FROM geo_monitor_subtask s
+        INNER JOIN geo_monitor_task t ON t.task_id = s.task_id
+        WHERE t.deleted = 0
+          AND s.updated_at >= :since
+          AND JSON_UNQUOTE(JSON_EXTRACT(s.raw_result_json, '$.source')) = 'manual_snapshot'
+          AND LOWER(COALESCE(s.platform, '')) NOT LIKE '%doubao%'
+        ORDER BY s.updated_at DESC
+        LIMIT :lim
+        """
     )
+    ids = [
+        str(r[0])
+        for r in db.execute(sql, {"since": since, "lim": int(limit)}).all()
+    ]
+    if not ids:
+        return []
+    by_id = {
+        st.subtask_id: st
+        for st in db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id.in_(ids))).all()
+    }
     out: list[GeoMonitorSubtask] = []
-    for st in rows:
-        raw = st.raw_result_json if isinstance(st.raw_result_json, dict) else {}
-        if str(raw.get("source") or "").strip() != "manual_snapshot":
+    for sid in ids:
+        st = by_id.get(sid)
+        if not st:
             continue
         if _is_doubao_platform(st.platform):
             continue
         if not _share_url_from_subtask(st):
             continue
         out.append(st)
-        if len(out) >= limit:
-            break
     return out
 
 
