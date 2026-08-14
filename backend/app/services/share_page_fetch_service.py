@@ -51,6 +51,7 @@ _PLATFORM_SELF_HOSTS = (
     "deepseek.com",
     "deepseek.cn",
     "qianwen.com",
+    "qianwen.my.cn",
     "tongyi.aliyun.com",
     "yuanbao.tencent.com",
     "yb.tencent.com",
