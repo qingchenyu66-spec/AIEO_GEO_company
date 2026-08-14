@@ -236,7 +236,7 @@ def main() -> None:
             row = _refresh_one(db, st, apply=args.apply)
             report.append(row)
             print(json.dumps(row, ensure_ascii=False), flush=True)
-            if args.apply and row.get("action") == "updated":
+            if args.apply and row.get("action") in {"updated", "cleared_junk"}:
                 task = db.get(GeoMonitorTask, st.task_id)
                 if task and task.tenant_id:
                     tenant_ids.add(int(task.tenant_id))
