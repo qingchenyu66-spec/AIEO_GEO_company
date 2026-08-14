@@ -434,6 +434,17 @@ def refresh_stats_after_subtask_backfill(
             stat_date=day,
             platform=platform,
         )
+    # 2026-08-12 - 重算/补录后矩阵仍读 Redis 旧格（如 5）- 清 dashboard 含 ranking-matrix
+    try:
+        from app.services.monitor_service import invalidate_monitor_summary_cache
+
+        invalidate_monitor_summary_cache(int(task.tenant_id), bust_overview=True)
+    except Exception as exc:
+        logger.warning(
+            "invalidate_monitor_summary_cache after backfill failed tenant_id=%s error=%s",
+            task.tenant_id,
+            exc,
+        )
     try:
         from app.services.monitor_source_rollup_service import refresh_source_daily_after_subtask_backfill
 
@@ -491,6 +502,7 @@ def aggregate_platform_stats(
     *,
     tenant_ids: list[int] | None,
     since: date | None = None,
+    until: date | None = None,
 ) -> list[dict]:
     stmt = select(GeoMonitorDailyStat)
     if tenant_ids is not None:
@@ -499,6 +511,9 @@ def aggregate_platform_stats(
         stmt = stmt.where(GeoMonitorDailyStat.tenant_id.in_(tenant_ids))
     if since is not None:
         stmt = stmt.where(GeoMonitorDailyStat.stat_date >= since)
+    # 2026-08-14 - 信源页平台表现与工作台同窗：支持截止日，勿默认含今日全历史近30天
+    if until is not None:
+        stmt = stmt.where(GeoMonitorDailyStat.stat_date <= until)
     rows = list(db.scalars(stmt))
     bucket: dict[str, dict[str, int]] = {}
     for row in rows:
@@ -579,6 +594,8 @@ def workspace_metrics_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[st
     avg_rank = round(rank_sum / rank_count, 1) if rank_count else None
     return {
         "ranking_sample_count": completed,
+        # 2026-08-13 - 竞品/工作台对齐展示 N/M，需透出提及分子
+        "mentioned_count": mentioned,
         "brand_mention_rate": mention_rate,
         "avg_brand_rank": avg_rank,
         "top3_rate": top3_rate,
@@ -587,6 +604,32 @@ def workspace_metrics_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[st
         "negative_count": 0,
         "negative_rate": 0.0,
     }
+
+
+def brand_period_metrics_from_daily_stats(
+    db: Session,
+    tenant_id: int,
+    *,
+    range_start: date | datetime,
+    range_end: date | datetime,
+    platforms: list[str] | set[str] | frozenset[str] | None = None,
+) -> dict[str, int | float | None] | None:
+    """区间本品牌 KPI：与工作台「本期结论」同一日表样本加权。
+
+    2026-08-13 - 竞品页本品牌提及率曾走实时子任务+mention_position，与工作台日表漂移
+    """
+    if not has_daily_stats(db, [tenant_id]):
+        return None
+    since = range_start.date() if isinstance(range_start, datetime) else range_start
+    until = range_end.date() if isinstance(range_end, datetime) else range_end
+    rows = filter_daily_stat_rows_by_platforms(
+        list_daily_stats_for_tenant(db, tenant_id, since=since, until=until),
+        platforms,
+    )
+    metrics = workspace_metrics_from_stat_rows(rows)
+    if int(metrics.get("ranking_sample_count") or 0) <= 0:
+        return None
+    return metrics
 
 
 def filter_daily_stat_rows_by_platforms(

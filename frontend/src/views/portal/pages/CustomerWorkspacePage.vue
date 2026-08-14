@@ -564,6 +564,9 @@ onUnmounted(() => {
               <div v-else class="ws-board-conclusion-metric-delta is-muted">
                 {{ kpi.compareLabel || periodCompareLabel }} —
               </div>
+              <div v-if="kpi.sampleHint" class="ws-board-conclusion-metric-delta is-muted">
+                {{ kpi.sampleHint }}
+              </div>
             </div>
           </div>
         </article>

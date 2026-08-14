@@ -6,22 +6,21 @@ import re
 from datetime import date, datetime, timedelta, time
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, joinedload, load_only
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
-from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask
 from app.services.brand_service import (
     active_keyword_groups,
+    brand_exposure_terms,
     get_brand_asset,
     keyword_group_monitor_keywords,
     list_competitors,
 )
 from app.services.lead_diagnosis_analytics import names_match as _strict_entity_names_match
 from app.services.monitor_service import customer_display_cutoff, customer_display_date_range
-from app.services.monitor_stats_service import _detect_stat_date
-from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
 from app.services.brand_analysis_service import (
@@ -167,13 +166,28 @@ def _tracked_entities(asset: BrandAsset | None, competitors: list[Any]) -> list[
         name = str(_competitor_field(item, "name", "name") or "").strip()
         if not name:
             continue
-        terms = [name]
-        for alias in _competitor_aliases(item):
-            text = str(alias or "").strip()
-            if text and text not in terms:
-                terms.append(text)
+        terms = _expand_entity_match_terms(name, _competitor_aliases(item))
         rows.append({"name": name, "is_brand": False, "match_terms": terms})
     return rows
+
+
+def _expand_entity_match_terms(name: str, aliases: list[Any] | None = None) -> list[str]:
+    """竞品主名 + 别名；顿号/斜线合并录入时拆短名参与匹配（展示名仍用整段）。
+
+    2026-08-13 - 「inne、健敏思、天然博士」曾整串入库，拆词后可命中单品牌露出
+    """
+    terms: list[str] = []
+    for raw in (name, *(aliases or [])):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if text not in terms:
+            terms.append(text)
+        for part in re.split(r"[、,/，|]+", text):
+            piece = str(part or "").strip()
+            if piece and piece not in terms:
+                terms.append(piece)
+    return terms
 
 
 def _entity_match_stats_from_names(
@@ -514,106 +528,57 @@ def _aggregate_competitor_stats(
     asset = get_brand_asset(db, tenant_id)
     competitors = list_competitors(db, tenant_id)
     entities = _tracked_entities(asset, competitors)
+    # 2026-08-14 - 本品牌 live 匹配补露出词（宝得聪），避免只认公司全称导致曲线/KPI 漂
+    if asset is not None:
+        exposure = brand_exposure_terms(asset, active_keyword_groups(db, tenant_id))
+        for entity in entities:
+            if not entity.get("is_brand"):
+                continue
+            terms = list(entity.get("match_terms") or [])
+            for term in exposure:
+                text = str(term or "").strip()
+                if text and text not in terms:
+                    terms.append(text)
+            entity["match_terms"] = terms
     brand_display = (asset.brand_name if asset else None) or "本品牌"
     range_start_day = range_start.date()
     range_end_day = range_end.date()
     row_cap = max(1, min(subtask_limit, 5000))
 
-    # 快路径：按 schedule_key 业务日取 task，再按 task_id 拉轻字段（与工作台热力同源）。
-    # 无调度记录时回退宽窗 + _detect_stat_date，保证手工/补录任务不丢。
-    task_day_map = _schedule_task_day_map(
+    # 2026-08-14 - P1：schedule_key 快路径只吃到部分平台/任务，曲线出现假 100%/竞品假 0
+    # 改为与日表同源的业务日全量加载；Tab 计数先按全量再按平台过滤
+    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+
+    hist_rows, _hist_tasks, hist_days = load_subtasks_for_business_date_range(
         db,
         tenant_id,
-        range_start_day=range_start_day,
-        range_end_day=range_end_day,
+        start_date=range_start_day,
+        end_date=range_end_day,
+        asset=asset,
+        statuses={"completed", "partial_completed"},
+        limit=row_cap,
     )
     subtasks: list[GeoMonitorSubtask] = []
     subtask_day_keys: dict[int, str] = {}
     # 2026-07-30 - 点选平台后 Tab 其它端变 0 - Tab 计数独立于 platform_filters
     platform_tab_count_map: dict[str, int] = {}
-
-    if task_day_map:
-        platform_tab_count_map = _platform_tab_counts_for_task_ids(
-            db,
-            list(task_day_map.keys()),
-            prompt_filter=prompt_filter,
-        )
-        stmt = (
-            select(GeoMonitorSubtask)
-            .options(load_only(*_SUBTASK_LIGHT_COLS))
-            .where(
-                GeoMonitorSubtask.task_id.in_(list(task_day_map.keys())),
-                GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-            )
-        )
-        if platform_filters:
-            stmt = stmt.where(GeoMonitorSubtask.platform.in_(platform_filters))
-        if prompt_filter:
-            stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
-        for item in db.scalars(stmt.limit(row_cap)):
-            day = task_day_map.get(str(item.task_id or ""))
-            if day is None:
-                continue
-            subtasks.append(item)
-            subtask_day_keys[id(item)] = day.isoformat()
+    in_range: list[GeoMonitorSubtask] = []
+    for item in hist_rows:
+        biz = hist_days.get(item.id)
+        if biz is None or biz < range_start_day or biz > range_end_day:
+            continue
+        if prompt_filter and str(item.prompt or "") != prompt_filter:
+            continue
+        in_range.append(item)
+        subtask_day_keys[id(item)] = biz.isoformat()
+        code = str(item.platform or "").strip()
+        if code:
+            platform_tab_count_map[code] = platform_tab_count_map.get(code, 0) + 1
+    if platform_filters:
+        allowed = set(platform_filters)
+        subtasks = [item for item in in_range if str(item.platform or "") in allowed]
     else:
-        stmt = (
-            select(GeoMonitorSubtask)
-            .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
-            .options(
-                load_only(*_SUBTASK_LIGHT_COLS),
-                joinedload(GeoMonitorSubtask.task),
-            )
-            .where(
-                GeoMonitorTask.deleted.is_(False),
-                GeoMonitorTask.tenant_id == tenant_id,
-                GeoMonitorTask.purpose == "geo",
-                or_(
-                    and_(
-                        GeoMonitorTask.created_at >= range_start,
-                        GeoMonitorTask.created_at <= range_end,
-                    ),
-                    and_(
-                        GeoMonitorSubtask.updated_at >= range_start,
-                        GeoMonitorSubtask.updated_at <= range_end,
-                    ),
-                ),
-                GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
-            )
-        )
-        # 回退路径：SQL 不按平台过滤，便于 Tab 计数；聚合再在内存里收窄
-        if prompt_filter:
-            stmt = stmt.where(GeoMonitorSubtask.prompt == prompt_filter)
-
-        fetched = list(db.scalars(stmt.limit(row_cap)).unique())
-        task_ids = list({item.task_id for item in fetched if item.task_id})
-        schedule_runs_map = schedule_runs_for_tasks(db, task_ids) if task_ids else {}
-        lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids) if task_ids else {}
-        in_range: list[GeoMonitorSubtask] = []
-        for item in fetched:
-            task = item.task
-            if task is None:
-                continue
-            detect_day = _detect_stat_date(
-                item,
-                task,
-                schedule_run=schedule_runs_map.get(item.task_id),
-                lead_run=lead_runs_map.get(item.task_id),
-                asset=asset,
-            )
-            if detect_day is None or detect_day < range_start_day or detect_day > range_end_day:
-                continue
-            in_range.append(item)
-            subtask_day_keys[id(item)] = detect_day.isoformat()
-            code = str(item.platform or "").strip()
-            if code:
-                platform_tab_count_map[code] = platform_tab_count_map.get(code, 0) + 1
-        if platform_filters:
-            allowed = set(platform_filters)
-            subtasks = [item for item in in_range if str(item.platform or "") in allowed]
-        else:
-            subtasks = in_range
-
+        subtasks = in_range
     sentiment_parse: dict[str, Any] = {
         "parsed": 0,
         "pending_left": 0,
@@ -702,15 +667,23 @@ def _aggregate_competitor_stats(
             is_brand = entity["is_brand"]
             display_name = brand_display if is_brand else entity["name"]
             match_terms = entity.get("match_terms") or [entity["name"]]
-            mentioned, rank = _entity_match_stats_from_names(
-                named_entries,
-                match_terms,
-                mention_position=item.mention_position,
-                is_brand=is_brand,
-            )
+            # 2026-08-13 - 本品牌与日表同用 kpi_rank；禁 mention_position 单飞抬高提及率
+            if is_brand:
+                from app.services.monitor_service import kpi_rank_for_subtask
 
-            if not mentioned and rank is None:
-                continue
+                rank_val = kpi_rank_for_subtask(item, None, list(match_terms), asset)
+                if rank_val is None:
+                    continue
+                mentioned, rank = True, float(rank_val)
+            else:
+                mentioned, rank = _entity_match_stats_from_names(
+                    named_entries,
+                    match_terms,
+                    mention_position=None,
+                    is_brand=False,
+                )
+                if not mentioned and rank is None:
+                    continue
 
             if is_brand:
                 if rank is not None and rank <= 1:
@@ -874,7 +847,7 @@ def _aggregate_competitor_stats(
     )
     tab_sample_total = int(sum(platform_tab_count_map.values()))
 
-    return {
+    payload = {
         "brand_name": brand_display,
         "competitor_count": len(competitors),
         "sample_total": sample_total,
@@ -897,4 +870,127 @@ def _aggregate_competitor_stats(
         },
         "sentiment_rows": sentiment_rows,
         "sentiment_parse": sentiment_parse,
+        "brand_kpi_basis": "live_subtask",
     }
+    return _overlay_brand_kpi_from_daily_stats(
+        db,
+        tenant_id,
+        payload,
+        range_start=range_start,
+        range_end=range_end,
+        platform_filters=platform_filters,
+        brand_display=brand_display,
+        sorted_days=sorted_days,
+        trend_labels=trend_labels,
+    )
+
+
+def _overlay_brand_kpi_from_daily_stats(
+    db: Session,
+    tenant_id: int,
+    payload: dict[str, Any],
+    *,
+    range_start: datetime,
+    range_end: datetime,
+    platform_filters: list[str],
+    brand_display: str,
+    sorted_days: list[str],
+    trend_labels: list[str],
+) -> dict[str, Any]:
+    """本品牌提及率/均排/趋势对齐工作台日表；竞品行仍走实时实体匹配。
+
+    2026-08-13 - 方案 A：近 7 日「本品牌提及率」与本期结论同源
+    """
+    from app.services.brand_service import tenant_purchased_platforms
+    from app.services.monitor_stats_service import (
+        brand_period_metrics_from_daily_stats,
+        workspace_kpi_trends_from_stats,
+    )
+
+    asset = get_brand_asset(db, tenant_id)
+    purchased = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
+    platforms = platform_filters or list(purchased) or None
+    metrics = brand_period_metrics_from_daily_stats(
+        db,
+        tenant_id,
+        range_start=range_start,
+        range_end=range_end,
+        platforms=platforms,
+    )
+    if metrics is None:
+        return payload
+
+    mentioned = int(metrics.get("mentioned_count") or 0)
+    completed = int(metrics.get("ranking_sample_count") or 0)
+    mention_rate = float(metrics.get("brand_mention_rate") or 0.0)
+    avg_rank = metrics.get("avg_brand_rank")
+
+    for row in payload.get("rows") or []:
+        if not isinstance(row, dict) or not row.get("is_brand"):
+            continue
+        row["mention_count"] = mentioned
+        row["mention_rate"] = mention_rate
+        row["avg_rank"] = avg_rank
+        row["sample_count"] = completed
+        row["kpi_basis"] = "daily_stat"
+
+    trend_points = workspace_kpi_trends_from_stats(
+        db,
+        tenant_id,
+        range_start,
+        range_end,
+        platforms=platforms,
+    )
+    brand_values = [float(p.get("mention_rate") or 0.0) for p in trend_points]
+    if len(brand_values) == len(trend_labels):
+        for series in (payload.get("mention_trends") or {}).get("series") or []:
+            if isinstance(series, dict) and series.get("is_brand"):
+                series["values"] = brand_values
+                series["kpi_basis"] = "daily_stat"
+
+    # 分平台切片：本品牌趋势/KPI 也改吃日表，避免切平台后又漂
+    for plat_row in payload.get("platform_rows") or []:
+        if not isinstance(plat_row, dict):
+            continue
+        code = str(plat_row.get("platform") or "").strip()
+        if not code:
+            continue
+        plat_metrics = brand_period_metrics_from_daily_stats(
+            db,
+            tenant_id,
+            range_start=range_start,
+            range_end=range_end,
+            platforms=[code],
+        )
+        if plat_metrics is None:
+            continue
+        for row in plat_row.get("rows") or []:
+            if not isinstance(row, dict) or not row.get("is_brand"):
+                continue
+            row["mention_count"] = int(plat_metrics.get("mentioned_count") or 0)
+            row["mention_rate"] = float(plat_metrics.get("brand_mention_rate") or 0.0)
+            row["avg_rank"] = plat_metrics.get("avg_brand_rank")
+            row["sample_count"] = int(plat_metrics.get("ranking_sample_count") or 0)
+            row["kpi_basis"] = "daily_stat"
+        plat_trends = workspace_kpi_trends_from_stats(
+            db,
+            tenant_id,
+            range_start,
+            range_end,
+            platforms=[code],
+        )
+        plat_vals = [float(p.get("mention_rate") or 0.0) for p in plat_trends]
+        if len(plat_vals) != len(trend_labels):
+            continue
+        for series in (plat_row.get("mention_trends") or {}).get("series") or []:
+            if isinstance(series, dict) and series.get("is_brand"):
+                series["values"] = plat_vals
+                series["kpi_basis"] = "daily_stat"
+
+    payload["brand_kpi_basis"] = "daily_stat"
+    payload["brand_sample_total"] = completed
+    payload["brand_mention_count"] = mentioned
+    # 兼容前端 N/M：无平台筛选时本品牌分母改用日表完成数
+    if not platform_filters:
+        payload["sample_total"] = completed
+    return payload

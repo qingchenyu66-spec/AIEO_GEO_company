@@ -31,6 +31,7 @@ export type CompetitorLeaderboardRow = {
   first_mention_rate: number
   rank: number | null
   rank_sample_count: number
+  sample_count?: number
 }
 
 export type SentimentLeaderboardRow = {
@@ -185,6 +186,9 @@ export function useBrandInsights(options?: {
 
   const leaderboardRows = computed<CompetitorLeaderboardRow[]>(() => {
     const sourceRows = activePlatformSlice.value?.rows || summary.value?.rows || []
+    const brandSampleFallback = summary.value?.brand_sample_total
+      ?? summary.value?.sample_total
+      ?? 0
     return sourceRows.map(row => ({
       name: row.name,
       is_brand: Boolean(row.is_brand),
@@ -193,6 +197,9 @@ export function useBrandInsights(options?: {
       first_mention_rate: row.first_mention_rate ?? 0,
       rank: row.avg_rank,
       rank_sample_count: row.rank_sample_count || 0,
+      // 2026-08-13 - 本品牌 N/M 用日表分母，勿混用竞品实时 sample_total
+      sample_count: row.sample_count
+        ?? (row.is_brand ? brandSampleFallback : undefined),
     }))
   })
 
@@ -223,8 +230,14 @@ export function useBrandInsights(options?: {
   const brandSentimentRow = computed(() => sentimentLeaderboardRows.value.find(row => row.is_brand) || null)
   const sampleTotal = computed(() => (
     activePlatformSlice.value?.sample_count
+    ?? summary.value?.brand_sample_total
     ?? summary.value?.sample_total
     ?? 0
+  ))
+  const brandSampleTotal = computed(() => (
+    brandRow.value?.sample_count
+    ?? summary.value?.brand_sample_total
+    ?? sampleTotal.value
   ))
   const configuredCount = computed(() => brandCompetitors.value.length || summary.value?.competitor_count || 0)
   // 2026-07-30 - 有各端切片用切片；缺字段回退全局，避免曲线整块空白
@@ -573,6 +586,7 @@ export function useBrandInsights(options?: {
     brandRow,
     brandSentimentRow,
     sampleTotal,
+    brandSampleTotal,
     configuredCount,
     mentionTrendHiddenCount,
     focusedMentionTrendSeries,

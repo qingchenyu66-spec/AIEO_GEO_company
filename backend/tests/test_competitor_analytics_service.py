@@ -47,6 +47,17 @@ def test_tracked_entities_handles_dict_competitor():
     }]
 
 
+def test_tracked_entities_splits_顿号_merged_competitor_name():
+    # 2026-08-13 - 合并录入拆短名，避免整串匹配导致手算对不上
+    rows = _tracked_entities(None, [{"name": "inne、健敏思、天然博士", "aliases": []}])
+    assert len(rows) == 1
+    assert rows[0]["name"] == "inne、健敏思、天然博士"
+    terms = rows[0]["match_terms"]
+    assert "inne" in terms
+    assert "健敏思" in terms
+    assert "天然博士" in terms
+
+
 def test_tracked_entities_uses_brand_match_terms_without_extra_series():
     asset = SimpleNamespace(
         brand_name="艾迪亚控股集团有限公司",

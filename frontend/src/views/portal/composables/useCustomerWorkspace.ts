@@ -596,6 +596,10 @@ export function useCustomerWorkspace() {
           deltaKind: 'default' as const,
           periodMode: true,
           compareLabel,
+          // 2026-08-13 - 与竞品页本品牌 N/M 同源（日表样本加权）
+          sampleHint: data.kpis.ranking_sample_count
+            ? `${data.kpis.mentioned_count ?? Math.round((current.mention / 100) * data.kpis.ranking_sample_count)} / ${data.kpis.ranking_sample_count} 样本`
+            : null,
         },
         {
           key: 'rank',
@@ -608,6 +612,7 @@ export function useCustomerWorkspace() {
           deltaKind: 'rank' as const,
           periodMode: true,
           compareLabel,
+          sampleHint: null,
         },
         {
           key: 'top3',
@@ -620,6 +625,9 @@ export function useCustomerWorkspace() {
           deltaKind: 'default' as const,
           periodMode: true,
           compareLabel,
+          sampleHint: data.kpis.ranking_sample_count
+            ? `${data.kpis.ranking_sample_count} 样本`
+            : null,
         },
       ]
     }
@@ -635,6 +643,9 @@ export function useCustomerWorkspace() {
         lowerIsBetter: false,
         periodMode: false,
         compareLabel: '较上一轮',
+        sampleHint: data.kpis.ranking_sample_count
+          ? `${data.kpis.mentioned_count ?? 0} / ${data.kpis.ranking_sample_count} 样本`
+          : null,
       },
       {
         key: 'rank',
@@ -647,6 +658,7 @@ export function useCustomerWorkspace() {
         deltaKind: 'rank' as const,
         periodMode: false,
         compareLabel: '较上一轮',
+        sampleHint: null,
       },
       {
         key: 'top3',
@@ -658,6 +670,9 @@ export function useCustomerWorkspace() {
         lowerIsBetter: false,
         periodMode: false,
         compareLabel: '较上一轮',
+        sampleHint: data.kpis.ranking_sample_count
+          ? `${data.kpis.ranking_sample_count} 样本`
+          : null,
       },
     ]
   })

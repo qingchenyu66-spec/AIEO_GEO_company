@@ -14,6 +14,8 @@ export interface CompetitorCompareRow {
   first_mention_rate?: number
   avg_rank: number | null
   rank_sample_count?: number
+  sample_count?: number
+  kpi_basis?: string
   positive_rate?: number
   negative_rate?: number
   sentiment_sample?: number
@@ -60,6 +62,10 @@ export interface CompetitorCompareSummary {
   brand_name: string | null
   competitor_count: number
   sample_total: number
+  /** 本品牌日表完成样本（与工作台本期结论同源） */
+  brand_sample_total?: number
+  brand_mention_count?: number
+  brand_kpi_basis?: string
   /** 平台 Tab 用：未按选中平台过滤的样本总数 */
   tab_sample_total?: number
   start_at?: string
@@ -200,6 +206,8 @@ export type SourceCitationTrend = {
 
 export type SourceAnalysisSummary = {
   tenant_id: number
+  start_date?: string | null
+  end_date?: string | null
   source_stats: SourceStatRow[]
   source_stats_all?: SourceStatRow[]
   source_citation_trend?: SourceCitationTrend
@@ -215,6 +223,9 @@ export type SourceAnalysisSummary = {
 
 export async function getSourceStats(params?: {
   tenant_id?: number
+  start_date?: string
+  end_date?: string
+  platform?: string
 }): Promise<SourceAnalysisSummary> {
   const response = await http.get('/v1/analytics/source-stats', {
     params,
