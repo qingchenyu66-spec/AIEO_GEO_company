@@ -49,11 +49,28 @@ def _channel_for_code(code: str, name: str) -> str:
     return "web"
 
 
+def _strip_html(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _platform_table_html(html: str) -> str:
+    """Prefer the platforms table; avoid API 参数表误吸入 consumertaskid 等。"""
+    tables = re.findall(r"<table[\s\S]*?</table>", html or "", flags=re.IGNORECASE)
+    for table in tables:
+        if re.search(r"<code>\s*doubao\s*</code>", table, flags=re.IGNORECASE) and re.search(
+            r"<code>\s*deepseek\s*</code>", table, flags=re.IGNORECASE
+        ):
+            return table
+    return html or ""
+
+
 def _parse_platform_rows(html: str) -> list[dict[str, Any]]:
+    # 2026-08-11 - qianwen_mobile 说明含嵌套 <code>search</code>，旧正则 [^<]+ 整行丢弃→误判下架
+    blob = _platform_table_html(html)
     rows = re.findall(
-        r"<code>([a-z][a-z0-9_]+)</code></td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>",
-        html,
-        flags=re.IGNORECASE,
+        r"<code>([a-z][a-z0-9_]+)</code></td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>",
+        blob,
+        flags=re.IGNORECASE | re.DOTALL,
     )
     catalog: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -62,11 +79,13 @@ def _parse_platform_rows(html: str) -> list[dict[str, Any]]:
         if not text or text in seen:
             continue
         seen.add(text)
+        name_text = _strip_html(name)
+        desc_text = _strip_html(description)
         catalog.append({
             "code": text,
-            "name": name.strip(),
-            "description": description.strip(),
-            "channel": _channel_for_code(text, name),
+            "name": name_text,
+            "description": desc_text,
+            "channel": _channel_for_code(text, name_text),
             "sort_order": (index + 1) * 10,
         })
     return catalog
