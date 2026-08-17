@@ -79,6 +79,26 @@ const inclusionTenantId = computed(() => {
   return brandAsset.value?.tenant_id ?? null
 })
 
+// 2026-08-17 - 问题列 +N 原是摆设 - 点击展开该行全部监测问题
+const expandedQuestionUrls = ref<Set<string>>(new Set())
+
+function isQuestionsExpanded(url: string): boolean {
+  return expandedQuestionUrls.value.has(url)
+}
+
+function toggleQuestionsExpanded(url: string) {
+  const next = new Set(expandedQuestionUrls.value)
+  if (next.has(url)) next.delete(url)
+  else next.add(url)
+  expandedQuestionUrls.value = next
+}
+
+function visibleQuestions(source: { url: string; questions?: string[] | null }): string[] {
+  const all = source.questions || []
+  if (all.length <= 3 || isQuestionsExpanded(source.url)) return all
+  return all.slice(0, 3)
+}
+
 async function openWebsiteArticles(domain: string) {
   if (!domain) return
   // 并排时再次点击同一域名 = 取消筛选，回到全部信源
@@ -374,8 +394,23 @@ const categoryOptions = [
               </small>
             </div>
             <div class="source-table-tags">
-              <i v-for="question in (source.questions || []).slice(0, 3)" :key="`${source.url}-${question}`">{{ question }}</i>
-              <i v-if="(source.questions || []).length > 3" class="source-table-muted">+{{ source.questions!.length - 3 }}</i>
+              <i
+                v-for="question in visibleQuestions(source)"
+                :key="`${source.url}-${question}`"
+              >{{ question }}</i>
+              <button
+                v-if="(source.questions || []).length > 3"
+                type="button"
+                class="source-table-more"
+                :aria-expanded="isQuestionsExpanded(source.url)"
+                @click="toggleQuestionsExpanded(source.url)"
+              >
+                {{
+                  isQuestionsExpanded(source.url)
+                    ? '收起'
+                    : `+${source.questions!.length - 3}`
+                }}
+              </button>
             </div>
             <div class="source-table-tags">
               <i v-for="term in (source.exposure_terms || []).slice(0, 3)" :key="`${source.url}-${term}`" class="is-exposure">{{ term }}</i>
