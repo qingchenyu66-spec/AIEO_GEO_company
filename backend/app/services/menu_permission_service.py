@@ -451,21 +451,23 @@ def sync_position_menu_grants(
                     **flags,
                 )
             )
-        return
-
-    for menu_id in menu_ids or []:
-        if menu_id not in valid_menu_ids:
-            continue
-        db.add(
-            PositionMenu(
-                position_id=position_id,
-                menu_id=menu_id,
-                can_create=writable,
-                can_update=writable,
-                can_delete=writable,
-                can_export=True,
+    else:
+        for menu_id in menu_ids or []:
+            if menu_id not in valid_menu_ids:
+                continue
+            db.add(
+                PositionMenu(
+                    position_id=position_id,
+                    menu_id=menu_id,
+                    can_create=writable,
+                    can_update=writable,
+                    can_delete=writable,
+                    can_export=True,
+                )
             )
-        )
+
+    # 2026-08-11 - 保存职位后身份菜单被清空 - autoflush=False 下先 flush 再同步身份
+    db.flush()
 
 
 def replace_identity_menus_from_position(
@@ -511,6 +513,8 @@ def replace_identity_menus_from_position(
                 can_export=True,
             )
         )
+    # 2026-08-11 - 同会话读身份菜单可能空 - autoflush=False 下写完即 flush
+    db.flush()
 
 
 def sync_identity_menus_for_position(db: Session, position_id: int) -> int:

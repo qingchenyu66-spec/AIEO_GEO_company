@@ -73,6 +73,8 @@ def replace_identity_menus(db: Session, identity_id: int, menu_ids: list[int], *
             can_delete=writable,
             can_export=True,
         ))
+    # 2026-08-11 - 同会话读身份菜单可能空 - autoflush=False 下写完即 flush
+    db.flush()
 
 
 __all__ = [
