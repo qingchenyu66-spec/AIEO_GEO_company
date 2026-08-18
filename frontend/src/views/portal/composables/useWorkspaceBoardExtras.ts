@@ -198,8 +198,29 @@ export function inferDeviceLabel(platformCode: string) {
   return '桌面端'
 }
 
+// 2026-08-17 - 环图/柱用品牌 accent 过跳（Kimi 近黑+多蓝撞车）- 图表专用柔化色，不动 PLATFORM_META
+// 2026-08-17 - 首版柔化太贴品牌色看不出差别 - 加大明度/色相分流（仍可辨平台）
+const CHART_PLATFORM_COLORS: Record<string, string> = {
+  kimi: '#64748b',
+  yuanbao: '#34d399',
+  doubao: '#fb923c',
+  qianwen: '#a78bfa',
+  deepseek: '#38bdf8',
+  baiduai: '#818cf8',
+  wenxinyiyan: '#60a5fa',
+  antafu: '#22d3ee',
+  quark: '#0ea5e9',
+  weibo_zhisou: '#f59e0b',
+  chatgpt: '#2dd4bf',
+}
+
 export function platformBarColor(platformCode: string) {
-  return platformAccentColor(platformCode) || '#2563eb'
+  const code = String(platformCode || '').trim()
+  const base = code.replace(/_mobile$/i, '')
+  return CHART_PLATFORM_COLORS[code]
+    || CHART_PLATFORM_COLORS[base]
+    || platformAccentColor(platformCode)
+    || '#2563eb'
 }
 
 export function useWorkspaceBoardExtras(
@@ -457,6 +478,7 @@ export function useKeywordPlatformHeatmapChart(
         axisLabel: { color: '#64748b', fontSize: 12, interval: 0 },
         axisTick: { show: false },
       },
+      // 2026-08-17 - 工作台热力试色：O 白→品牌蓝；低端勿用纯白（与卡片底糊成「狗啃」）
       visualMap: {
         min: 0,
         max: 100,
@@ -468,7 +490,7 @@ export function useKeywordPlatformHeatmapChart(
         itemHeight: Math.min(140, Math.max(80, Math.floor(chartHeight * 0.35))),
         text: ['高', '低'],
         textStyle: { color: '#64748b', fontSize: 11 },
-        inRange: { color: ['#eff6ff', '#93c5fd', '#2563eb', '#1e3a8a'] },
+        inRange: { color: ['#e2e8f0', '#bfdbfe', '#60a5fa', '#2563eb', '#1e3a8a'] },
       },
       series: [{
         type: 'heatmap',
@@ -482,10 +504,18 @@ export function useKeywordPlatformHeatmapChart(
             if (!raw || raw[2] < 0) return '—'
             return `${raw[2]}`
           },
-          color: '#1e293b',
           fontSize: 12,
+          fontWeight: 700,
+          color: (params: { data: [number, number, number] }) => {
+            const raw = payload.data.find(item => item[0] === params.data[0] && item[1] === params.data[1])
+            const value = raw?.[2]
+            if (value == null || value < 0) return '#94a3b8'
+            if (value >= 50) return '#fff'
+            return '#1e3a8a'
+          },
         },
-        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)' } },
+        // 2026-08-17 - 热力悬停 emphasis 会丢掉格子数字/字色 - 禁用 emphasis，靠 tooltip
+        emphasis: { disabled: true },
       }],
     }, true)
     chart.resize()
