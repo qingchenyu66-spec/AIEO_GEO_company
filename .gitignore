@@ -23,6 +23,14 @@ sonar-project.properties.local
 
 # 本地调试 / 抓包 / 审计产物
 .playwright-cli/
+# 下划线前缀：本地探针 / 审计脚本与产物，不入库
+backend/_*
+backend/scripts/_*
+frontend/public/_*
+frontend/_*.txt
+frontend/_*.json
+frontend/src/**/_*
+backend/tests/_*.txt
 e2e/report/
 e2e/test-results/
 backend/.cache/
