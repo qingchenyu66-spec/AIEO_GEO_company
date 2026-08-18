@@ -576,6 +576,33 @@ def ensure_identity_menus_from_position(db: Session, identity: UserIdentity) -> 
     return True
 
 
+def heal_empty_identity_menus(db: Session) -> int:
+    """只补「身份菜单行为空、职位模板仍在」的记录，不覆盖已有个性化授权。
+
+    登录 /me 会逐人自愈，但已清空的行在用户进门户前一直 403；保存职位才会全员同步。
+    """
+    identities = list(
+        db.scalars(
+            select(UserIdentity).where(
+                UserIdentity.deleted.is_(False),
+                UserIdentity.status.is_(True),
+                UserIdentity.position_id.isnot(None),
+            )
+        )
+    )
+    healed = 0
+    for identity in identities:
+        has_menu = db.scalar(
+            select(UserIdentityMenu.id).where(UserIdentityMenu.identity_id == identity.id).limit(1)
+        )
+        if has_menu is not None:
+            continue
+        # 2026-08-18 - 保存职位清空身份菜单后不会自愈 - 空表按职位模板补回，有授权的不动
+        if ensure_identity_menus_from_position(db, identity):
+            healed += 1
+    return healed
+
+
 def require_platform_menu_permission(
     db: Session,
     current,

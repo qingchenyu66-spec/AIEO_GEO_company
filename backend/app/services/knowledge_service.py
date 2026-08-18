@@ -48,6 +48,7 @@ def _assert_knowledge_record_access(db: Session, current: CurrentSession, record
 
 def list_knowledge_files(db: Session, current: CurrentSession, tenant_id: int | None = None) -> list[KnowledgeFile]:
     """按身份读取知识库文件；客户只能查看自己企业，平台端可指定企业。"""
+    # 2026-08-18 - 知识库列表依赖 tenant_id - 客户走身份绑定企业，平台必须显式指定，禁止无参扫全库
     resolved_tenant_id = resolve_and_guard_tenant_id(db, current, tenant_id)
     return list(
         db.scalars(

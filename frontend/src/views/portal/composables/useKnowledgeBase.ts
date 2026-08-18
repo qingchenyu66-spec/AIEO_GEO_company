@@ -41,6 +41,16 @@ export function useKnowledgeBase() {
     isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
   ))
   const previewTenantId = computed(() => parsePreviewTenantId(route))
+  const knowledgeTenantId = computed(() => {
+    if (previewTenantId.value) return previewTenantId.value
+    const raw = route.query.tenant_id
+    const sticky = Number(Array.isArray(raw) ? raw[0] : raw)
+    if (Number.isFinite(sticky) && sticky > 0) return sticky
+    if (auth.session?.identity?.identity_type === 'CUSTOMER') {
+      return auth.session.identity.tenant_id ?? null
+    }
+    return null
+  })
 
   const pageMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.knowledge')?.menu_name || '企业知识库'
@@ -103,12 +113,15 @@ export function useKnowledgeBase() {
       selectedId.value = items[0].id
     }
   })
+  watch(knowledgeTenantId, () => {
+    void loadFiles()
+  })
 
   async function loadFiles() {
     loading.value = true
     loadError.value = ''
     try {
-      files.value = await withRetry(() => getKnowledgeFiles(previewTenantId.value))
+      files.value = await withRetry(() => getKnowledgeFiles(knowledgeTenantId.value))
       if (files.value.length && selectedId.value === null) {
         selectedId.value = files.value[0].id
       }
@@ -139,7 +152,7 @@ export function useKnowledgeBase() {
     validateFile(file)
     uploading.value = true
     try {
-      const record = await uploadKnowledgeFile(file, null)
+      const record = await uploadKnowledgeFile(file, knowledgeTenantId.value)
       ElMessage.success('资料已上传')
       files.value = [record, ...files.value.filter(item => item.id !== record.id)]
       selectedId.value = record.id

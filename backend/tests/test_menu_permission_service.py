@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.services.menu_permission_service import (
     ROUTE_ONLY_MENU_CODES,
     ensure_identity_menus_from_position,
+    heal_empty_identity_menus,
     sanitize_menu_grant_flags,
     sync_identity_menus_for_position,
 )
@@ -169,3 +170,30 @@ def test_ensure_identity_menus_from_position_skips_when_matched(monkeypatch):
     changed = ensure_identity_menus_from_position(FakeSession(), identity)
     assert changed is False
     assert replace_calls == []
+
+
+def test_heal_empty_identity_menus_skips_non_empty(monkeypatch):
+    empty = SimpleNamespace(id=1, position_id=3)
+    filled = SimpleNamespace(id=2, position_id=3)
+    ensure_ids: list[int] = []
+    menu_hits = iter([None, 88])
+
+    class FakeScalars:
+        def __iter__(self):
+            return iter([empty, filled])
+
+    class FakeSession:
+        def scalars(self, _stmt):
+            return FakeScalars()
+
+        def scalar(self, _stmt):
+            return next(menu_hits)
+
+    monkeypatch.setattr(
+        "app.services.menu_permission_service.ensure_identity_menus_from_position",
+        lambda _db, identity: ensure_ids.append(identity.id) or True,
+    )
+
+    count = heal_empty_identity_menus(FakeSession())
+    assert count == 1
+    assert ensure_ids == [1]
