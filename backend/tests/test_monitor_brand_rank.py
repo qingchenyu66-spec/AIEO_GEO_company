@@ -446,3 +446,37 @@ def test_line_enum_dropped_when_compact_section_is_slightly_behind() -> None:
         ]
     )
     assert [item.rank_basis for item in kept] == ["section_local"]
+
+
+def test_representative_column_enum_first_not_empty() -> None:
+    """19227911：代表企业格顿号鸿联九五为首，勿因场景列/跳过表格而空位次。"""
+    text = """
+### 第二步：认识市场上的主要玩家
+
+| 公司类型 | 代表企业 | 核心优势 / 特点 | 适合场景 |
+| :--- | :--- | :--- | :--- |
+| **综合巨头与平台** | 百度智能云[citation:7]、Scale AI[citation:8]、Labelbox[citation:9] | 技术实力雄厚 | 大型企业 |
+| **专业数据服务商** | 鸿联九五[citation:10]、澳鹏(Appen)[citation:11]、云测数据[citation:12]、海天瑞声[citation:13]、数据堂[citation:14]、菲利信科技[citation:15]、标贝数据[citation:16] | **行业主流选择** | 绝大多数有明确数据标注需求的企业 |
+| **垂直领域专家** | 曼孚科技(自动驾驶)[citation:17]、中科江南(医疗)[citation:18] | 垂直场景 | 行业项目 |
+"""
+    subtask = SimpleNamespace(
+        prompt="数据标注公司选哪家",
+        answer_content=text,
+        mention_context="鸿联九五",
+        all_rankings_json=[
+            {"name": "📝 第一步", "rank": 1},
+            {"name": "百度智能云", "rank": 1, "category": "📊 第二步：认识市场上的主要玩家"},
+            {"name": "Scale AI", "rank": 2, "category": "📊 第二步：认识市场上的主要玩家"},
+        ],
+        mention_position=None,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["北京鸿联九五信息产业有限公司", "鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "rep_column"

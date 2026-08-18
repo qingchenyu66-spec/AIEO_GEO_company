@@ -4404,6 +4404,7 @@ def _drop_soft_ranks_beaten_by_structured(
                 "preferred_column",
                 "line_enum_local",
                 "scenario_table",
+                "rep_column",
                 "if_cluster",
                 "typed_cluster",
                 "quick_pick",
@@ -4425,6 +4426,7 @@ def _drop_soft_ranks_beaten_by_structured(
                 "table",
                 "preferred_column",
                 "scenario_table",
+                "rep_column",
                 "if_cluster",
                 "typed_cluster",
                 "quick_pick",
@@ -4967,6 +4969,66 @@ def _scenario_markdown_table_brand_rank(text: str, brand_terms: list[str]) -> in
     return None
 
 
+_REP_COMPANY_COL_HINTS = (
+    "代表企业", "代表公司", "代表厂商", "推荐公司", "推荐企业", "相关企业",
+)
+
+
+def _representative_column_enum_rank(text: str, brand_terms: list[str]) -> int | None:
+    """表「代表企业/推荐公司」列：品牌在该格顿号名单中的位次。
+
+    2026-08-18 - 19227911 专业数据服务商格首个鸿联九五；场景表只读方案列、行内又跳过表格 → 空位次
+    """
+    from app.services.ranking_parser import _is_markdown_table_line, _split_markdown_table_cells
+
+    if not text or not brand_terms:
+        return None
+    lines = [str(ln or "").rstrip() for ln in str(text).splitlines()]
+    best: int | None = None
+    i = 0
+    while i < len(lines):
+        header = lines[i].strip()
+        if not _is_markdown_table_line(header):
+            i += 1
+            continue
+        cols = [re.sub(r"\s+", "", c) for c in _split_markdown_table_cells(header)]
+        col_idx = next(
+            (k for k, col in enumerate(cols) if any(hint in col for hint in _REP_COMPANY_COL_HINTS)),
+            None,
+        )
+        if col_idx is None:
+            i += 1
+            continue
+        j = i + 1
+        if j < len(lines) and re.search(r"^\|?\s*:?-{2,}", lines[j].replace("|", " ").strip() or "-"):
+            j += 1
+        while j < len(lines) and _is_markdown_table_line(lines[j]):
+            row = lines[j].strip()
+            j += 1
+            if re.search(r"^\|?\s*:?-{2,}", row.replace("|", " ").strip() or "-"):
+                continue
+            cells = [c.strip() for c in _split_markdown_table_cells(row)]
+            if col_idx >= len(cells):
+                continue
+            cell = cells[col_idx]
+            if not _configured_exposure_term_in_text(cell, brand_terms):
+                continue
+            blob = re.sub(r"\[citation:\d+\]", "", cell)
+            blob = re.sub(r"\*\*", "", blob)
+            blob = re.sub(r"<[^>]+>", " ", blob)
+            blob = re.sub(r"\s+", " ", blob).strip()
+            parts = [p.strip() for p in re.split(r"[、，,;；]", blob) if p.strip()]
+            if len(parts) < 2:
+                continue
+            for index, part in enumerate(parts, 1):
+                if _configured_exposure_term_in_text(part, brand_terms):
+                    if best is None or index < best:
+                        best = index
+                    break
+        i = j
+    return best
+
+
 def _if_scenario_cluster_brand_rank(text: str, brand_terms: list[str]) -> tuple[int | None, str | None]:
     """「如果住在南方…」子树内品牌序（万华/千年舟/大王椰→3）。
 
@@ -5437,6 +5499,18 @@ def _resolve_brand_rank_detail(
                 )
             )
             mentioned = True
+        rep_rank = _representative_column_enum_rank(rankable_text, brand_terms)
+        if rep_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=rep_rank,
+                    mentioned=True,
+                    source="structured",
+                    confidence=0.92,
+                    rank_basis="rep_column",
+                )
+            )
+            mentioned = True
         cluster_rank, cluster_title = _if_scenario_cluster_brand_rank(rankable_text, brand_terms)
         if cluster_rank is not None:
             candidates.append(
@@ -5582,6 +5656,7 @@ def _resolve_brand_rank_detail(
                 "cn_chapter",
                 "bold_lead_company",
                 "scenario_table",
+                "rep_column",
                 "if_cluster",
                 "typed_cluster",
                 "quick_pick",
@@ -5626,6 +5701,7 @@ def _resolve_brand_rank_detail(
                 "cn_chapter",
                 "bold_lead_company",
                 "scenario_table",
+                "rep_column",
                 "if_cluster",
                 "typed_cluster",
                 "quick_pick",
