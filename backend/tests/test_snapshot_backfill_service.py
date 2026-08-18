@@ -521,7 +521,8 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert subtask.raw_result_json.get("screenshot_pending") is True
     assert subtask.raw_result_json.get("screenshot_enqueue") == "queued"
     assert enqueued == [("st-backfill", "https://www.doubao.com/thread/abc1234567890")]
-    assert subtask.raw_result_json.get("manual_rank_locked") is False
+    # 2026-08-17 - 与补录「一律锁定」对齐；无手填名次也会锁，防规则升级冲掉
+    assert subtask.raw_result_json.get("manual_rank_locked") is True
     assert subtask.raw_result_json.get("fetch_reference_count") == 1
 
     log = db_session.scalar(
@@ -1255,6 +1256,80 @@ def test_ensure_gap_backfill_subtask_creates_local_records(db_session) -> None:
         current=current,
     )
     assert again.subtask_id == subtask.subtask_id
+
+
+def test_ensure_gap_backfill_second_platform_appends_same_task(db_session) -> None:
+    """同 schedule_key 第二平台应追加到已有 task，禁止新建 bft 覆盖 schedule_run.task_id。"""
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    tenant = Tenant(name="缺口双平台", code="tenant-gap-2plat", deleted=False)
+    db_session.add(tenant)
+    db_session.flush()
+    db_session.add(
+        BrandAsset(
+            tenant_id=tenant.id,
+            company_full_name="缺口双平台有限公司",
+            brand_name="双平台品牌",
+            brand_short_name="双平台",
+            monitor_keywords_json=["双平台品牌推荐"],
+            aliases_json=[],
+            product_keywords_json=[],
+            monitored_platforms_json=["doubao", "deepseek"],
+            region_codes_json=[],
+            schedule_times_json=["09:35"],
+            schedule_type="daily_times",
+            schedule_weekdays_json=[],
+            schedule_month_days_json=[],
+            status=True,
+            deleted=False,
+        )
+    )
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(identity_type="PLATFORM", tenant_id=None, position_id=None),
+        user=SimpleNamespace(id=1, display_name="运营", username="ops"),
+    )
+    first = ensure_gap_backfill_subtask(
+        db_session,
+        tenant_id=tenant.id,
+        platform="doubao",
+        prompt="双平台品牌推荐",
+        schedule_window_key="20260802-0935",
+        current=current,
+    )
+    second = ensure_gap_backfill_subtask(
+        db_session,
+        tenant_id=tenant.id,
+        platform="deepseek",
+        prompt="双平台品牌推荐",
+        schedule_window_key="20260802-0935",
+        current=current,
+    )
+    assert second.task_id == first.task_id
+    assert second.subtask_id != first.subtask_id
+    assert second.platform == "deepseek"
+
+    runs = list(
+        db_session.scalars(
+            select(GeoMonitorScheduleRun).where(GeoMonitorScheduleRun.tenant_id == tenant.id)
+        )
+    )
+    assert len(runs) == 1
+    assert runs[0].task_id == first.task_id
+    assert int(runs[0].platform_count or 0) >= 2
+
+    task = db_session.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == first.task_id))
+    assert task is not None
+    plats = {
+        str(item.get("platform") or "").strip()
+        for item in (task.platforms_json or [])
+        if isinstance(item, dict)
+    }
+    assert plats == {"doubao", "deepseek"}
+    assert int(task.total_items or 0) == 2
 
 
 def test_ensure_then_dismiss_clears_gap_todo(db_session, monkeypatch) -> None:

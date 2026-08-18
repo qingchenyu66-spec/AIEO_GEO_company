@@ -591,14 +591,32 @@ async function openDetailById(subtaskId: string, item: SnapshotBackfillPendingIt
   }
 }
 
+const TERMINAL_BACKFILL_STATUSES = new Set(['completed', 'partial_completed', 'failed', 'stopped'])
+
+function statusAllowsSnapshotBackfill(status: string | null | undefined) {
+  const value = String(status || '').trim().toLowerCase()
+  // 缺口格无状态：允许走 ensureGap；真实子任务必须终态
+  if (!value) return true
+  return TERMINAL_BACKFILL_STATUSES.has(value)
+}
+
 function openBackfillFromDetail() {
   if (!canSubmitBackfill.value || !detailSubtask.value) return
+  // 2026-08-11 - 监测未终态就补录会被同步盖掉
+  if (!statusAllowsSnapshotBackfill(detailSubtask.value.status)) {
+    ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
+    return
+  }
   backfillTarget.value = detailSubtask.value
   backfillVisible.value = true
 }
 
 async function openBackfillFromSlot(slot: SnapshotBackfillMatrixSlot) {
   if (!canSubmitBackfill.value) return
+  if (!slot.is_gap && !statusAllowsSnapshotBackfill(slot.status)) {
+    ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
+    return
+  }
   try {
     if (slot.is_gap || !slot.subtask_id) {
       const tenantId = slot.tenant_id ?? (tenantFilter.value === '' ? null : Number(tenantFilter.value))

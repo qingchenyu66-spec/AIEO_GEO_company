@@ -35,6 +35,7 @@ from app.services.operation_log_service import write_operation_log
 from app.services.media_proxy_service import public_screenshot_url
 from app.services.monitor_service import (
     backfill_weak_rank_threshold,
+    subtask_inflight_blocks_snapshot_backfill,
     TERMINAL_STATUSES,
     _average_mention_position,
     _platform_display_names,
@@ -521,6 +522,9 @@ def apply_snapshot_backfill(
 
     subtask = get_monitor_subtask(db, subtask_id, current)
     task = get_monitor_task(db, subtask.task_id, current)
+    # 2026-08-11 - 监测未终态就补录会被同步盖掉 - 仅 completed/failed/stopped 等终态可补
+    if subtask_inflight_blocks_snapshot_backfill(subtask):
+        raise ValueError("该场次监测尚未结束，请等抓取完成或失败后再补录")
 
     previous_stat_date = None
     if task.tenant_id:
@@ -672,7 +676,10 @@ def apply_snapshot_backfill(
                 refs.append({"index": index, "url": text, "title": text})
     if not refs and fetched_refs:
         refs = fetched_refs
-    subtask.reference_list_json = refs or None
+    # 2026-08-14 - 补录抓到的引用也过静态资源过滤，与同步写入一致
+    from app.services.monitor_service import _filter_citation_sources
+
+    subtask.reference_list_json = _filter_citation_sources(refs) or None
     subtask.citation_list_json = None
 
     if sentiment:
@@ -684,15 +691,22 @@ def apply_snapshot_backfill(
     subtask.all_rankings_json = rankings_for_storage(_subtask_answer_plaintext(subtask), None)
     subtask.competitor_rankings_json = None
 
-    recompute_subtask_rank_from_answer(db, subtask, task, override_mention_position=mention_position)
+    # 2026-08-12 - 补录写入允许重算；批量洗数默认跳过 manual_snapshot
+    recompute_subtask_rank_from_answer(
+        db,
+        subtask,
+        task,
+        override_mention_position=mention_position,
+        force=mention_position is None,
+    )
 
     manual_meta = {
         "source": "manual_snapshot",
         "snapshot_url": url,
         "operator_user_id": current.user.id,
         "replaced": bool(previous_answer),
-        # 手填名次才锁定；空着走解析结果，后续规则升级可重算
-        "manual_rank_locked": mention_position is not None,
+        # 2026-08-12 - 补录位次一律锁定，避免规则升级洗数冲掉
+        "manual_rank_locked": True,
         **fetch_meta,
     }
     if previous_answer:
@@ -2102,8 +2116,76 @@ def ensure_gap_backfill_subtask(
         raise ValueError("schedule_window_key 无法解析为检测时刻") from exc
 
     monitor_keywords = keyword_group_primary_keyword(group) or prompt_text
+
+    def _gap_placeholder_subtask(task_id: str) -> GeoMonitorSubtask:
+        return GeoMonitorSubtask(
+            subtask_id=_new_gap_backfill_id("bfs"),
+            task_id=task_id,
+            platform=plat,
+            mode=FAST_MONITOR_MODE,
+            prompt=prompt_text,
+            status="failed",
+            error_message="到期漏跑/无自动监测，待快照补录",
+            # 2026-08-04 - 缺口占位未标重试闭环 - needs_backfill 为假，忽略后矩阵丢格又冒缺口
+            auto_retry_count=1,
+            auto_retry_status="failed",
+            raw_result_json={"source": "gap_backfill", "schedule_window_key": window_key},
+            updated_at=slot_dt,
+        )
+
+    def _merge_platform_into_task(task: GeoMonitorTask) -> None:
+        platforms = list(task.platforms_json or [])
+        if not any(
+            isinstance(item, dict) and str(item.get("platform") or "").strip() == plat
+            for item in platforms
+        ):
+            platforms.append({"platform": plat, "mode": FAST_MONITOR_MODE, "screenshot": 1})
+            task.platforms_json = platforms
+        prompts = [str(item).strip() for item in (task.prompts_json or []) if str(item).strip()]
+        if prompt_text not in prompts:
+            prompts.append(prompt_text)
+            task.prompts_json = prompts
+        task.total_items = int(task.total_items or 0) + 1
+        task.failed_items = int(task.failed_items or 0) + 1
+        if task.status == "completed":
+            task.status = "partial_completed"
+        task.updated_at = slot_dt
+
+    # 2026-08-11 - 同 schedule_key 多平台缺口曾各建 bft 并覆盖 task_id，矩阵只见一端 - 已有 task 则追加 subtask
+    if existing_run and existing_run.task_id:
+        anchor_task = db.scalar(
+            select(GeoMonitorTask).where(
+                GeoMonitorTask.task_id == existing_run.task_id,
+                GeoMonitorTask.deleted.is_(False),
+            )
+        )
+        if anchor_task is not None:
+            for owned in anchor_task.subtasks or []:
+                if owned.platform == plat and (owned.prompt or "").strip() == prompt_text:
+                    return owned
+            subtask = _gap_placeholder_subtask(anchor_task.task_id)
+            db.add(subtask)
+            _merge_platform_into_task(anchor_task)
+            existing_run.status = "submitted"
+            existing_run.error_message = None
+            existing_run.prompt_count = max(int(existing_run.prompt_count or 0), len(anchor_task.prompts_json or []) or 1)
+            plat_n = len(
+                {
+                    str(item.get("platform") or "").strip()
+                    for item in (anchor_task.platforms_json or [])
+                    if isinstance(item, dict) and str(item.get("platform") or "").strip()
+                }
+            )
+            existing_run.platform_count = max(int(existing_run.platform_count or 0), plat_n or 1)
+            existing_run.updated_at = slot_dt
+            db.flush()
+            db.commit()
+            db.refresh(subtask)
+            _bust_snapshot_backfill_matrix_cache()
+            return subtask
+
     task_id = _new_gap_backfill_id("bft")
-    subtask_id = _new_gap_backfill_id("bfs")
+    subtask = _gap_placeholder_subtask(task_id)
     task = GeoMonitorTask(
         task_id=task_id,
         tenant_id=tenant_id,
@@ -2120,20 +2202,6 @@ def ensure_gap_backfill_subtask(
         raw_request_json={"source": "gap_backfill", "schedule_window_key": window_key},
         raw_response_json={"source": "gap_backfill"},
         created_at=slot_dt,
-        updated_at=slot_dt,
-    )
-    subtask = GeoMonitorSubtask(
-        subtask_id=subtask_id,
-        task_id=task_id,
-        platform=plat,
-        mode=FAST_MONITOR_MODE,
-        prompt=prompt_text,
-        status="failed",
-        error_message="到期漏跑/无自动监测，待快照补录",
-        # 2026-08-04 - 缺口占位未标重试闭环 - needs_backfill 为假，忽略后矩阵丢格又冒缺口
-        auto_retry_count=1,
-        auto_retry_status="failed",
-        raw_result_json={"source": "gap_backfill", "schedule_window_key": window_key},
         updated_at=slot_dt,
     )
     task.subtasks = [subtask]
@@ -2154,11 +2222,13 @@ def ensure_gap_backfill_subtask(
             )
         )
     else:
+        # 仅在无有效 task 时写入指针；禁止用单平台新 task 覆盖已有挂靠
         existing_run.task_id = task_id
         existing_run.status = "submitted"
         existing_run.error_message = None
         existing_run.prompt_count = max(existing_run.prompt_count or 0, 1)
         existing_run.platform_count = max(existing_run.platform_count or 0, 1)
+        existing_run.updated_at = slot_dt
 
     db.flush()
     db.commit()
