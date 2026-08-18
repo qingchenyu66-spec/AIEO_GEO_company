@@ -3506,13 +3506,19 @@ def _normalize_appearance_enum_part(
             after = name[idx + len(term) :]
             before_ok = (not before) or before.endswith(
                 ("了", "如", "是", "和", "与", "或", "、", "，", ",", "：", ":", "有", "到", "（", "(", "《")
-            )
+            ) or before in {
+                "北京", "上海", "广州", "深圳", "杭州", "成都", "南京", "武汉", "西安", "重庆",
+                "天津", "苏州", "宁波", "青岛", "长沙", "郑州", "东莞", "佛山", "合肥", "沈阳",
+                "中国",
+            }
             after_ok = (not after) or after in {"）", ")", "」", "』", "”", '"', "'", "》"} or any(
                 after.startswith(s) or s in after
                 for s in (
                     "板材", "专卖", "总店", "直营", "旗舰", "（", "(", "店", "控股",
                     # 2026-08-12 - C1：万唯大小卷 / 万唯同步听力 / 万唯《文言文
                     "大小卷", "同步", "听力", "初中", "中考", "系列", "教辅",
+                    # 2026-08-18 - 「北京鸿联九五信息产业有限公司」全称加粗超 10 字进不了出场池
+                    "信息", "有限", "股份", "集团", "科技",
                 )
             )
             if before_ok and after_ok:
@@ -3528,6 +3534,22 @@ def _normalize_appearance_enum_part(
                 ):
                     return term
     return name
+
+
+def _short_exposure_surface(name: str, brand_terms: list[str] | None) -> str:
+    """全称含配置短露出词时，用短词进出场池。
+
+    2026-08-18 - 「北京鸿联九五信息产业有限公司」最长 term 就是全称，normalize 不坍缩，>10 字被丢掉，文末「鸿联九五」才计第42
+    """
+    blob = str(name or "").strip()
+    if not blob or not brand_terms:
+        return blob
+    shorts = [
+        str(term or "").strip()
+        for term in brand_terms
+        if term and 2 <= len(str(term).strip()) <= 12 and str(term).strip() in blob
+    ]
+    return max(shorts, key=len) if shorts else blob
 
 
 def _collect_brand_appearance_tokens(text: str, brand_terms: list[str] | None = None) -> list[str]:
@@ -3554,9 +3576,16 @@ def _collect_brand_appearance_tokens(text: str, brand_terms: list[str] | None = 
     seen: set[str] = set()
 
     def add(raw_name: str, *, from_enum: bool) -> bool:
-        name = _normalize_appearance_enum_part(raw_name, brand_terms)
+        name = _short_exposure_surface(
+            _normalize_appearance_enum_part(raw_name, brand_terms),
+            brand_terms,
+        )
         if not name or name in seen:
             return False
+        is_configured = bool(
+            brand_terms
+            and any(name == str(term or "").strip() for term in brand_terms if term)
+        )
         if name in skip_labels:
             return False
         if any(x in name for x in ("市场", "商城", "卖场", "地标", "区域", "首选", "次选")):
@@ -3568,15 +3597,15 @@ def _collect_brand_appearance_tokens(text: str, brand_terms: list[str] | None = 
         if name.endswith(("理由", "提醒", "建议", "方法", "潜规则")):
             return False
         if from_enum:
-            if len(name) < 2 or len(name) > 10:
+            if not is_configured and (len(name) < 2 or len(name) > 10):
                 return False
             # 纯文本顿号更严：超过 6 字基本是半句话不是品牌
-            if not _looks_like_company_list_name(name):
+            if not is_configured and not _looks_like_company_list_name(name):
                 return False
         else:
-            if not (2 <= len(name) <= 8):
+            if not is_configured and not (2 <= len(name) <= 8):
                 return False
-            if not _looks_like_company_list_name(name):
+            if not is_configured and not _looks_like_company_list_name(name):
                 return False
         if not _is_brand_like_appearance_token(name, brand_terms):
             return False
@@ -4014,7 +4043,7 @@ def _is_venue_only_section_title(title: str) -> bool:
         return False
     blob = f"{text}{raw}"
     # 2026-08-18 - 「中国本土市场活跃榜单」含「市场」被当卖场 → 类内第2吃成全文出场19
-    if any(h in blob for h in ("榜单", "本土", "巨头", "冠军", "赛道")):
+    if any(h in blob for h in ("榜单", "本土", "巨头", "冠军", "赛道", "中国市场")):
         return False
     return any(h in blob for h in _TIER_VENUE_HINTS)
 
@@ -4113,6 +4142,9 @@ _GEO_SECTION_FUZZY_HINTS = (
     "投放广告", "租用大屏", "制作LED", "定制与工程", "造屏幕",
     # 2026-08-18 - BPO「中国本土市场活跃榜单」未开节 → 鸿联 bullet 第2吃成全文19
     "中国本土", "本土市场", "活跃榜单", "四大巨头", "隐形冠军",
+    # 2026-08-18 - 「中国市场的主要BPO / 国家队与大型外包商」未开节 → 鸿联吃成全文42/30
+    "中国市场", "国家队", "行业领导者", "综合型巨头", "垂直领域", "大型外包",
+    "本土企业", "本土领先", "全球化服务",
     # 切开「排名陷阱」段，避免并进上一类后 token/粘连把类内2抬到3
     "排名陷阱",
     # 2026-08-18 - 高铁「综合代理商」顿号第2被头部资源吞成14；印章「选购决策小贴士」并进电子印章节成9

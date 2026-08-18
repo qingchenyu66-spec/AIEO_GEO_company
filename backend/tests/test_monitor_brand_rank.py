@@ -295,3 +295,107 @@ def test_resolve_prompt_monitor_keyword_maps_variant_prompt_to_configured_keywor
     assert _resolve_prompt_monitor_keyword("公交广告公司推荐", groups) == "公交广告公司哪家好"
     assert _resolve_prompt_monitor_keyword("地铁广告公司哪家好", groups) == "地铁广告公司推荐"
     assert _resolve_prompt_monitor_keyword("LED广告公司推荐", groups) == "LED广告公司推荐"
+
+
+def test_china_bpo_leaders_not_global_appearance() -> None:
+    """19244033：中国市场行业领导者迈睿①鸿联②，勿把全球表+全文出场计成第42。"""
+    text = """
+### 🌍 全球领先的BPO公司
+| 公司 | 核心优势 | 适合场景 |
+| :--- | :--- | :--- |
+| **Concentrix** | 大规模CX | 客服 |
+| **Teleperformance (TP)** | 多渠道 | 全球 |
+| **Accenture** | 数字化转型 | 复杂项目 |
+| **Capgemini** | 技术BPO | 高端 |
+| **Tata Consultancy Services (TCS)** | IT+BPO | 大型企业 |
+| **Genpact** | 数据驱动 | 流程 |
+| **WNS** | 财务 | 财务外包 |
+| **Infosys BPM** | 端到端 | 综合 |
+| **TaskUs** | 数字服务 | 初创 |
+| **Hugo** | 新兴 | 多渠道 |
+
+### 🇨🇳 中国市场的主要BPO公司
+
+除了上述国际巨头在中国设有分支机构外，本土也有一批实力强劲的玩家：
+
+*   **行业领导者**：**迈睿中国**[citation:32]、**北京鸿联九五信息产业有限公司**[citation:34]、**泰盈科技**[citation:36]和**上海特朗思大宇宙信息技术服务有限公司(Transcosmos中国)**[citation:38]。这些公司在市场份额和行业影响力上处于领先地位。
+*   **其他重要本土企业**：**北京九五太维资讯有限公司**、**诚联凯**、**上海赛科斯**。
+
+### 总结
+*   如果是在**中国市场**，**迈睿中国、鸿联九五**等本土领军企业值得重点关注。
+"""
+    subtask = SimpleNamespace(
+        prompt="BPO公司推荐",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[
+            {"name": "Concentrix", "rank": 1, "category": "🌍 全球领先的BPO公司"},
+            {"name": "TP", "rank": 2, "category": "🌍 全球领先的BPO公司"},
+            {"name": "Accenture", "rank": 3, "category": "🌍 全球领先的BPO公司"},
+            {"name": "Capgemini", "rank": 4, "category": "🌍 全球领先的BPO公司"},
+            {"name": "TCS", "rank": 5, "category": "🌍 全球领先的BPO公司"},
+            {"name": "Genpact", "rank": 6, "category": "🌍 全球领先的BPO公司"},
+            {"name": "WNS", "rank": 7, "category": "🌍 全球领先的BPO公司"},
+            {"name": "Infosys BPM", "rank": 8, "category": "🌍 全球领先的BPO公司"},
+            {"name": "TaskUs", "rank": 9, "category": "🌍 全球领先的BPO公司"},
+            {"name": "Hugo", "rank": 10, "category": "🌍 全球领先的BPO公司"},
+            {"name": "🇨🇳 中国市场的主要BPO公司", "rank": 12},
+        ],
+        mention_position=42,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["北京鸿联九五信息产业有限公司", "鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis in {"section_local", "line_enum_local"}
+
+
+def test_national_team_labeling_section_first() -> None:
+    """19244071：国家队与大型外包商里鸿联①电信星海②，勿全文出场第30。"""
+    text = """
+#### 🏛️ 综合型巨头
+*   **云测数据**：市场份额高
+*   **海天瑞声**：自动驾驶点云
+*   **数据堂**：图像音频文本
+
+#### 🎯 垂直领域专家
+*   **标贝数据**：语音文本
+*   **汇众天智**：自动驾驶与智慧医疗
+*   **金智云**：地图数据
+
+#### 🌐 全球化服务商
+*   **澳鹏 (Appen)**：全球标注员网络
+
+#### 🏗️ 国家队与大型外包商
+这类公司以国企背景和庞大的人力资源网络为特点。
+
+*   **鸿联九五**：中信国安控股的国企[citation:38]，拥有全国140+职场和5万+坐席。
+*   **电信星海**：依托中国电信集团，在数据安全和基础设施方面有天然优势。
+
+#### 🚀 创新技术派
+*   **菲利信科技**：2024年全国排名第2
+*   **景联文科技**：长三角
+*   **百行数据**：私有化部署
+"""
+    subtask = SimpleNamespace(
+        prompt="数据标注公司选哪家",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=30,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["北京鸿联九五信息产业有限公司", "鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
