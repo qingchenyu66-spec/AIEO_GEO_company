@@ -136,8 +136,18 @@ def find_pending_duplicate(
             "brand.brand_word_groups.upsert",
             "reports.generate",
             "diagnosis.record.create",
+            "management.tenant.restore",
         }:
             return record
+        if operation_key == "brand.asset.upsert" and tenant_id is None:
+            name = str(body.get("company_full_name") or "").strip()
+            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
+            if (
+                name
+                and record.tenant_id is None
+                and str(rec_body.get("company_full_name") or "").strip() == name
+            ):
+                return record
         if operation_key == "management.user.create":
             username = str(body.get("username") or "").strip().lower()
             rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})

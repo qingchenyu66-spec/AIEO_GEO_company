@@ -1,10 +1,11 @@
 import hashlib
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import hash_password
+from app.models.approval import OperationApproval
 from app.models.permission import Position, Role, UserIdentityMenu
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -156,6 +157,48 @@ def _tenant_code_from_name(name: str) -> str:
     return f"TENANT_{digest}"
 
 
+def create_platform_tenant(
+    db: Session,
+    *,
+    name: str,
+    owner_user_id: int,
+    service_start_date: date | None = None,
+    service_end_date: date | None = None,
+    preferred_code: str | None = None,
+) -> Tenant:
+    """新建在册企业（不 commit）。销售草稿保存 / 审批回放共用。"""
+    # 2026-08-18 - 新增企业弹窗不再入库，保存配置时才建租户
+    from app.services.tenant_account_service import sync_tenant_accounts_for_service_state
+
+    cleaned = (name or "").strip()
+    if len(cleaned) < 2:
+        raise ValueError("企业名称至少 2 个字")
+    if service_start_date and service_end_date and service_end_date < service_start_date:
+        raise ValueError("服务结束日期不能早于服务开始日期")
+    preferred = (preferred_code or _tenant_code_from_name(cleaned)).strip()
+    raise_if_live_tenant_name_or_code_conflict(db, name=cleaned, code=preferred)
+    code = allocate_tenant_code(db, cleaned, preferred)
+    today = date.today()
+    expired = bool(service_end_date and service_end_date < today)
+    not_started = bool(service_start_date and service_start_date > today)
+    tenant = Tenant(
+        name=cleaned,
+        code=code,
+        owner_user_id=owner_user_id,
+        service_start_date=service_start_date,
+        service_end_date=service_end_date,
+        status=not expired and not not_started,
+        stop_reason="expired" if expired else None,
+    )
+    if expired:
+        tenant.stopped_at = datetime.now()
+    db.add(tenant)
+    db.flush()
+    if not tenant.status:
+        sync_tenant_accounts_for_service_state(db, tenant)
+    return tenant
+
+
 def allocate_tenant_code(db: Session, name: str, preferred: str | None = None) -> str:
     """分配未被占用的企业编码（含软删行，避免 uk 撞车）。"""
     base = (preferred or _tenant_code_from_name(name)).strip() or _tenant_code_from_name(name)
@@ -218,6 +261,56 @@ def raise_if_live_tenant_name_or_code_conflict(
     if exists.name == name:
         raise ValueError(live_tenant_name_conflict_detail(exists, name))
     raise ValueError(f"企业编码「{code}」已存在")
+
+
+def _approval_new_tenant_name(record: OperationApproval) -> str:
+    raw = record.payload_json if isinstance(record.payload_json, dict) else {}
+    body = raw.get("body") if isinstance(raw.get("body"), dict) else raw
+    if not isinstance(body, dict):
+        return ""
+    if record.operation_key == "brand.asset.upsert":
+        return str(body.get("company_full_name") or body.get("brand_name") or "").strip()
+    if record.operation_key == "management.tenant.create":
+        return str(body.get("name") or "").strip()
+    return ""
+
+
+def raise_if_new_tenant_name_unavailable(
+    db: Session,
+    name: str,
+    *,
+    allow_own_pending_user_id: int | None = None,
+) -> None:
+    """新建企业名称：拦在册重名，并拦他人（或全部）待审批同名单。"""
+    # 2026-08-18 - 同名仍能点下一步进草稿 - 销售列表看不到别人的企业，须在入库前全局校验
+    cleaned = (name or "").strip()
+    if len(cleaned) < 2:
+        raise ValueError("企业名称至少 2 个字")
+    exists = db.scalar(
+        select(Tenant).where(Tenant.name == cleaned, Tenant.deleted.is_(False)).limit(1)
+    )
+    if exists is not None:
+        raise ValueError(live_tenant_name_conflict_detail(exists, cleaned))
+    pending_rows = list(
+        db.scalars(
+            select(OperationApproval).where(
+                OperationApproval.deleted.is_(False),
+                OperationApproval.status == "pending",
+                OperationApproval.tenant_id.is_(None),
+                OperationApproval.operation_key.in_(
+                    ("brand.asset.upsert", "management.tenant.create")
+                ),
+            )
+        )
+    )
+    for record in pending_rows:
+        if (
+            allow_own_pending_user_id is not None
+            and record.requester_user_id == allow_own_pending_user_id
+        ):
+            continue
+        if _approval_new_tenant_name(record) == cleaned:
+            raise ValueError(f"企业「{cleaned}」已有待审批的新增申请，请勿重复提交")
 
 
 def _reject_garbled_text(value: str | None, field_name: str) -> None:

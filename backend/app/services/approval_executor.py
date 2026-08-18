@@ -29,7 +29,7 @@ from app.services.brand_service import (
     editable_keyword_groups,
     list_brand_word_groups,
     list_competitors,
-    save_brand_asset,
+    save_brand_asset_maybe_bootstrap,
     save_brand_word_groups,
 )
 from app.services.lead_diagnosis_service import create_lead_diagnosis, submit_due_lead_run, update_lead_diagnosis
@@ -251,7 +251,10 @@ def _exec_tenant_restore(db: Session, current: CurrentSession, record: Operation
 
 def _exec_brand_asset(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     payload = BrandAssetSaveRequest.model_validate(data.get("body") or data)
-    asset = save_brand_asset(db, payload, current)
+    # 2026-08-18 - 新建草稿审批通过时按申请人建企业，避免审批人变成归属销售
+    asset = save_brand_asset_maybe_bootstrap(
+        db, payload, current, owner_user_id=record.requester_user_id,
+    )
     return {"tenant_id": asset.tenant_id, "brand_name": asset.brand_name}
 
 

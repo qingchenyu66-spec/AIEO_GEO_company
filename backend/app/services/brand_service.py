@@ -21,6 +21,60 @@ from app.services.platform_selection import normalize_platform_selections, selec
 from app.services.tenant_scope import ensure_sales_tenant_access
 
 
+def save_brand_asset_maybe_bootstrap(
+    db: Session,
+    payload: BrandAssetSaveRequest,
+    current: CurrentSession,
+    *,
+    owner_user_id: int,
+) -> BrandAsset:
+    """平台无 tenant_id 时先建企业再保存配置；客户身份仍走绑定企业。"""
+    # 2026-08-18 - 新增企业不先落库：保存配置时才建企业
+    is_bootstrap = current.identity.identity_type == "PLATFORM" and payload.tenant_id is None
+    working = payload
+    if is_bootstrap:
+        from app.services.management_service import create_platform_tenant
+
+        tenant = create_platform_tenant(
+            db,
+            name=payload.company_full_name,
+            owner_user_id=owner_user_id,
+            service_start_date=payload.service_start_date,
+            service_end_date=payload.service_end_date,
+        )
+        working = payload.model_copy(update={"tenant_id": tenant.id})
+    asset = save_brand_asset(db, working, current)
+    if is_bootstrap:
+        _apply_bootstrap_extras(db, asset.tenant_id, working, current)
+    return asset
+
+
+def _apply_bootstrap_extras(
+    db: Session,
+    tenant_id: int,
+    payload: BrandAssetSaveRequest,
+    current: CurrentSession,
+) -> None:
+    """新建企业保存时把草稿里的竞品、品牌词一并落库。"""
+    for item in payload.competitors or []:
+        name = str(item.name or "").strip()
+        if not name:
+            continue
+        save_competitor(
+            db,
+            item.model_copy(update={"tenant_id": tenant_id, "name": name}),
+            current,
+        )
+    groups = [item for item in (payload.brand_word_groups or []) if item]
+    if not groups:
+        return
+    save_brand_word_groups(
+        db,
+        BrandWordGroupsSaveRequest(tenant_id=tenant_id, groups=groups),
+        current,
+    )
+
+
 def resolve_tenant_id(current: CurrentSession, requested_tenant_id: int | None) -> int:
     """平台端可指定企业；客户端强制使用当前身份绑定企业。"""
     if current.identity.identity_type == "CUSTOMER":
@@ -393,6 +447,9 @@ def save_keyword_groups(
     for group_id, group in existing.items():
         if group_id not in seen_ids:
             group.deleted = True
+
+    # 2026-08-11 - 词组改后平台汇总不准 - autoflush=False 下先 flush 再 SELECT
+    db.flush()
 
     union_platforms: list[str] = []
     for item in db.scalars(

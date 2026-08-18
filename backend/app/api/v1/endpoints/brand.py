@@ -19,12 +19,13 @@ from app.services.brand_service import (
     list_brand_word_groups,
     list_competitors,
     sanitize_brand_asset_payload_for_grants,
-    save_brand_asset,
+    save_brand_asset_maybe_bootstrap,
     save_brand_word_groups,
     save_competitor,
 )
 from app.services.approval_preview_service import brand_asset_has_changes
 from app.services.approval_service import queue_or_run, requires_sales_approval
+from app.services.management_service import raise_if_new_tenant_name_unavailable
 from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
 from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
 from app.core.config import settings
@@ -112,7 +113,9 @@ def upsert_brand_asset(
     tenant_id = payload.tenant_id
 
     def _execute():
-        asset = save_brand_asset(db, payload, current)
+        asset = save_brand_asset_maybe_bootstrap(
+            db, payload, current, owner_user_id=current.user.id,
+        )
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
         competitors = list_competitors(db, asset.tenant_id)
@@ -124,6 +127,13 @@ def upsert_brand_asset(
 
     try:
         body = payload.model_dump(mode="json")
+        if tenant_id is None:
+            # 2026-08-18 - 销售入队前不落库，同名单会进审批 - 提交前拦在册/他人待审重名
+            raise_if_new_tenant_name_unavailable(
+                db,
+                payload.company_full_name or payload.brand_name,
+                allow_own_pending_user_id=current.user.id,
+            )
         # 2026-07-29 - 销售无变更仍进空审批单：完整 diff 确认无变化后直接成功返回
         if (
             tenant_id is not None
@@ -136,8 +146,12 @@ def upsert_brand_asset(
             current,
             operation_key="brand.asset.upsert",
             module="brand",
-            action="update",
-            summary=f"保存企业配置：{payload.company_full_name or payload.brand_name}",
+            action="update" if tenant_id is not None else "create",
+            summary=(
+                f"新增企业：{payload.company_full_name or payload.brand_name}"
+                if tenant_id is None
+                else f"保存企业配置：{payload.company_full_name or payload.brand_name}"
+            ),
             payload={"body": body},
             tenant_id=tenant_id,
             executor=_execute,

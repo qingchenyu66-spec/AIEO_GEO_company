@@ -23,12 +23,25 @@ _MODE_SHORT = {
 }
 
 
+def _platform_display_name(code: str) -> str:
+    """审批预览用中文名；只读 fallback 目录，避免每次刷新去拉模力文档。"""
+    from app.services.molizhishu_catalog_service import _FALLBACK_CATALOG
+
+    for item in _FALLBACK_CATALOG:
+        if str(item.get("code") or "").strip() == code:
+            name = str(item.get("name") or "").strip()
+            if name:
+                return name
+    return code
+
+
 def _platform_labels(raw: Any) -> list[str]:
     """平台列表展示：兼容 string[] 与 {code,mode}[]。"""
     labels: list[str] = []
     for item in normalize_platform_selections(raw if isinstance(raw, list) else []):
         mode = _MODE_SHORT.get(str(item.get("mode") or "standard"), "快速")
-        labels.append(f"{item['code']}({mode})")
+        code = str(item.get("code") or "").strip()
+        labels.append(f"{_platform_display_name(code)}({mode})")
     return labels
 
 
@@ -79,9 +92,78 @@ def _identity_summary(identities: list[dict[str, Any]] | None) -> str:
     return "；".join(parts) or "（未配置身份）"
 
 
+def _group_keyword_list(group: dict[str, Any]) -> list[Any]:
+    keywords = group.get("monitor_keywords") or []
+    if keywords:
+        return keywords
+    if group.get("monitor_keyword"):
+        return [group.get("monitor_keyword")]
+    return []
+
+
+def _brand_bootstrap_changes(body: dict[str, Any]) -> list[dict[str, str]]:
+    """新建企业草稿：把官网、监测词、品牌词、竞品等提交内容摊开展示。"""
+    # 2026-08-18 - 新建审批只写「N 平台」- 对齐改配置预览，摊开平台/模式和露出词
+    # 2026-08-18 - 预览缺中文平台名/词组状态/竞品分类 - 一并摊开
+    rows: list[dict[str, str]] = [
+        _change("官网 / 主站", after=str(body.get("official_url") or "").strip() or "（空）", kind="add"),
+        _change("品牌说明", after=str(body.get("description") or "").strip() or "（空）", kind="add"),
+    ]
+    regions = region_display_labels(body.get("region_codes"))
+    if regions and regions != "—":
+        rows.append(_change("监测地区", after=regions, kind="add"))
+    times = _join_list(body.get("schedule_times"))
+    if times:
+        rows.append(_change("监测时段", after=times, kind="add"))
+    keyword_groups = [item for item in (body.get("keyword_groups") or []) if isinstance(item, dict)]
+    rows.append(_change("监测词组数", after=str(len(keyword_groups)), kind="add"))
+    for index, group in enumerate(keyword_groups[:8]):
+        name = str(group.get("name") or f"词组{index + 1}").strip() or f"词组{index + 1}"
+        prefix = f"监测词组「{name}」"
+        # 2026-08-18 - 词组预览一行塞词/平台/模式 - 拆成字段行，停用才单独标
+        if not group.get("status", True):
+            rows.append(_change(f"{prefix}状态", after="停用", kind="add"))
+        rows.append(
+            _change(f"{prefix}监测词", after=_join_list(_group_keyword_list(group), limit=6), kind="add")
+        )
+        rows.append(
+            _change(f"{prefix}平台", after=_join_list(_platform_labels(group.get("platforms")), limit=6), kind="add")
+        )
+        rows.append(
+            _change(f"{prefix}露出词", after=_join_list(group.get("exposure_terms"), limit=8), kind="add")
+        )
+    brand_groups = [item for item in (body.get("brand_word_groups") or []) if isinstance(item, dict)]
+    if brand_groups:
+        rows.append(_change("品牌词组数", after=str(len(brand_groups)), kind="add"))
+        for index, group in enumerate(brand_groups[:8]):
+            name = str(group.get("name") or f"品牌词组{index + 1}").strip() or f"品牌词组{index + 1}"
+            prefix = f"品牌词组「{name}」"
+            run_mode = str(group.get("run_mode") or "once").strip().lower()
+            mode_label = "每周" if run_mode == "weekly" else "仅本次"
+            if not group.get("status", True):
+                rows.append(_change(f"{prefix}状态", after="停用", kind="add"))
+            rows.append(_change(f"{prefix}运行", after=mode_label, kind="add"))
+            rows.append(
+                _change(f"{prefix}平台", after=_join_list(_platform_labels(group.get("platforms")), limit=6), kind="add")
+            )
+            rows.append(
+                _change(f"{prefix}品牌词", after=_join_list(_group_keyword_list(group), limit=6), kind="add")
+            )
+    competitors = [item for item in (body.get("competitors") or []) if isinstance(item, dict)]
+    competitor_labels: list[str] = []
+    for item in competitors:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        category = str(item.get("category") or "").strip() or "直接竞品"
+        competitor_labels.append(f"{name}（{category}）")
+    rows.append(_change("竞品", after=_join_list(competitor_labels, limit=20), kind="add"))
+    return rows
+
+
 def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> list[dict[str, str]]:
     if tenant_id is None:
-        return [_change("企业配置", after="保存企业品牌与监测配置", kind="info")]
+        return _brand_bootstrap_changes(body)
 
     asset = get_brand_asset(db, tenant_id)
     groups = list_keyword_groups(db, tenant_id)
@@ -305,7 +387,7 @@ def _user_update_changes(db: Session, body: dict[str, Any], user_id: int | None)
 def _tenant_changes(body: dict[str, Any], *, is_create: bool) -> list[dict[str, str]]:
     kind = "add" if is_create else "update"
     return [
-        _change("操作类型", after="新建企业" if is_create else "修改企业资料", kind="info"),
+        _change("操作类型", after="新增企业" if is_create else "修改企业资料", kind=kind),
         _change("企业名称", after=str(body.get("name") or "—"), kind=kind),
         _change("企业编码", after=str(body.get("code") or "（自动生成）"), kind=kind),
         _change("服务开始", after=str(body.get("service_start_date") or "—"), kind=kind),
@@ -418,6 +500,17 @@ def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, 
 
     if key == "brand.asset.upsert":
         changes = _brand_changes(db, record.tenant_id, body)
+        if record.tenant_id is None:
+            # 2026-08-18 - 新建企业草稿：审批预览先展示企业名称/服务期，再摊开配置
+            tenant_rows = _tenant_changes(
+                {
+                    "name": body.get("company_full_name"),
+                    "service_start_date": body.get("service_start_date"),
+                    "service_end_date": body.get("service_end_date"),
+                },
+                is_create=True,
+            )
+            changes = tenant_rows + changes
     elif key == "brand.brand_word_groups.upsert":
         changes = _brand_word_group_changes(body)
     elif key == "management.user.create":
@@ -428,6 +521,12 @@ def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, 
         changes = _tenant_changes(body, is_create=True)
     elif key == "management.tenant.update":
         changes = _tenant_changes(body, is_create=False)
+    elif key == "management.tenant.restore":
+        tenant = db.scalar(select(Tenant).where(Tenant.id == record.tenant_id)) if record.tenant_id else None
+        changes = [
+            _change("操作类型", after="恢复企业服务", kind="info"),
+            _change("企业名称", after=(tenant.name if tenant else "—"), kind="update"),
+        ]
     elif key in {"reports.generate", "reports.update", "reports.publish"}:
         action = {"reports.generate": "create", "reports.update": "update", "reports.publish": "publish"}[key]
         changes = _report_changes(body, action=action)

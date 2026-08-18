@@ -61,6 +61,7 @@ from app.services.management_service import (
     list_managed_users,
     list_platform_sales_users,
     raise_if_live_tenant_name_or_code_conflict,
+    raise_if_new_tenant_name_unavailable,
     reset_managed_user_password,
     restore_managed_user,
     set_managed_user_status,
@@ -656,6 +657,23 @@ def management_tenants(
     )
 
 
+@router.get("/tenants/name-check", response_model=ApiResponse[dict])
+def management_tenant_name_check(
+    name: str = Query(..., min_length=2, max_length=150),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """新建企业前校验名称：在册重名、待审批同名单都拦。"""
+    require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权新增企业")
+    try:
+        # 2026-08-18 - 同名也能点下一步 - 销售列表按归属过滤，这里查全库+待审
+        raise_if_new_tenant_name_unavailable(db, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data={"available": True})
+
+
 @router.get("/operation-logs", response_model=ApiResponse[list[dict]])
 def management_operation_logs(
     current: CurrentSession = Depends(get_current_session),
@@ -1094,34 +1112,59 @@ def management_create_tenant(
     # 2026-07-30 - 企业重名方案 B - 在册拦截分文案；软删可再建并换 code
     preferred_code = (payload.code or _tenant_code_from_name(name)).strip()
     try:
+        raise_if_new_tenant_name_unavailable(
+            db, name, allow_own_pending_user_id=current.user.id,
+        )
         raise_if_live_tenant_name_or_code_conflict(db, name=name, code=preferred_code)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    was_purged = tenant_name_was_purged(db, name)
-    code = allocate_tenant_code(db, name, preferred_code)
 
-    tenant = Tenant(
-        name=name,
-        code=code,
-        owner_user_id=current.user.id,
-        service_start_date=payload.service_start_date,
-        service_end_date=payload.service_end_date,
-        status=service_status_from_period(payload.service_start_date, payload.service_end_date),
-        stop_reason="expired" if payload.service_end_date and payload.service_end_date < date.today() else None,
-    )
-    db.add(tenant)
-    db.flush()
-    if not tenant.status:
-        if tenant.stop_reason == "expired" and tenant.stopped_at is None:
-            tenant.stopped_at = datetime.now()
-        sync_tenant_accounts_for_service_state(db, tenant)
-    write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
-    db.commit()
-    db.refresh(tenant)
-    data = tenant_to_dict(tenant, db=db)
-    if was_purged:
-        data["name_was_purged"] = True
-    return ApiResponse(data=data)
+    def _execute():
+        was_purged = tenant_name_was_purged(db, name)
+        code = allocate_tenant_code(db, name, preferred_code)
+
+        tenant = Tenant(
+            name=name,
+            code=code,
+            owner_user_id=current.user.id,
+            service_start_date=payload.service_start_date,
+            service_end_date=payload.service_end_date,
+            status=service_status_from_period(payload.service_start_date, payload.service_end_date),
+            stop_reason="expired" if payload.service_end_date and payload.service_end_date < date.today() else None,
+        )
+        db.add(tenant)
+        db.flush()
+        if not tenant.status:
+            if tenant.stop_reason == "expired" and tenant.stopped_at is None:
+                tenant.stopped_at = datetime.now()
+            sync_tenant_accounts_for_service_state(db, tenant)
+        write_management_log(db, current, "企业新增", f"新增企业：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
+        db.commit()
+        db.refresh(tenant)
+        data = tenant_to_dict(tenant, db=db)
+        if was_purged:
+            data["name_was_purged"] = True
+        return data
+
+    try:
+        # 2026-08-11 - 销售确认新增企业却免审落库 - 接入已有 management.tenant.create 审批
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="management.tenant.create",
+            module="tenant",
+            action="create",
+            summary=f"新增企业：{name}",
+            payload={"body": payload.model_dump(mode="json")},
+            executor=_execute,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"数据库保存失败：{exc.__class__.__name__}") from exc
+    return ApiResponse(data=result)
 
 
 @router.put("/tenants/{tenant_id}", response_model=ApiResponse[dict])
@@ -1289,25 +1332,50 @@ def management_restore_tenant(
     if tenant.service_end_date and tenant.service_end_date < date.today():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="服务已到期，请先延长服务期限后再恢复")
 
-    from app.services.tenant_account_service import tenant_service_is_operational
+    def _execute():
+        from app.services.tenant_account_service import tenant_service_is_operational
 
-    was_operational = tenant_service_is_operational(tenant)
-    tenant.status = service_status_from_period(tenant.service_start_date, tenant.service_end_date)
-    tenant.stop_reason = None
-    tenant.stopped_at = None
-    tenant.stopped_by = None
-    restore_tenant_customer_accounts(db, tenant_id)
+        live = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+        if live is None:
+            raise ValueError("企业不存在")
+        if live.service_end_date and live.service_end_date < date.today():
+            raise ValueError("服务已到期，请先延长服务期限后再恢复")
+        was_operational = tenant_service_is_operational(live)
+        live.status = service_status_from_period(live.service_start_date, live.service_end_date)
+        live.stop_reason = None
+        live.stopped_at = None
+        live.stopped_by = None
+        restore_tenant_customer_accounts(db, tenant_id)
 
-    write_management_log(db, current, "企业恢复", f"恢复企业服务：{tenant.name}", target_module="企业管理", target_id=tenant.id, tenant_id=tenant.id)
-    db.commit()
-    from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
+        write_management_log(db, current, "企业恢复", f"恢复企业服务：{live.name}", target_module="企业管理", target_id=live.id, tenant_id=live.id)
+        db.commit()
+        from app.services.schedule_service import maybe_kick_brand_words_after_service_became_active
 
-    maybe_kick_brand_words_after_service_became_active(
-        tenant_id=tenant.id,
-        became_active=tenant_service_is_operational(tenant) and not was_operational,
-    )
-    db.refresh(tenant)
-    return ApiResponse(data=tenant_to_dict(tenant, db=db))
+        maybe_kick_brand_words_after_service_became_active(
+            tenant_id=live.id,
+            became_active=tenant_service_is_operational(live) and not was_operational,
+        )
+        db.refresh(live)
+        return tenant_to_dict(live, db=db)
+
+    try:
+        # 2026-08-18 - 销售恢复服务也进审批，避免绕过停服管控
+        pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="management.tenant.restore",
+            module="tenant",
+            action="restore",
+            summary=f"恢复企业服务：{tenant.name}",
+            payload={"tenant_id": tenant_id},
+            tenant_id=tenant_id,
+            target_id=tenant_id,
+            executor=_execute,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=result)
 
 
 @router.post("/tenants/{tenant_id}/purge", response_model=ApiResponse[dict])

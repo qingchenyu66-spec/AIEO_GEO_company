@@ -6,8 +6,8 @@ from app.services.approval_preview_service import _brand_changes, _platform_labe
 def test_platform_labels_mixed_shapes():
     # 字符串平台归一为 FAST_MONITOR_MODE(=search)；预览口径为「快速」
     assert _platform_labels(["doubao", {"code": "kimi", "mode": "search"}]) == [
-        "doubao(快速)",
-        "kimi(快速)",
+        "豆包(快速)",
+        "Kimi(快速)",
     ]
 
 

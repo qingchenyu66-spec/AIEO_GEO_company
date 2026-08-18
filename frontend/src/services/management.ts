@@ -336,7 +336,11 @@ export async function getQuotaDailyCost(year?: number, month?: number): Promise<
   return response.data.data
 }
 
-export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<TenantInfo> {
+export async function checkTenantNameAvailable(name: string): Promise<void> {
+  await http.get('/v1/management/tenants/name-check', { params: { name } })
+}
+
+export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<unknown> {
   const response = await http.post('/v1/management/tenants', payload)
   invalidateCache('/v1/management/tenants')
   return response.data.data
@@ -359,7 +363,7 @@ export async function purgeTenant(tenantId: number, confirmName: string): Promis
   return response.data.data
 }
 
-export async function restoreTenant(tenantId: number): Promise<TenantInfo> {
+export async function restoreTenant(tenantId: number): Promise<unknown> {
   const response = await http.patch(`/v1/management/tenants/${tenantId}/restore`)
   invalidateCache('/v1/management/tenants')
   return response.data.data

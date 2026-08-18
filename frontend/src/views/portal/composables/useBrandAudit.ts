@@ -4,13 +4,13 @@ import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  createTenant, deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant,
+  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable,
   type TenantInfo,
   type TenantSalesOwner,
 } from '../../../services/management'
 import {
   createCompetitor, deleteCompetitor, defaultBrandWordGroupName, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, saveBrandWordGroups, updateCompetitor,
-  normalizePlatformSelections, platformSelectionCodes,
+  normalizePlatformSelection, normalizePlatformSelections, platformSelectionCodes,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
 import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
@@ -130,7 +130,12 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     { code: 'schedule', name: '监控计划' },
     { code: 'competitors', name: '竞品监控' },
     { code: 'files', name: '上传文件' },
-  ] as Array<{ code: EnterpriseTab; name: string }>).filter(tab => canViewEnterpriseTab(tab.code)))
+  ] as Array<{ code: EnterpriseTab; name: string }>).filter(tab => {
+    if (creatingDraftTenant.value && tab.code === 'files') {
+      return false
+    }
+    return canViewEnterpriseTab(tab.code)
+  }))
 
   const tenants = ref<TenantInfo[]>([])
   const enterpriseDetailMode = ref(false)
@@ -146,6 +151,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     owner_user_id: 'all' as 'all' | 'none' | number,
   })
   const tenantDialog = ref(false)
+  const creatingDraftTenant = ref(false)
   const tenantForm = reactive({ name: '', code: '', service_start_date: '', service_end_date: '' })
   const tenantTransferDialog = ref(false)
   const tenantTransferTarget = ref<TenantInfo | null>(null)
@@ -704,6 +710,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function loadBrandAssetData() {
+    if (creatingDraftTenant.value) return
     loadingBrand.value = true
     try {
       if (isPlatform.value && !brandForm.tenant_id) {
@@ -854,6 +861,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   function backToEnterpriseList() {
+    creatingDraftTenant.value = false
     enterpriseDetailMode.value = false
     brandAsset.value = null
     brandCompetitors.value = []
@@ -892,6 +900,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
     loadingBrand.value = true
     try {
+      const isDraftCreate = creatingDraftTenant.value || !brandForm.tenant_id
       if (brandForm.tenant_id) {
         const tenant = await updateTenant(brandForm.tenant_id, {
           name: brandForm.company_full_name.trim(),
@@ -904,6 +913,34 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         if (tenantIndex >= 0) tenants.value.splice(tenantIndex, 1, tenant)
       }
       const scheduleFrequency = Math.max(1, scheduleTimeList().length || brandForm.schedule_frequency)
+      const brandWordGroups = isDraftCreate
+        ? brandWordGroupRows.value
+          .map((group, index) => {
+            const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+            return {
+              id: null,
+              name: (group.name || '').trim() || defaultBrandWordGroupName(index),
+              monitor_keyword: monitorKeywords[0] || '',
+              monitor_keywords: monitorKeywords,
+              platforms: normalizePlatformSelections(group.platforms),
+              run_mode: group.run_mode === 'weekly' ? 'weekly' as const : 'once' as const,
+              sort_order: index,
+              status: group.status,
+            }
+          })
+          .filter(group => group.monitor_keywords.length)
+        : undefined
+      const competitors = isDraftCreate
+        ? competitorRows.value
+          .map(row => ({
+            name: (row.name || '').trim(),
+            short_name: null,
+            aliases: [],
+            website_url: null,
+            category: (row.category || '').trim() || '直接竞品',
+          }))
+          .filter(item => item.name)
+        : undefined
       const saved = await saveBrandAsset({
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
@@ -922,12 +959,22 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         schedule_frequency: scheduleFrequency,
         schedule_weekdays: [],
         schedule_month_days: [],
+        service_start_date: brandForm.service_start_date || null,
+        service_end_date: brandForm.service_end_date || null,
+        brand_word_groups: brandWordGroups,
+        competitors,
       })
       if (isPendingApproval(saved)) {
-        const msg = pendingApprovalMessage(saved, '已提交审批，等待运营或管理员审核')
+        const msg = pendingApprovalMessage(saved, isDraftCreate ? '已提交审批，通过后企业才会创建' : '已提交审批，等待运营或管理员审核')
         if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
         else ElMessage.info(msg)
+        if (isDraftCreate) backToEnterpriseList()
         return
+      }
+      if (isDraftCreate && saved.tenant_id) {
+        creatingDraftTenant.value = false
+        brandForm.tenant_id = saved.tenant_id
+        await loadEnterpriseList()
       }
       const listIndex = tenants.value.findIndex(item => item.id === brandForm.tenant_id)
       if (listIndex >= 0) {
@@ -946,7 +993,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function submitBrandWordGroups(successText = '品牌词配置已保存') {
-    if (!brandForm.tenant_id) {
+    if (creatingDraftTenant.value || !brandForm.tenant_id) {
+      if (creatingDraftTenant.value) {
+        // 2026-08-18 - 草稿点品牌词保存会整单进审批 - 仅右上角保存当前配置才提交
+        return
+      }
       ElMessage.warning('请先选择企业')
       return
     }
@@ -1021,35 +1072,43 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
-  async function submitTenant() {
-    if (!tenantForm.name.trim()) {
-      ElMessage.warning('请填写企业名称')
+  async function goNextFromTenantDialog() {
+    const name = tenantForm.name.trim()
+    if (name.length < 2) {
+      ElMessage.warning('请填写企业名称（至少2个字）')
+      return
+    }
+    if (tenantForm.service_start_date && tenantForm.service_end_date && tenantForm.service_end_date < tenantForm.service_start_date) {
+      ElMessage.warning('服务结束日期不能早于服务开始日期')
       return
     }
     loadingBrand.value = true
     try {
-      const tenant = await createTenant({
-        name: tenantForm.name.trim(),
-        code: null,
-        service_start_date: tenantForm.service_start_date || null,
-        service_end_date: tenantForm.service_end_date || null,
-      })
-      tenantForm.name = ''
-      tenantForm.service_start_date = ''
-      tenantForm.service_end_date = ''
-      tenantDialog.value = false
-      await loadEnterpriseList()
-      await openEnterpriseDetail(tenant)
-      // 2026-07-30 - 方案 B 第三档提示 - 软删同名允许新建时明示
-      if (tenant.name_was_purged) {
-        ElMessage.warning('该名称曾被彻底删除，将新建企业')
-      }
-      ElMessage.success('企业已新增，请继续维护监控配置')
+      // 2026-08-18 - 同名仍能进草稿 - 下一步先打全库重名/待审校验
+      await checkTenantNameAvailable(name)
     } catch (error: unknown) {
-      notifyError(error, '企业新增失败')
+      notifyOperationError(error, '该企业名称不可用')
+      return
     } finally {
       loadingBrand.value = false
     }
+    creatingDraftTenant.value = true
+    enterpriseDetailMode.value = true
+    const firstVisibleTab = visibleEnterpriseTabs.value[0]?.code
+    if (firstVisibleTab) enterpriseDetailTab.value = firstVisibleTab
+    brandAsset.value = null
+    brandCompetitors.value = []
+    competitorRows.value = []
+    knowledgeFiles.value = []
+    fillBrandForm(null, null)
+    brandForm.company_full_name = name
+    brandForm.brand_name = name
+    brandForm.service_start_date = tenantForm.service_start_date || ''
+    brandForm.service_end_date = tenantForm.service_end_date || ''
+    tenantForm.name = ''
+    tenantForm.service_start_date = ''
+    tenantForm.service_end_date = ''
+    tenantDialog.value = false
   }
 
   async function removeTenant(tenant: TenantInfo) {
@@ -1111,7 +1170,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
     loadingBrand.value = true
     try {
-      await restoreTenant(tenant.id)
+      const restored = await restoreTenant(tenant.id)
+      if (isPendingApproval(restored)) {
+        const msg = pendingApprovalMessage(restored, '已提交审批，通过后才会恢复服务')
+        if (isDuplicateMergedApproval(restored)) ElMessage.warning(msg)
+        else ElMessage.info(msg)
+        return
+      }
       await loadEnterpriseList()
       ElMessage.success('企业服务已恢复')
     } catch (error: unknown) {
@@ -1199,6 +1264,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
     competitorRows.value.push(row)
     competitorNameInput.value = ''
+    if (creatingDraftTenant.value || !brandForm.tenant_id) return
     await saveCompetitorRow(row)
   }
 
@@ -1234,7 +1300,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   async function removeCompetitorRow(row: typeof competitorRows.value[number], index: number) {
     if (!row.id) {
       competitorRows.value.splice(index, 1)
-      if (!competitorRows.value.length) addCompetitorRow()
       return
     }
     try {
@@ -1390,11 +1455,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       return
     }
     const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== target.code)
-    next.push({
+    // 2026-08-11 - 弹窗选「快速」落库为 search；选深度思考落库 reasoning_search
+    const saved = normalizePlatformSelection({
       code: target.code,
       mode: modeDialogForm.mode,
       screenshot: 1,
     })
+    if (saved) next.push(saved)
     rows.value[target.groupIndex] = { ...group, platforms: next }
     modeDialogVisible.value = false
     modeDialogTarget.value = null
@@ -1431,6 +1498,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterpriseInfoCompetitors,
     enterpriseFilters,
     tenantDialog,
+    creatingDraftTenant,
     tenantForm,
     tenantTransferDialog,
     tenantTransferTarget,
@@ -1525,7 +1593,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     backToEnterpriseList,
     submitBrandAsset,
     submitBrandWordGroups,
-    submitTenant,
+    goNextFromTenantDialog,
     removeTenant,
     purgeTenantThoroughly,
     restoreTenantService,

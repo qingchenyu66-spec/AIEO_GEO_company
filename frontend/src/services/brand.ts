@@ -60,14 +60,14 @@ export function defaultBrandWordGroupName(index: number) {
   return `品牌词组 ${index + 1}`
 }
 
-const VALID_PLATFORM_MODES = new Set(['standard', 'reasoning', 'search', 'reasoning_search'] as const)
-
 function coercePlatformMode(mode: unknown): PlatformSelection['mode'] {
   const value = String(mode || '').trim()
-  if (VALID_PLATFORM_MODES.has(value as PlatformSelection['mode'])) {
-    return value as PlatformSelection['mode']
+  // 2026-08-18 - 快速=search；深度=reasoning_search（深度+联网）
+  if (value === 'reasoning' || value === 'reasoning_search') {
+    return 'reasoning_search'
   }
-  // 旧字符串平台缺省联网 search
+  if (value === 'search') return 'search'
+  // standard / 非法 / 空 → search
   return 'search'
 }
 
@@ -80,7 +80,6 @@ export function normalizePlatformSelection(raw: string | PlatformSelection | nul
   }
   const code = String(raw.code || '').trim()
   if (!code) return null
-  // 2026-08-03 - 方案B：保留快速/深度选择，不再全平台强制 search
   return { code, mode: coercePlatformMode(raw.mode), screenshot: 1 }
 }
 
@@ -227,6 +226,16 @@ export interface BrandAssetPayload {
   schedule_frequency: number
   schedule_weekdays: number[]
   schedule_month_days: number[]
+  service_start_date?: string | null
+  service_end_date?: string | null
+  brand_word_groups?: BrandWordGroup[]
+  competitors?: Array<{
+    name: string
+    short_name?: string | null
+    aliases?: string[]
+    website_url?: string | null
+    category?: string | null
+  }>
 }
 
 export interface CompetitorPayload {

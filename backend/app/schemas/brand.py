@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.region_catalog import normalize_region_codes
@@ -61,10 +63,24 @@ class BrandWordGroupsSaveRequest(BaseModel):
     groups: list[BrandWordGroupSaveRequest] = Field(default_factory=list)
 
 
+class CompetitorSaveRequest(BaseModel):
+    """保存企业竞品配置。"""
+
+    tenant_id: int | None = None
+    name: str = Field(min_length=1, max_length=100)
+    short_name: str | None = Field(default=None, max_length=100)
+    aliases: list[str] = Field(default_factory=list)
+    website_url: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default="直接竞品", max_length=50)
+
+
 class BrandAssetSaveRequest(BaseModel):
     """保存企业品牌资产配置。"""
 
     tenant_id: int | None = None
+    # 2026-08-18 - 新增企业草稿无 tenant_id；保存时带服务期一并建企业
+    service_start_date: date | None = None
+    service_end_date: date | None = None
     company_full_name: str = Field(min_length=2, max_length=150)
     brand_name: str = Field(min_length=1, max_length=100)
     brand_short_name: str | None = Field(default=None, max_length=100)
@@ -73,6 +89,8 @@ class BrandAssetSaveRequest(BaseModel):
     product_keywords: list[str] = Field(default_factory=list)
     monitored_platforms: list[str] = Field(default_factory=list)
     keyword_groups: list[BrandKeywordGroupSaveRequest] = Field(default_factory=list)
+    brand_word_groups: list[BrandWordGroupSaveRequest] = Field(default_factory=list)
+    competitors: list[CompetitorSaveRequest] = Field(default_factory=list)
     region_codes: list[str] = Field(default_factory=list, max_length=34)
 
     @field_validator("region_codes")
@@ -87,13 +105,3 @@ class BrandAssetSaveRequest(BaseModel):
     schedule_weekdays: list[int] = Field(default_factory=list)
     schedule_month_days: list[int] = Field(default_factory=list)
 
-
-class CompetitorSaveRequest(BaseModel):
-    """保存企业竞品配置。"""
-
-    tenant_id: int | None = None
-    name: str = Field(min_length=1, max_length=100)
-    short_name: str | None = Field(default=None, max_length=100)
-    aliases: list[str] = Field(default_factory=list)
-    website_url: str | None = Field(default=None, max_length=500)
-    category: str | None = Field(default="直接竞品", max_length=50)
