@@ -15,18 +15,20 @@ def test_normalize_legacy_string_platforms():
     assert rows[0]["screenshot"] == 1
 
 
-def test_normalize_preserves_selected_modes():
-    # 2026-08-03 - 方案B：不再全平台强制 search
+def test_normalize_maps_standard_to_search_and_reasoning_to_reasoning_search():
+    # 2026-08-18 - 快速→search；深度→reasoning_search
     rows = normalize_platform_selections([
         "deepseek",
         {"code": "deepseek", "mode": "standard", "screenshot": 1},
         {"code": "doubao", "mode": "reasoning_search", "screenshot": 1},
         {"code": "kimi", "mode": "reasoning", "screenshot": 0},
+        {"code": "yuanbao", "mode": "search", "screenshot": 1},
     ])
     assert rows == [
         {"code": "deepseek", "mode": "search", "screenshot": 1},
         {"code": "doubao", "mode": "reasoning_search", "screenshot": 1},
-        {"code": "kimi", "mode": "reasoning", "screenshot": 1},
+        {"code": "kimi", "mode": "reasoning_search", "screenshot": 1},
+        {"code": "yuanbao", "mode": "search", "screenshot": 1},
     ]
 
 
@@ -35,7 +37,7 @@ def test_normalize_object_platforms():
         {"code": "yuanbao", "mode": "reasoning", "screenshot": 0},
         {"platform": "qianwen"},
     ])
-    assert rows[0] == {"code": "yuanbao", "mode": "reasoning", "screenshot": 1}
+    assert rows[0] == {"code": "yuanbao", "mode": "reasoning_search", "screenshot": 1}
     assert rows[1]["code"] == "qianwen"
     assert rows[1]["mode"] == "search"
     assert rows[1]["screenshot"] == 1

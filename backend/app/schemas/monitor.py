@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field, HttpUrl
 MonitorMode = Literal["standard", "reasoning", "search", "reasoning_search"]
 ScreenshotMode = Literal[0, 1, 2]
 
-# 缺省/旧数据回退：联网 search（与 standard 同价且带回信源）。深度思考走 reasoning，不再强制覆盖。
+# 缺省/旧数据回退：快速=联网 search；深度=reasoning_search（深度+联网）。
 FAST_MONITOR_MODE: MonitorMode = "search"
+DEEP_MONITOR_MODE: MonitorMode = "reasoning_search"
 
 
 def default_monitor_mode(platform: str) -> MonitorMode:

@@ -4,21 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.schemas.monitor import FAST_MONITOR_MODE, MonitorMode, ScreenshotMode
-
-_VALID_MODES = frozenset({"standard", "reasoning", "search", "reasoning_search"})
+from app.schemas.monitor import DEEP_MONITOR_MODE, FAST_MONITOR_MODE, MonitorMode, ScreenshotMode
 
 
 def _coerce_mode(raw: Any) -> MonitorMode:
     mode = str(raw or "").strip().lower()
-    if mode in _VALID_MODES:
-        return mode  # type: ignore[return-value]
+    # 2026-08-18 - 深度→reasoning_search（深度+联网）；快速仍 search
+    if mode in {"reasoning", "reasoning_search"}:
+        return DEEP_MONITOR_MODE
+    if mode == "search":
+        return "search"
+    # standard / 空 / 非法 → 联网 search
     return FAST_MONITOR_MODE
 
 
 def normalize_platform_selection(raw: Any) -> dict[str, Any] | None:
     """Accept legacy string, dict, or PlatformSelection-like object; return normalized dict or None."""
-    # 2026-08-03 - 方案B：保留用户选的快速/深度，不再全平台强制 search
+    # 2026-08-11 - 快速→search；reasoning* 原样；字符串平台默认 search
+    # 2026-08-18 - 深度也走 _coerce_mode → reasoning_search
     if isinstance(raw, str):
         code = raw.strip().lower()
         if not code:
