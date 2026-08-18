@@ -225,7 +225,10 @@ export async function submitSnapshotBackfill(
     reference_urls?: string[]
   },
 ): Promise<{ subtask: MonitorSubtask }> {
-  const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill`, payload)
+  // 2026-08-17 - 补录默认 30s 被艾迪亚信源重刷拖死；后端已异步，前端仍放宽兜底
+  const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill`, payload, {
+    timeout: 120000,
+  })
   invalidateCache('/v1/monitor')
   invalidateCache('/v1/brand/asset')
   return response.data.data

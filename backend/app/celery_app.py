@@ -44,6 +44,7 @@ celery_app.conf.update(
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
         "app.tasks.snapshot_backfill.capture_backfill_screenshot_task": {"queue": "default"},
+        "app.tasks.snapshot_backfill.refresh_source_daily_after_backfill_task": {"queue": "default"},
         "app.tasks.report_source_value.pregenerate_source_value_task": {"queue": "default"},
         "app.tasks.report_source_value.scan_source_value_pregenerate": {"queue": "default"},
     },

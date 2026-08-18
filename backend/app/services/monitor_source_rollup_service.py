@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.database import SessionLocal
 from app.core.read_cache import source_stats_config_fingerprint
 from app.models.monitor import GeoMonitorDailyStat, GeoMonitorSourceDaily, GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import (
@@ -227,6 +228,89 @@ def refresh_source_daily_after_subtask_backfill(
             exposure_terms=exposure,
             config_fp=config_fp,
         )
+
+
+def enqueue_source_daily_after_backfill(
+    *,
+    tenant_id: int,
+    task_id: str,
+    previous_stat_date: str | None,
+    new_stat_date: str | None,
+) -> str:
+    """补录后信源日表重刷改异步，避免 HTTP 被艾迪亚级租户拖过 30s。
+
+    2026-08-17 - 快照补录 timeout of 30000ms：同步 source rollup 8–12s+
+    """
+    from app.core.config import settings
+
+    if settings.celery_enabled:
+        try:
+            from app.tasks.snapshot_backfill import refresh_source_daily_after_backfill_task
+
+            refresh_source_daily_after_backfill_task.delay(
+                int(tenant_id),
+                str(task_id),
+                previous_stat_date,
+                new_stat_date,
+            )
+            return "queued"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "source daily after backfill enqueue failed task_id=%s err=%s; thread fallback",
+                task_id,
+                exc,
+            )
+
+    import threading
+
+    def _run() -> None:
+        db = SessionLocal()
+        try:
+            _run_source_daily_after_backfill(
+                db,
+                tenant_id=int(tenant_id),
+                task_id=str(task_id),
+                previous_stat_date=previous_stat_date,
+                new_stat_date=new_stat_date,
+            )
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.exception("source daily after backfill thread failed task_id=%s", task_id)
+        finally:
+            db.close()
+
+    threading.Thread(target=_run, name=f"src-daily-bf-{task_id[:12]}", daemon=True).start()
+    return "thread_fallback"
+
+
+def _run_source_daily_after_backfill(
+    db: Session,
+    *,
+    tenant_id: int,
+    task_id: str,
+    previous_stat_date: str | None,
+    new_stat_date: str | None,
+) -> None:
+    task = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
+    if task is None or task.tenant_id is None:
+        return
+    if int(task.tenant_id) != int(tenant_id):
+        logger.warning(
+            "source daily after backfill tenant mismatch task_id=%s expected=%s actual=%s",
+            task_id,
+            tenant_id,
+            task.tenant_id,
+        )
+        return
+    prev = date.fromisoformat(previous_stat_date) if previous_stat_date else None
+    new = date.fromisoformat(new_stat_date) if new_stat_date else None
+    refresh_source_daily_after_subtask_backfill(
+        db,
+        task=task,
+        previous_stat_date=prev,
+        new_stat_date=new,
+    )
 
 
 def _candidate_source_days(db: Session, tenant_id: int, cutoff_day: date) -> list[date]:
