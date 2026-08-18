@@ -739,8 +739,9 @@
 }
 
 .brand-insights-wordcloud-echart {
-  min-height: 360px;
-  height: 360px;
+  /* 2026-08-04 - 加高画布，长中文词云少叠字 */
+  min-height: 420px;
+  height: 420px;
   cursor: pointer;
 }
 

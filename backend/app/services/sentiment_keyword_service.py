@@ -34,7 +34,11 @@ _LLM_MAX_SUBTASKS = 24
 _DEFAULT_USE_LLM = True
 _FAST_SUBTASK_CAP = 800
 _COMPANY_ENTITY_RE = re.compile(
-    r"(传媒|广告|媒体|控股|集团|有限公司|股份|银行|保险|重工)$"
+    r"(传媒|广告|媒体|控股|集团|有限公司|股份|银行|保险|重工|葡萄酒|乳业|食品)$"
+)
+# 2026-08-04 - 「…等品牌/客户」名单句不当情绪词
+_ROSTER_LIST_RE = re.compile(
+    r"(?:等(?:客户|品牌|企业)|(?:客户|品牌)包括|服务过的品牌|合作品牌包括)"
 )
 _CITY_PREFIX_RE = re.compile(
     r"^(北京|上海|广州|深圳|杭州|成都|重庆|天津|苏州|南京|武汉|西安|青岛|大连|厦门|"
@@ -47,6 +51,12 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _CLAUSE_SPLIT = re.compile(r"[。！？；\n\r|]+")
 _PHRASE_SPLIT = re.compile(r"[；;，,、：:]+")
 _NOISE_RE = re.compile(r"^[#\->\s|·•\d.]+$")
+# 2026-08-04 - 列表序号/破折号前缀（「1. 品牌 —— 首选」）
+_LIST_PREFIX_RE = re.compile(r"^(?:\d+[\.．、\)）]|[;；·•\-—–—]+)+")
+_BRAND_LEAD_SEP_RE = re.compile(r"^(?:核心优势|[—\-–—:：\s·]+)+")
+# 词云宜短评；过长接近整句卖点
+_PHRASE_MAX_LEN = 18
+_PHRASE_MIN_LEN = 4
 
 # 2026-07-31 - S3：短语级极性闸门（整篇 sentiment 桶不够，需短语自带评价向）
 _NEGATIVE_POLARITY_CUES: tuple[str, ...] = (
@@ -59,7 +69,8 @@ _NEGATIVE_POLARITY_CUES: tuple[str, ...] = (
 _POSITIVE_POLARITY_CUES: tuple[str, ...] = (
     "靠谱", "领先", "首选", "推荐", "优势", "口碑好", "性价比高", "专业", "可靠",
     "价格透明", "流程透明", "更透明",
-    "省心", "实力强", "头部", "优质", "出色", "亮眼", "值得信赖", "值得选", "稳妥",
+    # 2026-08-04 - 去掉「头部」：命中「头部品牌」营销套话刷屏（保留「行业头部」）
+    "省心", "实力强", "行业头部", "优质", "出色", "亮眼", "值得信赖", "值得选", "稳妥",
     "执行力强", "落地强", "服务好", "体验好", "口碑佳", "正反馈", "好评", "强势",
     "一手价", "价格实", "最实", "实惠", "公道", "高效", "精准", "覆盖强", "资源强",
     "提升", "增长", "突破", "优选", "亮点", "成熟", "完善", "卓越", "显著", "优于",
@@ -81,11 +92,32 @@ def _compact(text: str) -> str:
     return re.sub(r"\s+", "", (text or "").strip())
 
 
+def _normalize_phrase_text(text: str, brand_names: set[str] | None = None) -> str:
+    """去列表号、前导标点、品牌名前缀，得到可展示短评。"""
+    s = re.sub(r"\s+", "", (text or "").strip())
+    if not s:
+        return ""
+    s = _LIST_PREFIX_RE.sub("", s)
+    s = re.sub(r"^[;；,，、.\s]+", "", s)
+    for name in sorted((brand_names or set()), key=len, reverse=True):
+        entity = _compact(name)
+        if len(entity) < 2 or not s.startswith(entity):
+            continue
+        rest = _BRAND_LEAD_SEP_RE.sub("", s[len(entity) :])
+        # 2026-08-04 - 「品牌+核心优势」标题剥完为空，勿再被短别名二次截断
+        if not rest:
+            return ""
+        if len(rest) >= _PHRASE_MIN_LEN:
+            s = rest
+            break
+    return s
+
+
 def _is_valid_phrase(phrase: str) -> bool:
     text = phrase.strip()
     if not text or _NOISE_RE.match(text):
         return False
-    if len(text) < 4 or len(text) > 28:
+    if len(text) < _PHRASE_MIN_LEN or len(text) > _PHRASE_MAX_LEN:
         return False
     chinese_chars = re.findall(r"[\u4e00-\u9fff]", text)
     if len(chinese_chars) < 2:
@@ -94,7 +126,42 @@ def _is_valid_phrase(phrase: str) -> bool:
         return False
     if re.fullmatch(r"[\d\sWw%+]+", text):
         return False
+    # 2026-08-04 - 截断残片 / 列表装饰
+    if text.endswith(("的全流", "的全", "触达超", "在于", "包括", "核心优势")):
+        return False
+    if "⭐" in text or "★" in text or text.startswith("控股集团"):
+        return False
     return True
+
+
+def _collapse_substring_phrases(
+    bucket: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """短串是长串前缀/真子串时并入长串，去掉滑动窗口截断重复。"""
+    if len(bucket) <= 1:
+        return bucket
+    texts = sorted(bucket.keys(), key=len, reverse=True)
+    drop: set[str] = set()
+    for i, longer in enumerate(texts):
+        if longer in drop:
+            continue
+        cl = _compact(longer)
+        for shorter in texts[i + 1 :]:
+            if shorter in drop:
+                continue
+            cs = _compact(shorter)
+            if len(cs) < _PHRASE_MIN_LEN:
+                drop.add(shorter)
+                continue
+            # 真前缀或被长串包含，且不是几乎同长
+            if cl.startswith(cs) or (cs in cl and len(cl) - len(cs) >= 2):
+                host = bucket[longer]
+                child = bucket[shorter]
+                host["count"] = int(host["count"]) + int(child["count"])
+                host["subtask_ids"].extend(child.get("subtask_ids") or [])
+                host["task_ids"].extend(child.get("task_ids") or [])
+                drop.add(shorter)
+    return {k: v for k, v in bucket.items() if k not in drop}
 
 
 def _blocked_entity_names(asset, competitors) -> set[str]:
@@ -133,6 +200,9 @@ def _is_entity_like_phrase(text: str, blocked: set[str]) -> bool:
     if _CITY_PREFIX_RE.match(compact) and len(compact) <= 6:
         return True
     if compact.endswith("等") and len(compact) <= 8:
+        return True
+    # 2026-08-04 - 「…等品牌」客户名单不当情绪词
+    if _ROSTER_LIST_RE.search(compact):
         return True
     return False
 
@@ -226,6 +296,7 @@ def _extract_phrases(
     *,
     blocked: set[str],
     polarity: str | None = None,
+    brand_names: set[str] | None = None,
 ) -> set[str]:
     if not text:
         return set()
@@ -234,24 +305,22 @@ def _extract_phrases(
         return set()
 
     phrases: set[str] = set()
+
+    def try_add(raw: str) -> None:
+        # 2026-08-04 - 先洗序号/品牌前缀，再判有用；弃用 4~12 字滑窗残片
+        part = _normalize_phrase_text(raw, brand_names)
+        if not part:
+            return
+        if _is_useful_sentiment_phrase(part, blocked) and (
+            polarity is None or _accept_phrase_for_polarity(part, polarity)
+        ):
+            phrases.add(part)
+
     for clause in _CLAUSE_SPLIT.split(cleaned):
         clause = clause.strip()
-        if _is_useful_sentiment_phrase(clause, blocked) and (
-            polarity is None or _accept_phrase_for_polarity(clause, polarity)
-        ):
-            phrases.add(clause)
+        try_add(clause)
         for part in _PHRASE_SPLIT.split(clause):
-            part = part.strip()
-            if _is_useful_sentiment_phrase(part, blocked) and (
-                polarity is None or _accept_phrase_for_polarity(part, polarity)
-            ):
-                phrases.add(part)
-
-    for word in re.findall(r"[\u4e00-\u9fff]{4,12}", cleaned):
-        if _is_useful_sentiment_phrase(word, blocked) and (
-            polarity is None or _accept_phrase_for_polarity(word, polarity)
-        ):
-            phrases.add(word)
+            try_add(part)
     return phrases
 
 
@@ -297,7 +366,9 @@ def _aggregate_rule_based(
     bucket: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "subtask_ids": [], "task_ids": []})
     for item in items:
         source = _snippet_for_subtask(item, brand_names)
-        phrases = _extract_phrases(source, blocked=blocked, polarity=polarity)
+        phrases = _extract_phrases(
+            source, blocked=blocked, polarity=polarity, brand_names=brand_names
+        )
         for phrase in phrases:
             entry = bucket[phrase]
             entry["count"] += 1
@@ -352,7 +423,9 @@ def _aggregate_with_deepseek(
             for future in as_completed(futures):
                 phrases = future.result()
                 for row in phrases:
-                    text = row["text"]
+                    text = _normalize_phrase_text(row["text"], brand_names)
+                    if not text:
+                        continue
                     if not _is_useful_sentiment_phrase(text, blocked):
                         continue
                     # 负面仍严；正面 LLM 结果在无反义命中时放行
@@ -534,8 +607,10 @@ def build_sentiment_keywords(
             used_llm = used_llm or llm_used
 
     def finalize(polarity: str) -> list[dict[str, Any]]:
+        # 2026-08-04 - 截断短串并入长串后再截断 topN
+        collapsed = _collapse_substring_phrases(buckets[polarity])
         rows = []
-        for text, stats in buckets[polarity].items():
+        for text, stats in collapsed.items():
             rows.append({
                 "text": text,
                 "count": int(stats["count"]),

@@ -32,6 +32,22 @@ SENTIMENT_NOISE_SUBSTRINGS: tuple[str, ...] = (
     "综合来看",
     "值得一提",
     "综上所述",
+    # 2026-08-04 - 词云被「头部品牌/已服务超N家」营销刷屏
+    "头部品牌",
+    "家头部",
+    "已服务超",
+    "累计服务超",
+    "服务超500",
+    "服务了超",
+    "500+头部",
+    "500家头部",
+    "核心优势在于",
+    # 2026-08-04 - 列表/荐商套话
+    "以下是",
+    "服务商推荐",
+    "主流优质",
+    "推荐理由",
+    "暂未列入",
 )
 
 SENTIMENT_STOP_WORDS: frozenset[str] = WORDCLOUD_STOP_WORDS | SENTIMENT_EXTRA_STOP_WORDS
