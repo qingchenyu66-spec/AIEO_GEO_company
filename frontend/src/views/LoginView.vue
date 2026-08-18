@@ -10,6 +10,7 @@ import { useAuthStore } from '../stores/auth'
 import AppBrandLogo from '../components/AppBrandLogo.vue'
 import PlatformBadge from '../components/PlatformBadge.vue'
 import { supportedPlatforms } from '../views/portal/platformMeta'
+import { comparePlatformCodes } from './portal/platformOrder'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -27,7 +28,13 @@ const selected = computed(() => auth.pendingIdentities.find(item => item.id === 
 function identityDisplayName(identity: { position_name?: string | null; identity_name?: string }) {
   return identity.position_name || identity.identity_name || '登录身份'
 }
-const platforms = supportedPlatforms.map(item => ({ code: item.code, name: item.name }))
+// 2026-08-17 - 登录页监测平台条不展示移动端 - 仅滤展示，不动 supportedPlatforms 业务勾选
+// 2026-08-18 - 展示序走市场排序；PLATFORM_META 对象键序不影响本条
+const platforms = supportedPlatforms
+  .filter(item => !item.code.endsWith('_mobile'))
+  .slice()
+  .sort((left, right) => comparePlatformCodes(left.code, right.code))
+  .map(item => ({ code: item.code, name: item.name }))
 
 async function submitLogin() {
   if (!form.username || !form.password) return ElMessage.warning('请输入账号和密码')
