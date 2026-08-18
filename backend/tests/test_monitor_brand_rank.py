@@ -399,3 +399,38 @@ def test_national_team_labeling_section_first() -> None:
     assert detail.mentioned is True
     assert detail.rank == 1
     assert detail.rank_basis == "section_local"
+
+
+def test_line_enum_kept_when_section_local_is_inflated() -> None:
+    """客服BPO行内迈睿①鸿联②，宽节类内第9不得盖掉行内第2。"""
+    from app.services.monitor_service import _drop_soft_ranks_beaten_by_structured
+
+    kept = _drop_soft_ranks_beaten_by_structured(
+        [
+            BrandRankResolution(
+                rank=9, mentioned=True, source="appearance", confidence=0.72, rank_basis="section_local"
+            ),
+            BrandRankResolution(
+                rank=2, mentioned=True, source="appearance", confidence=0.7, rank_basis="line_enum_local"
+            ),
+        ]
+    )
+    assert min(item.rank for item in kept if item.rank is not None) == 2
+    assert any(item.rank_basis == "line_enum_local" for item in kept)
+
+
+def test_line_enum_dropped_when_compact_section_is_slightly_behind() -> None:
+    """紧凑类内第5被行内第4盖掉时，仍丢掉行内。"""
+    from app.services.monitor_service import _drop_soft_ranks_beaten_by_structured
+
+    kept = _drop_soft_ranks_beaten_by_structured(
+        [
+            BrandRankResolution(
+                rank=5, mentioned=True, source="appearance", confidence=0.72, rank_basis="section_local"
+            ),
+            BrandRankResolution(
+                rank=4, mentioned=True, source="appearance", confidence=0.7, rank_basis="line_enum_local"
+            ),
+        ]
+    )
+    assert [item.rank_basis for item in kept] == ["section_local"]
