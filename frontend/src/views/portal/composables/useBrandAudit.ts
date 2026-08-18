@@ -1234,19 +1234,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
-  function addCompetitorRow() {
-    const name = competitorNameInput.value.trim()
-    competitorRows.value.push({
-      id: null,
-      name,
-      short_name: '',
-      aliases_text: '',
-      website_url: '',
-      category: '直接竞品',
-    })
-    competitorNameInput.value = ''
-  }
-
   async function addCompetitorTag() {
     const name = competitorNameInput.value.trim()
     if (!name) {
