@@ -4453,7 +4453,7 @@ def _drop_soft_ranks_beaten_by_structured(
         if has_category_peer and basis in {"brand_token_order", "appearance_beyond_top3"}:
             continue
         # 2026-08-17 - 类内公司卡序在时，行内顿号枚举勿再 min 出更靠前的虚位（6304 5被枚举4盖）
-        # 2026-08-18 - 宽节类内第9盖掉客服BPO行内第2（19244015）；仅紧凑类内(≤6)且枚举更靠前才丢行内
+        # 2026-08-18 - 宽节类内第6/9盖掉客服BPO行内第2；仅紧凑类内且枚举只领先1～2位才丢行内
         if has_section_local and basis == "line_enum_local" and item.rank is not None:
             section_best = min(
                 (
@@ -4464,7 +4464,11 @@ def _drop_soft_ranks_beaten_by_structured(
                 ),
                 default=None,
             )
-            if section_best is not None and float(item.rank) < section_best <= 6:
+            if (
+                section_best is not None
+                and float(item.rank) < section_best <= 6
+                and (section_best - float(item.rank)) <= 2
+            ):
                 continue
         # 公司标题节或靠前硬信号在时，全文出场 ≥7 视为虚抬
         if (

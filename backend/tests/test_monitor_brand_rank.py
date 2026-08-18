@@ -418,6 +418,18 @@ def test_line_enum_kept_when_section_local_is_inflated() -> None:
     assert min(item.rank for item in kept if item.rank is not None) == 2
     assert any(item.rank_basis == "line_enum_local" for item in kept)
 
+    kept_six = _drop_soft_ranks_beaten_by_structured(
+        [
+            BrandRankResolution(
+                rank=6, mentioned=True, source="appearance", confidence=0.72, rank_basis="section_local"
+            ),
+            BrandRankResolution(
+                rank=2, mentioned=True, source="appearance", confidence=0.7, rank_basis="line_enum_local"
+            ),
+        ]
+    )
+    assert min(item.rank for item in kept_six if item.rank is not None) == 2
+
 
 def test_line_enum_dropped_when_compact_section_is_slightly_behind() -> None:
     """紧凑类内第5被行内第4盖掉时，仍丢掉行内。"""
