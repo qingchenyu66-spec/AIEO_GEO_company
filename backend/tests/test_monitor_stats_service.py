@@ -10,9 +10,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.brand import BrandAsset
+from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.lead_diagnosis import LeadDiagnosisRun
-from app.models.monitor import GeoMonitorDailyStat, GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import (
+    GeoMonitorCompetitorDailyStat,
+    GeoMonitorDailyStat,
+    GeoMonitorScheduleRun,
+    GeoMonitorSubtask,
+    GeoMonitorTask,
+)
 from app.services.monitor_stats_service import (
     _is_transient_daily_stat_conflict,
     _rebuild_daily_stat_for_platform_day,
@@ -29,9 +35,11 @@ def db_session():
             GeoMonitorTask.__table__,
             GeoMonitorSubtask.__table__,
             GeoMonitorDailyStat.__table__,
+            GeoMonitorCompetitorDailyStat.__table__,
             GeoMonitorScheduleRun.__table__,
             LeadDiagnosisRun.__table__,
             BrandAsset.__table__,
+            BrandCompetitor.__table__,
         ],
     )
     session = sessionmaker(bind=engine)()
@@ -50,6 +58,24 @@ def _add_task_with_subtasks(
     stat_day: datetime,
     mention_positions: list[int | None],
 ) -> None:
+    # 2026-08-17 - 日表走 kpi_rank：需正文含品牌词，否则 mention_position 单独不计
+    if db.scalar(select(BrandAsset).where(BrandAsset.tenant_id == tenant_id)) is None:
+        db.add(
+            BrandAsset(
+                tenant_id=tenant_id,
+                company_full_name="测试公司",
+                brand_name="测试品牌",
+                brand_short_name="测品",
+                monitor_keywords_json=["测试品牌"],
+                aliases_json=[],
+                product_keywords_json=[],
+                monitored_platforms_json=["doubao"],
+                region_codes_json=[],
+                schedule_times_json=["09:00"],
+                schedule_weekdays_json=[],
+                schedule_month_days_json=[],
+            )
+        )
     task = GeoMonitorTask(
         task_id=task_id,
         tenant_id=tenant_id,
@@ -57,10 +83,12 @@ def _add_task_with_subtasks(
         total_items=len(mention_positions),
         completed_items=len(mention_positions),
         failed_items=0,
-        prompts_json=["q"],
+        monitor_keywords="测试品牌",
+        prompts_json=["推荐测试品牌排名"],
         platforms_json=[{"platform": platform}],
         raw_request_json={},
         raw_response_json={},
+        created_at=stat_day,
     )
     db.add(task)
     for index, mention_position in enumerate(mention_positions, start=1):
@@ -70,9 +98,15 @@ def _add_task_with_subtasks(
                 task_id=task_id,
                 platform=platform,
                 mode="standard",
-                prompt=f"prompt-{index}",
+                prompt="推荐测试品牌哪个好",
                 status="completed",
                 mention_position=mention_position,
+                answer_content="1. 测试品牌\n2. 其它" if mention_position is not None else "其它品牌",
+                all_rankings_json=(
+                    [{"name": "测试品牌", "rank": mention_position}]
+                    if mention_position is not None
+                    else []
+                ),
                 raw_result_json={},
                 updated_at=stat_day,
             )
