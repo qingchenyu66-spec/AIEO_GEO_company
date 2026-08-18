@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.brand import BrandAsset
 from app.models.lead_diagnosis import LeadDiagnosisRun
-from app.models.monitor import GeoMonitorDailyStat, GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import (
+    GeoMonitorCompetitorDailyStat,
+    GeoMonitorDailyStat,
+    GeoMonitorScheduleRun,
+    GeoMonitorSubtask,
+    GeoMonitorTask,
+)
 from app.services.brand_service import get_brand_asset
 from app.services.schedule_context import (
     lead_diagnosis_runs_for_tasks,
@@ -232,6 +238,50 @@ def _write_daily_stat_row(
     db.flush()
 
 
+def _write_competitor_daily_rows(
+    db: Session,
+    *,
+    tenant_id: int,
+    stat_date: date,
+    platform: str,
+    completed: int,
+    competitor_metrics: dict[int, dict[str, Any]],
+) -> None:
+    """同平台日：删后写竞品日表；completed 与本品牌日表同分母。
+
+    2026-08-17 - B3+ 竞品日物化
+    """
+    from app.services.entity_daily_kpi import KPI_RULE_VERSION
+
+    db.execute(
+        delete(GeoMonitorCompetitorDailyStat).where(
+            GeoMonitorCompetitorDailyStat.tenant_id == tenant_id,
+            GeoMonitorCompetitorDailyStat.stat_date == stat_date,
+            GeoMonitorCompetitorDailyStat.platform == platform,
+        )
+    )
+    db.flush()
+    if completed <= 0:
+        return
+    for competitor_id, payload in competitor_metrics.items():
+        db.add(
+            GeoMonitorCompetitorDailyStat(
+                tenant_id=tenant_id,
+                competitor_id=int(competitor_id),
+                competitor_name=str(payload.get("name") or "")[:100],
+                stat_date=stat_date,
+                platform=platform,
+                completed_count=completed,
+                mentioned_count=int(payload.get("mentioned") or 0),
+                top3_count=int(payload.get("top3") or 0),
+                rank_sum=int(payload.get("rank_sum") or 0),
+                rank_count=int(payload.get("rank_count") or 0),
+                rule_version=KPI_RULE_VERSION,
+            )
+        )
+    db.flush()
+
+
 def _rebuild_daily_stat_for_platform_day(
     db: Session,
     *,
@@ -239,7 +289,10 @@ def _rebuild_daily_stat_for_platform_day(
     stat_date: date,
     platform: str,
 ) -> None:
-    """按企业+检测日+平台，汇总全部已返回子任务重建日统计。"""
+    """按企业+检测日+平台，汇总全部已返回子任务重建日统计（本品牌+竞品）。
+
+    2026-08-17 - B3+：A2 仅 ranking 进对比分母；竞品同行写入
+    """
     # 预筛 created_at/updated_at 邻近窗口，避免整表终态子任务进内存再滤业务日
     pad_start = datetime.combine(stat_date - timedelta(days=3), time.min)
     pad_end = datetime.combine(stat_date + timedelta(days=14), time.max)
@@ -261,19 +314,28 @@ def _rebuild_daily_stat_for_platform_day(
             )
         )
     )
-    metrics = {"completed": 0, "mentioned": 0, "top3": 0, "rank_sum": 0, "rank_count": 0, "citation": 0}
+    from app.services.entity_daily_kpi import (
+        apply_rank_to_metrics,
+        empty_kpi_metrics,
+        is_kpi_ranking_prompt,
+        resolve_entity_rank_for_kpi,
+    )
+
+    metrics = empty_kpi_metrics()
+    competitor_metrics: dict[int, dict[str, Any]] = {}
     if subtasks:
         task_ids = list({item.task_id for item in subtasks if item.task_id})
         schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
         lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
         asset = get_brand_asset(db, tenant_id)
 
-        from app.services.brand_service import active_keyword_groups
-        from app.services.monitor_service import (
-            _is_valid_citation_source,
-            _ranking_match_terms,
-            kpi_rank_for_subtask,
+        from app.services.brand_service import (
+            active_keyword_groups,
+            brand_exposure_terms,
+            list_competitors,
         )
+        from app.services.competitor_analytics_service import _expand_entity_match_terms
+        from app.services.monitor_service import _is_valid_citation_source, _ranking_match_terms
 
         try:
             groups = active_keyword_groups(db, tenant_id) if asset is not None else []
@@ -281,6 +343,33 @@ def _rebuild_daily_stat_for_platform_day(
             # ponytail: 单测/残缺库无词组表时退回资产别名，勿拖垮日统计重建
             groups = []
         tenant_terms = _ranking_match_terms(asset, groups) if asset is not None else []
+        if asset is not None:
+            for term in brand_exposure_terms(asset, groups):
+                text = str(term or "").strip()
+                if text and text not in tenant_terms:
+                    tenant_terms.append(text)
+
+        competitors = []
+        try:
+            competitors = list_competitors(db, tenant_id)
+        except Exception:
+            # ponytail: 单测无竞品表时跳过竞品日表写入
+            competitors = []
+        for comp in competitors:
+            if not comp.status:
+                continue
+            name = str(comp.name or "").strip()
+            if not name:
+                continue
+            competitor_metrics[int(comp.id)] = {
+                "name": name,
+                "terms": _expand_entity_match_terms(name, list(comp.aliases_json or [])),
+                "mentioned": 0,
+                "top3": 0,
+                "rank_sum": 0,
+                "rank_count": 0,
+            }
+
         for item in subtasks:
             task = item.task
             if task is None:
@@ -294,23 +383,35 @@ def _rebuild_daily_stat_for_platform_day(
             )
             if detect_day != stat_date:
                 continue
-            metrics["completed"] += 1
-            terms = list(tenant_terms)
-            kw = str(task.monitor_keywords or "").strip()
-            if kw and kw not in terms:
-                terms.append(kw)
-            rank = kpi_rank_for_subtask(item, task.monitor_keywords, terms, asset)
-            if rank is not None:
-                metrics["mentioned"] += 1
-                metrics["rank_sum"] += int(rank)
-                metrics["rank_count"] += 1
-                if float(rank) <= 3:
-                    metrics["top3"] += 1
             refs = item.reference_list_json or []
             if isinstance(refs, list):
                 metrics["citation"] += sum(
                     1 for src in refs if isinstance(src, dict) and _is_valid_citation_source(src)
                 )
+            # 2026-08-17 - B3+ A2：非 ranking 不进对比 KPI 分母/分子（引文仍累计）
+            if not is_kpi_ranking_prompt(item.prompt):
+                continue
+            metrics["completed"] += 1
+            terms = list(tenant_terms)
+            kw = str(task.monitor_keywords or "").strip()
+            if kw and kw not in terms:
+                terms.append(kw)
+            brand_rank = resolve_entity_rank_for_kpi(
+                item,
+                terms,
+                asset,
+                is_brand=True,
+                monitor_keywords=task.monitor_keywords,
+            )
+            apply_rank_to_metrics(metrics, brand_rank)
+            for payload in competitor_metrics.values():
+                comp_rank = resolve_entity_rank_for_kpi(
+                    item,
+                    list(payload["terms"]),
+                    asset,
+                    is_brand=False,
+                )
+                apply_rank_to_metrics(payload, comp_rank)
 
     # 先读后写缩短持锁；每 key 独立 commit，死锁/唯一键竞态时 rollback 后重试写段
     # ponytail: 调用方本就在 sync/补录 commit 之后刷日统计，单 key commit 不扩大事务边界
@@ -323,6 +424,14 @@ def _rebuild_daily_stat_for_platform_day(
                 stat_date=stat_date,
                 platform=platform,
                 metrics=metrics,
+            )
+            _write_competitor_daily_rows(
+                db,
+                tenant_id=tenant_id,
+                stat_date=stat_date,
+                platform=platform,
+                completed=int(metrics.get("completed") or 0),
+                competitor_metrics=competitor_metrics,
             )
             db.commit()
             return
@@ -445,18 +554,19 @@ def refresh_stats_after_subtask_backfill(
             task.tenant_id,
             exc,
         )
+    # 2026-08-17 - 补录 HTTP 30s 超时：艾迪亚信源日表同步重刷可达 8–12s+，改异步（日表仍同步）
     try:
-        from app.services.monitor_source_rollup_service import refresh_source_daily_after_subtask_backfill
+        from app.services.monitor_source_rollup_service import enqueue_source_daily_after_backfill
 
-        refresh_source_daily_after_subtask_backfill(
-            db,
-            task=task,
-            previous_stat_date=previous_stat_date,
-            new_stat_date=new_day,
+        enqueue_source_daily_after_backfill(
+            tenant_id=int(task.tenant_id),
+            task_id=str(task.task_id),
+            previous_stat_date=previous_stat_date.isoformat() if previous_stat_date else None,
+            new_stat_date=new_day.isoformat() if new_day else None,
         )
     except Exception as exc:
         logger.warning(
-            "refresh_source_daily_after_subtask_backfill failed task_id=%s error=%s",
+            "enqueue_source_daily_after_backfill failed task_id=%s error=%s",
             task.task_id,
             exc,
         )
@@ -561,6 +671,133 @@ def list_daily_stats_for_tenant(
     if until is not None:
         stmt = stmt.where(GeoMonitorDailyStat.stat_date <= until)
     return list(db.scalars(stmt.order_by(GeoMonitorDailyStat.stat_date.asc())))
+
+
+def list_competitor_daily_stats_for_tenant(
+    db: Session,
+    tenant_id: int,
+    *,
+    since: date | None = None,
+    until: date | None = None,
+) -> list[GeoMonitorCompetitorDailyStat]:
+    """2026-08-17 - B3+ 竞品日表读取."""
+    stmt = select(GeoMonitorCompetitorDailyStat).where(
+        GeoMonitorCompetitorDailyStat.tenant_id == tenant_id
+    )
+    if since is not None:
+        stmt = stmt.where(GeoMonitorCompetitorDailyStat.stat_date >= since)
+    if until is not None:
+        stmt = stmt.where(GeoMonitorCompetitorDailyStat.stat_date <= until)
+    return list(db.scalars(stmt.order_by(GeoMonitorCompetitorDailyStat.stat_date.asc())))
+
+
+def has_competitor_daily_stats(db: Session, tenant_ids: list[int] | None) -> bool:
+    stmt = select(func.count()).select_from(GeoMonitorCompetitorDailyStat)
+    if tenant_ids is not None:
+        if not tenant_ids:
+            return False
+        stmt = stmt.where(GeoMonitorCompetitorDailyStat.tenant_id.in_(tenant_ids))
+    return int(db.scalar(stmt) or 0) > 0
+
+
+def competitor_period_rows_from_daily_stats(
+    db: Session,
+    tenant_id: int,
+    *,
+    range_start: date | datetime,
+    range_end: date | datetime,
+    platforms: list[str] | set[str] | frozenset[str] | None = None,
+) -> list[dict[str, Any]] | None:
+    """区间竞品 KPI（与本品牌日表同分母加权）。无竞品日表时返回 None。"""
+    since = range_start.date() if isinstance(range_start, datetime) else range_start
+    until = range_end.date() if isinstance(range_end, datetime) else range_end
+    rows = list_competitor_daily_stats_for_tenant(db, tenant_id, since=since, until=until)
+    if platforms:
+        allow = {str(code).strip() for code in platforms if str(code).strip()}
+        if allow:
+            rows = [row for row in rows if str(row.platform or "").strip() in allow]
+    if not rows:
+        return None
+    bucket: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        cid = int(row.competitor_id)
+        item = bucket.setdefault(
+            cid,
+            {
+                "competitor_id": cid,
+                "name": str(row.competitor_name or ""),
+                "completed": 0,
+                "mentioned": 0,
+                "rank_sum": 0,
+                "rank_count": 0,
+            },
+        )
+        item["name"] = str(row.competitor_name or item["name"])
+        item["completed"] += int(row.completed_count or 0)
+        item["mentioned"] += int(row.mentioned_count or 0)
+        item["rank_sum"] += int(row.rank_sum or 0)
+        item["rank_count"] += int(row.rank_count or 0)
+    out: list[dict[str, Any]] = []
+    for item in bucket.values():
+        completed = int(item["completed"] or 0)
+        mentioned = int(item["mentioned"] or 0)
+        rank_count = int(item["rank_count"] or 0)
+        out.append(
+            {
+                "competitor_id": item["competitor_id"],
+                "name": item["name"],
+                "is_brand": False,
+                "mention_count": mentioned,
+                "mention_rate": round(mentioned / completed * 100, 1) if completed else 0.0,
+                "avg_rank": round(item["rank_sum"] / rank_count, 1) if rank_count else None,
+                "sample_count": completed,
+                "kpi_basis": "daily_stat",
+            }
+        )
+    return out
+
+
+def competitor_kpi_trends_from_stats(
+    db: Session,
+    tenant_id: int,
+    range_start: datetime,
+    range_end: datetime,
+    *,
+    platforms: list[str] | set[str] | frozenset[str] | None = None,
+) -> dict[str, list[float]]:
+    """竞品名 → 与工作台同日序列的提及率。"""
+    since = range_start.date()
+    until = range_end.date()
+    rows = list_competitor_daily_stats_for_tenant(db, tenant_id, since=since, until=until)
+    if platforms:
+        allow = {str(code).strip() for code in platforms if str(code).strip()}
+        if allow:
+            rows = [row for row in rows if str(row.platform or "").strip() in allow]
+    # day -> name -> {m, c}
+    by_day: dict[str, dict[str, dict[str, int]]] = {}
+    names: set[str] = set()
+    for row in rows:
+        day = row.stat_date.isoformat()
+        name = str(row.competitor_name or "").strip()
+        if not name:
+            continue
+        names.add(name)
+        cell = by_day.setdefault(day, {}).setdefault(name, {"m": 0, "c": 0})
+        cell["m"] += int(row.mentioned_count or 0)
+        cell["c"] += int(row.completed_count or 0)
+    sorted_days: list[str] = []
+    cursor = since
+    while cursor <= until:
+        sorted_days.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    series: dict[str, list[float]] = {name: [] for name in names}
+    for day in sorted_days:
+        day_map = by_day.get(day) or {}
+        for name in names:
+            cell = day_map.get(name) or {"m": 0, "c": 0}
+            c = int(cell["c"] or 0)
+            series[name].append(round(cell["m"] / c * 100, 1) if c else 0.0)
+    return series
 
 
 def platform_bucket_from_stat_rows(rows: list[GeoMonitorDailyStat]) -> dict[str, dict[str, int | float]]:

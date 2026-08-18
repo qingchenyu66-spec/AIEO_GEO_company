@@ -7,6 +7,7 @@ from app.models.system import OperationLog, SystemConfig
 from app.models.menu_config import MenuConfig
 from app.models.monitor import (
     GeoMonitorCallbackEvent,
+    GeoMonitorCompetitorDailyStat,
     GeoMonitorDailyStat,
     GeoMonitorScheduleRun,
     GeoMonitorSourceDaily,
@@ -23,6 +24,7 @@ from app.models.announcement import Announcement, AnnouncementAck, AnnouncementM
 
 __all__ = [
     "GeoMonitorCallbackEvent",
+    "GeoMonitorCompetitorDailyStat",
     "GeoMonitorDailyStat",
     "GeoMonitorScheduleRun",
     "GeoMonitorSourceDaily",

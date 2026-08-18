@@ -120,6 +120,44 @@ class GeoMonitorDailyStat(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class GeoMonitorCompetitorDailyStat(Base):
+    """企业 × 竞品 × 日期 × 平台的对比 KPI 预聚合（与本品牌日表同分母）。
+
+    2026-08-17 - B3+：竞品也走日物化，避免本品牌日表 / 竞品 live 双轨
+    """
+
+    __tablename__ = "geo_monitor_competitor_daily_stat"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "competitor_id",
+            "stat_date",
+            "platform",
+            name="uk_geo_monitor_competitor_daily_stat",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False)
+    competitor_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_brand_competitor.id"),
+        index=True,
+        nullable=False,
+    )
+    competitor_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="写入时竞品名快照")
+    stat_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    mentioned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    top3_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rank_sum: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rank_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(32), nullable=False, default="b3plus-a2-v1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class GeoMonitorSourceDaily(Base):
     """企业 × 监测日的信源引用预聚合（方案 C：读路径按日合并，避免全历史扫 reference_list）。"""
 

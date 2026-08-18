@@ -897,13 +897,17 @@ def _overlay_brand_kpi_from_daily_stats(
     sorted_days: list[str],
     trend_labels: list[str],
 ) -> dict[str, Any]:
-    """本品牌提及率/均排/趋势对齐工作台日表；竞品行仍走实时实体匹配。
+    """本品牌+竞品提及率/均排/趋势对齐日表（B3+）。
 
+    2026-08-17 - 竞品也吃日表；无竞品日表时竞品行保留 live（未回填窗兜底）
     2026-08-13 - 方案 A：近 7 日「本品牌提及率」与本期结论同源
     """
     from app.services.brand_service import tenant_purchased_platforms
     from app.services.monitor_stats_service import (
         brand_period_metrics_from_daily_stats,
+        competitor_kpi_trends_from_stats,
+        competitor_period_rows_from_daily_stats,
+        has_competitor_daily_stats,
         workspace_kpi_trends_from_stats,
     )
 
@@ -934,6 +938,29 @@ def _overlay_brand_kpi_from_daily_stats(
         row["sample_count"] = completed
         row["kpi_basis"] = "daily_stat"
 
+    comp_rows = None
+    if has_competitor_daily_stats(db, [tenant_id]):
+        comp_rows = competitor_period_rows_from_daily_stats(
+            db,
+            tenant_id,
+            range_start=range_start,
+            range_end=range_end,
+            platforms=platforms,
+        )
+    if comp_rows:
+        by_name = {str(item["name"]): item for item in comp_rows}
+        for row in payload.get("rows") or []:
+            if not isinstance(row, dict) or row.get("is_brand"):
+                continue
+            hit = by_name.get(str(row.get("name") or ""))
+            if not hit:
+                continue
+            row["mention_count"] = hit["mention_count"]
+            row["mention_rate"] = hit["mention_rate"]
+            row["avg_rank"] = hit["avg_rank"]
+            row["sample_count"] = hit["sample_count"]
+            row["kpi_basis"] = "daily_stat"
+
     trend_points = workspace_kpi_trends_from_stats(
         db,
         tenant_id,
@@ -942,13 +969,30 @@ def _overlay_brand_kpi_from_daily_stats(
         platforms=platforms,
     )
     brand_values = [float(p.get("mention_rate") or 0.0) for p in trend_points]
+    comp_trend_map = (
+        competitor_kpi_trends_from_stats(
+            db,
+            tenant_id,
+            range_start,
+            range_end,
+            platforms=platforms,
+        )
+        if comp_rows
+        else {}
+    )
     if len(brand_values) == len(trend_labels):
         for series in (payload.get("mention_trends") or {}).get("series") or []:
-            if isinstance(series, dict) and series.get("is_brand"):
+            if not isinstance(series, dict):
+                continue
+            if series.get("is_brand"):
                 series["values"] = brand_values
                 series["kpi_basis"] = "daily_stat"
+                continue
+            values = comp_trend_map.get(str(series.get("name") or ""))
+            if values is not None and len(values) == len(trend_labels):
+                series["values"] = values
+                series["kpi_basis"] = "daily_stat"
 
-    # 分平台切片：本品牌趋势/KPI 也改吃日表，避免切平台后又漂
     for plat_row in payload.get("platform_rows") or []:
         if not isinstance(plat_row, dict):
             continue
@@ -972,6 +1016,27 @@ def _overlay_brand_kpi_from_daily_stats(
             row["avg_rank"] = plat_metrics.get("avg_brand_rank")
             row["sample_count"] = int(plat_metrics.get("ranking_sample_count") or 0)
             row["kpi_basis"] = "daily_stat"
+        if comp_rows:
+            plat_comps = competitor_period_rows_from_daily_stats(
+                db,
+                tenant_id,
+                range_start=range_start,
+                range_end=range_end,
+                platforms=[code],
+            )
+            if plat_comps:
+                by_name = {str(item["name"]): item for item in plat_comps}
+                for row in plat_row.get("rows") or []:
+                    if not isinstance(row, dict) or row.get("is_brand"):
+                        continue
+                    hit = by_name.get(str(row.get("name") or ""))
+                    if not hit:
+                        continue
+                    row["mention_count"] = hit["mention_count"]
+                    row["mention_rate"] = hit["mention_rate"]
+                    row["avg_rank"] = hit["avg_rank"]
+                    row["sample_count"] = hit["sample_count"]
+                    row["kpi_basis"] = "daily_stat"
         plat_trends = workspace_kpi_trends_from_stats(
             db,
             tenant_id,
@@ -980,14 +1045,34 @@ def _overlay_brand_kpi_from_daily_stats(
             platforms=[code],
         )
         plat_vals = [float(p.get("mention_rate") or 0.0) for p in plat_trends]
+        plat_comp_trends = (
+            competitor_kpi_trends_from_stats(
+                db,
+                tenant_id,
+                range_start,
+                range_end,
+                platforms=[code],
+            )
+            if comp_rows
+            else {}
+        )
         if len(plat_vals) != len(trend_labels):
             continue
         for series in (plat_row.get("mention_trends") or {}).get("series") or []:
-            if isinstance(series, dict) and series.get("is_brand"):
+            if not isinstance(series, dict):
+                continue
+            if series.get("is_brand"):
                 series["values"] = plat_vals
+                series["kpi_basis"] = "daily_stat"
+                continue
+            values = plat_comp_trends.get(str(series.get("name") or ""))
+            if values is not None and len(values) == len(trend_labels):
+                series["values"] = values
                 series["kpi_basis"] = "daily_stat"
 
     payload["brand_kpi_basis"] = "daily_stat"
+    if comp_rows:
+        payload["competitor_kpi_basis"] = "daily_stat"
     payload["brand_sample_total"] = completed
     payload["brand_mention_count"] = mentioned
     # 兼容前端 N/M：无平台筛选时本品牌分母改用日表完成数
