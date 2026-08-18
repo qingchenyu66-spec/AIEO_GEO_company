@@ -37,6 +37,28 @@ def test_parse_holding_group_short_name_in_numbered_headers():
     assert rank == 4
 
 
+def test_parse_numbered_category_heading_keeps_local_bullets():
+    """### 3. 中国本土市场活跃榜单 开新段；鸿联是该类 bullet 第2，标题不当选手。"""
+    text = """
+### 1. 全球综合实力“四大巨头”（规模与全流程能力）
+-   **Concentrix**：全球营收最高。
+-   **Teleperformance（TP）**：欧洲老牌。
+
+### 3. 中国本土市场活跃榜单（国内靠谱选择）
+-   **泰盈科技（CCC）**：呼叫中心龙头。
+-   **鸿联九五**：中信集团旗下。
+-   **维音（VXI）**：汽车客服。
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "中国本土市场活跃榜单" not in names
+    assert "全球综合实力“四大巨头”" not in names
+    assert "鸿联九五" in names
+    hl = next(item for item in entries if item["name"] == "鸿联九五")
+    assert hl["rank"] == 2
+    assert "本土" in str(hl.get("category") or "")
+
+
 def test_normalize_collapses_all_rank_one_api_payload():
     """模力 allRankings 全员 rank=1 时按出场序重排。"""
     raw = [
@@ -955,4 +977,30 @@ def test_markdown_system_slash_product_header_ranks():
     rank, matched = find_best_brand_rank(entries, lambda name: "动码" in name)
     assert matched is True
     assert rank == 4
+
+
+def test_parse_skips_purchase_tip_titles_under_advice_section():
+    """2026-08-17 - 选购建议「追求/想要/厨卫潮湿区域」不得进榜。"""
+    text = """
+### 全国性一线龙头
+1. **兔宝宝**
+2. **莫干山**
+
+### 区域高端品牌
+大王椰、鹏鸿、伟业、丰林，在对应区域属于一线高端。
+
+## 三、简单选购建议
+1. **追求极致质感、预算充足**：可丽芙
+2. **想要进口质感、控制预算**：福人
+3. **看重环保、家用刚需**：兔宝宝
+4. **厨卫潮湿区域**：优先多层实木板
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "兔宝宝" in names
+    assert "莫干山" in names
+    assert "追求极致质感" not in names
+    assert "想要进口质感" not in names
+    assert "看重环保" not in names
+    assert "厨卫潮湿区域" not in names
 

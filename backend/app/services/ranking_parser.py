@@ -88,6 +88,9 @@ _SUBCATEGORY_HINTS = (
     "头部", "区域", "性价比", "上市", "量产", "工程", "本地",
     # 元宝「按梯队」：🥇一线 / 🥈本土全国代理 / 🥉策略购买型
     "一线", "二线", "三线", "梯队", "持有方", "全国代理", "购买型", "自营",
+    # 2026-08-18 - ### 3. 中国本土市场活跃榜单 被当选手，后续 bullet 被 in_company_block 吞掉
+    "榜单", "巨头", "冠军", "赛道", "本土",
+    "综合代理商", "选购决策", "小贴士",
 )
 _TIER_MEDAL_RE = re.compile(r"^[🥇🥈🥉🏅]\s*")
 
@@ -106,6 +109,9 @@ _NON_RANK_CATEGORY_HINTS = (
     "关键考量", "决策路径", "评估", "checklist", "Checklist",
     "下一步", "建议的下一步", "维度", "关键问题",
     "选择建议", "补充推荐", "选择要点", "案例总结",
+    # 2026-08-17 - 「简单选购建议」下编号项被当品牌 → 榜尾脏行撑到第18
+    "选购建议", "简单选购", "购买建议", "选购要点",
+    "排名陷阱", "必须警惕", "选购决策", "小贴士",
 )
 _SENTENCE_NAME_HINTS = (
     "有优势", "而不", "优先问", "好的公司", "能否提供", "在一线", "适合区域", "适合全国",
@@ -175,6 +181,32 @@ def _looks_like_company_list_name(name: str) -> bool:
     if any(ch in cleaned for ch in "，。；！？"):
         return False
     if cleaned.startswith("看") and "：" not in cleaned:
+        return False
+    # 2026-08-17 - 选购建议「追求极致质感 / 想要进口质感 / 厨卫潮湿区域」误进榜
+    if re.match(r"^(追求|想要|看重|优先)", cleaned):
+        return False
+    if cleaned.endswith("区域") and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
+        return False
+    # 2026-08-17 - 广告答字段名/避坑句进结构化榜
+    if cleaned in {
+        "地址", "电话", "业务范围", "本地优势", "适合对象", "全媒体平台", "服务能力",
+        "资源覆盖", "客户口碑", "推荐理由", "核心资源", "核心优势", "资源规模",
+        "技术亮点", "成本优势", "灵活性", "组合投放", "注重互动", "明确目标",
+        "-", "—",
+    }:
+        return False
+    if cleaned.startswith(("不要", "确认", "注重", "明确", "核实")):
+        return False
+    # 2026-08-17 - 「防潮和防霉」「铁路局媒介资源」「深圳宝安、天津…」误占类内槽
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,4}[和与][\u4e00-\u9fff]{2,4}", cleaned) and not any(
+        hint in cleaned for hint in _CORP_NAME_HINTS
+    ):
+        return False
+    if cleaned.endswith("资源") and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
+        return False
+    if re.search(r"[、，,]", cleaned) and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
+        return False
+    if re.search(r"清单|匹配|指标|交付|全包|抽查|监播|形式匹配", cleaned):
         return False
     # 长句且无公司后缀 → 描述文案，不是选手
     if len(cleaned) > 14 and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
@@ -882,7 +914,16 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 continue
             numbered = NUMBERED_TITLE_RE.match(content)
             if numbered:
-                append_item(numbered.group(2), _next_section_rank(appearance_counters, current_section))
+                body = numbered.group(2).strip()
+                # 2026-08-18 - ### 3. 中国本土市场活跃榜单 不是公司；当选手还会挡住后面 - **鸿联九五**
+                if _is_non_rank_category(body) or _looks_like_subcategory_header(body):
+                    cat = _extract_category_name(body) or body
+                    current_section = cat
+                    current_category = cat
+                    appearance_counters.setdefault(current_section, 0)
+                    in_company_block = False
+                    continue
+                append_item(body, _next_section_rank(appearance_counters, current_section))
                 in_company_block = True
                 continue
             if level == 1:

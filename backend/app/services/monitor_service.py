@@ -20,7 +20,7 @@ from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
-from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
+from app.schemas.monitor import DEEP_MONITOR_MODE, FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.media_proxy_service import public_screenshot_url
 from app.services.brand_service import (
@@ -235,8 +235,11 @@ def fill_missing_subtask_ranks_for_task(
                 changed += 1
             continue
         # 2026-08-14 - 只补空：已有位次默认信任库，根治「展开重算覆盖」
+        # 2026-08-17 - 模力先写脏 mentionPosition=18 且无 rank_resolution 时跳过 → 区域顿号虚抬；无本地解析留痕则强制重算
         if not force_recompute and subtask.mention_position is not None:
-            continue
+            raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+            if raw.get("rank_resolution"):
+                continue
         before = subtask.mention_position
         recompute_subtask_rank_from_answer(db, subtask, task)
         if subtask.mention_position != before:
@@ -1050,12 +1053,15 @@ def _build_submit_payload(
 
 
 def _fast_platform_payload(item: PlatformConfig) -> dict[str, Any]:
-    """提交平台配置；快速统一联网 search，深度思考原样；截图强制开启。"""
+    """提交平台配置；快速=联网 search，深度=reasoning_search；截图强制开启。"""
     # 2026-08-11 - 快速→search 拿信源；reasoning* 不动（已弃用 8/3 提交层全保留 standard）
+    # 2026-08-18 - 深度改为深度+联网 reasoning_search，旧 reasoning 提交时一并映射
     payload = item.model_dump()
     payload["screenshot"] = 1
     mode = str(payload.get("mode") or "").strip().lower()
-    if mode not in {"reasoning", "reasoning_search"}:
+    if mode in {"reasoning", "reasoning_search"}:
+        payload["mode"] = DEEP_MONITOR_MODE
+    else:
         payload["mode"] = FAST_MONITOR_MODE
     return payload
 
@@ -3367,6 +3373,19 @@ def _is_brand_like_appearance_token(name: str, brand_terms: list[str] | None = N
         return False
     if text in {"淘宝", "京东", "天猫", "拼多多", "红星美凯龙", "最大", "建材", "操作"}:
         return False
+    # 2026-08-17 - 广告/板材答把字段名、避坑句进出场 → 艾迪亚虚抬到23/30
+    field_labels = frozenset({
+        "地址", "电话", "业务范围", "本地优势", "适合对象", "全媒体平台", "服务能力",
+        "资源覆盖", "客户口碑", "推荐理由", "核心资源", "核心优势", "资源规模",
+        "技术亮点", "成本优势", "灵活性", "区域渗透率", "数字化转型", "组合投放",
+        "注重互动", "明确目标", "全国性需求", "投放建议", "避坑提醒", "避坑指南",
+    })
+    if text in field_labels:
+        return False
+    if text.startswith(("不要", "确认", "注重", "明确", "核实", "认准", "如果")):
+        return False
+    if text in {"-", "—", "–"}:
+        return False
     # 2026-08-12 - A+B：非配置词须像强专名（纯中文2-6 / 拉丁品牌），否则不进池
     if not _is_strong_appearance_proper_name(text):
         return False
@@ -3784,13 +3803,19 @@ def _line_local_brand_enum_rank(
                     continue
         if not _configured_exposure_term_in_text(raw_line, brand_terms):
             continue
-        tokens = _collect_brand_appearance_tokens(raw_line, brand_terms)
+        scan_line = raw_line
+        cue = re.search(r"应关注|优先选择|可以关注|可选择", raw_line)
+        # 2026-08-18 - 同行「**合同、证书被外部伪造** → 应关注**云玺、动码**」前半顿号会把动码抬到第4
+        if cue:
+            scan_line = raw_line[cue.start():]
+        tokens = _collect_brand_appearance_tokens(scan_line, brand_terms)
         need = min_brands
         if re.search(
             r"[→➡]|找[\u4e00-\u9fffA-Za-z]{2,}|"
             r"对号入座|怎么选|按需求|"
             r"还有像|补充一点|等特色|特色品牌|"
-            r"频繁出现|头部选择",
+            r"频繁出现|头部选择|"
+            r"应关注|优先选择",  # 2026-08-18 - 贴士「应关注云玺、动码」仅2品牌，默认≥3会丢行内第2
             raw_line,
         ):
             need = min(2, min_brands)
@@ -3815,8 +3840,12 @@ def _section_nomination_brand_rank(body: str, brand_terms: list[str]) -> int | N
         return None
     skip_heads = frozenset({
         "特点", "说明", "提醒", "注意", "组合", "任务", "方案", "内容", "适合", "优势", "短板",
-        "讲解", "练习", "专项", "拓展", "进阶", "预习",
+        "讲解", "练习", "专项", "拓展", "进阶", "预习", "有什么", "核心优势", "推荐理由",
     })
+    # 2026-08-17 - 「新疆及西北地区」「全国多城同步」是场景标题不是公司，进槽会把艾迪亚挤成第3
+    scenario_label_re = re.compile(
+        r"地区|同步|布局|场景|如果|需求|建议|维度|路线|步骤|提醒"
+    )
     slots: list[str] = []
     for raw in str(body).splitlines():
         plain = re.sub(r"<[^>]+>", " ", raw)
@@ -3847,14 +3876,48 @@ def _section_nomination_brand_rank(body: str, brand_terms: list[str]) -> int | N
                     added = True
             if added:
                 continue
+        # 2026-08-17 - 「**地区**：**华铁**」要华铁；「**迪岸**：…**28座机场**」只取行首公司，勿把卖点加粗当选手
+        bold_bits = re.findall(r"\*\*([^*]{2,40})\*\*", plain)
+        if not bold_bits:
+            bold_bits = re.findall(r"\*\*([^*]{2,40})\*\*", str(raw or ""))
+        if bold_bits and re.match(r"^[-*•·▪]\s*", plain):
+            first_head = _clean_item_name(bold_bits[0])
+            # 场景/字段标题行：跳过标题，收后面的公司加粗；普通行：只收首个公司加粗
+            skip_first = bool(
+                first_head
+                and (
+                    first_head in skip_heads
+                    or scenario_label_re.search(first_head)
+                )
+            )
+            bit_iter = bold_bits[1:] if skip_first else bold_bits[:1]
+            added_bold = False
+            for bit in bit_iter:
+                # 2026-08-17 - 「迪岸 / 迪岸双赢」同一列表卡只占一槽；露出在右侧仍算本卡
+                if _configured_exposure_term_in_text(bit, brand_terms):
+                    hit = next((t for t in brand_terms if t and t in bit), None)
+                    slots.append(hit or _clean_item_name(bit) or bit.strip())
+                    added_bold = True
+                    continue
+                piece = re.split(r"[/／|]", bit, 1)[0]
+                head = _clean_item_name(piece)
+                if not head or head in skip_heads or scenario_label_re.search(head):
+                    continue
+                if _configured_exposure_term_in_text(head, brand_terms) or _looks_like_company_list_name(head):
+                    slots.append(head)
+                    added_bold = True
+            if added_bold:
+                continue
         text = re.sub(r"^[-*•·▪]\s*", "", bare).strip()
+        # 2026-08-17 - 「德高传媒 (JCDecaux)：」括号挡冒号 → 类内只收到含露出词的行变成第1
         lead = re.match(
-            r"^([A-Za-z][A-Za-z0-9]{1,24}|[\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff &]{0,22}?)\s*[：:]",
+            r"^([A-Za-z][A-Za-z0-9]{1,24}|[\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff &]{0,22}?)"
+            r"(?:\s*[（(][^）)]{0,40}[）)])?\s*[：:]",
             text,
         )
         if lead:
             head = _clean_item_name(lead.group(1))
-            if head and head not in skip_heads and (
+            if head and head not in skip_heads and not scenario_label_re.search(head) and (
                 _configured_exposure_term_in_text(head, brand_terms)
                 or _looks_like_company_list_name(head)
                 or re.match(r"^[A-Za-z]", head)
@@ -3866,9 +3929,12 @@ def _section_nomination_brand_rank(body: str, brand_terms: list[str]) -> int | N
             bare,
         )
         if choose:
-            slots.append(choose.group(1))
-            continue
-        if re.match(r"^[-*•·▪]\s+", plain) and _configured_exposure_term_in_text(bare, brand_terms):
+            picked = choose.group(1)
+            # 2026-08-18 - 「想找面向中文市场」把「面向…」算进点名槽，鸿联从类内2抬到3
+            if _configured_exposure_term_in_text(picked, brand_terms) or _looks_like_company_list_name(picked):
+                slots.append(picked)
+                continue
+        if re.match(r"^[-*•·▪]\s*", plain) and _configured_exposure_term_in_text(bare, brand_terms):
             if bare.count("、") < 2 and bare.count("，") < 2:
                 slots.append(bare)
     if not slots:
@@ -3887,9 +3953,29 @@ _TIER_SECTION_HINTS = (
 _SECONDARY_MENTION_HEADING_RE = re.compile(
     r"(?:其他|其它).{0,12}(?:品牌|参考|关注)|值得关注|实力品牌参考|拓展阅读|参考品牌"
 )
+# 2026-08-17 - 避坑/选择建议/投放建议段里「比如品牌」虚抬到 7–20 - 建议段一律当次要
+# 2026-08-18 - 「选购决策小贴士」未切开，动码并进电子印章节成第9
+_TIP_RANK_HEADING_RE = re.compile(
+    r"避坑|选购建议|投放建议|选择建议|小建议|给你几个|注意事项|温馨提示|"
+    r"关键提醒|合作模式建议|怎么选|挑选合作|结语|三点建议|如何选择|按需选择|"
+    r"如何结合|结合你的情况|排名陷阱|必须警惕|"
+    r"选购决策|小贴士"
+)
 _PRIMARY_RANK_HEADING_RE = re.compile(
     r"主流|速览|对比|重点|品牌推荐|推荐清单|选型建议|分档|按场景"
 )
+_CN_ORDINAL_RANK = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
 _TIER_VENUE_HINTS = (
     "市场", "商城", "卖场", "地标", "门店", "建材城", "白马", "专卖店", "旗舰店", "直营店",
     "居然之家", "美凯龙",
@@ -3923,7 +4009,13 @@ def _is_venue_only_section_title(title: str) -> bool:
     if _CHAPTER_LABEL_RE.match(re.sub(r"^#+\s*", "", raw.strip())):
         return False
     text = _short_tier_section_title(raw)
+    # 2026-08-17 - 「品类齐全、中端性价比（大型建材城）」是档位不是纯卖场；括号建材城勿否分类名
+    if any(h in text for h in _TIER_SECTION_HINTS):
+        return False
     blob = f"{text}{raw}"
+    # 2026-08-18 - 「中国本土市场活跃榜单」含「市场」被当卖场 → 类内第2吃成全文出场19
+    if any(h in blob for h in ("榜单", "本土", "巨头", "冠军", "赛道")):
+        return False
     return any(h in blob for h in _TIER_VENUE_HINTS)
 
 
@@ -3937,6 +4029,10 @@ def _category_section_label(title: str) -> str | None:
     raw = re.sub(r"^#+\s*", "", raw).strip()
     if not raw:
         return None
+    # 2026-08-17 - 长标题「方案三：全国性标杆…」先于 len>16 截断认分类，否则只吃全文出场
+    fuzzy_early = _geo_fuzzy_section_label(raw)
+    if fuzzy_early:
+        return fuzzy_early
     station = _STATION_LABEL_RE.search(raw)
     if station:
         return station.group(0)
@@ -3946,6 +4042,9 @@ def _category_section_label(title: str) -> str | None:
         label = _short_tier_section_title(body)
         if label and label not in _SECTION_SKIP_LABELS and 2 <= len(label) <= 16:
             return label
+        fuzzy_ch = _geo_fuzzy_section_label(body)
+        if fuzzy_ch:
+            return fuzzy_ch
         return None
     text = _short_tier_section_title(raw)
     if not text or len(text) > 16:
@@ -3998,14 +4097,68 @@ _SUBJECT_SECTION_LABELS = frozenset({
     "道法", "道德与法治", "小四门", "体育", "科学",
 })
 # 2026-08-12 - 短剧/投放「全国性品牌」小标题
+# 2026-08-17 - 「区域高端品牌」顿号点名须类内计位（大王椰虚抬到18）
 _GEO_BRAND_SECTION_LABELS = frozenset({
     "全国性品牌", "全国品牌", "本地品牌", "区域品牌", "国际品牌",
+    "区域高端品牌", "全国性一线龙头", "高定国产精板梯队", "顶级进口梯队",
 })
-_SECTION_DECORATION_RE = re.compile(r"[📚📕📗📘📙📝📖🗣️📐🗺️🧮📌✅❌🔍🏅🏆🥇⚙️🤔*#\s]+")
+# 2026-08-17 - 用户标注：其他特色/方案三/小众高定等类内第2却被全文出场抬到18/19
+_GEO_SECTION_FUZZY_HINTS = (
+    "其他特色", "全国性标杆", "全国性公司", "全国性巨头", "全国性布局", "全国分类",
+    "全国枢纽", "小众高定", "主流公司", "区域投放", "方案一", "方案二", "方案三",
+    "国内一线", "国际质感", "国潮审美", "高关注度", "综合实力首选",
+    "跨区域", "特定需求", "专业公司", "整合型", "创意型", "如何结合",
+    "头部资源", "集团化", "代表性公司", "公司速览", "全链路",
+    # 2026-08-17 - 「如果你需要投放广告（租用大屏）」未开节 → 艾迪亚全文虚第7
+    "投放广告", "租用大屏", "制作LED", "定制与工程", "造屏幕",
+    # 2026-08-18 - BPO「中国本土市场活跃榜单」未开节 → 鸿联 bullet 第2吃成全文19
+    "中国本土", "本土市场", "活跃榜单", "四大巨头", "隐形冠军",
+    # 切开「排名陷阱」段，避免并进上一类后 token/粘连把类内2抬到3
+    "排名陷阱",
+    # 2026-08-18 - 高铁「综合代理商」顿号第2被头部资源吞成14；印章「选购决策小贴士」并进电子印章节成9
+    "综合代理商", "选购决策", "小贴士",
+)
+_SECTION_DECORATION_RE = re.compile(
+    r"[📚📕📗📘📙📝📖🗣️📐🗺️🧮📌✅❌🔍🏅🏆🥇⚙️🤔📺🛠💡*#\s]+"
+)
 
 
 def _strip_section_decorations(text: str) -> str:
     return _SECTION_DECORATION_RE.sub("", str(text or ""))
+
+
+def _geo_scenario_need_section_label(raw: str) -> str | None:
+    """「如果你需要投放/制作…」场景小节 → 短类名。
+
+    2026-08-17 - 18325 LED「如果你需要投放广告（租用大屏资源）」len>16 未当分类
+    """
+    probe = _strip_section_decorations(re.sub(r"\*\*", "", str(raw or "")))
+    probe = re.sub(r"^#+\s*", "", probe).strip()
+    if not probe or not re.search(r"如果你需要|如果你想|若你需要|如果你是", probe):
+        return None
+    paren = re.search(r"[（(]([^）)]{2,20})[）)]", probe)
+    if paren:
+        return paren.group(1).strip()[:16]
+    m = re.search(r"(?:如果你需要|如果你想|若你需要|如果你是)([^。\n]{2,20})", probe)
+    if not m:
+        return None
+    body = re.split(r"[（(]", m.group(1), 1)[0].strip(" ：:·")
+    return body[:16] or None
+
+
+def _geo_fuzzy_section_label(raw: str) -> str | None:
+    """标题含投放/板材常用分类词 → 类内计位标签。"""
+    probe = _strip_section_decorations(re.sub(r"\*\*", "", str(raw or "")))
+    probe = re.sub(r"^#+\s*", "", probe).strip()
+    if not probe:
+        return None
+    need = _geo_scenario_need_section_label(probe)
+    if need:
+        return need
+    for hint in _GEO_SECTION_FUZZY_HINTS:
+        if hint in probe:
+            return hint
+    return None
 
 
 def _secondary_section_label(title: str) -> str | None:
@@ -4045,11 +4198,11 @@ def _brand_only_in_secondary_mention(text: str, brand_terms: list[str]) -> bool:
     for raw in str(text).splitlines():
         title = _heading_title_from_line(raw)
         if title:
-            if _SECONDARY_MENTION_HEADING_RE.search(title):
+            if _SECONDARY_MENTION_HEADING_RE.search(title) or _TIP_RANK_HEADING_RE.search(title):
                 in_secondary = True
             elif _PRIMARY_RANK_HEADING_RE.search(title) or _category_section_label(title):
                 in_secondary = False
-            elif re.search(r"如何选择|三点建议|给你三点|按需选择", title):
+            elif re.search(r"给你三点|按需选择", title):
                 # 建议段里的点名也不算正式榜位
                 in_secondary = True
         if not _configured_exposure_term_in_text(raw, brand_terms):
@@ -4061,6 +4214,131 @@ def _brand_only_in_secondary_mention(text: str, brand_terms: list[str]) -> bool:
     return saw_secondary and not saw_primary
 
 
+def _line_is_primary_brand_list_item(line: str, brand_terms: list[str]) -> bool:
+    """正式选手行：### 7.品牌 / * **品牌** 卡片头，不是「比如品牌」旁白。"""
+    plain = re.sub(r"\*\*", "", str(line or "")).strip()
+    if not plain or not _configured_exposure_term_in_text(plain, brand_terms):
+        return False
+    if re.match(r"^#{0,3}\s*\d+\s*[.．、）)]\s*\S+", plain):
+        return True
+    if re.match(r"^#{1,3}\s*[一二三四五六七八九十]+[、.．]\s*\S+", plain):
+        return True
+    # * **艾迪亚控股集团** 或 * **艾迪亚**（省内…）——标题卡，后面可无正文
+    if re.match(
+        r"^[*•·\-]\s+\*\*[^*]{2,40}\*\*(?:\s*[（(].*)?\s*$",
+        str(line or "").strip(),
+    ):
+        return True
+    if re.match(r"^\*\*[^*]{2,40}\*\*\s*[—–\-：:].+", str(line or "").strip()):
+        return True
+    return False
+
+
+def _line_is_aside_example_for_rank(line: str, brand_terms: list[str]) -> bool:
+    """举例/旁白点名：计提及，不计推荐位次。
+
+    2026-08-17 - 「比如艾迪亚」「可以考虑像艾迪亚这样的」「偏好品牌（比如兔宝宝、大王椰）」
+    被 brand_token_order 虚抬到 7–20
+    勿误伤「还有像 A 和 B」补充并列（仍走行内序）
+    """
+    if not brand_terms or not _configured_exposure_term_in_text(line, brand_terms):
+        return False
+    if _line_is_primary_brand_list_item(line, brand_terms):
+        return False
+    plain = re.sub(r"\*\*", "", str(line or ""))
+    if re.search(r"还有像|补充一点|补充：", plain):
+        return False
+    if re.search(r"(比如|例如|诸如).{0,100}", plain):
+        return True
+    if re.search(r"(可以考虑像|考虑像).{0,40}这样的", plain):
+        return True
+    if re.search(r"像.{0,40}也被", plain):
+        return True
+    if re.search(
+        r"(如果你有特定|有比较偏好的品牌|想找的品牌|特定想找的品牌)",
+        plain,
+    ):
+        return True
+    # 「除了上面这些，像A、B等」附带点名
+    if re.search(r"(除了上面|除此之外).{0,20}像.{0,80}等", plain):
+        return True
+    return False
+
+
+def _answer_excluding_aside_and_tip_for_rank(text: str, brand_terms: list[str]) -> str:
+    """排名计分正文：去掉负面行 + 举例旁白行（建议段里正式枚举仍保留）。
+
+    2026-08-17 - tip 整段剥离会误伤「选购建议：莫干山、大王椰」真枚举；改为只剥旁白行
+    """
+    lines_out: list[str] = []
+    for raw in str(text or "").splitlines():
+        if _line_is_negative_rank_context(raw):
+            continue
+        if _line_is_aside_example_for_rank(raw, brand_terms):
+            continue
+        lines_out.append(raw)
+    return "\n".join(lines_out)
+
+
+def _cn_chapter_brand_rank(text: str, brand_terms: list[str]) -> tuple[int | None, str | None]:
+    """## 五、艾迪亚控股… → 作者章节序即公司位次。
+
+    2026-08-17 - 高铁答「## 五、艾迪亚」被全文出场抬到 10 - 认中文章节号
+    """
+    if not text or not brand_terms:
+        return None, None
+    for raw in str(text).splitlines():
+        bare = re.sub(r"\*\*", "", re.sub(r"<[^>]+>", " ", raw))
+        bare = re.sub(r"\s+", " ", bare).strip()
+        match = re.match(
+            r"^#{1,3}\s*([一二三四五六七八九十]+)[、.．]\s*(.+)$",
+            bare,
+        )
+        if not match:
+            continue
+        body = match.group(2).strip()
+        if _TIP_RANK_HEADING_RE.search(body):
+            continue
+        if not _configured_exposure_term_in_text(body, brand_terms):
+            continue
+        rank = _CN_ORDINAL_RANK.get(match.group(1))
+        if rank is None:
+            continue
+        return rank, body[:40]
+    return None, None
+
+
+def _bold_lead_company_rank(text: str, brand_terms: list[str]) -> int | None:
+    """**公司名** — 简介 卡片互比位次（机场/高铁类答第一张卡即第1）。
+
+    2026-08-17 - 艾迪亚正文首卡却被建议表 line_enum 抬到 11
+    """
+    if not text or not brand_terms:
+        return None
+    names: list[str] = []
+    for raw in str(text).splitlines():
+        if _line_is_aside_example_for_rank(raw, brand_terms):
+            continue
+        title = _heading_title_from_line(raw)
+        if title and _TIP_RANK_HEADING_RE.search(title):
+            break
+        bare = str(raw or "").strip()
+        bare = re.sub(r"^#{1,3}\s*", "", bare)
+        match = re.match(r"^\*\*([^*]{2,40})\*\*\s*[—–\-：:].+", bare)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        if len(name) < 2 or name in {"推荐理由", "核心优势", "核心资源"}:
+            continue
+        names.append(name)
+    if len(names) < 2:
+        return None
+    for index, name in enumerate(names, 1):
+        if _configured_exposure_term_in_text(name, brand_terms):
+            return index
+    return None
+
+
 def _drop_soft_ranks_beaten_by_structured(
     candidates: list[BrandRankResolution],
 ) -> list[BrandRankResolution]:
@@ -4068,23 +4346,90 @@ def _drop_soft_ranks_beaten_by_structured(
 
     2026-08-12 - 动码主表第4被「可以关注动码」line_enum 盖成第1
     2026-08-12 - 有主表时「其他/参考」小节内第1也不得盖掉主表位次
+    2026-08-17 - 有公司标题节/靠前结构化时丢掉虚高 brand_token_order（≥7）
+    2026-08-17 - 方案A：只要有类内/表/章节 peer，全文出场一律丢掉（用户标注类内2≠19）
     """
     has_structured = any(
         item.source == "structured" and item.rank is not None for item in candidates
     )
-    if not has_structured:
-        return candidates
+    has_company_heading = any(
+        str(item.rank_basis or "") in {"company_heading", "cn_chapter", "bold_lead_company"}
+        and item.rank is not None
+        for item in candidates
+    )
+    # 任意可用分类 peer（不限 ≤6）：压过 brand_token_order
+    has_category_peer = any(
+        item.rank is not None
+        and (
+            item.source == "structured"
+            or str(item.rank_basis or "") in {
+                "company_heading",
+                "cn_chapter",
+                "bold_lead_company",
+                "section_local",
+                "secondary_section_local",
+                "table",
+                "preferred_column",
+                "line_enum_local",
+                "scenario_table",
+                "if_cluster",
+                "typed_cluster",
+                "quick_pick",
+                "numbered_list",
+            }
+        )
+        for item in candidates
+    )
+    strong_front = any(
+        item.rank is not None
+        and float(item.rank) <= 6
+        and (
+            item.source == "structured"
+            or str(item.rank_basis or "") in {
+                "company_heading",
+                "cn_chapter",
+                "bold_lead_company",
+                "section_local",
+                "table",
+                "preferred_column",
+                "scenario_table",
+                "if_cluster",
+                "typed_cluster",
+                "quick_pick",
+                "numbered_list",
+            }
+        )
+        for item in candidates
+    )
+    has_section_local = any(
+        str(item.rank_basis or "") == "section_local" and item.rank is not None
+        for item in candidates
+    )
     kept: list[BrandRankResolution] = []
     for item in candidates:
         basis = str(item.rank_basis or "")
         # 保留教辅等正式 section_local 与 structured 一起 min；丢掉 secondary/建议软信号
-        if item.source == "appearance" and basis in {
+        if has_structured and item.source == "appearance" and basis in {
             "line_enum_local",
             "brand_token_order",
             "appearance_beyond_top3",
             "secondary_section_local",
             "",
         }:
+            continue
+        # 方案A：有类内/表 peer 时全文出场不作数
+        if has_category_peer and basis in {"brand_token_order", "appearance_beyond_top3"}:
+            continue
+        # 2026-08-17 - 类内公司卡序在时，行内顿号枚举勿再 min 出更靠前的虚位（6304 5被枚举4盖）
+        if has_section_local and basis == "line_enum_local":
+            continue
+        # 公司标题节或靠前硬信号在时，全文出场 ≥7 视为虚抬
+        if (
+            (has_company_heading or strong_front)
+            and basis in {"brand_token_order", "appearance_beyond_top3", "line_enum_local"}
+            and item.rank is not None
+            and float(item.rank) >= 7
+        ):
             continue
         kept.append(item)
     return kept
@@ -4094,7 +4439,8 @@ def _numbered_list_brand_rank(text: str, brand_terms: list[str]) -> int | None:
     """小节内 1. 2. 3. 编号推荐：返回含露出词的条目序号。"""
     if not text or not brand_terms:
         return None
-    items: list[str] = []
+    # (行内数字序号, 条目正文) — 用行号而非文档累计下标，避免后文避坑 1.2.3. 搅乱
+    items: list[tuple[int, str]] = []
     for raw in str(text).splitlines():
         plain = re.sub(r"<[^>]+>", " ", raw)
         plain = re.sub(r"\s+", " ", plain).strip()
@@ -4104,12 +4450,12 @@ def _numbered_list_brand_rank(text: str, brand_terms: list[str]) -> int | None:
         match = re.match(r"^(\d+)\s*[\.、．]\s+(.+)$", bare)
         if not match:
             continue
-        items.append(match.group(2).strip())
+        items.append((int(match.group(1)), match.group(2).strip()))
     if len(items) < 2:
         return None
-    for index, body in enumerate(items, 1):
+    for num, body in items:
         if _configured_exposure_term_in_text(body, brand_terms):
-            return index
+            return num
     return None
 
 
@@ -4121,6 +4467,25 @@ def _numbered_subheading_brand_rank(text: str, brand_terms: list[str]) -> int | 
     """
     if not text or not brand_terms:
         return None
+    blocks = _iter_numbered_subsection_blocks(text)
+    if len(blocks) < 2:
+        return None
+    for num, heading, parts in blocks:
+        if _configured_exposure_term_in_text(heading, brand_terms):
+            return num
+        for line in parts:
+            text_line = str(line or "").strip()
+            if not text_line or not _configured_exposure_term_in_text(text_line, brand_terms):
+                continue
+            # 卖场/方案里的多品牌顿号并列 ≠ 该编号档的主推书
+            if text_line.count("、") >= 2:
+                continue
+            return num
+    return None
+
+
+def _iter_numbered_subsection_blocks(text: str) -> list[tuple[int, str, list[str]]]:
+    """拆 ### 1. / ### 2. 子块：(序号, 标题, 正文行)。"""
     header_re = re.compile(r"^#{0,3}\s*(\d+)\s*[\.、．]\s+(.+)$")
     blocks: list[tuple[int, str, list[str]]] = []
     current_num: int | None = None
@@ -4147,26 +4512,106 @@ def _numbered_subheading_brand_rank(text: str, brand_terms: list[str]) -> int | 
             current_parts = []
             continue
         if current_num is not None:
-            current_parts.append(bare)
+            # 2026-08-17 - 保留 **；剥光后「鹏鸿…）和大王椰」丢并列，子节序失效
+            current_parts.append(plain)
     flush()
+    return blocks
+
+
+def _numbered_subsection_local_brand_rank(text: str, brand_terms: list[str]) -> int | None:
+    """编号基材/分档子节内品牌序（多层板：兔宝宝、莫干山、大王椰 → 3）。
+
+    2026-08-17 - 4011「按板材基材」整节累加虚成第11；应按 ### 3.多层板 子节计
+    """
+    if not text or not brand_terms:
+        return None
+    blocks = _iter_numbered_subsection_blocks(text)
     if len(blocks) < 2:
         return None
-    for num, heading, parts in blocks:
-        if _configured_exposure_term_in_text(heading, brand_terms):
-            return num
-        for line in parts:
-            text_line = str(line or "").strip()
-            if not text_line or not _configured_exposure_term_in_text(text_line, brand_terms):
-                continue
-            # 卖场/方案里的多品牌顿号并列 ≠ 该编号档的主推书
-            if text_line.count("、") >= 2:
-                continue
-            return num
+    for _num, heading, parts in blocks:
+        blob = "\n".join([heading, *parts])
+        if not _configured_exposure_term_in_text(blob, brand_terms):
+            continue
+        tokens = _collect_brand_appearance_tokens(blob, brand_terms)
+        if len(tokens) < 2:
+            # 单行顿号：兔宝宝、莫干山、大王椰
+            for line in parts:
+                if not _configured_exposure_term_in_text(line, brand_terms):
+                    continue
+                line_tokens = _collect_brand_appearance_tokens(line, brand_terms)
+                if len(line_tokens) >= 2:
+                    tokens = line_tokens
+                    break
+        if len(tokens) < 2:
+            continue
+        for index, token in enumerate(tokens, 1):
+            if _configured_exposure_term_in_text(token, brand_terms):
+                return index
     return None
 
 
 def _looks_like_tier_section_title(title: str) -> bool:
     return _category_section_label(title) is not None
+
+
+def _company_tail_from_colon_title(title: str) -> str | None:
+    """「综合实力最强：华铁传媒集团」→ 华铁传媒集团；无冒号或不像公司则 None。"""
+    raw = re.sub(r"\*\*", "", str(title or "")).strip()
+    raw = re.sub(r"^#+\s*", "", raw).strip()
+    raw = re.sub(r"^[^\w\u4e00-\u9fff]+", "", raw).strip()
+    if "：" not in raw and ":" not in raw:
+        return None
+    tail = re.split(r"[：:]", raw, maxsplit=1)[-1].strip()
+    tail = re.sub(r"[（(].*?[)）]$", "", tail).strip()
+    if not tail or len(tail) > 40:
+        return None
+    if re.search(r"公司|集团|传媒|有限|控股|股份", tail):
+        return tail
+    # 短中文品牌尾（德高中国 / 艾迪亚传媒）
+    if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,16}", tail) and not re.search(
+        r"建议|指南|对比|提醒|优势|覆盖|能力|理由",
+        tail,
+    ):
+        return tail
+    return None
+
+
+def _is_company_colon_section_title(title: str) -> bool:
+    return _company_tail_from_colon_title(title) is not None
+
+
+def _company_colon_heading_rank(
+    text: str,
+    brand_terms: list[str],
+) -> tuple[int | None, str | None]:
+    """## 称号：公司名 列表中的公司位次（同级标题互为选手）。
+
+    2026-08-17 - 高铁/机场答「全域媒介整合：艾迪亚」应为公司节第几，勿吃全文出场虚抬到30
+    """
+    if not text or not brand_terms:
+        return None, None
+    headers: list[str] = []
+    for raw in str(text).splitlines():
+        plain = re.sub(r"<[^>]+>", " ", raw)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        bare = re.sub(r"\*\*", "", plain)
+        match = re.match(r"^#{1,3}\s+(.+)$", bare)
+        if not match:
+            continue
+        content = match.group(1).strip()
+        # 去掉「一、」再认冒号公司尾
+        content = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", content)
+        content = re.sub(r"^\d+[、.．]\s*", "", content)
+        tail = _company_tail_from_colon_title(content)
+        if not tail:
+            continue
+        headers.append(tail)
+    if len(headers) < 2:
+        return None, None
+    for index, company in enumerate(headers, 1):
+        if _configured_exposure_term_in_text(company, brand_terms):
+            return index, company
+    return None, None
 
 
 def _tier_local_brand_token_rank(
@@ -4262,11 +4707,21 @@ def _tier_local_brand_token_rank(
     flush()
 
     for title, body_lines in sections:
+        # 2026-08-17 - 「称号：公司名」节正文是卖点不是并列品牌，类内 token 序会虚抬到20+
+        if _is_company_colon_section_title(title):
+            continue
+        # 2026-08-18 - 「排名陷阱」段里再点名品牌，勿盖掉真正类内序
+        if _TIP_RANK_HEADING_RE.search(str(title)):
+            continue
         body = "\n".join(body_lines)
         # 2026-08-12 - ### 1./2./3. 分档跨行点名优先于卖点 token 出场
         sub_heading = _numbered_subheading_brand_rank(body, brand_terms)
         if sub_heading is not None:
             return sub_heading, title
+        # 2026-08-17 - ### 3.多层板 下顿号第3；勿与颗粒/欧松等子节累加成11
+        sub_local = _numbered_subsection_local_brand_rank(body, brand_terms)
+        if sub_local is not None:
+            return int(sub_local), title
         # 2026-08-12 - 编号列表类内序；仅短小节（≤6条或主题小节），避免「分学科教辅」跨科连号虚高
         numbered = _numbered_list_brand_rank(body, brand_terms)
         if numbered is not None:
@@ -4280,14 +4735,38 @@ def _tier_local_brand_token_rank(
             )
             if title in _TOPIC_SECTION_LABELS or item_n <= 6:
                 return numbered, title
+        # 2026-08-17 - 点名与 token 取 min：修「意大利奥凯奇」拆词虚抬，且不盖教辅书名第1（勿拆东墙）
+        # 2026-08-17 - 仅「粘连少行多卡」启用 glued；正常多行列表仍走点名/token，避免板材档位被材料加粗拆墙
+        local_ranks: list[int] = []
+        nominated = _section_nomination_brand_rank(body, brand_terms)
+        if nominated is not None:
+            local_ranks.append(int(nominated))
+        glued = None
+        body_lines_nonempty = [ln for ln in body_lines if str(ln).strip()]
+        bold_cards = body.count("**") // 2
+        # 元宝粘连：]-** / -** 多卡挤一行；或少行多卡
+        crushed = bold_cards >= 5 and (
+            "]-" in body
+            or "-**" in body.replace("\n", "")
+            or len(body_lines_nonempty) <= 4
+            or bold_cards >= max(len(body_lines_nonempty), 1) * 2
+        )
+        if crushed:
+            glued = _glued_bold_company_rank(body, brand_terms)
+            if glued is not None:
+                return int(glued), title
+        # 点名失败时仍可回退粘连公司卡（13747 无空格 -** 导致 nom 空）
+        if nominated is None:
+            glued = _glued_bold_company_rank(body, brand_terms)
+            if glued is not None:
+                return int(glued), title
         tokens = _collect_brand_appearance_tokens(body, brand_terms)
         for index, token in enumerate(tokens, 1):
             if _configured_exposure_term_in_text(token, brand_terms):
-                return index, title
-        # 2026-08-12 - token 池吃不到书名号/「AniShort：」/「可选择X」时走点名行序
-        nominated = _section_nomination_brand_rank(body, brand_terms)
-        if nominated is not None:
-            return nominated, title
+                local_ranks.append(index)
+                break
+        if local_ranks:
+            return min(local_ranks), title
     return None, None
 
 
@@ -4391,6 +4870,290 @@ def _preferred_column_table_rank(answer_text: str, brand_terms: list[str]) -> in
             row_no += 1
             if _brand_appears_in_text(cells[preferred_idx], brand_terms):
                 return row_no
+    return None
+
+
+def _scenario_markdown_table_brand_rank(text: str, brand_terms: list[str]) -> int | None:
+    """场景×方案 Markdown 表：品牌所在数据行序（动码在「防伪」行=第2）。
+
+    2026-08-17 - 用户标注19228：场景表应按行互比，勿全文出场13
+    """
+    from app.services.ranking_parser import _is_markdown_table_line, _split_markdown_table_cells
+
+    if not text or not brand_terms:
+        return None
+    lines = [str(ln or "").rstrip() for ln in str(text).splitlines()]
+    i = 0
+    while i < len(lines):
+        header = lines[i].strip()
+        if not _is_markdown_table_line(header):
+            i += 1
+            continue
+        cols = [c.strip() for c in _split_markdown_table_cells(header)]
+        head_blob = "".join(cols)
+        if not any(h in head_blob for h in ("适用场景", "场景", "主流方案", "方案/产品", "核心痛点")):
+            i += 1
+            continue
+        # skip separator
+        j = i + 1
+        if j < len(lines) and re.search(r"^\|?\s*:?-{2,}", lines[j].replace("|", " ").strip() or "-"):
+            j += 1
+        # prefer 方案 column else last content col
+        scheme_idx = next(
+            (k for k, c in enumerate(cols) if "方案" in c or "产品" in c),
+            2 if len(cols) > 2 else len(cols) - 1,
+        )
+        row_no = 0
+        while j < len(lines) and _is_markdown_table_line(lines[j]):
+            row = lines[j].strip()
+            j += 1
+            if re.search(r"^\|?\s*:?-{2,}", row.replace("|", " ").strip() or "-"):
+                continue
+            cells = [c.strip() for c in _split_markdown_table_cells(row)]
+            if len(cells) <= max(0, scheme_idx):
+                continue
+            row_no += 1
+            cell = cells[scheme_idx] if scheme_idx < len(cells) else " ".join(cells)
+            if _configured_exposure_term_in_text(cell, brand_terms):
+                return row_no
+        i = j
+    return None
+
+
+def _if_scenario_cluster_brand_rank(text: str, brand_terms: list[str]) -> tuple[int | None, str | None]:
+    """「如果住在南方…」子树内品牌序（万华/千年舟/大王椰→3）。
+
+    2026-08-17 - 18953 整段「如何结合」虚抬到16；潮湿子树才是用户标注的分类第3
+    """
+    from app.services.ranking_parser import _looks_like_company_list_name, _clean_item_name
+
+    if not text or not brand_terms:
+        return None, None
+    lines = str(text).splitlines()
+    clusters: list[tuple[str, str]] = []
+    idx = 0
+    while idx < len(lines):
+        raw = lines[idx]
+        plain = re.sub(r"\*\*", "", raw).strip()
+        match = re.match(r"^[-*•·▪]\s+(如果.+)$", plain)
+        if not match:
+            idx += 1
+            continue
+        title = match.group(1).strip()[:32]
+        body_lines: list[str] = []
+        idx += 1
+        while idx < len(lines):
+            nxt = lines[idx]
+            nxt_plain = re.sub(r"\*\*", "", nxt).strip()
+            if re.match(r"^#{1,4}\s+\S", nxt.strip()):
+                break
+            if re.match(r"^[-*•·▪]\s+如果", nxt_plain):
+                break
+            body_lines.append(nxt)
+            idx += 1
+        clusters.append((title, "\n".join(body_lines)))
+
+    for title, body in clusters:
+        if not _configured_exposure_term_in_text(body, brand_terms):
+            continue
+        # 2026-08-17 - 先加粗后「如X」会把万华排到千年舟后→大王椰虚成第2；按正文位置合并
+        events: list[tuple[int, str]] = []
+        for m in re.finditer(r"\*\*([^*]{2,24})\*\*", body):
+            name = _clean_item_name(m.group(1))
+            if name and (
+                _configured_exposure_term_in_text(name, brand_terms)
+                or _looks_like_company_list_name(name)
+            ):
+                events.append((m.start(), name))
+        for m in re.finditer(r"如([\u4e00-\u9fff]{2,8})", body):
+            frag = m.group(1)
+            # 「如万华禾香板」只占品牌前缀槽，勿把产品全名再插一刀
+            brandish = frag[:2] if len(frag) >= 2 else frag
+            if brandish and (
+                _configured_exposure_term_in_text(brandish, brand_terms)
+                or _looks_like_company_list_name(brandish)
+                or re.fullmatch(r"[\u4e00-\u9fff]{2,4}", brandish)
+            ):
+                events.append((m.start(), brandish))
+        events.sort(key=lambda item: item[0])
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for _, p in events:
+            if p in seen:
+                continue
+            seen.add(p)
+            ordered.append(p)
+        for index, name in enumerate(ordered, 1):
+            if _configured_exposure_term_in_text(name, brand_terms):
+                return index, title
+    return None, None
+
+
+def _quick_pick_line_brand_rank(text: str, brand_terms: list[str]) -> tuple[int | None, str | None]:
+    """快速选型行内并列序（火山剧创、天工短剧、AniShort → 3）。
+
+    2026-08-17 - 19373 选型 tip 未开新节被吞进「配套辅助」虚成第4；按场景行并列算
+    """
+    from app.services.ranking_parser import _looks_like_company_list_name, _clean_item_name
+
+    if not text or not brand_terms:
+        return None, None
+    in_pick = False
+    pick_title: str | None = None
+    best: tuple[int, str | None] | None = None
+    for raw in str(text).splitlines():
+        title = _heading_title_from_line(raw)
+        if title:
+            if re.search(r"快速选型|选型建议", title):
+                in_pick = True
+                pick_title = title.strip()[:40]
+                continue
+            if in_pick and (
+                re.search(r"重要提醒|注意事项|总结|避坑|结语", title)
+                or re.match(r"^[一二三四五六七八九十]+、", title)
+                or re.match(r"^#{1,2}\s+", str(raw or "").strip())
+            ):
+                in_pick = False
+        if not in_pick:
+            continue
+        if not _configured_exposure_term_in_text(raw, brand_terms):
+            continue
+        peers: list[str] = []
+        for m in re.finditer(r"\*\*([^*]{2,80})\*\*", raw):
+            for piece in re.split(r"[、，,/／+|]", m.group(1)):
+                name = _clean_item_name(piece)
+                if not name or len(name) > 24:
+                    continue
+                if (
+                    _configured_exposure_term_in_text(name, brand_terms)
+                    or _looks_like_company_list_name(name)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{1,19}", name)
+                    or re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,16}", name)
+                ):
+                    peers.append(name)
+        if len(peers) < 2:
+            continue
+        for index, name in enumerate(peers, 1):
+            if _configured_exposure_term_in_text(name, brand_terms):
+                scenario = re.sub(r"\*\*[^*]+\*\*", "", raw)
+                scenario = re.sub(r"^[-*•·▪]\s*", "", scenario).strip(" ：:·")[:24]
+                label = scenario or pick_title or "快速选型"
+                cand = (index, label)
+                if best is None or cand[0] < best[0]:
+                    best = cand
+                break
+    if best is None:
+        return None, None
+    return best[0], best[1]
+
+
+def _typed_service_cluster_brand_rank(text: str, brand_terms: list[str]) -> tuple[int | None, str | None]:
+    """「创意型或整合型服务商」子树内公司序（艾迪亚①澜翼②）。
+
+    2026-08-17 - 5857 落在「特定需求」大节虚成第4；类型子树才是标注口径
+    """
+    from app.services.ranking_parser import _looks_like_company_list_name, _clean_item_name
+
+    if not text or not brand_terms:
+        return None, None
+    type_title_re = re.compile(
+        r"^(\s*)[-*•·▪]\s+\*\*([^*]{2,36}(?:服务商|型公司|运营商|代理商|线路资源))\*\*\s*[：:]?\s*$"
+    )
+    lines = str(text).splitlines()
+    idx = 0
+    while idx < len(lines):
+        match = type_title_re.match(lines[idx])
+        if not match:
+            idx += 1
+            continue
+        indent = len(match.group(1))
+        title = _clean_item_name(match.group(2)) or match.group(2).strip()
+        body_lines: list[str] = []
+        idx += 1
+        while idx < len(lines):
+            nxt = lines[idx]
+            nxt_match = type_title_re.match(nxt)
+            if nxt_match and len(nxt_match.group(1)) <= indent:
+                break
+            if re.match(r"^#{1,4}\s+\S", nxt.strip()):
+                break
+            # 同级其它分类标题（非公司冒号行）
+            sibling = re.match(r"^(\s*)[-*•·▪]\s+\*\*([^*]{2,40})\*\*\s*[：:]\s*$", nxt)
+            if sibling and len(sibling.group(1)) <= indent:
+                break
+            body_lines.append(nxt)
+            idx += 1
+        body = "\n".join(body_lines)
+        if not _configured_exposure_term_in_text(body, brand_terms):
+            continue
+        slots: list[str] = []
+        for line in body_lines:
+            bits = re.findall(r"\*\*([^*]{2,40})\*\*", line)
+            if not bits:
+                continue
+            head = _clean_item_name(bits[0])
+            if not head:
+                continue
+            if _configured_exposure_term_in_text(head, brand_terms) or _looks_like_company_list_name(head):
+                slots.append(head)
+        for index, name in enumerate(slots, 1):
+            if _configured_exposure_term_in_text(name, brand_terms):
+                return index, title
+    return None, None
+
+
+def _glued_bold_company_rank(text: str, brand_terms: list[str]) -> int | None:
+    """粘连正文里按 **公司** 出场序（元宝「-**分众**-**新潮**…艾迪亚」→6）。
+
+    2026-08-17 - 13747/6304 换行丢失后 section_local 吃到十几；加粗公司卡仍可数
+    """
+    from app.services.ranking_parser import _looks_like_company_list_name, _clean_item_name
+
+    if not text or not brand_terms:
+        return None
+    corp_cue = re.compile(r"传媒|广告|集团|公司|媒体|控股")
+    slots: list[str] = []
+    for m in re.finditer(r"\*\*([^*]{2,48})\*\*", str(text)):
+        raw_bold = m.group(1)
+        # clean 会剥「（如天赐、艾迪亚等）」→ 露出词须看 raw；槽位保留露出词以便回查
+        has_brand = _configured_exposure_term_in_text(raw_bold, brand_terms)
+        cleaned = _clean_item_name(raw_bold)
+        if has_brand:
+            hit = next((t for t in brand_terms if t and t in raw_bold), None)
+            slots.append(hit or cleaned or raw_bold.strip())
+            continue
+        if not cleaned:
+            continue
+        # 「喜屏 / 通众」同一列表卡只占一槽（取左侧公司）
+        if re.search(r"[/／]", cleaned):
+            left = _clean_item_name(re.split(r"[/／]", cleaned, 1)[0])
+            if left and _looks_like_company_list_name(left) and (
+                corp_cue.search(left) or re.fullmatch(r"[\u4e00-\u9fffA-Za-z]{2,6}", left)
+            ):
+                slots.append(left)
+            continue
+        for piece in re.split(r"[|]", cleaned):
+            name = _clean_item_name(piece)
+            if not name or len(name) > 20:
+                continue
+            if name in {"推荐理由", "核心优势", "核心资源", "资源覆盖"}:
+                continue
+            if not _looks_like_company_list_name(name):
+                continue
+            if corp_cue.search(name) or re.fullmatch(r"[\u4e00-\u9fffA-Za-z]{2,6}", name):
+                if re.search(
+                    r"社区|市场|场景|预算|受众|平台$|胶|板|芯$|地区|同步|布局|如果|建议",
+                    name,
+                ) and not corp_cue.search(name):
+                    continue
+                if name in {"有什么", "推荐理由", "核心优势", "核心资源", "资源覆盖"}:
+                    continue
+                slots.append(name)
+    if len(slots) < 2:
+        return None
+    for index, name in enumerate(slots, 1):
+        if _configured_exposure_term_in_text(name, brand_terms):
+            return index
     return None
 
 
@@ -4504,7 +5267,17 @@ def _resolve_brand_rank_detail(
         )
 
     # 2026-08-11 - 假货/贴牌等负面点名不进推荐位次，只保留提及
-    rankable_text = _answer_excluding_negative_rank_context(answer_text)
+    # 2026-08-17 - 再剥举例旁白；负面优先于 aside，便于区分 rank_basis
+    after_negative = _answer_excluding_negative_rank_context(answer_text)
+    if not _configured_exposure_term_in_text(after_negative, brand_terms):
+        return BrandRankResolution(
+            rank=None,
+            mentioned=True,
+            source="exposure",
+            confidence=0.9,
+            rank_basis="negative_context_skip",
+        )
+    rankable_text = _answer_excluding_aside_and_tip_for_rank(answer_text, brand_terms)
     has_brand_in_rankable = _configured_exposure_term_in_text(rankable_text, brand_terms)
     if not has_brand_in_rankable:
         return BrandRankResolution(
@@ -4512,7 +5285,7 @@ def _resolve_brand_rank_detail(
             mentioned=True,
             source="exposure",
             confidence=0.9,
-            rank_basis="negative_context_skip",
+            rank_basis="aside_or_tip_only",
         )
 
     # 2026-07-29 - 任何情况取最优 - 已存 LLM 结果改为候选，不再短路挡住更好的规则位次
@@ -4570,18 +5343,22 @@ def _resolve_brand_rank_detail(
     unordered_list_table = bool(re.search(r"\|[^\n]*不分先后[^\n]*\|", rankable_text))
     if has_brand_in_rankable and rank_from_list is not None and not unordered_list_table:
         category = list_category or _matched_brand_category(subtask, brand_terms, rank_from_list)
-        basis = "table" if "|" in rankable_text and "企业" in rankable_text else "section"
-        candidates.append(
-            BrandRankResolution(
-                rank=rank_from_list,
-                mentioned=True,
-                source="structured",
-                confidence=0.95,
-                category=category,
-                rank_basis=basis,
+        # 2026-08-17 - 「如何结合你的情况」被当 structured section 压过 if_cluster 同名次
+        if not (category and _TIP_RANK_HEADING_RE.search(str(category))):
+            basis = "table" if "|" in rankable_text and "企业" in rankable_text else "section"
+            candidates.append(
+                BrandRankResolution(
+                    rank=rank_from_list,
+                    mentioned=True,
+                    source="structured",
+                    confidence=0.95,
+                    category=category,
+                    rank_basis=basis,
+                )
             )
-        )
-        mentioned = True
+            mentioned = True
+        else:
+            mentioned = True
     elif has_brand_in_rankable and in_ranking_list:
         mentioned = True
 
@@ -4598,12 +5375,115 @@ def _resolve_brand_rank_detail(
         )
         mentioned = True
 
+    # 2026-08-17 - 场景表行序 / 「如果…」子树（DIFF 标注；与既有路径取 min）
+    # 注意：不加全文 glued_bold，避免全局加粗公司卡虚压真类内序（拆东墙）
+    if has_brand_in_rankable:
+        scenario_row = _scenario_markdown_table_brand_rank(rankable_text, brand_terms)
+        if scenario_row is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=scenario_row,
+                    mentioned=True,
+                    source="structured",
+                    confidence=0.9,
+                    rank_basis="scenario_table",
+                )
+            )
+            mentioned = True
+        cluster_rank, cluster_title = _if_scenario_cluster_brand_rank(rankable_text, brand_terms)
+        if cluster_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=cluster_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.8,
+                    category=cluster_title,
+                    rank_basis="if_cluster",
+                )
+            )
+            mentioned = True
+        typed_rank, typed_title = _typed_service_cluster_brand_rank(rankable_text, brand_terms)
+        if typed_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=typed_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.85,
+                    category=typed_title,
+                    rank_basis="typed_cluster",
+                )
+            )
+            mentioned = True
+        # 2026-08-17 - 快速选型行内并列（19373 批量生产 AniShort→3）
+        pick_rank, pick_title = _quick_pick_line_brand_rank(rankable_text, brand_terms)
+        if pick_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=pick_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.88,
+                    category=pick_title,
+                    rank_basis="quick_pick",
+                )
+            )
+            mentioned = True
+
     token_rank = _brand_token_appearance_rank(rankable_text, brand_terms) if has_brand_in_rankable else None
 
     # 2026-08-12 - 「其他/参考」仅点名：用小节内序，禁用全文出场/建议句局部序（免虚成 10/18）
     secondary_only = bool(
         has_brand_in_rankable and _brand_only_in_secondary_mention(rankable_text, brand_terms)
     )
+
+    # 2026-08-17 - ## 称号：公司名 → 公司节互比位次（优先于脏 section_local / 全文出场）
+    if has_brand_in_rankable:
+        heading_rank, heading_name = _company_colon_heading_rank(rankable_text, brand_terms)
+        if heading_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=heading_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.9,
+                    category=heading_name,
+                    rank_basis="company_heading",
+                )
+            )
+            mentioned = True
+
+    # 2026-08-17 - ## 五、艾迪亚控股 → 章节号即位次
+    if has_brand_in_rankable:
+        cn_rank, cn_name = _cn_chapter_brand_rank(rankable_text, brand_terms)
+        if cn_rank is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=cn_rank,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.88,
+                    category=cn_name,
+                    rank_basis="cn_chapter",
+                )
+            )
+            mentioned = True
+
+    # 2026-08-17 - **公司** — 简介 多卡互比（压过建议表虚高）
+    if has_brand_in_rankable and not secondary_only:
+        bold_lead = _bold_lead_company_rank(rankable_text, brand_terms)
+        if bold_lead is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=bold_lead,
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.82,
+                    rank_basis="bold_lead_company",
+                )
+            )
+            mentioned = True
 
     # 2026-08-11 - 方案C：分档小类内点名序优先于全文出场序，并带回类名
     # 2026-08-12 - 其他值得关注/实力品牌参考：点名也算排名（小节内序）
@@ -4628,7 +5508,8 @@ def _resolve_brand_rank_detail(
             mentioned = True
 
     # 2026-08-11 - P1：同行≥3品牌顿号局部序进候选池，与全文/类内一起 min
-    if has_brand_in_rankable and not secondary_only:
+    # 2026-08-17 - 仅次要/建议段露出时仍允许行内枚举，只禁全文出场虚抬
+    if has_brand_in_rankable:
         line_rank = _line_local_brand_enum_rank(rankable_text, brand_terms)
         if line_rank is not None:
             candidates.append(
@@ -4642,6 +5523,45 @@ def _resolve_brand_rank_detail(
             )
             mentioned = True
 
+    # 2026-08-17 - 1./2./6. 编号公司列表：无更优类内/结构化时压过全文 token（第6≠11）
+    if has_brand_in_rankable and not secondary_only:
+        numbered = _numbered_list_brand_rank(rankable_text, brand_terms)
+        if numbered is not None:
+            _peer_bases = {
+                "section_local",
+                "secondary_section_local",
+                "line_enum_local",
+                "company_heading",
+                "cn_chapter",
+                "bold_lead_company",
+                "scenario_table",
+                "if_cluster",
+                "typed_cluster",
+                "quick_pick",
+                "table",
+                "preferred_column",
+            }
+            peer_ranks = [
+                float(item.rank)
+                for item in candidates
+                if item.rank is not None
+                and (
+                    item.source == "structured"
+                    or str(item.rank_basis or "") in _peer_bases
+                )
+            ]
+            if not peer_ranks or int(numbered) < min(peer_ranks):
+                candidates.append(
+                    BrandRankResolution(
+                        rank=int(numbered),
+                        mentioned=True,
+                        source="appearance",
+                        confidence=0.86,
+                        rank_basis="numbered_list",
+                    )
+                )
+                mentioned = True
+
     # 2026-08-12 - B：全局出场仅合格 token/scoped；关掉提名行序免卖点虚高
     # 2026-08-12 - 已有类内/同行局部序时勿再加全文出场进 min（否则 语法&阅读第3 被全文第2 冲掉）
     if has_brand_in_rankable and not secondary_only:
@@ -4651,7 +5571,19 @@ def _resolve_brand_rank_detail(
             if item.rank is not None
         }
         if not local_bases.intersection(
-            {"section_local", "line_enum_local", "secondary_section_local"}
+            {
+                "section_local",
+                "line_enum_local",
+                "secondary_section_local",
+                "company_heading",
+                "cn_chapter",
+                "bold_lead_company",
+                "scenario_table",
+                "if_cluster",
+                "typed_cluster",
+                "quick_pick",
+                "numbered_list",
+            }
         ):
             appearance_rank = _appearance_order_rank(
                 rankable_text,
