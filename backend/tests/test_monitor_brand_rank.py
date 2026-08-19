@@ -480,3 +480,140 @@ def test_representative_column_enum_first_not_empty() -> None:
     assert detail.mentioned is True
     assert detail.rank == 1
     assert detail.rank_basis == "rep_column"
+
+
+def test_callcenter_domestic_head_table_second() -> None:
+    """19147399：国内头部代表企业 泰盈、鸿联、维音 → 第2，勿全文16。"""
+    text = """
+### 第三步：三类主流供应商“画像”与对应场景
+
+| 类型 | 代表企业（供检索参考） | 核心优势 | 最适合谁 |
+| :--- | :--- | :--- | :--- |
+| **国际巨头（高安全）** | Teleperformance（TP）、Concentrix（CNX） | 流程标准化 | 跨国企业 |
+| **国内头部（高性价比）** | 泰盈科技、鸿联九五、维音（VXI） | 本土化灵活 | 互联网大厂 |
+| **垂直专精（高转化）** | 区域性/行业性小巨人 | 行业话术库 | 汽车售后 |
+"""
+    subtask = SimpleNamespace(
+        prompt="呼叫中心外包公司选哪家",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=16,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis == "rep_column"
+
+
+def test_hr_vertical_expert_fourth_not_seven() -> None:
+    """19227921：垂直行业专家华兴①卡思②华路③鸿联④，勿被总结顿号抬成第7。"""
+    text = """
+### 🏢 全国性综合服务商
+*   **中智集团 (CIIC)**：央企背景
+*   **北京外企 (FESCO)**：老牌
+*   **万宝盛华 (ManpowerGroup)**：全球
+*   **蚂蚁HR**：72小时到岗
+*   **科锐国际**：高端寻访
+*   **上海外服**：华东巨头
+
+### 🎯 垂直行业专家
+*   **华兴人力资源**：国央企岗位外包
+*   **卡思优派**：高端制造
+*   **北京华路时代**：IT和技术岗位
+*   **鸿联九五**：金融、通信等合规敏感型行业的标杆
+
+总的来说，可以优先考察**中智、FESCO、万宝盛华**等综合型巨头；如果你身处**高端制造、IT互联网、金融**等专业性强的行业，那么**卡思优派、华路时代、鸿联九五**这类垂直专家可能是更能解决实际问题的选择。
+"""
+    subtask = SimpleNamespace(
+        prompt="人力资源外包公司推荐",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=7,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+    assert detail.rank_basis == "section_local"
+
+
+def test_strength_type_colon_card_first_not_empty() -> None:
+    """19244073：综合实力型下「鸿联九五：」为首张卡，勿空位次。"""
+    text = """
+📊 主流数据标注公司推荐
+🏢 综合实力型：全栈式服务，安全合规
+
+这类公司通常规模大、资质全。
+
+鸿联九五：中信集团旗下国企。拥有覆盖全国50+城市的140+职场。
+
+百度智能云：依托其文心大模型。
+
+云测数据 (Testin)：全流程闭环服务。
+"""
+    subtask = SimpleNamespace(
+        prompt="数据标注公司推荐",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=None,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
+
+
+def test_high_compliance_scene_first_not_token_fourteen() -> None:
+    """19244037：高合规场景首卡鸿联九五，勿全文出场第14。"""
+    text = """
+选择哪家内容审核公司，关键在于适合自己的。
+
+🏢 大型、全球化及高合规要求场景
+
+如果你的业务涉及金融、政务，可以重点考虑以下服务商。
+
+鸿联九五：作为中信集团控股的央企，它在安全合规方面具有天然优势。
+
+网易智企·易盾：国内内容风控市场的领跑者。
+
+⚡️ 高并发、互联网及出海业务场景
+
+深圳蔚蓝云创：以高并发著称。
+"""
+    subtask = SimpleNamespace(
+        prompt="内容审核公司哪家好",
+        answer_content=text,
+        mention_context=None,
+        all_rankings_json=[],
+        mention_position=14,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        subtask,
+        "北京鸿联九五信息产业有限公司",
+        ["鸿联九五"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"

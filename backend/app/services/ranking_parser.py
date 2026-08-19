@@ -202,7 +202,12 @@ def _looks_like_company_list_name(name: str) -> bool:
         hint in cleaned for hint in _CORP_NAME_HINTS
     ):
         return False
-    if cleaned.endswith("资源") and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
+    # 2026-08-19 - 「华兴人力资源」被当资源踢出 → 垂直专家鸿联从第4吃成第3
+    if (
+        cleaned.endswith("资源")
+        and not cleaned.endswith("人力资源")
+        and not any(hint in cleaned for hint in _CORP_NAME_HINTS)
+    ):
         return False
     if re.search(r"[、，,]", cleaned) and not any(hint in cleaned for hint in _CORP_NAME_HINTS):
         return False

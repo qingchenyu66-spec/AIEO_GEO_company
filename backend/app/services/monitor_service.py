@@ -4145,6 +4145,8 @@ _GEO_SECTION_FUZZY_HINTS = (
     # 2026-08-18 - 「中国市场的主要BPO / 国家队与大型外包商」未开节 → 鸿联吃成全文42/30
     "中国市场", "国家队", "行业领导者", "综合型巨头", "垂直领域", "大型外包",
     "本土企业", "本土领先", "全球化服务",
+    # 2026-08-19 - 垂直行业专家第4吃成全文7；综合实力型卡片/高合规场景空位或第14
+    "垂直行业", "综合实力型", "高合规", "国内头部",
     # 切开「排名陷阱」段，避免并进上一类后 token/粘连把类内2抬到3
     "排名陷阱",
     # 2026-08-18 - 高铁「综合代理商」顿号第2被头部资源吞成14；印章「选购决策小贴士」并进电子印章节成9
@@ -4745,6 +4747,9 @@ def _tier_local_brand_token_rank(
         label = None
         if header_body:
             label = _category_section_label(bare) or _category_section_label(header_body)
+        elif 2 <= len(plain) <= 48:
+            # 2026-08-19 - 「🏢 综合实力型：…」「高合规要求场景」无 # 未开节 → 冒号卡空位/全文14
+            label = _geo_fuzzy_section_label(plain)
         if label:
             flush()
             current_title = label
