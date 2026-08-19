@@ -381,6 +381,18 @@ onUnmounted(() => {
       </article>
 
       <article class="panel">
+        <div class="panel-head"><div><h2>客户数据概况</h2><p>企业、任务与信源数据总览</p></div><FileBarChart /></div>
+        <div class="ops-customer-data-grid">
+          <div v-for="row in customerDataRows" :key="row.label">
+            <span>{{ row.label }}</span>
+            <b>{{ row.value }}</b>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="ops-quota-band">
+      <article class="panel">
         <div class="panel-head"><div><h2>费用额度</h2><p>账户与 DeepSeek 余额、接口消耗与预计月消耗</p></div><WalletCards /></div>
         <div class="ops-quota-grid">
           <div v-for="row in quotaRows" :key="row.label" :class="{ 'is-highlight': row.highlight }">
@@ -423,7 +435,9 @@ onUnmounted(() => {
           <p class="ops-quota-calendar-note">{{ quotaDaily?.deepseek_note || 'DeepSeek 仅余额快照，无官方按日流水' }}</p>
         </div>
       </article>
+    </section>
 
+    <section class="ops-rank-grid">
       <article class="panel">
         <div class="panel-head"><div><h2>费用消耗排行</h2><p>按企业与售前诊断汇总接口消耗</p></div><WalletCards /></div>
         <div class="ops-cost-list">
@@ -445,16 +459,6 @@ onUnmounted(() => {
             <em>{{ props.monitorStatusLabelMap[task.status] || task.status }} · {{ task.completed_items }}/{{ task.total_items }}</em>
           </div>
           <div v-if="!overview?.recent_tasks?.length" class="mini-empty">暂无最近任务。</div>
-        </div>
-      </article>
-
-      <article class="panel">
-        <div class="panel-head"><div><h2>客户数据概况</h2><p>企业、任务与信源数据总览</p></div><FileBarChart /></div>
-        <div class="ops-customer-data-grid">
-          <div v-for="row in customerDataRows" :key="row.label">
-            <span>{{ row.label }}</span>
-            <b>{{ row.value }}</b>
-          </div>
         </div>
       </article>
     </section>
