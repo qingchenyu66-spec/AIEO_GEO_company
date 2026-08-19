@@ -4745,8 +4745,14 @@ def _tier_local_brand_token_rank(
                         header_body = bullet_bold.group(1).strip()
         # 2026-08-12 - 先用整行再认 header_body：去掉「四、」后「试卷类」认不出 → 万唯全文虚第5
         label = None
+        is_hash_heading = bool(re.match(r"^#{1,3}\s+", bare))
         if header_body:
             label = _category_section_label(bare) or _category_section_label(header_body)
+            if not label and is_hash_heading:
+                # 2026-08-19 - 「### 如何选择」未开节，并进垂直专家后编号/总结把类内4抬成7
+                probe = _strip_section_decorations(header_body).strip(" ：:.-—|？?")
+                if 2 <= len(probe) <= 40:
+                    label = probe[:16]
         elif 2 <= len(plain) <= 48:
             # 2026-08-19 - 「🏢 综合实力型：…」「高合规要求场景」无 # 未开节 → 冒号卡空位/全文14
             label = _geo_fuzzy_section_label(plain)
