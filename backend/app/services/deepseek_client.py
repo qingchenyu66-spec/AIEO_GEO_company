@@ -1042,17 +1042,25 @@ class DeepseekClient:
         """Extract brand list rank from a monitor answer using ranking rules."""
         aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
         truncate_note = "（正文已截断）" if truncated else ""
+        # 2026-08-19 - 旧提示第2条「有表就按行序」盖掉第1条选节，全球 OA500 把中国代表企业吃成第4
         system_prompt = (
-            "你是 GEO 品牌监测排名分析助手。请根据 AI 回答正文，判断目标品牌在「与监测词最相关的小节/表格」中的推荐位次。"
-            "排名规则：\n"
-            "1. 优先看与监测词/问题语义最匹配的 ##/### 小节或表格；在该小节内按 1. 2. 3. 或表格行序计数。\n"
-            "2. 若存在 Markdown 表格且含企业名列，按表格行序排名。\n"
-            "3. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null。\n"
-            "4. 不要把全篇第一次出现的段落序号当作排名；不要跨小节累计。\n"
-            # 2026-07-29 - 选型表「首选」第一行被判成备选第4 - 明确首选列优先于备选/补充表
-            "5. 表格若有「首选推荐/首选」与「备选」列：品牌在首选列出现时，以该表中首次作为首选的数据行序为 rank；"
-            "仅在备选列出现才用备选行序。优先「选型建议/场景推荐」主表，不要用「其他补充」或回答前的思考过程压过主表。\n"
-            "6. 只输出 JSON，不要解释。"
+            "你是 GEO 品牌监测排名分析助手。先锁定唯一一块推荐名单，再在该块内给目标品牌计位。"
+            "规则：\n"
+            "1. 先选名单、后计数。只选一块。禁止把全球段与中国段、多个 ### 小节、总结与名单的序号加在一起。\n"
+            "2. ### / #### 是硬边界，不得跨标题累计。\n"
+            "3. 目标品牌为国内企业或中文露出词时：优先「中国/本土/国内市场」小节或表；"
+            "全球总榜、国际巨头概览只作对照，不得给国内品牌计位。\n"
+            "4. 国内若有多段名单，取与问题最贴的一块（如垂直行业专家、第二梯队、综合实力型、高合规场景）。"
+            "「如何选择/怎么选/总结/结语/注意事项」以及 [citation:N] 不是选手。\n"
+            "5. 计数：bullet 或「公司名：」卡片按出现顺序从 1 计；"
+            "表格若有代表企业/推荐品牌列且一格内顿号并列多家，按格内顿号顺序计，不要用整表行号；"
+            "一行一家的公司表才按数据行序。\n"
+            "6. 表格同时有「首选推荐/首选」与「备选」列：品牌在首选列出现时，"
+            "以该表中首次作为首选的数据行序为 rank；仅在备选列出现才用备选行序。"
+            "不要用「其他补充」或回答前的思考过程压过主表。\n"
+            "7. 品牌未出现在选定名单中：brand_mentioned=false、rank=null。"
+            "不要把总结顿号并列当成名单。\n"
+            "8. evidence 必须是原文子串（不超过80字）。只输出 JSON，不要解释。"
         )
         user_prompt = (
             f"监测词：{monitor_keyword}\n"
@@ -1061,17 +1069,18 @@ class DeepseekClient:
             f"{truncate_note}\n\n"
             "回答正文：\n"
             f"{answer_text}\n\n"
-            "输出 JSON：\n"
+            "输出 JSON（rank 为选定名单内从 1 计的整数；未进名单则为 null。"
+            "下面数字只是字段示例，不要照抄）：\n"
             "{\n"
             '  "brand_mentioned": true,\n'
-            '  "rank": 4,\n'
-            '  "category": "区域优质工程商",\n'
-            '  "rank_basis": "section_list",\n'
-            '  "confidence": 0.92,\n'
-            '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
+            '  "rank": null,\n'
+            '  "category": "小节或表的短标题",\n'
+            '  "rank_basis": "section_bullet",\n'
+            '  "confidence": 0.0,\n'
+            '  "evidence": ""\n'
             "}\n"
-            "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
-            "confidence 范围 0~1。"
+            "rank_basis 取值：section_bullet | cell_enum | markdown_table | preferred_column | prose | none\n"
+            "confidence 范围 0~1；吃不准时 confidence<=0.4 且 rank=null。"
         )
         content = self.chat_completion(
             messages=[
