@@ -10,7 +10,12 @@ from app.core.config import settings
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.services.brand_service import BrandAsset, _is_industry_monitor_keyword, ranking_task_is_industry_scoped
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
-from app.services.monitor_service import BrandRankResolution, _answer_body_for_rank, _brand_appears_in_text
+from app.services.monitor_service import (
+    BrandRankResolution,
+    _SECONDARY_MENTION_HEADING_RE,
+    _answer_body_for_rank,
+    _brand_appears_in_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +44,35 @@ def _parse_rank_number(raw: Any) -> int | float | None:
     return int(value) if value.is_integer() else value
 
 
+def _is_secondary_rank_category(name: str) -> bool:
+    return bool(_SECONDARY_MENTION_HEADING_RE.search(str(name or "")))
+
+
+def _select_llm_matrix_rank(
+    category_ranks: list[dict[str, Any]],
+    *,
+    preferred_category: str | None,
+) -> tuple[int | float | None, str | None]:
+    """主表有 rank 就用主表；主表没有再用补充名单。禁止 min() 让「其他值得关注」盖掉主表。"""
+    ranked = [row for row in category_ranks if row.get("rank") is not None]
+    primary = [row for row in ranked if not _is_secondary_rank_category(str(row["category"]))]
+    secondary = [row for row in ranked if _is_secondary_rank_category(str(row["category"]))]
+    pool = primary or secondary
+    if not pool:
+        return None, preferred_category
+    if preferred_category:
+        named = next((row for row in pool if row["category"] == preferred_category), None)
+        if named is not None:
+            return named["rank"], named["category"]
+    chosen = min(pool, key=lambda item: float(item["rank"]))
+    return chosen["rank"], chosen["category"]
+
+
 def parse_llm_rank_payload(payload: dict[str, Any]) -> LlmBrandRankResult:
     """LLM JSON → 结果。矩阵用分类排；总排只作附录。
 
     2026-08-19 - 总排会叠全球段，不能当 mention_position
+    2026-08-19 - 主表与补充名单都有时取主表，禁止 min 到补充名单
     """
     mentioned = bool(payload.get("brand_mentioned"))
     overall = _parse_rank_number(payload.get("overall_rank"))
@@ -61,17 +91,21 @@ def parse_llm_rank_payload(payload: dict[str, Any]) -> LlmBrandRankResult:
 
     category = str(payload.get("category") or "").strip() or None
     category_rank = _parse_rank_number(payload.get("category_rank"))
-    if category_rank is None and category:
+    selected_rank, selected_category = _select_llm_matrix_rank(
+        category_ranks,
+        preferred_category=category,
+    )
+    if selected_rank is not None:
+        category_rank = selected_rank
+        if selected_category:
+            category = selected_category
+    elif category_rank is None and category:
         named = next(
             (row["rank"] for row in category_ranks if row["category"] == category),
             None,
         )
         if named is not None:
             category_rank = named
-    if category_rank is None:
-        nums = [row["rank"] for row in category_ranks if row.get("rank") is not None]
-        if nums:
-            category_rank = min(nums, key=lambda item: float(item))
     if category_rank is None:
         category_rank = _parse_rank_number(payload.get("rank"))
 

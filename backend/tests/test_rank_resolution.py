@@ -217,6 +217,51 @@ def test_should_trigger_llm_fallback_for_null_rank_with_mention() -> None:
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
 
 
+def test_parse_llm_payload_secondary_watch_list_is_category_rank() -> None:
+    """2026-08-19 - 主表没有、只在「其他值得关注」第5：矩阵用 5，不是空、不是全文 23。"""
+    from app.services.rank_llm_service import parse_llm_rank_payload
+
+    result = parse_llm_rank_payload(
+        {
+            "brand_mentioned": True,
+            "overall_rank": 15,
+            "category_ranks": [
+                {"category": "中国数据标注公司排行榜", "rank": None},
+                {"category": "其他值得关注的企业", "rank": 5},
+                {"category": "全球数据标注公司", "rank": None},
+            ],
+            "category": "其他值得关注的企业",
+            "rank_basis": "section_bullet",
+            "confidence": 0.9,
+            "evidence": "鸿联九五：中信国安控股的国有企业",
+        }
+    )
+    assert result.rank == 5
+    assert result.overall_rank == 15
+    assert result.category == "其他值得关注的企业"
+
+
+def test_parse_llm_payload_main_table_beats_secondary_mention() -> None:
+    """2026-08-19 - 主表和其他名单都有：用主表，不取补充名单更靠前的位次。"""
+    from app.services.rank_llm_service import parse_llm_rank_payload
+
+    result = parse_llm_rank_payload(
+        {
+            "brand_mentioned": True,
+            "overall_rank": 8,
+            "category_ranks": [
+                {"category": "中国数据标注公司排行榜", "rank": 8},
+                {"category": "其他值得关注的企业", "rank": 1},
+            ],
+            "category": "其他值得关注的企业",
+            "confidence": 0.9,
+            "evidence": "鸿联九五",
+        }
+    )
+    assert result.rank == 8
+    assert result.category == "中国数据标注公司排行榜"
+
+
 def test_parse_llm_payload_uses_category_rank_not_overall() -> None:
     """2026-08-19 - 总排叠全球段；矩阵 rank 取分类排。"""
     from app.services.rank_llm_service import parse_llm_rank_payload
