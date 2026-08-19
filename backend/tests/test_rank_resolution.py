@@ -217,7 +217,41 @@ def test_should_trigger_llm_fallback_for_null_rank_with_mention() -> None:
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
 
 
-def test_apply_llm_rank_fallback_replaces_appearance_rank() -> None:
+def test_parse_llm_payload_uses_category_rank_not_overall() -> None:
+    """2026-08-19 - 总排叠全球段；矩阵 rank 取分类排。"""
+    from app.services.rank_llm_service import parse_llm_rank_payload
+
+    result = parse_llm_rank_payload(
+        {
+            "brand_mentioned": True,
+            "overall_rank": 10,
+            "category_ranks": [
+                {"category": "全球巨头", "rank": 8},
+                {"category": "垂直行业专家", "rank": 4},
+            ],
+            "category": "垂直行业专家",
+            "confidence": 0.9,
+            "evidence": "鸿联九五",
+        }
+    )
+    assert result.rank == 4
+    assert result.overall_rank == 10
+    assert result.category == "垂直行业专家"
+
+
+def test_parse_llm_payload_legacy_rank_field() -> None:
+    from app.services.rank_llm_service import parse_llm_rank_payload
+
+    result = parse_llm_rank_payload(
+        {
+            "brand_mentioned": True,
+            "rank": 2,
+            "confidence": 0.8,
+            "evidence": "鸿联九五",
+        }
+    )
+    assert result.rank == 2
+    assert result.overall_rank is None
     resolution = BrandRankResolution(rank=29, mentioned=True, source="appearance", confidence=0.55)
     llm = LlmBrandRankResult(
         rank=4,

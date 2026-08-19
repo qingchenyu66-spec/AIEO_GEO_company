@@ -1042,25 +1042,16 @@ class DeepseekClient:
         """Extract brand list rank from a monitor answer using ranking rules."""
         aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
         truncate_note = "（正文已截断）" if truncated else ""
-        # 2026-08-19 - 旧提示第2条「有表就按行序」盖掉第1条选节，全球 OA500 把中国代表企业吃成第4
+        # 2026-08-19 - 过紧会逼只报一块；改自主分类。总排与分类排分开，矩阵位次只用分类排
         system_prompt = (
-            "你是 GEO 品牌监测排名分析助手。先锁定唯一一块推荐名单，再在该块内给目标品牌计位。"
-            "规则：\n"
-            "1. 先选名单、后计数。只选一块。禁止把全球段与中国段、多个 ### 小节、总结与名单的序号加在一起。\n"
-            "2. ### / #### 是硬边界，不得跨标题累计。\n"
-            "3. 目标品牌为国内企业或中文露出词时：优先「中国/本土/国内市场」小节或表；"
-            "全球总榜、国际巨头概览只作对照，不得给国内品牌计位。\n"
-            "4. 国内若有多段名单，取与问题最贴的一块（如垂直行业专家、第二梯队、综合实力型、高合规场景）。"
-            "「如何选择/怎么选/总结/结语/注意事项」以及 [citation:N] 不是选手。\n"
-            "5. 计数：bullet 或「公司名：」卡片按出现顺序从 1 计；"
-            "表格若有代表企业/推荐品牌列且一格内顿号并列多家，按格内顿号顺序计，不要用整表行号；"
-            "一行一家的公司表才按数据行序。\n"
-            "6. 表格同时有「首选推荐/首选」与「备选」列：品牌在首选列出现时，"
-            "以该表中首次作为首选的数据行序为 rank；仅在备选列出现才用备选行序。"
-            "不要用「其他补充」或回答前的思考过程压过主表。\n"
-            "7. 品牌未出现在选定名单中：brand_mentioned=false、rank=null。"
-            "不要把总结顿号并列当成名单。\n"
-            "8. evidence 必须是原文子串（不超过80字）。只输出 JSON，不要解释。"
+            "你是 GEO 品牌监测排名分析助手。请自己阅读正文、自行划分推荐类别，"
+            "分别给出总排和分类排。不要套固定的「必须选中国市场/必须只留一块名单」。\n"
+            "总排 overall_rank：正文里所有推荐名单中的公司，按首次出现顺序排成一条序列，目标品牌的位次。"
+            "如何选择、总结、注意事项、引用角标里的点名不算选手。\n"
+            "分类排 category_ranks：按正文自己的结构归类（小节标题、表格分区、梯队、场景、全球/中国等），"
+            "每一类内单独从 1 计数。同一品牌可出现在多类。总排和分类排允许不同，禁止用总排冒充分类排。\n"
+            "表格一格内顿号并列多家时，分类排按格内顺序计。"
+            "evidence 必须是原文子串（不超过80字）。只输出 JSON。"
         )
         user_prompt = (
             f"监测词：{monitor_keyword}\n"
@@ -1069,18 +1060,20 @@ class DeepseekClient:
             f"{truncate_note}\n\n"
             "回答正文：\n"
             f"{answer_text}\n\n"
-            "输出 JSON（rank 为选定名单内从 1 计的整数；未进名单则为 null。"
-            "下面数字只是字段示例，不要照抄）：\n"
+            "输出 JSON（字段示例，数字不要照抄）：\n"
             "{\n"
             '  "brand_mentioned": true,\n'
-            '  "rank": null,\n'
-            '  "category": "小节或表的短标题",\n'
+            '  "overall_rank": null,\n'
+            '  "category_ranks": [\n'
+            '    {"category": "类别名", "rank": null}\n'
+            "  ],\n"
+            '  "category": "与问题最贴的那一类名",\n'
             '  "rank_basis": "section_bullet",\n'
             '  "confidence": 0.0,\n'
             '  "evidence": ""\n'
             "}\n"
             "rank_basis 取值：section_bullet | cell_enum | markdown_table | preferred_column | prose | none\n"
-            "confidence 范围 0~1；吃不准时 confidence<=0.4 且 rank=null。"
+            "confidence 范围 0~1。"
         )
         content = self.chat_completion(
             messages=[
@@ -1088,7 +1081,7 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=512,
+            max_tokens=800,
             source="rank_fallback",
         )
         payload = self._parse_json_payload(content)

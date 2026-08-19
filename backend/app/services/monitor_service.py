@@ -5291,6 +5291,8 @@ class BrandRankResolution:
     category: str | None = None
     rank_basis: str | None = None
     evidence: str | None = None
+    overall_rank: int | float | None = None
+    category_ranks: list | None = None
 
 
 def _matched_brand_category(

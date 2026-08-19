@@ -23,6 +23,82 @@ class LlmBrandRankResult:
     rank_basis: str | None
     confidence: float
     evidence: str | None
+    overall_rank: int | float | None = None
+    category_ranks: list | None = None
+
+
+def _parse_rank_number(raw: Any) -> int | float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    return int(value) if value.is_integer() else value
+
+
+def parse_llm_rank_payload(payload: dict[str, Any]) -> LlmBrandRankResult:
+    """LLM JSON → 结果。矩阵用分类排；总排只作附录。
+
+    2026-08-19 - 总排会叠全球段，不能当 mention_position
+    """
+    mentioned = bool(payload.get("brand_mentioned"))
+    overall = _parse_rank_number(payload.get("overall_rank"))
+    category_ranks: list[dict[str, Any]] = []
+    raw_cats = payload.get("category_ranks")
+    if isinstance(raw_cats, list):
+        for item in raw_cats:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("category") or item.get("name") or "").strip()
+            if not name:
+                continue
+            category_ranks.append(
+                {"category": name, "rank": _parse_rank_number(item.get("rank"))}
+            )
+
+    category = str(payload.get("category") or "").strip() or None
+    category_rank = _parse_rank_number(payload.get("category_rank"))
+    if category_rank is None and category:
+        named = next(
+            (row["rank"] for row in category_ranks if row["category"] == category),
+            None,
+        )
+        if named is not None:
+            category_rank = named
+    if category_rank is None:
+        nums = [row["rank"] for row in category_ranks if row.get("rank") is not None]
+        if nums:
+            category_rank = min(nums, key=lambda item: float(item))
+    if category_rank is None:
+        category_rank = _parse_rank_number(payload.get("rank"))
+
+    if not category and category_ranks:
+        matched = next(
+            (row["category"] for row in category_ranks if row.get("rank") == category_rank),
+            None,
+        )
+        category = matched or str(category_ranks[0]["category"])
+
+    confidence_raw = payload.get("confidence")
+    try:
+        confidence = float(confidence_raw)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    return LlmBrandRankResult(
+        rank=category_rank if mentioned else None,
+        mentioned=mentioned,
+        category=category,
+        rank_basis=str(payload.get("rank_basis") or "").strip() or None,
+        confidence=confidence,
+        evidence=str(payload.get("evidence") or "").strip() or None,
+        overall_rank=overall if mentioned else None,
+        category_ranks=category_ranks or None,
+    )
 
 
 def should_trigger_llm_fallback(
@@ -80,33 +156,7 @@ def extract_brand_rank_with_llm(
         logger.warning("[rank_llm] deepseek failed monitor_keyword=%r: %s", monitor_keyword, exc)
         return None
 
-    mentioned = bool(payload.get("brand_mentioned"))
-    rank_raw = payload.get("rank")
-    rank: int | float | None
-    if rank_raw is None:
-        rank = None
-    else:
-        try:
-            rank_value = float(rank_raw)
-            rank = int(rank_value) if rank_value.is_integer() else rank_value
-        except (TypeError, ValueError):
-            rank = None
-
-    confidence_raw = payload.get("confidence")
-    try:
-        confidence = float(confidence_raw)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-
-    return LlmBrandRankResult(
-        rank=rank if mentioned else None,
-        mentioned=mentioned,
-        category=str(payload.get("category") or "").strip() or None,
-        rank_basis=str(payload.get("rank_basis") or "").strip() or None,
-        confidence=confidence,
-        evidence=str(payload.get("evidence") or "").strip() or None,
-    )
+    return parse_llm_rank_payload(payload)
 
 
 def apply_llm_rank_fallback(
@@ -134,6 +184,8 @@ def apply_llm_rank_fallback(
         category=llm_result.category,
         rank_basis=llm_result.rank_basis,
         evidence=llm_result.evidence,
+        overall_rank=llm_result.overall_rank,
+        category_ranks=llm_result.category_ranks,
     )
     if resolution.rank is None:
         return llm_resolution
@@ -160,6 +212,10 @@ def rank_resolution_to_json(resolution: BrandRankResolution) -> dict[str, Any]:
         payload["rank_basis"] = resolution.rank_basis
     if resolution.evidence:
         payload["evidence"] = resolution.evidence
+    if resolution.overall_rank is not None:
+        payload["overall_rank"] = resolution.overall_rank
+    if resolution.category_ranks:
+        payload["category_ranks"] = resolution.category_ranks
     return payload
 
 
