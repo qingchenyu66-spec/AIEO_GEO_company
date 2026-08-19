@@ -286,6 +286,23 @@ def _llm_resolution_from_result(llm_result: LlmBrandRankResult) -> BrandRankReso
     )
 
 
+def _keep_llm_result_if_evidence_off(
+    result: LlmBrandRankResult | None,
+    answer_text: str,
+) -> LlmBrandRankResult | None:
+    """evidence 对不上正文时仍保留位次。
+
+    2026-08-19 - 模型给了 rank=1 但 evidence 少空格/漏 **，整条当 llm_miss
+    """
+    if result is None:
+        return None
+    evidence = result.evidence
+    if not evidence or evidence in answer_text:
+        return result
+    logger.info("[rank_llm] evidence not in answer, keep rank=%s", result.rank)
+    return replace(result, evidence=None)
+
+
 def resolve_rank_with_optional_llm(
     *,
     subtask: GeoMonitorSubtask,
@@ -307,11 +324,7 @@ def resolve_rank_with_optional_llm(
             answer_text=answer_text,
             force=rank_engine_is_llm(),
         )
-        if result is not None and result.mentioned and result.evidence:
-            if result.evidence not in answer_text:
-                # 2026-08-11 - LLM evidence 不在正文 - 丢弃，防 context 串味
-                return None
-        return result
+        return _keep_llm_result_if_evidence_off(result, answer_text)
 
     # 2026-08-19 - 规则计位先停：矩阵只用 LLM 分类排，不再和规则取 min
     if rank_engine_is_llm():

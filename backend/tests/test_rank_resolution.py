@@ -217,6 +217,25 @@ def test_should_trigger_llm_fallback_for_null_rank_with_mention() -> None:
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
 
 
+def test_keep_llm_rank_when_evidence_not_exact_substring() -> None:
+    """2026-08-19 - evidence 少空格仍保留分类排，勿洗成 llm_miss。"""
+    from app.services.rank_llm_service import LlmBrandRankResult, _keep_llm_result_if_evidence_off
+
+    raw = LlmBrandRankResult(
+        rank=1,
+        mentioned=True,
+        category="综合服务商推荐 (2026年)",
+        rank_basis="section_bullet",
+        confidence=0.9,
+        evidence="1. **鸿联九五** (推荐指数：★★★★★)",
+    )
+    answer = "        1.  **鸿联九五** (推荐指数：★★★★★)\n        2.  **澳鹏**"
+    kept = _keep_llm_result_if_evidence_off(raw, answer)
+    assert kept is not None
+    assert kept.rank == 1
+    assert kept.evidence is None
+
+
 def test_parse_llm_payload_secondary_watch_list_is_category_rank() -> None:
     """2026-08-19 - 主表没有、只在「其他值得关注」第5：矩阵用 5，不是空、不是全文 23。"""
     from app.services.rank_llm_service import parse_llm_rank_payload
