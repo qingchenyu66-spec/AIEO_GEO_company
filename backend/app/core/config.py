@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     deepseek_knowledge_parse_max_chars: int = 12000
     deepseek_rank_fallback_enabled: bool = False
     deepseek_rank_parse_max_chars: int = 8000
+    # 2026-08-19 - 写路径改 LLM 分类排；规则函数保留。改回 rules 即恢复规则计位
+    rank_engine: str = "llm"
     # Stuck "parsing" rows older than this are marked failed by beat sweeper.
     knowledge_parse_timeout_minutes: int = 10
 

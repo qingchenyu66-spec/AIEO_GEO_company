@@ -25,13 +25,10 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     def fake_normalize(st) -> None:
         return None
 
-    def fake_resolve(st, monitor_keywords, brand_terms, asset=None):
-        seen["mp_during_resolve"] = st.mention_position
-        seen["raw"] = dict(st.raw_result_json or {})
-        return BrandRankResolution(rank=1, mentioned=True, source="llm", confidence=0.95)
-
     def fake_optional_llm(*, subtask, task, resolution, brand_terms, asset):
-        return resolution
+        seen["mp_during_resolve"] = subtask.mention_position
+        seen["raw"] = dict(subtask.raw_result_json or {})
+        return BrandRankResolution(rank=1, mentioned=True, source="llm", confidence=0.95)
 
     def fake_persist(st, resolution) -> None:
         raw = dict(st.raw_result_json or {})
@@ -44,7 +41,6 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
         st.raw_result_json = raw
 
     monkeypatch.setattr("app.services.monitor_service._normalize_subtask_rankings_on_write", fake_normalize)
-    monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", fake_resolve)
     monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_optional_llm)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
 
@@ -57,6 +53,43 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     assert seen["raw"].get("manual_rank_locked") is False
     assert subtask.mention_position == 1
     assert subtask.raw_result_json.get("rank_resolution", {}).get("rank") == 1
+
+
+def test_recompute_llm_engine_skips_rule_resolver(monkeypatch) -> None:
+    """2026-08-19 - rank_engine=llm 时不再跑规则计位。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "rank_engine", "llm")
+    subtask = SimpleNamespace(
+        mention_position=9,
+        raw_result_json={},
+        answer_content="1. 竞品A\n2. 鸿联九五",
+        all_rankings_json=[],
+        prompt="BPO公司推荐",
+    )
+    task = SimpleNamespace(tenant_id=None, monitor_keywords="鸿联九五", raw_request_json={})
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("rule resolver should stay off")
+
+    def fake_llm(*, subtask, task, resolution, brand_terms, asset):
+        assert resolution.rank is None
+        return BrandRankResolution(
+            rank=2, mentioned=True, source="llm", confidence=0.9, category="中国市场"
+        )
+
+    def fake_persist(st, resolution) -> None:
+        raw = dict(st.raw_result_json or {})
+        raw["rank_resolution"] = {"rank": resolution.rank, "source": resolution.source}
+        st.raw_result_json = raw
+
+    monkeypatch.setattr("app.services.monitor_service._normalize_subtask_rankings_on_write", lambda st: None)
+    monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", boom)
+    monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_llm)
+    monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
+    recompute_subtask_rank_from_answer(MagicMock(), subtask, task, force=True)
+    assert subtask.mention_position == 2
+    assert subtask.raw_result_json["rank_resolution"]["source"] == "llm"
 
 
 def test_recompute_skips_manual_snapshot_unless_forced() -> None:

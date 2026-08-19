@@ -18,6 +18,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.models.tenant import Tenant
@@ -95,7 +96,8 @@ def main() -> None:
     parser.add_argument("--active-only", action="store_true", help="仅服务中企业（status=1）")
     args = parser.parse_args()
 
-    if not args.with_llm:
+    # 2026-08-19 - LLM 主路径时不能再 patch 掉模型，否则重算会把位次洗空
+    if not args.with_llm and str(getattr(settings, "rank_engine", "llm") or "").strip().lower() != "llm":
         _patch_skip_llm()
 
     db = SessionLocal()

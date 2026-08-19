@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from app.core.config import settings
 from app.services.monitor_service import (
     BrandRankResolution,
     fill_missing_subtask_ranks_for_task,
@@ -22,8 +23,9 @@ class _FakeRankBackfillSession:
         return self._subtasks
 
 
-def test_fill_subtask_ranks_only_fills_null_by_default() -> None:
+def test_fill_subtask_ranks_only_fills_null_by_default(monkeypatch) -> None:
     """2026-08-14 - 默认只补空，已有错误位次不覆盖（force 才重算）。"""
+    monkeypatch.setattr(settings, "rank_engine", "rules")
     task = SimpleNamespace(
         task_id="task-1",
         tenant_id=None,
@@ -58,7 +60,8 @@ def test_fill_subtask_ranks_only_fills_null_by_default() -> None:
     assert "parsed_at" in empty.raw_result_json["rank_resolution"]
 
 
-def test_fill_subtask_ranks_force_recomputes_existing() -> None:
+def test_fill_subtask_ranks_force_recomputes_existing(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "rank_engine", "rules")
     task = SimpleNamespace(
         task_id="task-1",
         tenant_id=None,

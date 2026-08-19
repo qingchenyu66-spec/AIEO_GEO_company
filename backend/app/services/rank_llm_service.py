@@ -129,15 +129,23 @@ def _truncate_answer(text: str, limit: int) -> tuple[str, bool]:
     return cleaned[:limit], True
 
 
+def rank_engine_is_llm() -> bool:
+    return str(getattr(settings, "rank_engine", "llm") or "llm").strip().lower() == "llm"
+
+
 def extract_brand_rank_with_llm(
     *,
     brand_terms: list[str],
     monitor_keyword: str,
     prompt: str,
     answer_text: str,
+    force: bool = False,
 ) -> LlmBrandRankResult | None:
     client = DeepseekClient()
-    if not client.rank_fallback_enabled:
+    # 2026-08-19 - rank_engine=llm 时不看 fallback 开关，有 key 就抽分类排
+    if not client.api_key:
+        return None
+    if not force and not rank_engine_is_llm() and not client.rank_fallback_enabled:
         return None
 
     body, truncated = _truncate_answer(answer_text, settings.deepseek_rank_parse_max_chars)
@@ -230,6 +238,20 @@ def persist_rank_resolution(subtask: GeoMonitorSubtask, resolution: BrandRankRes
     subtask.raw_result_json = raw
 
 
+def _llm_resolution_from_result(llm_result: LlmBrandRankResult) -> BrandRankResolution:
+    return BrandRankResolution(
+        rank=llm_result.rank,
+        mentioned=True,
+        source="llm",
+        confidence=llm_result.confidence,
+        category=llm_result.category,
+        rank_basis=llm_result.rank_basis or "category_local",
+        evidence=llm_result.evidence,
+        overall_rank=llm_result.overall_rank,
+        category_ranks=llm_result.category_ranks,
+    )
+
+
 def resolve_rank_with_optional_llm(
     *,
     subtask: GeoMonitorSubtask,
@@ -239,22 +261,50 @@ def resolve_rank_with_optional_llm(
     asset: BrandAsset | None,
 ) -> BrandRankResolution:
     monitor_keyword = str(task.monitor_keywords or "").strip()
-    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
-    if not should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task):
-        return resolution
-
     answer_text = _answer_body_for_rank(subtask)
     if not _brand_appears_in_text(answer_text, brand_terms):
         return resolution
 
-    llm_result = extract_brand_rank_with_llm(
-        brand_terms=brand_terms,
-        monitor_keyword=monitor_keyword,
-        prompt=str(subtask.prompt or ""),
-        answer_text=answer_text,
-    )
-    if llm_result is not None and llm_result.mentioned and llm_result.evidence:
-        if llm_result.evidence not in answer_text:
-            # 2026-08-11 - LLM evidence 不在正文 - 丢弃，防 context 串味
-            llm_result = None
-    return apply_llm_rank_fallback(resolution, llm_result)
+    def _run_llm() -> LlmBrandRankResult | None:
+        result = extract_brand_rank_with_llm(
+            brand_terms=brand_terms,
+            monitor_keyword=monitor_keyword,
+            prompt=str(subtask.prompt or ""),
+            answer_text=answer_text,
+            force=rank_engine_is_llm(),
+        )
+        if result is not None and result.mentioned and result.evidence:
+            if result.evidence not in answer_text:
+                # 2026-08-11 - LLM evidence 不在正文 - 丢弃，防 context 串味
+                return None
+        return result
+
+    # 2026-08-19 - 规则计位先停：矩阵只用 LLM 分类排，不再和规则取 min
+    if rank_engine_is_llm():
+        llm_result = _run_llm()
+        if llm_result is None or not llm_result.mentioned or llm_result.rank is None:
+            return BrandRankResolution(
+                rank=None,
+                mentioned=True,
+                source="none",
+                confidence=0.4,
+                rank_basis="llm_miss",
+            )
+        if llm_result.confidence < 0.65:
+            return BrandRankResolution(
+                rank=None,
+                mentioned=True,
+                source="none",
+                confidence=llm_result.confidence,
+                rank_basis="llm_low_conf",
+                category=llm_result.category,
+                evidence=llm_result.evidence,
+                overall_rank=llm_result.overall_rank,
+                category_ranks=llm_result.category_ranks,
+            )
+        return _llm_resolution_from_result(llm_result)
+
+    is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)
+    if not should_trigger_llm_fallback(resolution, is_industry_task=is_industry_task):
+        return resolution
+    return apply_llm_rank_fallback(resolution, _run_llm())

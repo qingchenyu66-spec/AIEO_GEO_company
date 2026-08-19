@@ -5347,10 +5347,9 @@ def _resolve_brand_rank_detail(
     brand_terms: list[str],
     asset: BrandAsset | None = None,
 ) -> BrandRankResolution:
-    """Resolve brand rank with provenance for matrix display and LLM fallback.
+    """规则计位（单测 / rank_engine=rules 回滚用）。
 
-    2026-07-27 - 方案X 全自动规则取最前 - 结构化/点名序/库内位次取 min；人工锁与 LLM 仍优先
-    ponytail: 乐观偏差会抬高 Top3；若改回保守瀑布，收紧候选池即可
+    2026-08-19 - 写路径已改 LLM 分类排，本函数默认不再被 recompute 调用
     """
     # 露出类：context 仍可算「提及」；排名类位次必须正文含品牌
     combined_text = _subtask_brand_text(subtask)
@@ -6014,8 +6013,7 @@ def _read_display_brand_rank(
 ) -> BrandRankResolution:
     """读路径展示位次：mention_position 为权威；缺失再 JSON；仅空位次时详情可全文解析。
 
-    写路径（recompute_subtask_rank_from_answer）仍走 _resolve_brand_rank_detail，
-    算完后写回 mention_position，不经过本函数。
+    写路径见 recompute_subtask_rank_from_answer（当前 LLM 分类排）。
     """
     # ponytail: 轻量扫描常不带 mention_context；未加载则跳过，勿 N+1
     if _orm_attr_loaded(subtask, "mention_context"):
@@ -6136,6 +6134,14 @@ def _read_display_brand_rank(
         )
 
     if allow_full_parse:
+        # 2026-08-19 - 规则计位已停，空位次不要在读路径再跑规则全文解析
+        if str(getattr(settings, "rank_engine", "llm") or "llm").strip().lower() == "llm":
+            return BrandRankResolution(
+                rank=None,
+                mentioned=has_brand_in_mention,
+                source="none",
+                confidence=0.3 if has_brand_in_mention else 0.9,
+            )
         # mention_position 为空时才全文解析，避免与权威列打架
         return _resolve_brand_rank_detail(subtask, monitor_keywords, brand_terms, asset)
 
@@ -8804,7 +8810,17 @@ def recompute_subtask_rank_from_answer(
         )
         return
 
-    resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
+    # 2026-08-19 - 规则计位先停用；函数仍保留，settings.rank_engine=rules 可恢复
+    # resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
+    if str(getattr(settings, "rank_engine", "llm") or "llm").strip().lower() == "llm":
+        resolution = BrandRankResolution(
+            rank=None,
+            mentioned=True,
+            source="none",
+            confidence=0.3,
+        )
+    else:
+        resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
     from app.services.rank_llm_service import persist_rank_resolution, resolve_rank_with_optional_llm
 
     resolution = resolve_rank_with_optional_llm(
