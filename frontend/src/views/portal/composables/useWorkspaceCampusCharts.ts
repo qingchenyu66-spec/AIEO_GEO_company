@@ -4,7 +4,8 @@ import { loadEchartsRuntime } from '../../../utils/echartsLoader'
 
 export type WorkspaceCampusChartData = {
   trendLabels: string[]
-  trendValues: number[]
+  trendValues: Array<number | null>
+  trendEmptyFlags?: boolean[]
   intentRows: Array<{ name: string; value: number }>
   intentTotal: number
   mentionRows: Array<{ name: string; value: number }>
@@ -149,16 +150,32 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
         const trendChart = getChart(refs.trend.value)
         if (!trendChart) return
         if (data.trendLabels.length) {
+          // 2026-08-20 - 无样本日误画成 0% - null 断线；灰点 scatter 提示「当日暂无样本」
+          const emptyFlags = data.trendEmptyFlags
+            || data.trendValues.map(value => value == null)
+          const emptyScatter = data.trendLabels
+            .map((label, index) => (emptyFlags[index] ? [label, 0] : null))
+            .filter((item): item is [string, number] => item != null)
           trendChart.setOption({
             animation: false,
             color: ['#2563eb'],
             grid: { left: 48, right: 24, top: 24, bottom: 36, containLabel: false },
             tooltip: {
               trigger: 'axis',
-              valueFormatter: (value: number) => `${value}%`,
               axisPointer: {
                 type: 'line',
                 lineStyle: { color: '#93c5fd', width: 1 },
+              },
+              formatter: (params: Array<{ axisValueLabel?: string; axisValue?: string; seriesType?: string; value?: number | string | null | Array<string | number> }>) => {
+                const rows = Array.isArray(params) ? params : [params]
+                const axis = String(rows[0]?.axisValueLabel ?? rows[0]?.axisValue ?? '')
+                const line = rows.find(row => row.seriesType === 'line')
+                const raw = line?.value
+                const num = Array.isArray(raw) ? raw[1] : raw
+                if (num == null || num === '' || Number.isNaN(Number(num))) {
+                  return `${axis}<br/>当日暂无样本`
+                }
+                return `${axis}<br/>提及率 ${Number(num)}%`
               },
             },
             xAxis: {
@@ -177,27 +194,48 @@ export function useWorkspaceCampusCharts(refs: ChartRefs) {
               axisLabel: { formatter: '{value}%', color: '#64748b', fontSize: 11 },
               splitLine: { lineStyle: { color: '#f1f5f9' } },
             },
-            series: [{
-              type: 'line',
-              data: data.trendValues,
-              smooth: true,
-              // White-bordered symbols punch holes in the stroke; keep continuous line
-              symbol: 'circle',
-              symbolSize: 8,
-              showSymbol: true,
-              lineStyle: { width: 3, color: '#2563eb' },
-              itemStyle: {
-                color: '#2563eb',
-                borderWidth: 2,
-                borderColor: '#2563eb',
+            series: [
+              {
+                type: 'line',
+                data: data.trendValues,
+                connectNulls: false,
+                smooth: true,
+                symbol: 'circle',
+                symbolSize: 8,
+                showSymbol: true,
+                lineStyle: { width: 3, color: '#2563eb' },
+                itemStyle: {
+                  color: '#2563eb',
+                  borderWidth: 2,
+                  borderColor: '#2563eb',
+                },
+                areaStyle: {
+                  color: new graphic.LinearGradient(0, 0, 0, 1, [
+                    { offset: 0, color: 'rgba(37, 99, 235, 0.25)' },
+                    { offset: 1, color: 'rgba(37, 99, 235, 0.02)' },
+                  ]),
+                },
               },
-              areaStyle: {
-                color: new graphic.LinearGradient(0, 0, 0, 1, [
-                  { offset: 0, color: 'rgba(37, 99, 235, 0.25)' },
-                  { offset: 1, color: 'rgba(37, 99, 235, 0.02)' },
-                ]),
+              {
+                type: 'scatter',
+                data: emptyScatter,
+                symbol: 'circle',
+                symbolSize: 7,
+                itemStyle: {
+                  color: '#e2e8f0',
+                  borderColor: '#94a3b8',
+                  borderWidth: 1.5,
+                },
+                z: 5,
+                tooltip: {
+                  trigger: 'item',
+                  formatter: (params: { name?: string; value?: [string, number] }) => {
+                    const label = params.value?.[0] ?? params.name ?? ''
+                    return `${label}<br/>当日暂无样本`
+                  },
+                },
               },
-            }],
+            ],
           }, true)
         } else {
           trendChart.clear()

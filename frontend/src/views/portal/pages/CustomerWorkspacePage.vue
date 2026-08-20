@@ -2,6 +2,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import {
   BarChart3,
+  ChevronDown,
   Clock3,
   FileText,
   Search,
@@ -312,6 +313,7 @@ const chartData = computed<WorkspaceCampusChartData | null>(() => {
   return {
     trendLabels: trendBars.value.map(bar => bar.label),
     trendValues: trendBars.value.map(bar => bar.value),
+    trendEmptyFlags: trendBars.value.map(bar => bar.empty),
     intentRows: [],
     intentTotal: 0,
     mentionRows: [],
@@ -419,90 +421,37 @@ onUnmounted(() => {
     </section>
 
     <template v-else-if="brief">
-      <div class="ws-board-profile-row">
-        <article class="ws-board-card ws-board-profile-strip">
-          <div class="ws-board-profile-strip-top">
-            <div class="ws-board-profile-strip-main">
-              <h2 class="ws-board-profile-name">{{ displayName }}</h2>
-              <p class="ws-board-profile-brand">{{ brandLine }}</p>
+      <div class="ws-board-insight-row" :class="{ 'is-period-switching': periodSwitching }">
+        <article class="ws-board-card ws-board-conclusion-card">
+          <div class="ws-board-conclusion-head">
+            <div class="ws-board-conclusion-title-wrap">
+              <div class="ws-board-conclusion-title">本期结论</div>
+              <p v-if="trendPeriodLabel" class="ws-board-conclusion-sub">
+                {{ trendPeriodLabel }} · 区间汇总 · {{ periodCompareLabel }}
+              </p>
             </div>
-            <span class="ws-board-profile-status">正常运行 · {{ platformPeriodLabel }}</span>
-          </div>
-          <div class="ws-board-profile-strip-meta">
-            <div class="ws-board-profile-meta-item">
-              <span class="ws-board-profile-meta-label">监测节奏</span>
-              <span class="ws-board-profile-meta-value">{{ scheduleLine }}</span>
-            </div>
-            <div class="ws-board-profile-meta-item">
-              <span class="ws-board-profile-meta-label">服务周期</span>
-              <span class="ws-board-profile-meta-value">{{ servicePeriod }}</span>
-            </div>
-            <div class="ws-board-profile-meta-item">
-              <span class="ws-board-profile-meta-label">官网</span>
-              <a
-                v-if="brandAsset?.official_url"
-                class="ws-board-profile-meta-value is-link"
-                :href="brandAsset.official_url"
-                target="_blank"
-                rel="noopener"
-              >{{ brandAsset.official_url }}</a>
-              <span v-else class="ws-board-profile-meta-value is-muted">未配置</span>
-            </div>
-          </div>
-        </article>
-
-        <article class="ws-board-card ws-board-keywords-card">
-          <div class="ws-board-card-head">
-            <div class="ws-board-card-title" style="margin:0">
-              <Tag :size="18" />
-              监控词
-            </div>
-            <span class="ws-board-section-period">{{ monitorKeywordLabels.length }} 个</span>
-          </div>
-          <div v-if="monitorKeywordLabels.length" class="ws-board-keywords-wrap">
-            <div class="ws-board-keywords-metrics">
-              <div
-                v-for="name in monitorKeywordLabels"
-                :key="name"
-                class="ws-board-keyword-metric"
-                :title="name"
-              >
-                <div class="ws-board-keyword-metric-value">{{ name }}</div>
+            <div class="ws-board-conclusion-head-aside">
+              <span class="ws-board-conclusion-badge" :class="{ 'is-calm': conclusionBadge.calm }">
+                {{ conclusionBadge.label }}
+              </span>
+              <div class="ws-board-period-inline" role="region" aria-label="数据周期">
+                <div class="ws-board-tabs" :aria-busy="periodSwitching">
+                  <button
+                    v-for="option in trendPresetOptions"
+                    :key="option.value"
+                    type="button"
+                    class="ws-board-tab"
+                    :class="{ active: trendPreset === option.value }"
+                    @click="applyTrendPreset(option.value)"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+                <span v-if="periodSwitching" class="ws-board-period-bar-hint">正在切换…</span>
               </div>
             </div>
           </div>
-          <p v-else class="ws-board-mini-empty">暂无监控词配置</p>
-        </article>
-      </div>
-
-      <div
-        class="ws-board-period-bar"
-        :class="{ 'is-switching': periodSwitching }"
-        role="region"
-        aria-label="数据周期"
-      >
-        <div class="ws-board-period-bar-left">
-          <span class="ws-board-period-bar-label">数据周期</span>
-          <span class="ws-board-period-bar-range">
-            <em>{{ selectedPeriodPresetLabel }}</em>
-            {{ selectedPeriodRange }}
-          </span>
-          <span v-if="periodSwitching" class="ws-board-period-bar-hint">正在切换…</span>
-        </div>
-        <div class="ws-board-period-bar-right">
-          <div class="ws-board-tabs" :aria-busy="periodSwitching">
-            <button
-              v-for="option in trendPresetOptions"
-              :key="option.value"
-              type="button"
-              class="ws-board-tab"
-              :class="{ active: trendPreset === option.value }"
-              @click="applyTrendPreset(option.value)"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-          <div v-if="trendPreset === 'custom'" class="ws-board-date-inputs">
+          <div v-if="trendPreset === 'custom'" class="ws-board-date-inputs ws-board-date-inputs--inline">
             <input
               v-model="trendStartDate"
               type="date"
@@ -518,24 +467,13 @@ onUnmounted(() => {
               @change="onCustomTrendDateChange"
             >
           </div>
-        </div>
-      </div>
-
-      <div class="ws-board-insight-row" :class="{ 'is-period-switching': periodSwitching }">
-        <article class="ws-board-card ws-board-conclusion-card">
-          <div class="ws-board-conclusion-head">
-            <div class="ws-board-conclusion-title-wrap">
-              <div class="ws-board-conclusion-title">本期结论</div>
-              <p v-if="trendPeriodLabel" class="ws-board-conclusion-sub">
-                {{ trendPeriodLabel }} · 区间汇总 · {{ periodCompareLabel }}
-              </p>
-            </div>
-            <span class="ws-board-conclusion-badge" :class="{ 'is-calm': conclusionBadge.calm }">
-              {{ conclusionBadge.label }}
-            </span>
-          </div>
           <div class="ws-board-conclusion-metrics">
-            <div v-for="kpi in miniKpis" :key="kpi.key" class="ws-board-conclusion-metric">
+            <div
+              v-for="kpi in miniKpis"
+              :key="kpi.key"
+              class="ws-board-conclusion-metric"
+              :class="{ 'is-primary': kpi.key === 'mention' }"
+            >
               <div class="ws-board-conclusion-metric-label">{{ kpi.label }}</div>
               <div class="ws-board-conclusion-metric-value">
                 <template v-if="kpi.value != null">
@@ -577,12 +515,78 @@ onUnmounted(() => {
               <TrendingUp :size="18" />
               提及率趋势
             </div>
-            <span class="ws-board-section-period">{{ trendPeriodLabel }}</span>
+            <span class="ws-board-section-period">{{ selectedPeriodPresetLabel }} · {{ selectedPeriodRange }}</span>
           </div>
           <div ref="trendChartRef" class="ws-board-chart-trend ws-board-chart-trend-hero" />
           <p v-if="!trendBars.length" class="ws-board-mini-empty">暂无趋势数据</p>
         </article>
       </div>
+
+      <!-- 2026-08-20 - 首屏让结论上移 - 公司/监控词默认折叠，摘要行仍露企业名 -->
+      <details class="ws-board-service-info">
+        <summary class="ws-board-service-summary">
+          <span class="ws-board-service-summary-label">
+            服务信息
+            <em>{{ displayName }}</em>
+          </span>
+          <ChevronDown class="ws-board-service-chevron" :size="16" aria-hidden="true" />
+        </summary>
+        <div class="ws-board-profile-row">
+          <article class="ws-board-card ws-board-profile-strip">
+            <div class="ws-board-profile-strip-top">
+              <div class="ws-board-profile-strip-main">
+                <h2 class="ws-board-profile-name">{{ displayName }}</h2>
+                <p class="ws-board-profile-brand">{{ brandLine }}</p>
+              </div>
+              <span class="ws-board-profile-status">正常运行 · {{ platformPeriodLabel }}</span>
+            </div>
+            <div class="ws-board-profile-strip-meta">
+              <div class="ws-board-profile-meta-item">
+                <span class="ws-board-profile-meta-label">监测节奏</span>
+                <span class="ws-board-profile-meta-value">{{ scheduleLine }}</span>
+              </div>
+              <div class="ws-board-profile-meta-item">
+                <span class="ws-board-profile-meta-label">服务周期</span>
+                <span class="ws-board-profile-meta-value">{{ servicePeriod }}</span>
+              </div>
+              <div class="ws-board-profile-meta-item">
+                <span class="ws-board-profile-meta-label">官网</span>
+                <a
+                  v-if="brandAsset?.official_url"
+                  class="ws-board-profile-meta-value is-link"
+                  :href="brandAsset.official_url"
+                  target="_blank"
+                  rel="noopener"
+                >{{ brandAsset.official_url }}</a>
+                <span v-else class="ws-board-profile-meta-value is-muted">未配置</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="ws-board-card ws-board-keywords-card">
+            <div class="ws-board-card-head">
+              <div class="ws-board-card-title" style="margin:0">
+                <Tag :size="18" />
+                监控词
+              </div>
+              <span class="ws-board-section-period">{{ monitorKeywordLabels.length }} 个</span>
+            </div>
+            <div v-if="monitorKeywordLabels.length" class="ws-board-keywords-wrap">
+              <div class="ws-board-keywords-metrics">
+                <div
+                  v-for="name in monitorKeywordLabels"
+                  :key="name"
+                  class="ws-board-keyword-metric"
+                  :title="name"
+                >
+                  <div class="ws-board-keyword-metric-value">{{ name }}</div>
+                </div>
+              </div>
+            </div>
+            <p v-else class="ws-board-mini-empty">暂无监控词配置</p>
+          </article>
+        </div>
+      </details>
 
       <template v-if="belowFoldReady">
       <article class="ws-board-card ws-board-exposure-card">

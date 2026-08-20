@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" role="img" aria-labelledby="title">
+  <title id="title">亦智广告</title>
+  <defs>
+    <path id="spark" d="M0-11 C1.3-3.5 3.5-1.3 11 0 C3.5 1.3 1.3 3.5 0 11 C-1.3 3.5 -3.5 1.3 -11 0 C-3.5-1.3 -1.3-3.5 0-11 Z"/>
+  </defs>
+  <g fill="#0B2A5C" stroke="none">
+    <use href="#spark" transform="translate(46 106) scale(1)"/>
+    <use href="#spark" transform="translate(30 126) scale(0.58)"/>
+    <use href="#spark" transform="translate(62 130) scale(0.44)"/>
+    <path fill="none" stroke="#0B2A5C" stroke-width="3.4" stroke-linecap="round"
+          d="M54 110 C130 22, 290 6, 456 52"/>
+    <path fill="none" stroke="#0B2A5C" stroke-width="2.1" stroke-linecap="round"
+          d="M456 52 C468 56, 478 60, 486 64"/>
+    <circle cx="496" cy="68" r="3.1"/>
+    <circle cx="510" cy="73" r="2.4"/>
+    <circle cx="522" cy="77" r="1.8"/>
+    <g transform="translate(280 142) skewX(-9)">
+      <text x="0" y="0" text-anchor="middle" dominant-baseline="alphabetic"
+            font-family="'Source Han Sans SC','Noto Sans SC','PingFang SC','Microsoft YaHei UI','Microsoft YaHei',sans-serif"
+            font-size="74" font-weight="700" letter-spacing="8">亦智广告</text>
+    </g>
+  </g>
+</svg>

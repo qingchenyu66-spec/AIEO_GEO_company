@@ -27,21 +27,45 @@ button:disabled {
 
 .app-shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 24px 18px; color: #dce9ff; background: #07162d; }
-.brand { display: flex; align-items: center; gap: 12px; padding: 0 8px 24px; border-bottom: 1px solid rgba(255,255,255,.1); position: relative; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 4px 8px; border-bottom: none; position: relative; }
 .brand--portal { flex-direction: column; align-items: stretch; gap: 10px; padding-bottom: 20px; }
 .brand--portal .app-brand-logo--stacked { width: 100%; max-width: 196px; height: auto; filter: drop-shadow(0 6px 16px rgba(0,0,0,.22)); }
 .brand-subtitle { display: block; padding: 0 2px; color: #8299ba; font-size: 11px; line-height: 1.5; }
 .brand-mark {
   display: grid;
   place-items: center;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  padding: 5px;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   border-radius: 10px;
   overflow: hidden;
   background: rgba(0, 0, 0, .42);
   box-shadow: 0 8px 22px rgba(0, 0, 0, .28);
+}
+/* 2026-08-19 - 侧栏品牌区 - 单行标题+固定钮，收起轨用 Radar 图标 */
+.brand-mark--mono {
+  color: #dce9ff;
+  background: linear-gradient(145deg, rgba(40, 104, 219, .5), rgba(8, 28, 58, .88));
+  border: 1px solid rgba(88, 163, 255, .2);
+}
+.brand-mark--mono svg {
+  width: 20px;
+  height: 20px;
+}
+/* 2026-08-19 - 侧栏标题与收起图标同槽位 - 避免展开后隐藏图标仍占一行空白 */
+.brand-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.brand-head .brand-mark--mono,
+.brand-head .brand-mark--logo {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
 }
 .brand-mark .app-brand-logo--icon {
   width: 100%;
@@ -53,8 +77,8 @@ button:disabled {
 .app-brand-logo { display: block; max-width: 100%; height: auto; object-fit: contain; }
 .app-brand-logo--full { width: min(360px, 78vw); height: auto; }
 .app-brand-logo--stacked { width: 100%; height: auto; object-fit: contain; }
-.brand strong { display: block; font-size: 17px; }
-.brand span { display: block; margin-top: 3px; font-size: 12px; color: #8299ba; }
+.brand strong { display: block; flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.2; letter-spacing: -.015em; color: #eef4ff; }
+.brand span { display: block; margin-top: 4px; font-size: 12px; color: #8299ba; line-height: 1.35; }
 .nav { display: grid; gap: 6px; margin-top: 24px; }
 .nav-item { display: flex; align-items: center; gap: 12px; position: relative; width:100%; min-height: 44px; padding: 0 13px; border:0; border-radius: 7px; color: #9eb2ce; text-align:left; text-decoration: none; background:transparent; cursor:pointer; transition: .2s ease; }
 .nav-item:hover { color: white; background: rgba(255,255,255,.07); transform: translateX(2px); }
@@ -101,6 +125,25 @@ button:disabled {
 .workspace { min-width: 0; }
 .topbar { height: 74px; display: flex; align-items: center; justify-content: space-between; padding: 0 34px; border-bottom: 1px solid #dae4f0; background: rgba(255,255,255,.88); }
 .crumb { font-size: 13px; color: #7384a0; }
+/* 2026-08-20 - 顶栏变轻 - 面包屑弱化，只留页名 */
+.portal-shell .crumb {
+  font-size: 13px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.01em;
+}
+.portal-shell .user-chip--avatar-only {
+  padding: 4px;
+  gap: 0;
+}
+.portal-shell .user-menu-trigger {
+  min-height: 40px;
+}
+.portal-shell .el-dropdown-menu__item.is-disabled.user-menu-identity-label {
+  color: #64748b;
+  opacity: 1;
+  cursor: default;
+}
 .top-actions { display: flex; align-items: center; gap: 10px; }
 .env-chip { padding: 8px 12px; border: 1px solid #cfe1f5; border-radius: 6px; color: #32628f; background: #f5faff; font-size: 12px; }
 .content { padding: 30px 34px 48px; max-width: 1540px; margin: 0 auto; }
@@ -218,33 +261,198 @@ button:disabled {
 
 /* Portal identity controls */
 .portal-shell { min-width:0; }
+.portal-shell .brand-mark--mono { display: none; }
+/* 2026-08-20 - 亦智方标常显；标题折叠走生产 .brand > div:last-of-type */
+
+/* 2026-08-20 - 方案 B 浅色导航试跑 - 侧栏/壳层与内容区一体，不满意可整段回退 */
+/* 2026-08-20 - 登录后冷蓝气质微对齐 - 壳层底色略偏冷蓝，减轻与看板跳变 */
+.portal-shell {
+  --portal-chrome-bg: #f0f5fb;
+  --portal-chrome-surface: #ffffff;
+  --portal-chrome-border: #e2e8f0;
+  --portal-chrome-text: #0f172a;
+  --portal-chrome-muted: #64748b;
+  --portal-chrome-hover: #e8eef8;
+  --portal-chrome-active: #2563eb;
+  --portal-chrome-active-soft: rgba(37, 99, 235, .1);
+}
+.portal-shell .sidebar {
+  color: var(--portal-chrome-muted);
+  background: var(--portal-chrome-bg);
+  border-right: 1px solid var(--portal-chrome-border);
+}
+.portal-shell .brand strong {
+  color: var(--portal-chrome-text);
+}
+.portal-shell .brand span {
+  color: var(--portal-chrome-muted);
+}
+.portal-shell .brand-mark--mono {
+  color: #fff;
+  background: linear-gradient(145deg, #3b82f6, #1d4ed8);
+  border-color: transparent;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, .22);
+}
+.portal-shell .brand-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.portal-shell .brand-mark--logo {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  color: transparent;
+  background: #fff;
+  border: 1px solid var(--portal-chrome-border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
+  overflow: hidden;
+}
+.portal-shell .brand-mark--logo .app-brand-logo--icon {
+  /* 2026-08-20 - 方标在白底里光学居中 */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
+  padding: 3px;
+  box-sizing: border-box;
+  filter: none;
+  display: block;
+}
+.portal-shell .sidebar-pin {
+  color: var(--portal-chrome-muted);
+}
+.portal-shell .sidebar-pin:hover,
+.portal-shell .sidebar-pin.active {
+  color: var(--portal-chrome-active);
+  background: var(--portal-chrome-active-soft);
+}
+.portal-shell .portal-tag {
+  border-color: var(--portal-chrome-border);
+  background: var(--portal-chrome-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.portal-shell .portal-tag--compact {
+  /* 2026-08-20 - 侧栏身份卡：仍紧凑，但企业名换行展示全，勿单行截断 */
+  padding: 8px 10px;
+  gap: 8px;
+  margin-top: 6px;
+  align-items: flex-start;
+}
+.portal-shell .portal-tag--compact > svg {
+  margin-top: 1px;
+}
+.portal-shell .portal-tag--compact span {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.portal-shell .portal-tag--compact b,
+.portal-shell .portal-tag--compact small {
+  display: block;
+  margin: 0;
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  word-break: break-word;
+}
+.portal-shell .portal-tag--compact b {
+  font-size: 12px;
+  line-height: 1.3;
+}
+.portal-shell .portal-tag--compact small {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.portal-shell .portal-tag > svg {
+  color: var(--portal-chrome-active);
+}
+.portal-shell .portal-tag b {
+  color: var(--portal-chrome-text);
+}
+.portal-shell .portal-tag small {
+  color: var(--portal-chrome-muted);
+}
+.portal-shell .nav-item {
+  color: #475569;
+}
+.portal-shell .nav-item:hover {
+  color: var(--portal-chrome-text);
+  background: var(--portal-chrome-hover);
+}
+.portal-shell .nav-item.active {
+  color: #fff;
+  background: var(--portal-chrome-active);
+  box-shadow: 0 8px 20px rgba(37, 99, 235, .22);
+}
+.portal-shell .nav-favorites-divider {
+  background: var(--portal-chrome-border);
+}
+.portal-shell .nav-favorite-btn {
+  color: #94a3b8;
+}
+/* 2026-08-20 - 星标默认隐藏 - 含已置顶，仅行悬停可见，降低运营后台感 */
+.portal-shell .nav-favorite-btn.active {
+  color: #d97706;
+  opacity: 0;
+}
+.portal-shell .nav-item:hover .nav-favorite-btn,
+.portal-shell .nav-favorite-btn:focus-visible {
+  opacity: 1;
+}
+.portal-shell .nav-favorite-btn:hover {
+  color: var(--portal-chrome-text);
+  background: rgba(15, 23, 42, .06);
+}
+.portal-shell .nav-item.active .nav-favorite-btn {
+  color: rgba(255, 255, 255, .85);
+}
+.portal-shell .nav-item.active .nav-favorite-btn.active {
+  color: #fde68a;
+}
+.portal-shell .sub-nav {
+  border-left-color: var(--portal-chrome-border);
+}
+.portal-shell .sub-nav-item {
+  color: #64748b;
+}
+.portal-shell .sub-nav-item:hover {
+  color: var(--portal-chrome-text);
+  background: var(--portal-chrome-hover);
+}
+.portal-shell .sub-nav-item.active {
+  color: var(--portal-chrome-active);
+  background: var(--portal-chrome-active-soft);
+  box-shadow: none;
+}
+.portal-shell .topbar {
+  background: var(--portal-chrome-surface);
+  border-bottom-color: var(--portal-chrome-border);
+}
 
 .sidebar-pin {
   display: none;
   place-items: center;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  margin-left: auto;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: 1px solid rgba(255,255,255,.14);
-  border-radius: 7px;
-  color: #9eb2ce;
-  background: rgba(255,255,255,.05);
+  border: 0;
+  border-radius: 6px;
+  color: #7d95b8;
+  background: transparent;
   cursor: pointer;
 }
 .sidebar-pin svg { width: 15px; height: 15px; }
 .sidebar-pin:hover,
 .sidebar-pin.active {
   color: #fff;
-  border-color: rgba(88,163,255,.45);
-  background: rgba(40,104,219,.35);
+  background: rgba(255, 255, 255, .08);
 }
 
 /* Desktop: icon rail by default; hover / pin / user-submenu expands content column */
+/* 2026-08-20 - 侧栏收展对齐生产：固定钮 absolute 不占流；标题用 .brand > div:last-of-type 折叠 */
 @media (min-width: 901px) {
   .portal-shell:not(.portal-fullscreen) {
-    /* sidebar 自撑宽度，主区随动，避免双轨 grid 动画打架 */
     grid-template-columns: auto minmax(0, 1fr);
   }
   .portal-shell:not(.portal-fullscreen) .sidebar {
@@ -253,7 +461,6 @@ button:disabled {
     overflow-x: hidden;
     overflow-y: auto;
     z-index: 30;
-    /* 收起稍慢并带延迟：鼠标路过不易误缩；缓出曲线更顺 */
     transition:
       width .36s cubic-bezier(0.22, 1, 0.36, 1) .18s,
       padding .36s cubic-bezier(0.22, 1, 0.36, 1) .18s;
@@ -264,7 +471,6 @@ button:disabled {
     transition: padding .36s cubic-bezier(0.22, 1, 0.36, 1) .18s;
   }
   .portal-shell:not(.portal-fullscreen) .brand > div:last-of-type,
-  .portal-shell:not(.portal-fullscreen) .portal-tag span,
   .portal-shell:not(.portal-fullscreen) .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen) .nav-parent .nav-caret {
     display: block;
@@ -275,7 +481,6 @@ button:disabled {
     white-space: nowrap;
     transform: translateX(-8px);
     pointer-events: none;
-    /* 先淡出再收宽度 */
     transition:
       opacity .16s ease 0s,
       transform .2s ease 0s,
@@ -305,20 +510,6 @@ button:disabled {
       max-height .32s cubic-bezier(0.22, 1, 0.36, 1) .12s,
       margin .32s cubic-bezier(0.22, 1, 0.36, 1) .12s;
   }
-  .portal-shell:not(.portal-fullscreen) .portal-tag {
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-    padding: 10px;
-    min-height: 44px;
-    transition: padding .36s cubic-bezier(0.22, 1, 0.36, 1) .18s, gap .36s cubic-bezier(0.22, 1, 0.36, 1) .18s;
-  }
-  .portal-shell:not(.portal-fullscreen) .portal-tag > svg {
-    width: 20px;
-    height: 20px;
-    flex-shrink: 0;
-    display: block;
-  }
   .portal-shell:not(.portal-fullscreen) .nav { gap: 5px; margin-top: 14px; }
   .portal-shell:not(.portal-fullscreen) .nav-item {
     justify-content: center;
@@ -343,7 +534,7 @@ button:disabled {
     top: 8px;
     opacity: 0;
     pointer-events: none;
-    transition: opacity .22s ease .08s, background .18s ease, border-color .18s ease, color .18s ease;
+    transition: opacity .22s ease .08s, background .18s ease, color .18s ease;
   }
 
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .sidebar,
@@ -351,22 +542,41 @@ button:disabled {
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .sidebar {
     width: 248px;
     padding: 24px 18px;
-    /* 展开：短意图延迟后缓入，避免扫过就弹开 */
     transition-delay: .08s;
   }
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .brand,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .brand,
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .brand {
     justify-content: flex-start;
-    padding: 0 8px 24px;
+    /* 2026-08-20 - 展开后给标题与固定钮留空，避免 GEO Monitor 贴边/贴钮显得挤 */
+    gap: 12px;
+    padding: 2px 32px 20px 2px;
     transition-delay: .08s;
   }
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .brand > div:last-of-type,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .brand > div:last-of-type,
+  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .brand > div:last-of-type {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* 2026-08-20 - 去掉身份卡后补一点品牌区与菜单间距 */
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav,
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav,
+  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav {
+    margin-top: 8px;
+    gap: 6px;
+  }
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .sidebar-pin,
+  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .sidebar-pin {
+    right: 10px;
+    top: 10px;
+    opacity: 1;
+    pointer-events: auto;
+    transition-delay: .2s;
+  }
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .brand > div:last-of-type,
+  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .brand > div:last-of-type,
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .brand > div:last-of-type,
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .portal-tag span,
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .portal-tag span,
-  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .portal-tag span,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav-item > span:not(.nav-favorite-btn),
@@ -377,7 +587,6 @@ button:disabled {
     opacity: 1;
     transform: translateX(0);
     pointer-events: auto;
-    /* 宽度先动，文案稍后淡入 */
     transition:
       max-width .36s cubic-bezier(0.22, 1, 0.36, 1) .08s,
       opacity .24s ease .16s,
@@ -388,14 +597,6 @@ button:disabled {
   .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .nav-parent .nav-caret {
     width: 15px;
     margin-left: auto;
-  }
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .portal-tag,
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .portal-tag,
-  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .portal-tag {
-    justify-content: flex-start;
-    gap: 10px;
-    padding: 12px;
-    transition-delay: .08s;
   }
   .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .nav-item,
   .portal-shell:not(.portal-fullscreen).portal-sidebar-expanded .nav-item,
@@ -425,21 +626,13 @@ button:disabled {
       opacity .24s ease .2s,
       margin .36s cubic-bezier(0.22, 1, 0.36, 1) .12s;
   }
-  .portal-shell:not(.portal-fullscreen).portal-sidebar-pinned .sidebar-pin,
-  .portal-shell:not(.portal-fullscreen):has(.sidebar:hover) .sidebar-pin {
-    opacity: 1;
-    pointer-events: auto;
-    transition-delay: .2s;
-  }
 }
 
 @media (min-width: 901px) and (prefers-reduced-motion: reduce) {
   .portal-shell:not(.portal-fullscreen) .sidebar,
   .portal-shell:not(.portal-fullscreen) .brand,
-  .portal-shell:not(.portal-fullscreen) .portal-tag,
   .portal-shell:not(.portal-fullscreen) .nav-item,
   .portal-shell:not(.portal-fullscreen) .brand > div:last-of-type,
-  .portal-shell:not(.portal-fullscreen) .portal-tag span,
   .portal-shell:not(.portal-fullscreen) .nav-item > span:not(.nav-favorite-btn),
   .portal-shell:not(.portal-fullscreen) .nav-parent .nav-caret,
   .portal-shell:not(.portal-fullscreen) .sub-nav,
@@ -448,7 +641,8 @@ button:disabled {
   }
 }
 
-.portal-tag { display:flex; align-items:center; gap:10px; margin-top:18px; padding:12px; border:1px solid rgba(255,255,255,.1); border-radius:7px; background:rgba(255,255,255,.04); }
+.portal-shell .portal-tag { margin-top: 8px; }
+.portal-tag { display:flex; align-items:center; gap:10px; margin-top:0; padding:12px; border:1px solid rgba(255,255,255,.1); border-radius:7px; background:rgba(255,255,255,.04); }
 .portal-tag > svg { width:20px; height:20px; flex-shrink:0; display:block; color:#58a3ff; }
 .portal-tag b,.portal-tag small { display:block; }
 .portal-tag b { color:#e7f0ff; font-size:13px; }
@@ -4091,16 +4285,18 @@ button:disabled {
 @media (max-width: 900px) {
   .portal-shell { grid-template-columns:76px minmax(0,1fr); }
   .portal-shell .sidebar { width:76px; padding:18px 10px; }
-  .portal-shell .brand { justify-content:center; padding:0 0 18px; }
-  .portal-shell .brand > div:last-child,.portal-tag span,.portal-shell .nav-item > span:not(.nav-favorite-btn) { display:none; }
+  .portal-shell .brand { justify-content:center; padding:0 0 10px; }
+  .portal-shell .brand > div:last-of-type,
+  .portal-shell .brand .sidebar-pin,
+  .portal-shell .nav-item > span:not(.nav-favorite-btn) { display:none; }
   .portal-shell .sub-nav { display:none; }
   .portal-shell.portal-sidebar-expanded { grid-template-columns:minmax(200px,42vw) minmax(0,1fr); }
   .portal-shell.portal-sidebar-expanded .sidebar { width:100%; padding:18px 12px; }
-  .portal-shell.portal-sidebar-expanded .brand > div:last-child,
-  .portal-shell.portal-sidebar-expanded .portal-tag span,
+  .portal-shell.portal-sidebar-expanded .brand { display:flex; justify-content:flex-start; }
+  .portal-shell.portal-sidebar-expanded .brand > div:last-of-type,
   .portal-shell.portal-sidebar-expanded .nav-item > span:not(.nav-favorite-btn) { display:block; }
+  .portal-shell.portal-sidebar-expanded .brand .sidebar-pin { display:grid; position:absolute; right:6px; top:8px; }
   .portal-shell.portal-sidebar-expanded .sub-nav { display:grid; margin-left:0; padding-left:0; border-left:none; }
-  .portal-shell .portal-tag { justify-content:center; padding:10px 6px; }
   .portal-shell .nav { gap:5px; margin-top:14px; }
   .portal-shell .nav-item { justify-content:center; padding:0; }
   .portal-shell .topbar { height:auto; min-height:70px; padding:10px 16px; }
@@ -4161,195 +4357,193 @@ button:disabled {
   .permission-head { align-items:flex-start; flex-direction:column; }
 }
 
-/* Premium authentication — center glass (scheme B) */
+/* 2026-08-20 - 登录方案 A 玻璃卡 - 科技氛围底 + 毛玻璃表单（CSS 氛围，非风景图） */
 .auth-page {
-  --auth-orange: #ea580c;
-  --auth-orange-light: #fb923c;
+  --auth-accent: #60a5fa;
+  --auth-ink: #f8fafc;
+  --auth-mute: rgba(226, 232, 240, .78);
   position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--auth-ink);
+  font-family: "Plus Jakarta Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+.auth-page--glass {
   display: grid;
   place-items: center;
-  min-height: 100vh;
-  padding: 40px 20px;
-  overflow: hidden;
-  color: #f0f6fc;
-  background: #01040f;
+  padding: 48px 20px 72px;
+  background: #020617;
 }
-.auth-ambient {
-  position: fixed;
+.auth-glass-bg {
+  position: absolute;
   inset: 0;
-  pointer-events: none;
   z-index: 0;
+  pointer-events: none;
   overflow: hidden;
 }
-.auth-bg-base {
+.auth-glass-base {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 90% 70% at 50% 38%, rgba(15, 40, 72, .55), transparent 62%),
-    radial-gradient(circle at 12% 88%, rgba(234, 88, 12, .08), transparent 34%),
-    radial-gradient(circle at 88% 12%, rgba(14, 165, 233, .1), transparent 32%),
-    linear-gradient(180deg, #030712 0%, #020617 42%, #01040f 100%);
+    linear-gradient(180deg, rgba(2, 6, 23, .42) 0%, rgba(2, 6, 23, .55) 48%, rgba(2, 6, 23, .72) 100%),
+    url("/auth-glass-bg.jpg") center / cover no-repeat;
 }
-.auth-bg-grid {
+.auth-glass-grid {
   position: absolute;
   inset: 0;
-  opacity: .34;
+  opacity: .12;
   background-image:
-    linear-gradient(rgba(148, 163, 184, .07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, .07) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse 72% 58% at 50% 44%, #000 18%, transparent 78%);
+    linear-gradient(rgba(148, 163, 184, .14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, .14) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 20%, transparent 78%);
 }
-.auth-bg-vignette {
+.auth-glass-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: .28;
+}
+.auth-glass-glow-a {
+  width: min(420px, 70vw);
+  height: min(420px, 70vw);
+  top: -8%;
+  left: 8%;
+  background: rgba(37, 99, 235, .35);
+}
+.auth-glass-glow-b {
+  width: min(380px, 65vw);
+  height: min(380px, 65vw);
+  right: -4%;
+  bottom: -6%;
+  background: rgba(14, 165, 233, .22);
+}
+.auth-glass-vignette {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse 88% 78% at 50% 50%, transparent 42%, rgba(0, 0, 0, .62) 100%);
+  background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 30%, rgba(2, 6, 23, .62) 100%);
 }
-.auth-spotlight {
-  position: absolute;
-  top: 18%;
-  left: 50%;
-  width: min(560px, 92vw);
-  height: min(560px, 92vw);
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(234, 88, 12, .1) 0%, rgba(14, 165, 233, .06) 38%, transparent 68%);
-  transform: translateX(-50%);
-  filter: blur(18px);
-}
-.auth-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(88px);
-  opacity: .62;
-  animation: auth-orb-drift 18s ease-in-out infinite;
-}
-.auth-orb-a { width: 480px; height: 480px; top: -140px; left: 12%; background: rgba(234, 88, 12, .26); }
-.auth-orb-b { width: 400px; height: 400px; bottom: -100px; right: 8%; background: rgba(14, 165, 233, .24); animation-delay: -6s; }
-.auth-orb-c { width: 280px; height: 280px; top: 38%; left: 58%; background: rgba(168, 85, 247, .16); animation-delay: -12s; }
-.auth-orb-d { width: 220px; height: 220px; top: 62%; left: 18%; background: rgba(45, 212, 191, .1); animation-delay: -9s; }
-@keyframes auth-orb-drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(20px, -16px) scale(1.05); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .auth-orb { animation: none; }
-}
-.auth-wrap {
+.auth-center {
   position: relative;
   z-index: 1;
-  width: min(440px, 100%);
+  width: min(400px, 100%);
 }
-.auth-wrap::before {
-  content: "";
+.auth-center-foot {
   position: absolute;
-  inset: 8% -8%;
-  z-index: -1;
-  border-radius: 32px;
-  background: radial-gradient(ellipse at 50% 42%, rgba(234, 88, 12, .12), transparent 62%);
-  filter: blur(28px);
-  pointer-events: none;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  bottom: 24px;
+  margin: 0;
+  color: rgba(148, 163, 184, .72);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
 }
-.auth-hero {
+.auth-form--glass {
+  width: 100%;
+  padding: 34px 32px 28px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 18px;
+  background: rgba(8, 18, 36, .42);
+  backdrop-filter: blur(26px) saturate(1.25);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  box-shadow:
+    0 28px 80px rgba(0, 0, 0, .4),
+    inset 0 1px 0 rgba(255, 255, 255, .14);
+}
+.auth-glass-head {
   margin-bottom: 26px;
   text-align: center;
 }
-.auth-hero .app-brand-logo--full {
-  width: min(250px, 76%);
-  margin: 0 auto 10px;
-  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, .4));
-}
-.auth-hero h1 {
+.auth-glass-head h1 {
   margin: 0;
-  color: #e2e8f0;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: .04em;
-}
-.auth-hero-sub {
-  margin: 5px 0 0;
-  color: #8fa3b5;
-  font-size: 13px;
-}
-.auth-form {
-  padding: 30px 28px 26px;
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 22px;
-  background: rgba(10, 24, 40, .52);
-  backdrop-filter: blur(24px) saturate(1.2);
-  box-shadow: 0 32px 90px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .08);
-}
-.auth-form h2 {
-  margin: 0 0 22px;
   color: #fff;
-  font-size: 22px;
+  font-size: 28px;
   font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.15;
+}
+.auth-glass-head p {
+  margin: 10px 0 0;
+  color: var(--auth-mute);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+.auth-form-sub,
+.auth-hint {
+  margin: 0 0 16px;
+  color: var(--auth-mute);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
 }
 .auth-field-label {
   display: block;
-  margin: 10px 0 6px;
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+  margin: 16px 0 8px;
+  color: rgba(226, 232, 240, .72);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
 }
 .auth-field-label:first-of-type { margin-top: 0; }
-.auth-field {
+.auth-form--glass .auth-field {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 48px;
-  padding: 0 14px;
-  border: 1px solid rgba(148, 163, 184, .22);
-  border-radius: 11px;
-  background: rgba(0, 0, 0, .28);
-  transition: border-color .2s ease, box-shadow .2s ease;
+  height: 44px;
+  padding: 0 2px 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 0;
+  background: transparent;
+  transition: border-color .18s ease, box-shadow .18s ease;
 }
-.auth-field:focus-within {
-  border-color: rgba(251, 146, 60, .6);
-  box-shadow: 0 0 0 3px rgba(234, 88, 12, .12);
+.auth-form--glass .auth-field:focus-within {
+  border-bottom-color: rgba(96, 165, 250, .95);
+  box-shadow: none;
 }
-.auth-field > svg:first-child {
+.auth-form--glass .auth-field > svg:last-child,
+.auth-form--glass .auth-field > svg {
   flex-shrink: 0;
-  width: 17px;
-  color: #94a3b8;
+  width: 16px;
+  color: rgba(226, 232, 240, .7);
 }
-.auth-field input {
+.auth-form--glass .auth-field input {
   flex: 1;
   min-width: 0;
   border: 0;
   outline: 0;
   color: #fff;
   background: transparent;
+  font: inherit;
   font-size: 14px;
+  font-weight: 500;
 }
-.auth-field input::placeholder { color: #64748b; }
+.auth-form--glass .auth-field input::placeholder {
+  color: rgba(148, 163, 184, .72);
+  font-weight: 500;
+}
 .auth-field-toggle {
   display: grid;
   place-items: center;
-  padding: 4px;
+  padding: 2px;
   border: 0;
-  color: #94a3b8;
+  color: rgba(226, 232, 240, .7);
   background: transparent;
   cursor: pointer;
 }
-.auth-field-toggle svg { width: 17px; }
+.auth-field-toggle:hover { color: #fff; }
+.auth-field-toggle svg { width: 16px; }
 .auth-remember {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 18px 0 22px;
-  padding: 11px 14px;
-  border: 1px solid rgba(255, 255, 255, .06);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .025);
+  margin: 20px 0 24px;
   cursor: pointer;
   user-select: none;
-  transition: border-color .2s ease, background .2s ease;
-}
-.auth-remember:hover {
-  border-color: rgba(255, 255, 255, .1);
-  background: rgba(255, 255, 255, .04);
 }
 .auth-remember input {
   position: absolute;
@@ -4361,196 +4555,104 @@ button:disabled {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  border: 1.5px solid rgba(148, 163, 184, .45);
-  border-radius: 5px;
-  background: rgba(0, 0, 0, .25);
-  transition: border-color .2s ease, background .2s ease;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid rgba(255, 255, 255, .45);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .06);
+  transition: border-color .18s ease, background .18s ease;
 }
 .auth-remember-box svg {
-  width: 12px;
-  height: 12px;
-  color: #fff;
+  width: 11px;
+  height: 11px;
+  color: #0f172a;
   opacity: 0;
   transform: scale(.7);
   transition: .15s ease;
 }
 .auth-remember input:checked + .auth-remember-box {
-  border-color: var(--auth-orange);
-  background: linear-gradient(135deg, #c2410c, var(--auth-orange));
+  border-color: #fff;
+  background: #fff;
 }
 .auth-remember input:checked + .auth-remember-box svg {
   opacity: 1;
   transform: scale(1);
 }
 .auth-remember-text {
-  color: #cbd5e1;
+  color: rgba(226, 232, 240, .82);
   font-size: 13px;
   font-weight: 500;
 }
-.auth-hint {
-  margin: 0 0 14px;
-  color: #94a3b8;
-  font-size: 13px;
+.auth-help {
+  margin: 16px 0 0;
+  color: rgba(148, 163, 184, .78);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
   line-height: 1.5;
 }
 .auth-secondary {
-  margin-top: 14px;
+  margin-top: 12px;
   width: 100%;
-  height: 42px;
-  border: 1px solid rgba(148, 163, 184, .35);
-  border-radius: 11px;
-  color: #cbd5e1;
-  background: transparent;
+  height: 44px;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(255, 255, 255, .06);
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
 .auth-secondary:hover:not(:disabled) {
-  border-color: rgba(148, 163, 184, .55);
-  color: #fff;
+  background: rgba(255, 255, 255, .12);
 }
-.auth-submit {
+.auth-form--glass .auth-submit {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   width: 100%;
-  height: 50px;
+  height: 46px;
   border: 0;
-  border-radius: 11px;
-  color: #fff;
-  background: linear-gradient(135deg, #c2410c, var(--auth-orange) 45%, #f97316);
+  border-radius: 999px;
+  color: #0f172a;
+  background: #fff;
+  font: inherit;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 12px 32px rgba(234, 88, 12, .32);
-  transition: transform .15s ease, box-shadow .15s ease;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.auth-submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 40px rgba(234, 88, 12, .42);
+.auth-form--glass .auth-submit:hover:not(:disabled) {
+  background: #f1f5f9;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .28);
 }
-.auth-submit:active:not(:disabled) { transform: translateY(0) scale(.99); }
-.auth-submit:disabled { opacity: .65; cursor: wait; }
-.auth-submit svg { width: 17px; }
+.auth-form--glass .auth-submit:active:not(:disabled) { transform: translateY(1px); }
+.auth-form--glass .auth-submit:disabled { opacity: .65; cursor: wait; }
 .auth-submit-spinner {
   width: 17px;
   height: 17px;
-  border: 2px solid rgba(255, 255, 255, .38);
-  border-top-color: #fff;
+  border: 2px solid rgba(15, 23, 42, .2);
+  border-top-color: #0f172a;
   border-radius: 50%;
   animation: auth-spinner .75s linear infinite;
 }
 @keyframes auth-spinner { to { transform: rotate(360deg); } }
-.auth-platform-strip {
-  position: relative;
-  margin-top: 18px;
-  padding: 18px 16px 16px;
-  border: 1px solid rgba(255, 255, 255, .09);
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(14, 32, 52, .58), rgba(6, 16, 28, .42)),
-    rgba(255, 255, 255, .02);
-  backdrop-filter: blur(20px) saturate(1.15);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, .34),
-    inset 0 1px 0 rgba(255, 255, 255, .07);
-  overflow: hidden;
-}
-.auth-platform-strip::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(251, 146, 60, .35), rgba(56, 189, 248, .28), transparent);
-  opacity: .85;
-}
-.auth-platform-strip-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.auth-platform-strip-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-.auth-platform-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #34d399;
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, .16), 0 0 12px rgba(52, 211, 153, .45);
-  animation: auth-platform-pulse 2.4s ease-in-out infinite;
-}
-@keyframes auth-platform-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .72; transform: scale(.92); }
-}
-.auth-platform-count {
-  padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, .08);
-  border-radius: 999px;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 600;
-  background: rgba(0, 0, 0, .22);
-  white-space: nowrap;
-}
-.auth-platform-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-}
-.auth-platform-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  min-height: 72px;
-  padding: 10px 6px 9px;
-  border: 1px solid rgba(255, 255, 255, .05);
-  border-radius: 12px;
-  color: #94a3b8;
-  background: rgba(0, 0, 0, .22);
-  transition: transform .18s ease, border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease;
-}
-.auth-platform-item:hover {
-  transform: translateY(-2px);
-  border-color: rgba(251, 146, 60, .28);
-  color: #e2e8f0;
-  background: rgba(234, 88, 12, .06);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, .22);
-}
-.auth-platform-item span {
-  max-width: 100%;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.35;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.auth-platform-item .platform-badge__icon,
-.auth-platform-item .platform-badge__fallback {
-  border-radius: 7px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+@media (max-width: 480px) {
+  .auth-page--glass {
+    padding: 36px 16px 64px;
+  }
+  .auth-form--glass {
+    padding: 28px 20px 22px;
+  }
+  .auth-glass-head h1 {
+    font-size: 24px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .auth-platform-dot { animation: none; }
-}
-@media (max-width: 400px) {
-  .auth-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .auth-glass-glow { filter: blur(48px); }
 }
 
 .dark-identity-dialog { overflow: hidden; border: 1px solid rgba(41, 130, 179, .55); background: #071624 !important; box-shadow: 0 24px 90px rgba(0, 0, 0, .55) !important; }

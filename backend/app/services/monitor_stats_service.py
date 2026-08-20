@@ -926,12 +926,14 @@ def workspace_kpi_trends_from_stats(
     while cursor <= end:
         day_key = cursor.isoformat()
         metrics = workspace_metrics_from_stat_rows(by_day.get(day_key, []))
+        # 2026-08-20 - 趋势图无样本日误画成 0% - 透出 sample_count 供前端断点/灰点
         points.append({
             "label": cursor.strftime("%m-%d"),
             "mention_rate": metrics["brand_mention_rate"],
             "avg_brand_rank": metrics["avg_brand_rank"],
             "top3_rate": metrics["top3_rate"],
             "negative_rate": metrics["negative_rate"],
+            "sample_count": int(metrics.get("ranking_sample_count") or 0),
         })
         cursor += timedelta(days=1)
     return points

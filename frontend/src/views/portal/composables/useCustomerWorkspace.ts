@@ -714,12 +714,26 @@ export function useCustomerWorkspace() {
 
   const trendBars = computed(() => {
     const points = brief.value?.kpi_trends || []
-    if (!points.length) return [] as Array<{ label: string; height: number; value: number }>
-    const max = Math.max(...points.map(point => point.mention_rate), 1)
-    return points.map(point => ({
-      label: point.label,
-      height: Math.max(4, (point.mention_rate / max) * 100),
-      value: point.mention_rate,
+    if (!points.length) {
+      return [] as Array<{ label: string; height: number; value: number | null; empty: boolean }>
+    }
+    // 2026-08-20 - 无样本日勿硬画 0% - sample_count=0 时 value=null，图表断线+灰点
+    const mapped = points.map((point) => {
+      const sampleCount = point.sample_count
+      const empty = sampleCount != null
+        ? sampleCount <= 0
+        : point.avg_brand_rank == null && point.mention_rate === 0 && point.top3_rate === 0
+      return {
+        label: point.label,
+        empty,
+        value: empty ? null : point.mention_rate,
+        height: empty ? 0 : Math.max(4, point.mention_rate),
+      }
+    })
+    const max = Math.max(...mapped.map(point => point.value ?? 0), 1)
+    return mapped.map(point => ({
+      ...point,
+      height: point.empty ? 0 : Math.max(4, ((point.value ?? 0) / max) * 100),
     }))
   })
 

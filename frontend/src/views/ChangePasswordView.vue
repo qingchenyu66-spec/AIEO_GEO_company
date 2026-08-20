@@ -2,11 +2,10 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, LockKeyhole } from '@lucide/vue'
+import { LockKeyhole } from '@lucide/vue'
 import { changePasswordApi } from '../services/auth'
 import { notifyOperationError } from '../utils/requestError'
 import { useAuthStore } from '../stores/auth'
-import AppBrandLogo from '../components/AppBrandLogo.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -59,33 +58,27 @@ async function backToPortal() {
 </script>
 
 <template>
-  <!-- 2026-07-31 - 改密页黑屏 - 对齐登录页 auth-wrap/form/field，勿用已废弃 auth-card/input -->
-  <main class="auth-page">
-    <div class="auth-ambient" aria-hidden="true">
-      <div class="auth-bg-base"></div>
-      <div class="auth-bg-grid"></div>
-      <div class="auth-bg-vignette"></div>
-      <div class="auth-spotlight"></div>
-      <div class="auth-orb auth-orb-a"></div>
-      <div class="auth-orb auth-orb-b"></div>
+  <!-- 2026-08-20 - 改密页对齐玻璃卡方案 A -->
+  <main class="auth-page auth-page--glass">
+    <div class="auth-glass-bg" aria-hidden="true">
+      <div class="auth-glass-base"></div>
+      <div class="auth-glass-grid"></div>
+      <div class="auth-glass-glow auth-glass-glow-a"></div>
+      <div class="auth-glass-glow auth-glass-glow-b"></div>
+      <div class="auth-glass-vignette"></div>
     </div>
 
-    <div class="auth-wrap">
-      <header class="auth-hero">
-        <AppBrandLogo variant="full" alt="艾迪亚控股集团 · GEO Monitor" />
-        <h1>修改登录密码</h1>
-        <p class="auth-hero-sub">
-          {{ forcedChange ? '首次登录或管理员重置后，需设置自己的密码才能继续使用系统' : '更新当前账号的登录密码' }}
-        </p>
-      </header>
+    <div class="auth-center">
+      <form class="auth-form auth-form--glass" @submit.prevent="submit">
+        <header class="auth-glass-head">
+          <h1>{{ forcedChange ? '设置新密码' : '修改密码' }}</h1>
+          <p>{{ forcedChange ? '请先设置自己的密码，再进入工作空间' : '更新当前账号的登录密码' }}</p>
+        </header>
 
-      <form class="auth-form" @submit.prevent="submit">
-        <h2>{{ forcedChange ? '设置新密码' : '修改密码' }}</h2>
-        <p class="auth-hint">当前账号：{{ auth.session?.user?.username || '—' }}</p>
+        <p class="auth-form-sub">当前账号：{{ auth.session?.user?.username || '—' }}</p>
 
         <label class="auth-field-label" for="old-password">当前密码</label>
         <div class="auth-field">
-          <LockKeyhole aria-hidden="true" />
           <input
             id="old-password"
             v-model="form.oldPassword"
@@ -93,11 +86,11 @@ async function backToPortal() {
             autocomplete="current-password"
             :placeholder="forcedChange ? '管理员下发的初始密码' : '当前登录密码'"
           />
+          <LockKeyhole aria-hidden="true" />
         </div>
 
         <label class="auth-field-label" for="new-password">新密码</label>
         <div class="auth-field">
-          <LockKeyhole aria-hidden="true" />
           <input
             id="new-password"
             v-model="form.newPassword"
@@ -105,11 +98,11 @@ async function backToPortal() {
             autocomplete="new-password"
             placeholder="至少 6 个字符"
           />
+          <LockKeyhole aria-hidden="true" />
         </div>
 
         <label class="auth-field-label" for="confirm-password">确认新密码</label>
         <div class="auth-field">
-          <LockKeyhole aria-hidden="true" />
           <input
             id="confirm-password"
             v-model="form.confirmPassword"
@@ -117,16 +110,18 @@ async function backToPortal() {
             autocomplete="new-password"
             placeholder="再输入一次"
           />
+          <LockKeyhole aria-hidden="true" />
         </div>
 
         <button type="submit" class="auth-submit" style="margin-top: 22px" :disabled="loading">
           <span>{{ loading ? '提交中…' : '确认修改' }}</span>
-          <ArrowRight v-if="!loading" />
         </button>
         <button type="button" class="auth-secondary" :disabled="loading" @click="forcedChange ? logoutInstead() : backToPortal()">
           {{ forcedChange ? '退出登录' : '返回' }}
         </button>
       </form>
     </div>
+
+    <p class="auth-center-foot">© GEO Monitor</p>
   </main>
 </template>

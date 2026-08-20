@@ -345,6 +345,8 @@ export interface WorkspaceKpiTrendPoint {
   avg_brand_rank: number | null
   top3_rate: number
   negative_count: number
+  /** 当日样本数；缺省按旧接口兼容，前端用提及率字段兜底 */
+  sample_count?: number
 }
 
 export interface WorkspaceSnapshot {

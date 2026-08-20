@@ -74,12 +74,20 @@ function toggleSidebarPin() {
   }
 }
 
-function onUserMenuCommand(command: 'change-password' | 'logout') {
+function onUserMenuCommand(command: string) {
   if (command === 'change-password') {
     void router.push('/change-password')
     return
   }
-  emit('logout')
+  if (command === 'logout') {
+    emit('logout')
+    return
+  }
+  // 2026-08-20 - 顶栏变轻 - 职位切换收进账号菜单
+  if (command.startsWith('identity:')) {
+    const id = Number(command.slice('identity:'.length))
+    if (Number.isFinite(id)) emit('switchIdentity', id)
+  }
 }
 </script>
 
@@ -94,8 +102,14 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
   >
     <aside v-if="!fullscreen" class="sidebar">
       <div class="brand">
-        <div class="brand-mark"><AppBrandLogo variant="icon" /></div>
-        <div><strong>GEO Monitor</strong><span>{{ previewMode ? '客户门户预览' : (isPlatform ? '平台运营端' : '客户企业端') }}</span></div>
+        <!-- 2026-08-20 - 对齐生产：无 brand-head；固定钮 absolute 不占流，悬停不拽方标 -->
+        <div class="brand-mark brand-mark--logo" aria-hidden="true">
+          <AppBrandLogo variant="icon" alt="" />
+        </div>
+        <div>
+          <strong>GEO Monitor</strong>
+          <span>{{ previewMode ? '客户门户预览' : (isPlatform ? '平台运营端' : '客户企业端') }}</span>
+        </div>
         <button
           type="button"
           class="sidebar-pin"
@@ -108,14 +122,7 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
           <PanelLeft />
         </button>
       </div>
-      <div class="portal-tag">
-        <ShieldCheck v-if="isPlatform && !previewMode" />
-        <Building2 v-else />
-        <span>
-          <b>{{ portalIdentityName }}</b>
-          <small>{{ portalIdentitySubtitle }}</small>
-        </span>
-      </div>
+      <!-- 2026-08-20 - 侧栏身份白胶囊已去掉（用户确认可删） -->
       <nav class="nav" aria-label="主导航">
         <template v-for="(menu, index) in menus" :key="menu.menu_code">
           <div
@@ -212,7 +219,7 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
     </aside>
     <section class="workspace">
       <header v-if="!fullscreen" class="topbar">
-        <div class="crumb">GEO Monitor / {{ pageTitle }}</div>
+        <div class="crumb">{{ pageTitle }}</div>
         <div class="top-actions">
           <!-- 2026-07-30 - 预览退出抢视线/像退出登录 - 顶栏次要按钮「返回企业管理」，去蓝条 -->
           <button
@@ -222,37 +229,32 @@ function onUserMenuCommand(command: 'change-password' | 'logout') {
             @click="emit('exitPreview')"
           >返回企业管理</button>
           <NotificationBell @open-alerts="emit('openAlerts')" />
-          <el-dropdown v-if="identityCount > 1" trigger="click" @command="(id: number) => emit('switchIdentity', id)">
-            <button type="button" class="identity-switch">
-              <span><small>当前职位</small><b>{{ identityDisplayName(identities.find(i => i.id === currentIdentityId)) }}</b></span>
-              <ChevronDown />
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item
-                  v-for="identity in identities"
-                  :key="identity.id"
-                  :command="identity.id"
-                  :disabled="identity.id === currentIdentityId"
-                >
-                  <ShieldCheck v-if="identity.identity_type === 'PLATFORM'" />
-                  <Building2 v-else />
-                  {{ identityDisplayName(identity) }}
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
           <el-dropdown trigger="click" @command="onUserMenuCommand">
             <button type="button" class="user-menu-trigger" aria-label="账号菜单">
-              <div class="user-chip">
+              <div class="user-chip user-chip--avatar-only">
                 <span>{{ sessionDisplayInitial }}</span>
-                <div><b>{{ sessionUserName }}</b><small>{{ sessionUsername }}</small></div>
               </div>
               <ChevronDown class="user-menu-caret" aria-hidden="true" />
             </button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="change-password">
+                <el-dropdown-item disabled class="user-menu-identity-label">
+                  {{ sessionUserName }} · {{ sessionUsername }}
+                </el-dropdown-item>
+                <template v-if="identityCount > 1">
+                  <el-dropdown-item divided disabled>切换职位</el-dropdown-item>
+                  <el-dropdown-item
+                    v-for="identity in identities"
+                    :key="identity.id"
+                    :command="`identity:${identity.id}`"
+                    :disabled="identity.id === currentIdentityId"
+                  >
+                    <ShieldCheck v-if="identity.identity_type === 'PLATFORM'" />
+                    <Building2 v-else />
+                    {{ identityDisplayName(identity) }}
+                  </el-dropdown-item>
+                </template>
+                <el-dropdown-item divided command="change-password">
                   <LockKeyhole />
                   修改密码
                 </el-dropdown-item>

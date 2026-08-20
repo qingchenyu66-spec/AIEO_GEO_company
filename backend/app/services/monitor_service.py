@@ -6799,12 +6799,15 @@ def _build_workspace_kpi_trends(
             daily_ranking.get(day_key, []),
             daily_exposure.get(day_key, []),
         )
+        # 2026-08-20 - 趋势图无样本日误画成 0% - 透出 sample_count 供前端断点/灰点
         points.append({
             "label": cursor.strftime("%m-%d"),
             "mention_rate": metrics["brand_mention_rate"],
             "avg_brand_rank": metrics["avg_brand_rank"],
             "top3_rate": metrics["top3_rate"],
             "negative_count": metrics["negative_count"],
+            # 2026-08-20 - 与 stats 主路径对齐：提及率趋势只计 ranking 样本，勿叠加 exposure
+            "sample_count": int(metrics.get("ranking_sample_count") or 0),
         })
         cursor += timedelta(days=1)
     return points
