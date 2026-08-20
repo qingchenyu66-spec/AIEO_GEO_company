@@ -367,7 +367,8 @@
 
 .ws-board-conclusion-head {
   display: flex;
-  align-items: flex-start;
+  /* 2026-08-20 - 左侧标题顶齐显得偏上 - 与右侧徽章+周期切换垂直居中 */
+  align-items: center;
   justify-content: space-between;
   gap: 10px 14px;
   flex-wrap: wrap;
@@ -441,18 +442,24 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   flex: 1;
+  align-items: stretch;
 }
 
 .ws-board-conclusion-metric {
   display: flex;
   flex-direction: column;
+  /* 2026-08-20 - 指标块内容贴顶留白大 - 卡内水平+垂直居中 */
   justify-content: center;
+  align-items: center;
+  text-align: center;
   gap: 4px;
   min-height: 112px;
+  height: 100%;
   padding: 14px 12px;
   border-radius: 12px;
   background: #f8fafc;
   border: 1px solid #eef2f7;
+  box-sizing: border-box;
 }
 
 .ws-board-conclusion-metric.is-primary {
@@ -969,7 +976,10 @@
 .ws-board-stat-mini {
   display: flex;
   flex-direction: column;
+  /* 2026-08-20 - 露出四宫格文字贴顶 - 与结论指标卡同样卡内居中 */
   justify-content: center;
+  align-items: center;
+  text-align: center;
   padding: 20px 18px;
   background: #f8fafc;
   border-radius: 12px;
