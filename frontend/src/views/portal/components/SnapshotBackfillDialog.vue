@@ -55,8 +55,7 @@ function readShareUrlFromInput(): string {
 }
 
 const hasShareUrl = computed(() => isSharePageUrl(form.snapshot_url))
-const canRankOnly = computed(() => hasMolResult.value && parsedRank.value != null)
-const canSubmit = computed(() => hasShareUrl.value || canRankOnly.value || Boolean(form.snapshot_url.trim()))
+
 
 watch(
   () => props.visible,
