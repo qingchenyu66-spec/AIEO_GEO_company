@@ -325,15 +325,36 @@ function syncCellDrawerFromMatrix() {
     return
   }
   cellDrawer.value = refreshed
-  if (todoOnly.value && !refreshed.has_todo) {
+  // 2026-08-21 - 方案 A：全忽略后仍要能展开已忽略，勿因 todoOnly 关抽屉
+  maybeCloseCellDrawerAfterTodoClear(refreshed)
+}
+
+function cellHasDismissedSlots(cell: SnapshotBackfillMatrixCell | null | undefined) {
+  return Boolean(cell?.slots?.some(slot => slot.backfill_dismissed))
+}
+
+function maybeCloseCellDrawerAfterTodoClear(cell: SnapshotBackfillMatrixCell | null | undefined) {
+  if (!todoOnly.value) return
+  if (!cell) {
+    closeCellDrawer()
+    return
+  }
+  if (!cell.has_todo && !cellHasDismissedSlots(cell)) {
     closeCellDrawer()
   }
 }
 
-const drawerSlots = computed(() => {
+const showDismissedSlots = ref(false)
+
+const drawerActiveSlots = computed(() => {
   const slots = cellDrawer.value?.slots || []
-  // 2026-08-07 - 补录完成后待办里「不显示了」- 抽屉保留未忽略场次（含已补录）供点详情；矩阵外层 todoOnly 仍只红待补格
+  // 2026-08-21 - 方案 A：默认只列未忽略；已忽略靠开关展开
   return slots.filter(slot => !slot.backfill_dismissed)
+})
+
+const drawerDismissedSlots = computed(() => {
+  const slots = cellDrawer.value?.slots || []
+  return slots.filter(slot => Boolean(slot.backfill_dismissed))
 })
 
 
@@ -376,12 +397,15 @@ function openCell(word: string, date: string, platform?: string) {
 function openCellDirect(cell: SnapshotBackfillMatrixCell) {
   activePlatform.value = cell.platform
   cellDrawer.value = cell
+  // 2026-08-21 - 方案 A：每次打开格子默认不展开已忽略，避免误点
+  showDismissedSlots.value = false
   cellDrawerVisible.value = true
 }
 
 function closeCellDrawer() {
   cellDrawerVisible.value = false
   cellDrawer.value = null
+  showDismissedSlots.value = false
 }
 
 function averageRanks(ranks: number[]) {
@@ -464,8 +488,7 @@ function patchSlotLocally(
   if (cellDrawer.value) {
     const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date, cellDrawer.value.platform)
     if (refreshed) cellDrawer.value = refreshed
-    if (todoOnly.value && refreshed && !refreshed.has_todo) closeCellDrawer()
-    if (todoOnly.value && !refreshed) closeCellDrawer()
+    maybeCloseCellDrawerAfterTodoClear(refreshed)
   }
   return touched
 }
@@ -506,7 +529,9 @@ function patchGapSlotDismissedLocally(
   if (cellDrawer.value) {
     const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date, cellDrawer.value.platform)
     if (refreshed) cellDrawer.value = refreshed
-    if (todoOnly.value && (!refreshed || !refreshed.has_todo)) closeCellDrawer()
+    // 2026-08-21 - 方案 A：忽略后自动展开已忽略区，方便立刻取消忽略
+    showDismissedSlots.value = true
+    maybeCloseCellDrawerAfterTodoClear(refreshed)
   }
   return touched
 }
@@ -700,16 +725,39 @@ async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
   }
 }
 
+async function undismissSnapshot(subtaskId: string, reopenDetail = false) {
+  if (!canSubmitBackfill.value || !subtaskId) return null
+  const result = await undismissSnapshotBackfill(subtaskId)
+  ElMessage.success(result.item.needs_backfill ? '已取消忽略，已重新纳入待补录' : '已取消忽略')
+  // 取消忽略需重新进矩阵桶，安静重拉一次即可
+  await loadMatrix({ quiet: true, skipCache: true })
+  syncCellDrawerFromMatrix()
+  emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+  if (reopenDetail) {
+    await openDetailById(subtaskId, result.item)
+  }
+  return result
+}
+
 async function undismissFromDetail() {
   const subtaskId = detailItem.value?.subtask_id || detailSubtask.value?.subtask_id
-  if (!canSubmitBackfill.value || !subtaskId) return
+  if (!subtaskId) return
   try {
-    const result = await undismissSnapshotBackfill(subtaskId)
-    ElMessage.success(result.item.needs_backfill ? '已取消忽略，已重新纳入待补录' : '已取消忽略')
-    // 取消忽略需重新进矩阵桶，安静重拉一次即可
-    await loadMatrix({ quiet: true })
-    emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
-    await openDetailById(subtaskId, result.item)
+    await undismissSnapshot(subtaskId, true)
+  } catch (error: unknown) {
+    notifyOperationError(error, '取消忽略失败')
+  }
+}
+
+// 2026-08-21 - 方案 A：格子抽屉对已忽略场次直接取消忽略，再可点补录
+async function undismissFromSlot(slot: SnapshotBackfillMatrixSlot) {
+  const subtaskId = String(slot.subtask_id || '').trim()
+  if (!subtaskId) {
+    ElMessage.warning('缺少子任务，无法取消忽略')
+    return
+  }
+  try {
+    await undismissSnapshot(subtaskId, false)
   } catch (error: unknown) {
     notifyOperationError(error, '取消忽略失败')
   }
@@ -733,8 +781,8 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
     await loadMatrix({ quiet: true, skipCache: true })
   }
   syncCellDrawerFromMatrix()
-  // 仅当整格已无未忽略场次才关抽屉；已补录场次仍留在列表里
-  if (cellDrawerVisible.value && drawerSlots.value.length === 0) {
+  // 仅当整格已无场次（含已忽略）才关抽屉
+  if (cellDrawerVisible.value && !drawerActiveSlots.value.length && !drawerDismissedSlots.value.length) {
     closeCellDrawer()
   }
   emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
@@ -1145,8 +1193,17 @@ watch(
           {{ platformDisplayName(cellDrawer.platform) }} · {{ cellDrawer.word }} · {{ cellDrawer.date }}
           · 均位 {{ rankText(cellDrawer.rank) }}
         </div>
+
+        <label
+          v-if="drawerDismissedSlots.length"
+          class="sb-dismissed-toggle"
+        >
+          <input v-model="showDismissedSlots" type="checkbox" />
+          显示已忽略（{{ drawerDismissedSlots.length }}）
+        </label>
+
         <div
-          v-for="slot in drawerSlots"
+          v-for="slot in drawerActiveSlots"
           :key="slotKey(slot)"
           class="sb-todo-item"
         >
@@ -1177,6 +1234,37 @@ watch(
             </button>
           </div>
         </div>
+
+        <p v-if="!drawerActiveSlots.length && !showDismissedSlots" class="sb-drawer-empty">
+          {{ drawerDismissedSlots.length ? '当前无待办场次，可勾选上方「显示已忽略」。' : '当前无场次。' }}
+        </p>
+
+        <template v-if="showDismissedSlots && drawerDismissedSlots.length">
+          <div class="sb-dismissed-section-title">已忽略</div>
+          <div
+            v-for="slot in drawerDismissedSlots"
+            :key="`dismissed-${slotKey(slot)}`"
+            class="sb-todo-item is-dismissed"
+          >
+            <div class="t">{{ slot.schedule_label || slot.schedule_window_key || '场次' }} · 已忽略</div>
+            <div class="d">
+              位次 {{ rankText(slot.mention_position) }}
+              <template v-if="slot.error_message"> · {{ slot.error_message }}</template>
+            </div>
+            <div class="sb-todo-actions">
+              <button v-if="slot.subtask_id" type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
+              <button
+                v-if="canSubmitBackfill && slot.subtask_id"
+                type="button"
+                class="sb-btn"
+                @click="undismissFromSlot(slot)"
+              >
+                取消忽略
+              </button>
+            </div>
+          </div>
+        </template>
+
         <button type="button" class="sb-btn ghost" @click="closeCellDrawer">关闭</button>
       </div>
     </div>

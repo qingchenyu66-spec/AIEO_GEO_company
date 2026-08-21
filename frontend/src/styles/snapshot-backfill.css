@@ -859,12 +859,42 @@ table.sb-matrix tbody th {
   margin-bottom: 14px;
 }
 
+.sb-dismissed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--sb-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sb-dismissed-section-title {
+  margin: 8px 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sb-muted);
+}
+
+.sb-drawer-empty {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--sb-muted);
+  line-height: 1.5;
+}
+
 .sb-todo-item {
   border: 1px solid var(--sb-line);
   border-radius: 12px;
   padding: 12px;
   margin-bottom: 10px;
   background: #fafbfc;
+}
+
+.sb-todo-item.is-dismissed {
+  opacity: 0.78;
+  background: #f3f4f6;
 }
 
 .sb-todo-item .t {
