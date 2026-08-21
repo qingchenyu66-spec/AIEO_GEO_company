@@ -44,11 +44,7 @@
   gap: 14px;
   padding: 18px;
   border-radius: 8px;
-  /* 左栏随内容增高，不锁死视口 */
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 32px);
-  overflow: hidden;
+  /* 2026-08-21 - sticky+max-height 会裁切列表，四条也得滚；去掉裁切 */
 }
 
 .lead-rail-head h3 {
@@ -236,11 +232,11 @@
 
 .lead-rail-list {
   display: grid;
+  align-content: start;
   gap: 9px;
-  flex: 1 1 auto;
-  min-height: 0;
-  /* 约 8～10 条卡片高度；条目少时区域仍够高，不出现滚动条 */
-  height: min(760px, calc(100vh - 320px));
+  /* 至少能完整放下约 5～6 条；超过约 9～10 条再滚动 */
+  min-height: 680px;
+  max-height: 920px;
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
@@ -1333,14 +1329,8 @@
     grid-template-columns: 1fr;
   }
 
-  .lead-rail {
-    position: static;
-    max-height: none;
-    overflow: visible;
-  }
-
   .lead-rail-list {
-    height: auto;
+    min-height: 420px;
     max-height: min(72vh, 760px);
   }
 
