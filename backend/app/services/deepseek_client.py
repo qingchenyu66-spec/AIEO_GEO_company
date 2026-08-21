@@ -1500,17 +1500,29 @@ class DeepseekClient:
         """Extract brand list rank from a monitor answer using ranking rules."""
         aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
         truncate_note = "（正文已截断）" if truncated else ""
+        # 2026-08-21 - 方案 C：强制先列主表品牌序再报位次；忽略思考/搜索引用区品牌名
+        # 2026-08-21 - 补强：只用主推荐表/主列表，禁止次要段（纠人工改过的错因 1/4/5）
         system_prompt = (
-            "你是 GEO 品牌监测排名分析助手。请根据 AI 回答正文，判断目标品牌在「与监测词最相关的小节/表格」中的推荐位次。"
+            "你是 GEO 品牌监测排名分析助手。请根据 AI「正式回答」正文，判断目标品牌在「主推荐表/主列表」中的位次。"
             "排名规则：\n"
-            "1. 优先看与监测词/问题语义最匹配的 ##/### 小节或表格；在该小节内按 1. 2. 3. 或表格行序计数。\n"
-            "2. 若存在 Markdown 表格且含企业名列，按表格行序排名。\n"
-            "3. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null。\n"
-            "4. 不要把全篇第一次出现的段落序号当作排名；不要跨小节累计。\n"
+            "1. 只看正式回答中的主推荐表或主编号列表；忽略思考过程、搜索结果、网页标题、引用角标里的品牌名。\n"
+            "2. 主表定义：标题含「速览/主流/十大/品牌推荐/推荐清单/一线/综合」等，或正文中最先出现的品牌对比表/"
+            "1.2.3. 主推荐列表。分档文（入门/中端/高端）时：目标品牌所在那一档内按行序计位，"
+            "并把 category 写成该档标题；不要跨档累计。\n"
+            "3. 禁止用次要段计位：如「其他值得关注」「特色视角」「单科专项」「小四门」「备选/补充/拓展」"
+            "「选购建议/避坑/如何选择」。若品牌只在次要段出现、主表没有，才可用次要段，并在 category 标明该次要标题。\n"
+            "4. 若存在 Markdown/文本表格且含品牌列，优先按该主表数据行序排名（表头不算）。\n"
+            "5. 必须先写出主表/主列表中按出现顺序的品牌名数组 ordered_brands（至少前 8 个，不足则全写），"
+            "再把目标品牌在该数组中的 1-based 下标作为 rank；rank 必须与 ordered_brands 一致。\n"
+            "6. category 必须抄原文小节/表格标题，禁止编造与正文无关的类目名。\n"
+            "7. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null、ordered_brands=[]。\n"
+            "8. 不要跨小节累计；不要把「浏览网页/搜索结果」标题当作家。\n"
             # 2026-07-29 - 选型表「首选」第一行被判成备选第4 - 明确首选列优先于备选/补充表
-            "5. 表格若有「首选推荐/首选」与「备选」列：品牌在首选列出现时，以该表中首次作为首选的数据行序为 rank；"
-            "仅在备选列出现才用备选行序。优先「选型建议/场景推荐」主表，不要用「其他补充」或回答前的思考过程压过主表。\n"
-            "6. 只输出 JSON，不要解释。"
+            "9. 表格若有「首选推荐/首选」与「备选」列：品牌在首选列出现时，以该表中首次作为首选的数据行序为 rank；"
+            "仅在备选列出现才用备选行序。\n"
+            "10. 若输出 category_ranks：每个正式主表各给一条；矩阵最终取主表中最靠前的一条，"
+            "次要段条目不要用来压过主表。\n"
+            "11. 只输出 JSON，不要解释。"
         )
         user_prompt = (
             f"监测词：{monitor_keyword}\n"
@@ -1522,14 +1534,17 @@ class DeepseekClient:
             "输出 JSON：\n"
             "{\n"
             '  "brand_mentioned": true,\n'
-            '  "rank": 4,\n'
-            '  "category": "区域优质工程商",\n'
-            '  "rank_basis": "section_list",\n'
+            '  "ordered_brands": ["品牌A", "品牌B", "品牌C"],\n'
+            '  "rank": 3,\n'
+            '  "category": "热门品牌速览",\n'
+            '  "rank_basis": "markdown_table",\n'
             '  "confidence": 0.92,\n'
             '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
             "}\n"
             "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
-            "confidence 范围 0~1。"
+            "confidence 范围 0~1。\n"
+            "自检：若目标品牌是 ordered_brands 第 k 个，则 rank 必须等于 k；"
+            "category 必须能在正文标题中找到原文。"
         )
         content = self.chat_completion(
             messages=[

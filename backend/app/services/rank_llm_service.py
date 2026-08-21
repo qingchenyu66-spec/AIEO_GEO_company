@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -15,6 +16,7 @@ from app.services.monitor_service import (
     _SECONDARY_MENTION_HEADING_RE,
     _answer_body_for_rank,
     _brand_appears_in_text,
+    _name_matches_brand,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,17 @@ def _parse_rank_number(raw: Any) -> int | float | None:
 
 
 def _is_secondary_rank_category(name: str) -> bool:
-    return bool(_SECONDARY_MENTION_HEADING_RE.search(str(name or "")))
+    text = str(name or "")
+    if _SECONDARY_MENTION_HEADING_RE.search(text):
+        return True
+    # 2026-08-21 - 人工纠偏样本：LLM 爱钻「特色视角/单科专项/小四门」次要段
+    return bool(
+        re.search(
+            r"特色视角|差异化品牌|单科专项|小四门|专项资料|备选清单|补充热门|"
+            r"轻奢颜值补充|高端进口备选|其他补充|拓展名单",
+            text,
+        )
+    )
 
 
 def _select_llm_matrix_rank(
@@ -53,26 +65,99 @@ def _select_llm_matrix_rank(
     *,
     preferred_category: str | None,
 ) -> tuple[int | float | None, str | None]:
-    """主表有 rank 就用主表；主表没有再用补充名单。禁止 min() 让「其他值得关注」盖掉主表。"""
+    """主表有 rank 就用主表最靠前；主表没有再用补充名单。
+
+    2026-08-19 - 禁止 min() 让「其他值得关注」盖掉主表
+    2026-08-21 - preferred 若指向较差主表段，仍取主表最靠前（纠「全科第6盖掉分科第2」）
+    """
     ranked = [row for row in category_ranks if row.get("rank") is not None]
     primary = [row for row in ranked if not _is_secondary_rank_category(str(row["category"]))]
     secondary = [row for row in ranked if _is_secondary_rank_category(str(row["category"]))]
     pool = primary or secondary
     if not pool:
         return None, preferred_category
+    chosen = min(pool, key=lambda item: float(item["rank"]))
     if preferred_category:
         named = next((row for row in pool if row["category"] == preferred_category), None)
-        if named is not None:
+        # 同段或同名时保留 preferred 标签；位次一律取 pool 最靠前
+        if named is not None and float(named["rank"]) == float(chosen["rank"]):
             return named["rank"], named["category"]
-    chosen = min(pool, key=lambda item: float(item["rank"]))
     return chosen["rank"], chosen["category"]
 
 
-def parse_llm_rank_payload(payload: dict[str, Any]) -> LlmBrandRankResult:
+_ANSWER_START_MARKERS = (
+    "现在开始组织回答",
+    "现在开始整理回答",
+    "下面给出正式回答",
+    "以下是正式回答",
+    "以下为正式回答",
+)
+
+# 2026-08-21 - 方案 C：DeepSeek 分享页「思考/搜索引用」里的品牌名会污染表序计位
+_SEARCH_CHROME_RE = re.compile(
+    r"(?:搜索到|Found)\s+\d+\s+(?:个网页|web pages).*?(?:查看全部|View All)",
+    re.IGNORECASE | re.DOTALL,
+)
+_THOUGHT_HEADER_RE = re.compile(
+    r"(?:已思考[（(][^）\n)]*[）)]|Thought for \d+ seconds?)\s*",
+    re.IGNORECASE,
+)
+
+
+def strip_pre_answer_noise_for_rank(text: str) -> str:
+    """计位用正文：去掉思考过程与搜索引用区，只留正式回答。
+
+    2026-08-21 - 方案 C：浏览页标题里的竞品名会把表内第 3 误算成第 4
+    """
+    raw = str(text or "")
+    if not raw.strip():
+        return raw
+
+    cut_at = -1
+    for marker in _ANSWER_START_MARKERS:
+        idx = raw.find(marker)
+        if idx >= 0 and (cut_at < 0 or idx < cut_at):
+            cut_at = idx + len(marker)
+    if cut_at >= 0:
+        raw = raw[cut_at:]
+        raw = raw.lstrip("。．. \t\r\n")
+
+    raw = _SEARCH_CHROME_RE.sub("\n", raw)
+    raw = _THOUGHT_HEADER_RE.sub("\n", raw)
+    return raw.strip()
+
+
+def _parse_ordered_brands(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("ordered_brands") or payload.get("brand_list_prefix") or payload.get("list_preview")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def _rank_from_ordered_brands(ordered_brands: list[str], brand_terms: list[str]) -> int | None:
+    if not ordered_brands or not brand_terms:
+        return None
+    for idx, name in enumerate(ordered_brands, start=1):
+        if _name_matches_brand(name, brand_terms):
+            return idx
+    return None
+
+
+def parse_llm_rank_payload(
+    payload: dict[str, Any],
+    *,
+    brand_terms: list[str] | None = None,
+) -> LlmBrandRankResult:
     """LLM JSON → 结果。矩阵用分类排；总排只作附录。
 
     2026-08-19 - 总排会叠全球段，不能当 mention_position
     2026-08-19 - 主表与补充名单都有时取主表，禁止 min 到补充名单
+    2026-08-21 - 方案 C：有 ordered_brands 时以列表序校对 rank，纠正 LLM 口算偏差
     """
     mentioned = bool(payload.get("brand_mentioned"))
     overall = _parse_rank_number(payload.get("overall_rank"))
@@ -123,11 +208,25 @@ def parse_llm_rank_payload(payload: dict[str, Any]) -> LlmBrandRankResult:
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
 
+    rank_basis = str(payload.get("rank_basis") or "").strip() or None
+    ordered_brands = _parse_ordered_brands(payload)
+    checked = _rank_from_ordered_brands(ordered_brands, brand_terms or [])
+    if checked is not None:
+        mentioned = True
+        if category_rank is not None and int(checked) != int(category_rank):
+            # 列表序与口算不一致时信列表，避免再出现「表第三却报第四」
+            category_rank = checked
+            rank_basis = "ordered_brands_check"
+            confidence = max(confidence, 0.9)
+        elif category_rank is None:
+            category_rank = checked
+            rank_basis = rank_basis or "ordered_brands_check"
+
     return LlmBrandRankResult(
         rank=category_rank if mentioned else None,
         mentioned=mentioned,
         category=category,
-        rank_basis=str(payload.get("rank_basis") or "").strip() or None,
+        rank_basis=rank_basis,
         confidence=confidence,
         evidence=str(payload.get("evidence") or "").strip() or None,
         overall_rank=overall if mentioned else None,
@@ -182,7 +281,9 @@ def extract_brand_rank_with_llm(
     if not force and not rank_engine_is_llm() and not client.rank_fallback_enabled:
         return None
 
-    body, truncated = _truncate_answer(answer_text, settings.deepseek_rank_parse_max_chars)
+    # 2026-08-21 - 方案 C：送 LLM 前先裁思考/搜索区，再截断
+    cleaned = strip_pre_answer_noise_for_rank(answer_text)
+    body, truncated = _truncate_answer(cleaned, settings.deepseek_rank_parse_max_chars)
     if not body:
         return None
 
@@ -198,7 +299,7 @@ def extract_brand_rank_with_llm(
         logger.warning("[rank_llm] deepseek failed monitor_keyword=%r: %s", monitor_keyword, exc)
         return None
 
-    return parse_llm_rank_payload(payload)
+    return parse_llm_rank_payload(payload, brand_terms=brand_terms)
 
 
 def apply_llm_rank_fallback(
