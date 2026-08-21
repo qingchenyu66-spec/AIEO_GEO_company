@@ -1,10 +1,12 @@
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import {
   cancelLeadDiagnosis,
   createLeadDiagnosis,
+  finalizeLeadDiagnosisEarly,
   downloadLeadDiagnosisExport,
+  fetchLeadDiagnosisPreviewHtml,
   getLeadDiagnosisDetail,
   getLeadDiagnosisList,
   LEAD_STATUS_LABELS,
@@ -21,6 +23,7 @@ import {
   pendingApprovalMessage,
 } from '../../../services/approvals'
 import { notifyOperationError } from '../../../utils/requestError'
+import { injectReportPreviewBase } from '../../../utils/reportPreviewHtml'
 import { platformLabelMap } from '../portalMaps'
 import { supportedPlatforms } from '../platformMeta'
 import { formatDateTime } from '../portalUtils'
@@ -49,12 +52,41 @@ export function isLeadScheduleSlotDue(day: string, slot: string) {
 }
 
 export const PROMPT_TEMPLATES = [
-  { label: '产品推荐', value: '例如：XXX有哪些产品值得推荐？' },
-  { label: '排名查询', value: '例如：XXX在同类品牌里排名怎么样？' },
-  { label: '哪家更好', value: '例如：XXX和主要竞品哪家更好？' },
-  { label: '选购建议', value: '例如：选择XXX需要重点关注什么？' },
-  { label: '靠谱程度', value: '例如：XXX品牌靠谱吗？用户评价怎么样？' },
+  // 2026-08-13 - 问法模板标明品牌/非品牌，避免全品牌词导致主 KPI 暂无
+  // 2026-08-21 - 非品牌=行业+推荐/靠谱/哪家好，不硬拼「公司」（蛋白粉≠蛋白粉公司）
+  { label: '非品牌·推荐', lane: 'nonbrand' as const, value: '例如：蛋白粉推荐' },
+  { label: '非品牌·靠谱', lane: 'nonbrand' as const, value: '例如：蛋白粉哪家靠谱' },
+  { label: '非品牌·哪家好', lane: 'nonbrand' as const, value: '例如：蛋白粉哪家好' },
+  // 2026-08-17 - 品牌防守改为「公司介绍/怎么样」，贴近真实检索问法
+  { label: '品牌·介绍', lane: 'brand' as const, value: '例如：XXX公司介绍' },
+  { label: '品牌·评价', lane: 'brand' as const, value: '例如：XXX公司怎么样' },
 ]
+
+/** 非品牌问法主题：优先行业，其次产品焦点；不自动加「公司」。 */
+export function nonbrandTopicLabel(industry: string, productFocus: string): string {
+  return String(industry || '').trim() || String(productFocus || '').trim() || '相关品类'
+}
+
+export function buildNonbrandPromptSet(topic: string): [string, string, string] {
+  const t = String(topic || '').trim() || '相关品类'
+  return [`${t}推荐`, `${t}哪家靠谱`, `${t}哪家好`]
+}
+
+/** 本地粗判：问法是否含品牌名（与报告 is_brand_query 同思路）。 */
+export function promptLooksBrand(prompt: string, brand: string): boolean {
+  const text = String(prompt || '')
+  const b = String(brand || '').trim()
+  if (!text || !b) return false
+  if (text.toLowerCase().includes(b.toLowerCase())) return true
+  // 剥常见公司后缀后再判
+  for (const suffix of ['股份有限公司', '控股集团有限公司', '集团有限公司', '有限公司', '控股集团', '集团', '公司']) {
+    if (b.endsWith(suffix) && b.length > suffix.length + 1) {
+      const short = b.slice(0, -suffix.length).trim()
+      if (short && text.includes(short)) return true
+    }
+  }
+  return false
+}
 
 export const SCHEDULE_SLOTS = ['09:30', '14:30', '20:30']
 export const SCHEDULE_DAYS = 3
@@ -98,7 +130,7 @@ export function useLeadDiagnosis() {
   const loading = ref(false)
   const saving = ref(false)
   const exporting = ref(false)
-  const exportingFormat = ref<'pdf' | 'html' | null>(null)
+  const exportingFormat = ref<'html' | null>(null)
   const exportProgress = ref('')
   const detailLoading = ref(false)
   const loadError = ref('')
@@ -111,11 +143,52 @@ export function useLeadDiagnosis() {
   const createStep = ref(1)
   const detailTab = ref<DetailTab>('progress')
   const submittingSlotKey = ref<string | null>(null)
+  const previewHtmlLoading = ref(false)
+  const previewHtmlUrl = ref<string | null>(null)
+  const previewHtmlBlobById = new Map<number, string>()
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let detailSeq = 0
+  let previewSeq = 0
+
+  function revokePreviewHtmlBlob(exceptId?: number | null) {
+    for (const [id, url] of previewHtmlBlobById.entries()) {
+      if (exceptId != null && id === exceptId) continue
+      URL.revokeObjectURL(url)
+      previewHtmlBlobById.delete(id)
+    }
+    if (exceptId == null) previewHtmlUrl.value = null
+  }
+
+  async function loadPreviewHtml(leadId: number) {
+    const cached = previewHtmlBlobById.get(leadId)
+    if (cached) {
+      previewHtmlUrl.value = cached
+      previewHtmlLoading.value = false
+      return
+    }
+    const seq = ++previewSeq
+    previewHtmlLoading.value = true
+    try {
+      const html = injectReportPreviewBase(await fetchLeadDiagnosisPreviewHtml(leadId))
+      if (seq !== previewSeq || selectedId.value !== leadId) return
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+      previewHtmlBlobById.set(leadId, url)
+      previewHtmlUrl.value = url
+    } catch (error: unknown) {
+      if (seq !== previewSeq) return
+      previewHtmlUrl.value = null
+      notifyOperationError(error, '诊断驾驶舱预览加载失败')
+    } finally {
+      if (seq === previewSeq) previewHtmlLoading.value = false
+    }
+  }
 
   const createForm = ref({
     brand_name: '',
+    brand_aliases: '',
+    website_url: '',
+    industry: '',
+    product_focus: '',
     prompts: ['', '', '', '', ''],
     competitors: '',
     platforms: [] as string[],
@@ -146,6 +219,10 @@ export function useLeadDiagnosis() {
   ))
   const canExport = computed(() => auth.allowedMenus.some(
     menu => menu.menu_code === 'platform.lead_diagnosis' && menu.can_export,
+  ))
+  // 2026-08-11 - 无企业地区编辑权仍可选诊断地区 - 与 platform.audit.regions 对齐
+  const canEditRegions = computed(() => auth.allowedMenus.some(
+    menu => menu.menu_code === 'platform.audit.regions' && menu.can_update,
   ))
 
   const filteredRecords = computed(() => {
@@ -204,6 +281,20 @@ export function useLeadDiagnosis() {
   const filledPromptCount = computed(() => (
     createForm.value.prompts.map(item => item.trim()).filter(Boolean).length
   ))
+
+  // 2026-08-13 - 问法质量条：非品牌/品牌计数，避免全品牌词
+  const promptQuality = computed(() => {
+    const brand = createForm.value.brand_name.trim()
+    let brandN = 0
+    let nonbrandN = 0
+    for (const raw of createForm.value.prompts) {
+      const p = raw.trim()
+      if (!p) continue
+      if (promptLooksBrand(p, brand)) brandN += 1
+      else nonbrandN += 1
+    }
+    return { brandN, nonbrandN, total: brandN + nonbrandN }
+  })
 
   const scheduleTimeline = computed(() => {
     const item = detail.value
@@ -268,7 +359,9 @@ export function useLeadDiagnosis() {
   const progressPercent = computed(() => {
     if (!detail.value) return 0
     const total = detail.value.schedule_total_count ?? SCHEDULE_TOTAL
-    return Math.round((detail.value.completed_run_count / total) * 100)
+    if (!total) return 0
+    // 2026-08-21 - 计划外完成档曾把进度打到 133% - 前端再封顶一次
+    return Math.min(100, Math.round((detail.value.completed_run_count / total) * 100))
   })
 
   function healthTone(score: number | null | undefined) {
@@ -326,6 +419,7 @@ export function useLeadDiagnosis() {
     selectedId.value = id
     detailTab.value = 'progress'
     detailLoading.value = true
+    previewHtmlUrl.value = previewHtmlBlobById.get(id) || null
     try {
       const latest = await getLeadDiagnosisDetail(id)
       if (seq !== detailSeq || selectedId.value !== id) return
@@ -340,10 +434,23 @@ export function useLeadDiagnosis() {
     }
   }
 
+  watch(
+    [selectedId, detailTab, () => detail.value?.status],
+    ([id, tab, status]) => {
+      if (id && tab === 'report' && status === 'ready') {
+        void loadPreviewHtml(id)
+      }
+    },
+  )
+
   function openCreatePanel() {
     createStep.value = 1
     createForm.value = {
       brand_name: '',
+      brand_aliases: '',
+      website_url: '',
+      industry: '',
+      product_focus: '',
       prompts: ['', '', '', '', ''],
       competitors: '',
       platforms: [],
@@ -368,10 +475,50 @@ export function useLeadDiagnosis() {
     else list.push(code)
   }
 
+  function brandAsCompanyLabel(brand: string) {
+    const text = String(brand || '').trim()
+    if (!text) return 'XXX公司'
+    // 已以「公司」结尾则不再叠字（有限公司公司介绍）
+    return text.endsWith('公司') ? text : `${text}公司`
+  }
+
   function applyPromptTemplate(index: number) {
     if (index >= createForm.value.prompts.length) return
     const brand = createForm.value.brand_name.trim() || 'XXX'
-    createForm.value.prompts[index] = PROMPT_TEMPLATES[index].value.replace(/XXX/g, brand)
+    const tpl = PROMPT_TEMPLATES[index]
+    // 2026-08-21 - 非品牌按钮按表单「行业」即时拼，避免写死示例行业
+    if (tpl.lane === 'nonbrand') {
+      const topic = nonbrandTopicLabel(createForm.value.industry, createForm.value.product_focus)
+      const [p0, p1, p2] = buildNonbrandPromptSet(topic)
+      createForm.value.prompts[index] = [p0, p1, p2][index] || p0
+      return
+    }
+    let text = tpl.value.replace(/^例如：/, '')
+    // 2026-08-17 - 「XXX公司介绍」优先整词替换，避免品牌名已含「公司」时叠字
+    if (text.includes('XXX公司')) {
+      text = text.replace(/XXX公司/g, brandAsCompanyLabel(brand))
+    } else {
+      text = text.replace(/XXX/g, brand)
+    }
+    createForm.value.prompts[index] = text
+  }
+
+  function generateBalancedPrompts() {
+    const brand = createForm.value.brand_name.trim()
+    if (!brand) {
+      ElMessage.warning('请先填写品牌名称')
+      return
+    }
+    if (!createForm.value.industry.trim() && !createForm.value.product_focus.trim()) {
+      ElMessage.warning('请先填写行业（或产品焦点），再一键生成非品牌问法')
+      return
+    }
+    // 2026-08-21 - 行业优先：蛋白粉推荐 / 蛋白粉哪家靠谱 / 蛋白粉哪家好；不硬加「公司」
+    const topic = nonbrandTopicLabel(createForm.value.industry, createForm.value.product_focus)
+    const [p0, p1, p2] = buildNonbrandPromptSet(topic)
+    const company = brandAsCompanyLabel(brand)
+    createForm.value.prompts = [p0, p1, p2, `${company}介绍`, `${company}怎么样`]
+    ElMessage.success('已生成 3 条非品牌 + 2 条品牌问法，可再编辑')
   }
 
   function nextCreateStep() {
@@ -428,20 +575,46 @@ export function useLeadDiagnosis() {
       createStep.value = 2
       return
     }
+    const q = promptQuality.value
+    if (q.nonbrandN < 1) {
+      const ok = window.confirm(
+        '当前 5 条问法中非品牌词为 0，提交后将无法计算获客主 KPI（仅能看品牌防守）。确定仍要提交？',
+      )
+      if (!ok) return
+    } else if (q.nonbrandN < 3 || q.brandN < 2) {
+      ElMessage.warning(`建议至少 3 条非品牌 + 2 条品牌（当前非品牌 ${q.nonbrandN} / 品牌 ${q.brandN}）`)
+    }
     saving.value = true
     try {
       const competitors = createForm.value.competitors
         .split(/[,，、]/)
         .map(item => item.trim())
         .filter(Boolean)
+      const brand_aliases = createForm.value.brand_aliases
+        .split(/[,，、;/|]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
       const days = clampScheduleDays(createForm.value.schedule_days)
+      // 2026-08-13 - 官网/行业/产品走 lead_context，contact_note 仅销售备注
+      const lead_context = {
+        website_url: createForm.value.website_url.trim(),
+        industry: createForm.value.industry.trim(),
+        product_focus: createForm.value.product_focus.trim(),
+        purchase_scenario: '',
+        source: 'lead_diagnosis_create',
+      }
+      if (!lead_context.website_url) {
+        ElMessage.info('未填官网：信源与行动建议质量可能下降')
+      }
       const created = await createLeadDiagnosis({
         brand_name: brand,
         prompts,
         competitors,
+        brand_aliases: brand_aliases.length ? brand_aliases : undefined,
         platforms,
-        region_codes: [...createForm.value.region_codes],
+        region_codes: canEditRegions.value ? [...createForm.value.region_codes] : [],
         contact_note: createForm.value.contact_note.trim() || undefined,
+        lead_context,
         schedule_days: days,
         start_immediately: createForm.value.start_immediately,
       })
@@ -510,6 +683,36 @@ export function useLeadDiagnosis() {
     }
   }
 
+  async function handleFinalizeEarly() {
+    if (!selectedId.value || !canCreate.value || !detail.value) return
+    if (detail.value.status !== 'pending' && detail.value.status !== 'collecting') return
+    const completed = (detail.value.runs || []).filter(run => run.status === 'completed').length
+    if (!completed) {
+      ElMessage.warning('至少完成一场抓取后才能提前生成报告')
+      return
+    }
+    // 2026-08-11 - 提前收官勿与取消混淆 - 仅拦 submitted，pending 场次本就是要跳过的
+    if ((detail.value.runs || []).some(run => run.status === 'submitted')) {
+      ElMessage.warning('尚有场次正在抓取，请等当前场次结束后再提前收官')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        `将跳过剩余未执行场次，仅用已完成的 ${completed} 场数据汇总生成报告。确认提前结束？`,
+        '提前结束并生成报告',
+        { type: 'warning', confirmButtonText: '确认收官', cancelButtonText: '返回' },
+      )
+      const latest = await finalizeLeadDiagnosisEarly(selectedId.value)
+      detail.value = latest
+      await loadRecords({ silent: true })
+      stopPolling()
+      ElMessage.success('已提前收官，可下载报告')
+    } catch (error: unknown) {
+      if (error === 'cancel') return
+      notifyOperationError(error, '提前收官失败')
+    }
+  }
+
   const activeInflightRunCount = computed(() => (
     (detail.value?.runs || []).filter(run => run.status === 'submitted' || run.status === 'pending').length
   ))
@@ -537,7 +740,7 @@ export function useLeadDiagnosis() {
     }
   }
 
-  async function handleExport(format: 'pdf' | 'html' = 'pdf') {
+  async function handleExport(format: 'html' = 'html') {
     if (!selectedId.value || detail.value?.status !== 'ready') return
     exporting.value = true
     exportingFormat.value = format
@@ -546,9 +749,9 @@ export function useLeadDiagnosis() {
       const filename = await downloadLeadDiagnosisExport(selectedId.value, format, (label) => {
         exportProgress.value = label
       })
-      ElMessage.success(`${format === 'html' ? 'HTML' : 'PDF'} 已下载：${filename}`)
+      ElMessage.success(`HTML 已下载：${filename}`)
     } catch (error: unknown) {
-      notifyOperationError(error, format === 'html' ? '导出 HTML 失败' : '导出 PDF 失败')
+      notifyOperationError(error, '导出 HTML 失败')
     } finally {
       exporting.value = false
       exportingFormat.value = null
@@ -557,7 +760,10 @@ export function useLeadDiagnosis() {
   }
 
   onMounted(loadRecords)
-  onUnmounted(stopPolling)
+  onUnmounted(() => {
+    stopPolling()
+    revokePreviewHtmlBlob()
+  })
 
   return {
     loading,
@@ -566,6 +772,8 @@ export function useLeadDiagnosis() {
     exportingFormat,
     exportProgress,
     detailLoading,
+    previewHtmlLoading,
+    previewHtmlUrl,
     loadError,
     records,
     selectedId,
@@ -577,9 +785,13 @@ export function useLeadDiagnosis() {
     detailTab,
     createForm,
     createScheduleTotal,
+    promptQuality,
+    generateBalancedPrompts,
+    applyPromptTemplate,
     pageMenuName,
     canCreate,
     canExport,
+    canEditRegions,
     filteredRecords,
     statsSummary,
     diagnosisResult,
@@ -627,12 +839,12 @@ export function useLeadDiagnosis() {
     openCreatePanel,
     closeCreatePanel,
     toggleCreatePlatform,
-    applyPromptTemplate,
     nextCreateStep,
     submitCreate,
     handleRefresh,
     handleForceRun,
     handleCancel,
+    handleFinalizeEarly,
     handleRunSlot,
     canRunScheduleSlot,
     submittingSlotKey,

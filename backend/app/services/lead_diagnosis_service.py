@@ -28,7 +28,11 @@ from app.core.lead_diagnosis_config import (
 from app.core.masking import mask_phone
 from app.core.region_catalog import normalize_region_codes, region_display_name, region_submission_targets
 from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
-from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
+from app.schemas.lead_diagnosis import (
+    LeadDiagnosisCreateRequest,
+    LeadDiagnosisUpdateRequest,
+    normalize_lead_context,
+)
 from app.schemas.monitor import FAST_MONITOR_MODE, CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
 from app.services.lead_diagnosis_analytics import build_lead_diagnosis_analytics, build_rule_report_sections
@@ -280,6 +284,24 @@ def require_lead_diagnosis_access(db: Session, current: CurrentSession, action: 
         raise PermissionError("仅平台运营端可访问售前诊断")
     if not has_identity_menu_permission(db, current.identity.id, "platform.lead_diagnosis", action):
         raise PermissionError("当前身份无售前诊断权限")
+
+
+def can_edit_lead_diagnosis_regions(db: Session, current: CurrentSession) -> bool:
+    """与企业管理「服务地区」同权：无编辑权则诊断不可选地区。"""
+    return has_identity_menu_permission(
+        db, current.identity.id, "platform.audit.regions", "can_update",
+    )
+
+
+def sanitize_lead_region_codes_for_grants(
+    db: Session,
+    current: CurrentSession,
+    region_codes: list[str] | None,
+) -> list[str]:
+    # 2026-08-11 - 无企业地区编辑权仍可选诊断地区 - 与 audit.regions 对齐，无权强制全部区域
+    if can_edit_lead_diagnosis_regions(db, current):
+        return normalize_region_codes(region_codes)
+    return []
 
 
 def assert_lead_platforms_allowed(db: Session, current: CurrentSession, platforms: list[str]) -> None:
@@ -539,6 +561,10 @@ def _serialize_lead(
         "contact_name": lead.contact_name,
         "contact_phone": contact_phone,
         "contact_note": lead.contact_note,
+        # 2026-08-13 - 详情可审计入口字段 - 序列化 lead_context，旧单 normalize 为空字段
+        "lead_context": normalize_lead_context(lead.lead_context_json),
+        # 2026-08-13 - 露出词/别名（可选）
+        "brand_aliases": list(getattr(lead, "brand_aliases_json", None) or []),
         "prompts": lead.prompts_json or [],
         "competitors": lead.competitors_json or [],
         "platforms": list(lead.platforms_json or []),
@@ -556,7 +582,8 @@ def _serialize_lead(
         "created_at": lead.created_at.isoformat(),
         "updated_at": lead.updated_at.isoformat(),
         "run_count": len(lead.runs or []),
-        "completed_run_count": sum(1 for item in (lead.runs or []) if item.status == "completed"),
+        # 2026-08-21 - 迁入/补交产生计划外 run 时进度 12/9=133% - 只计计划内完成档
+        "completed_run_count": _completed_planned_run_count(lead),
         "mention_rate": kpis.get("mention_rate"),
         "avg_rank": kpis.get("avg_rank"),
     }
@@ -703,6 +730,7 @@ def create_lead_diagnosis(
     payload: LeadDiagnosisCreateRequest,
     *,
     enforce_position_platforms: bool = True,
+    enforce_region_grants: bool = True,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
@@ -710,15 +738,25 @@ def create_lead_diagnosis(
     if enforce_position_platforms:
         assert_lead_platforms_allowed(db, current, list(payload.platforms))
     diagnosis_date = payload.diagnosis_date or date.today()
+    # 2026-08-11 - 审批回放勿按申请人再剥地区 - 入队/修订时已按编辑人权限落正文
+    region_codes = (
+        sanitize_lead_region_codes_for_grants(db, current, payload.region_codes)
+        if enforce_region_grants
+        else normalize_region_codes(payload.region_codes)
+    )
     lead = LeadDiagnosis(
         brand_name=payload.brand_name.strip(),
         contact_name=(payload.contact_name or "").strip() or None,
         contact_phone=(payload.contact_phone or "").strip() or None,
         contact_note=(payload.contact_note or "").strip() or None,
+        # 2026-08-13 - 入口官网/行业/产品落库 lead_context_json，不再拼进 contact_note
+        lead_context_json=payload.lead_context_dict(),
+        # 2026-08-13 - 可选露出词落库，提交监测别名与聚合匹配共用
+        brand_aliases_json=list(payload.brand_aliases or []),
         prompts_json=payload.prompts,
         competitors_json=payload.competitors,
         platforms_json=list(payload.platforms),
-        region_codes_json=normalize_region_codes(payload.region_codes),
+        region_codes_json=region_codes,
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
         schedule_days=clamp_lead_schedule_days(payload.schedule_days),
         diagnosis_date=diagnosis_date,
@@ -778,6 +816,86 @@ def cancel_lead_diagnosis(
             run.status = "skipped"
             run.error_message = (run.error_message or "").strip() or "诊断已取消，本场次不再执行"
     db.commit()
+    return get_lead_diagnosis(db, lead_id, current=current)
+
+
+def finalize_lead_diagnosis_early(
+    db: Session,
+    current: CurrentSession,
+    lead_id: int,
+) -> dict[str, Any]:
+    """提前收官：跳过未执行场次，用已完成场次汇总并置 ready，可导出报告。"""
+    # 2026-08-11 - 要等满计划才能出报告 - 支持中途收官，剩余场次标 skipped
+    require_lead_diagnosis_access(db, current, "can_create")
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    ensure_lead_diagnosis_owner_access(db, current, lead)
+    if lead.status not in ACTIVE_STATUSES:
+        raise ValueError("当前诊断已结束或已取消，无法提前收官")
+
+    _sync_lead_run_statuses_from_tasks(db, lead)
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+
+    tasks = _task_map(db, lead)
+    for run in lead.runs or []:
+        if run.status != "submitted":
+            continue
+        task = tasks.get(run.task_id or "")
+        if task is not None and task.status not in TERMINAL_STATUSES:
+            raise ValueError("尚有场次正在抓取，请等当前场次结束后再提前收官")
+
+    completed_runs = [run for run in (lead.runs or []) if run.status == "completed" and run.task_id]
+    if not completed_runs:
+        raise ValueError("至少需要完成一场抓取才能提前生成报告")
+
+    for run in lead.runs or []:
+        if run.status in {"pending", "submitted"}:
+            run.status = "skipped"
+            run.error_message = (run.error_message or "").strip() or "提前收官，本场次不再执行"
+
+    existing_keys = {run.schedule_key for run in (lead.runs or [])}
+    for _day, _slot, schedule_key, schedule_label, _region in _iter_schedule_plan(lead):
+        if schedule_key in existing_keys:
+            continue
+        db.add(
+            LeadDiagnosisRun(
+                lead_diagnosis_id=lead.id,
+                schedule_key=schedule_key,
+                schedule_label=schedule_label,
+                status="skipped",
+                prompt_count=len(lead.prompts_json or []),
+                platform_count=len(_platform_configs_for_lead(lead)),
+                error_message="提前收官，本场次不再执行",
+            )
+        )
+        existing_keys.add(schedule_key)
+
+    db.flush()
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+
+    task_ids = [run.task_id for run in (lead.runs or []) if run.status == "completed" and run.task_id]
+    subtasks = _load_subtasks_by_task_ids(db, task_ids)
+    usable = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
+    if not usable:
+        raise ValueError("已完成场次尚无可用监测结果，无法生成报告")
+
+    tasks = _task_map(db, lead)
+    result = aggregate_lead_diagnosis(
+        lead,
+        subtasks,
+        task_region_map=_task_region_map(tasks),
+        db=db,
+    )
+    lead.diagnosis_result_json = result
+    lead.health_score = result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
+    lead.status = "ready"
+    db.commit()
+    _kick_lead_export_pregenerate(lead_id)
     return get_lead_diagnosis(db, lead_id, current=current)
 
 
@@ -915,8 +1033,10 @@ def submit_due_lead_run(
         return {"status": "skipped", "message": "该时段已提交"}
 
     platforms = _platform_configs_for_lead(lead)
+    # 2026-08-13 - lead 无 tenant 资产别名时重算会把「艾迪亚传媒」判未提及；提交时带短名/别名
     request = MonitorTaskCreateRequest(
         monitor_keywords=lead.brand_name,
+        monitor_keyword_aliases=[t for t in _lead_brand_terms(lead) if t != str(lead.brand_name or "").strip()],
         competitors=_competitor_payload(lead.competitors_json or []),
         prompts=lead.prompts_json or [],
         platforms=platforms,
@@ -1059,21 +1179,35 @@ def _all_slots_attempted(lead: LeadDiagnosis) -> bool:
     return expected.issubset(attempted)
 
 
-def _all_slots_completed(lead: LeadDiagnosis) -> bool:
+def _completed_planned_run_count(lead: LeadDiagnosis) -> int:
     expected = _expected_schedule_keys(lead)
+    return sum(
+        1
+        for item in (lead.runs or [])
+        if item.status == "completed" and item.schedule_key in expected
+    )
+
+
+def _all_slots_completed(lead: LeadDiagnosis) -> bool:
+    # 2026-08-21 - 计划外历史场次会让 completed==expected 永远失败、卡 collecting - 改为计划档均已完成即可
+    expected = _expected_schedule_keys(lead)
+    if not expected:
+        return False
     completed = {run.schedule_key for run in (lead.runs or []) if run.status == "completed"}
-    return expected == completed
+    return expected.issubset(completed)
 
 
 def _runs_terminal(lead: LeadDiagnosis, tasks: dict[str, GeoMonitorTask]) -> bool:
-    for run in lead.runs or []:
+    expected = _expected_schedule_keys(lead)
+    runs = [run for run in (lead.runs or []) if not expected or run.schedule_key in expected]
+    for run in runs:
         if run.status in {"pending", "submitted"}:
             task = tasks.get(run.task_id or "")
             if task and task.status not in TERMINAL_STATUSES:
                 return False
         if run.status == "pending":
             return False
-    return bool(lead.runs)
+    return bool(runs)
 
 
 def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
@@ -1187,6 +1321,54 @@ def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | 
     return {task_id: task.region_code_json for task_id, task in tasks.items()}
 
 
+def _lead_brand_terms(lead: LeadDiagnosis) -> list[str]:
+    """售前品牌匹配词：全称 + 入口露出词 + 结果里别名 + 去后缀短名。
+
+    2026-08-21 - 短别名/短码（如 SAB）虚抬格级 - 弱别名不进自动匹配
+    """
+    from app.schemas.lead_diagnosis import normalize_brand_aliases
+    from app.services.lead_brand_match import is_weak_brand_alias, matchable_brand_terms
+
+    raw: list[str] = []
+    seen: set[str] = set()
+
+    def _collect(value: str | None) -> None:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        raw.append(text)
+
+    brand = str(lead.brand_name or "").strip()
+    _collect(brand)
+    for alias in normalize_brand_aliases(getattr(lead, "brand_aliases_json", None) or []):
+        _collect(alias)
+    stored = lead.diagnosis_result_json if isinstance(lead.diagnosis_result_json, dict) else {}
+    for alias in normalize_brand_aliases(stored.get("brand_aliases") or []):
+        _collect(alias)
+    # 艾迪亚控股集团有限公司 → 艾迪亚控股集团 / 艾迪亚
+    for suffix in ("有限公司", "股份有限公司", "集团有限公司", "控股集团有限公司", "集团"):
+        if brand.endswith(suffix) and len(brand) > len(suffix) + 1:
+            _collect(brand[: -len(suffix)].strip())
+    if brand and len(brand) >= 3 and not is_weak_brand_alias(brand[:3]):
+        _collect(brand[:3])
+    return matchable_brand_terms(brand, raw)
+
+
+def _effective_lead_mention_position(
+    item: GeoMonitorSubtask,
+    brand: str,
+    brand_terms: list[str],
+) -> float | None:
+    """2026-08-13 - 售前热力全 —：聚合只读 mention_position，lead 无别名重算被清成空。
+    对齐生产展示位次：信任已写 mention_position，否则走 _resolve_brand_rank（勿用 normalize 重编号）。
+    2026-08-21 - 与样本表共用 resolve_subtask_brand_rank，避免两套判定。
+    """
+    from app.services.lead_brand_match import resolve_subtask_brand_rank
+
+    return resolve_subtask_brand_rank(item, brand, brand_terms)
+
+
 def aggregate_lead_diagnosis(
     lead: LeadDiagnosis,
     subtasks: list[GeoMonitorSubtask],
@@ -1198,9 +1380,16 @@ def aggregate_lead_diagnosis(
     if db is not None:
         competitors = resolve_lead_competitors(db, lead)
     completed = [item for item in subtasks if item.status in TERMINAL_STATUSES and item.answer_content]
-    mentioned = [item for item in completed if item.mention_position]
-    ranks = [item.mention_position for item in mentioned if item.mention_position]
-    top3 = [item for item in mentioned if item.mention_position and item.mention_position <= 3]
+    brand = str(lead.brand_name or "").strip()
+    brand_terms = _lead_brand_terms(lead)
+    # 2026-08-13 - 热力/KPI 改吃有效位次，勿只信可能被空别名洗掉的 mention_position
+    effective_ranks: list[float] = []
+    for item in completed:
+        pos = _effective_lead_mention_position(item, brand, brand_terms)
+        if pos is not None:
+            effective_ranks.append(pos)
+    mentioned_count = len(effective_ranks)
+    top3_count = sum(1 for rank in effective_ranks if rank <= 3)
 
     sentiment_counts: dict[str, int] = {}
     for item in completed:
@@ -1208,33 +1397,38 @@ def aggregate_lead_diagnosis(
         sentiment_counts[key] = sentiment_counts.get(key, 0) + 1
     positive = sentiment_counts.get("positive", 0) + sentiment_counts.get("neutral", 0)
     positive_rate = round(positive / len(completed) * 100, 1) if completed else 0.0
+    # 2026-08-14 - 负面率与驾驶舱一致：neg / 全样本（含 unknown），勿用已标注子集
+    negative_rate = (
+        round(sentiment_counts.get("negative", 0) / len(completed) * 100, 1) if completed else 0.0
+    )
 
-    mention_rate = round(len(mentioned) / len(completed) * 100, 1) if completed else 0.0
-    avg_rank = round(sum(ranks) / len(ranks), 1) if ranks else None
-    top3_rate = round(len(top3) / len(completed) * 100, 1) if completed else 0.0
+    mention_rate = round(mentioned_count / len(completed) * 100, 1) if completed else 0.0
+    avg_rank = round(sum(effective_ranks) / len(effective_ranks), 1) if effective_ranks else None
+    top3_rate = round(top3_count / len(completed) * 100, 1) if completed else 0.0
 
     platform_buckets: dict[str, dict[str, Any]] = {}
     matrix_cells: dict[str, dict[str, Any]] = {}
     source_map: dict[str, dict[str, Any]] = {}
 
     for item in completed:
+        eff = _effective_lead_mention_position(item, brand, brand_terms)
         bucket = platform_buckets.setdefault(
             item.platform,
             {"platform": item.platform, "total": 0, "completed": 0, "mentioned": 0, "rank_total": 0.0, "rank_count": 0},
         )
         bucket["total"] += 1
         bucket["completed"] += 1
-        if item.mention_position:
+        if eff is not None:
             bucket["mentioned"] += 1
-            bucket["rank_total"] += item.mention_position
+            bucket["rank_total"] += eff
             bucket["rank_count"] += 1
 
         cell_key = f"{item.prompt}::{item.platform}"
         cell = matrix_cells.setdefault(cell_key, {"prompt": item.prompt, "platform": item.platform, "ranks": [], "mentioned": 0, "total": 0})
         cell["total"] += 1
-        if item.mention_position:
+        if eff is not None:
             cell["mentioned"] += 1
-            cell["ranks"].append(item.mention_position)
+            cell["ranks"].append(eff)
 
         for source in item.reference_list_json or []:
             url = source.get("url") or source.get("site") or source.get("title")
@@ -1265,11 +1459,15 @@ def aggregate_lead_diagnosis(
     matrix_rows = []
     for cell in matrix_cells.values():
         ranks = cell["ranks"]
+        # 2026-08-21 - mention_rate 实为格内回答命中率；对外主展示用 avg_rank/露出
+        hit_rate = round(cell["mentioned"] / cell["total"] * 100, 1) if cell["total"] else 0.0
         matrix_rows.append({
             "prompt": cell["prompt"],
             "platform": cell["platform"],
             "sample_count": cell["total"],
-            "mention_rate": round(cell["mentioned"] / cell["total"] * 100, 1) if cell["total"] else 0.0,
+            "mention_rate": hit_rate,
+            "answer_hit_rate": hit_rate,
+            "exposed": bool(ranks),
             "avg_rank": round(sum(ranks) / len(ranks), 1) if ranks else None,
         })
 
@@ -1285,12 +1483,17 @@ def aggregate_lead_diagnosis(
         competitors=competitors,
         task_region_map=task_region_map,
     )
+    # 2026-08-14 - 汇总后竞品以挖掘结果为准（空则仍是建单/企业库兜底）
+    competitors = list(extended_analytics.get("competitors") or competitors)
+    competitor_stats = list(extended_analytics.get("competitor_stats") or [])
+    competitors_mined = list(extended_analytics.get("competitors_mined") or [])
 
     kpis = {
         "mention_rate": mention_rate,
         "avg_rank": avg_rank,
         "top3_rate": top3_rate,
         "positive_rate": positive_rate,
+        "negative_rate": negative_rate,
         "completed_count": len(completed),
         "subtask_count": len(subtasks),
         "source_count": len(source_map),
@@ -1398,9 +1601,14 @@ def aggregate_lead_diagnosis(
     diagnosis_block["health_score"] = health_score
     kpis["health_score"] = health_score
 
-    return {
+    result_payload = {
         "brand_name": lead.brand_name,
         "company_name": lead.brand_name,
+        # 2026-08-13 - 汇总结果带上入口露出词，报告/重算可复用
+        "brand_aliases": list(getattr(lead, "brand_aliases_json", None) or []),
+        "competitors": competitors,
+        "competitors_mined": competitors_mined,
+        "competitor_stats": competitor_stats,
         "period_label": (
             f"{lead.diagnosis_date.isoformat()} 至 {plan_end.isoformat()} · "
             f"{_schedule_days(lead)} 天 × 每日 {len(_schedule_slots(lead))} 档均值"
@@ -1420,6 +1628,9 @@ def aggregate_lead_diagnosis(
             "source_analysis": extended_analytics.get("source_analysis") or {},
             "rank_trend": extended_analytics.get("rank_trend") or [],
             "tracked_entities": extended_analytics.get("tracked_entities") or [],
+            "competitors": competitors,
+            "competitors_mined": competitors_mined,
+            "competitor_stats": competitor_stats,
             "brand_city_rankings": extended_analytics.get("brand_city_rankings") or [],
             "brand_date_matrix": extended_analytics.get("brand_date_matrix") or {},
             "brand_city_matrix": extended_analytics.get("brand_city_matrix") or {},
@@ -1432,6 +1643,14 @@ def aggregate_lead_diagnosis(
         "analysis_html": analysis_html,
         "runs": [_serialize_run(run) for run in sorted(lead.runs or [], key=lambda row: row.schedule_key)],
     }
+    # 2026-08-13 - 方案 B - 收尾时一次生成驾驶舱叙事包
+    try:
+        from app.services.report_diagnosis_cockpit_service import ensure_cockpit_narrative
+
+        result_payload = ensure_cockpit_narrative(result_payload)
+    except Exception:
+        pass
+    return result_payload
 
 
 def _rule_health_score(kpis: dict[str, Any]) -> int:
@@ -1804,31 +2023,191 @@ def build_lead_diagnosis_export(
     *,
     current: CurrentSession | None = None,
 ) -> tuple[bytes, str, str]:
+    report = _build_lead_diagnosis_report_payload(db, lead_id, current=current)
+    from app.services.report_export_service import build_report_export
+
+    fmt = _resolve_export_format(export_format)
+    return build_report_export(report, fmt, db=db)
+
+
+def build_lead_diagnosis_preview_html(
+    db: Session,
+    lead_id: int,
+    *,
+    current: CurrentSession | None = None,
+) -> str:
+    """售前诊断在线预览：与 HTML 下载同源驾驶舱模板。
+
+    2026-08-12 - 售前详情改 iframe 驾驶舱 - 预览走 cockpit，不再依赖 Vue 结论页
+    """
+    report = _build_lead_diagnosis_report_payload(db, lead_id, current=current)
+    from app.services.report_export_service import build_report_html_preview
+
+    return build_report_html_preview(db, report)
+
+
+def _build_lead_diagnosis_report_payload(
+    db: Session,
+    lead_id: int,
+    *,
+    current: CurrentSession | None = None,
+) -> dict[str, Any]:
     detail = get_lead_diagnosis(db, lead_id, current=current)
     if detail.get("status") != "ready":
         raise ValueError("诊断尚未完成，暂无法导出")
     result = dict(detail.get("diagnosis_result") or {})
     # 导出前用现算日均覆盖快照时段行，并写回，避免反复吃旧 cache
     result = _refresh_diagnosis_daily_ranks_for_export(db, lead_id, result)
-    report = {
-        "report_title": f"{detail['brand_name']} 售前品牌诊断报告",
+    # 2026-08-13 - 方案 B - 旧 ready 单缺叙事包时懒生成并落库，避免每次预览重打 DeepSeek
+    if not (isinstance(result.get("cockpit_narrative"), dict) and result["cockpit_narrative"].get("stage_copy")):
+        try:
+            from app.services.report_diagnosis_cockpit_service import ensure_cockpit_narrative
+
+            enriched = ensure_cockpit_narrative(
+                {
+                    **result,
+                    "brand_name": detail.get("brand_name") or result.get("brand_name"),
+                    "competitors": detail.get("competitors") or result.get("competitors") or [],
+                }
+            )
+            narrative = enriched.get("cockpit_narrative")
+            if isinstance(narrative, dict) and narrative.get("stage_copy"):
+                result["cockpit_narrative"] = narrative
+                lead = _load_lead_diagnosis(db, lead_id)
+                if lead is not None:
+                    from sqlalchemy.orm.attributes import flag_modified
+
+                    stored = dict(lead.diagnosis_result_json or {})
+                    stored["cockpit_narrative"] = narrative
+                    lead.diagnosis_result_json = stored
+                    flag_modified(lead, "diagnosis_result_json")
+                    db.add(lead)
+                    db.commit()
+        except Exception:
+            pass
+    # 2026-08-13 - 报告链路透传入口上下文，供 cockpit HTML 的 lead_context/input_context
+    lead_ctx = normalize_lead_context(detail.get("lead_context"))
+    # 2026-08-13 - 问法×平台快照证据（审计层，不参与 KPI）
+    snapshot_evidence = _build_lead_snapshot_evidence(db, lead_id)
+    return {
+        "report_title": _lead_diagnosis_report_title(detail, result),
         "report_type": "diagnosis",
         "report_type_label": "售前诊断",
         "status_label": "已完成",
         "tenant_name": detail["brand_name"],
         "data_summary": result.get("diagnosis", {}).get("sentiment_summary"),
         "created_at": detail.get("created_at"),
+        "updated_at": detail.get("updated_at") or detail.get("created_at"),
+        "id": lead_id,
         "report_content": {
             **result,
             "contact_phone": detail.get("contact_phone"),
             "contact_name": detail.get("contact_name"),
-            "competitors": detail.get("competitors") or [],
+            # 2026-08-14 - 导出优先用汇总挖掘竞品，勿被建单 competitors 盖掉
+            "competitors": result.get("competitors") or detail.get("competitors") or [],
+            "competitor_stats": result.get("competitor_stats") or [],
+            "competitors_mined": result.get("competitors_mined") or [],
+            "lead_context": lead_ctx,
+            "input_context": lead_ctx,
+            "snapshot_evidence": snapshot_evidence,
         },
     }
-    from app.services.report_export_service import build_report_export
 
-    fmt = _resolve_export_format(export_format)
-    return build_report_export(report, fmt, db=db)
+
+def _build_lead_snapshot_evidence(db: Session, lead_id: int) -> dict[str, dict[str, Any]]:
+    """从已完成场次子任务提取问法×平台快照/摘要。key = prompt||canonical_slot。"""
+    from app.services.report_diagnosis_cockpit_service import _canonical_platform
+
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        return {}
+    task_ids = [r.task_id for r in (lead.runs or []) if r.task_id and r.status == "completed"]
+    if not task_ids:
+        # 提前收官：也吃有答案的 submitted/completed 任务
+        task_ids = [r.task_id for r in (lead.runs or []) if r.task_id]
+    if not task_ids:
+        return {}
+    rows = list(
+        db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for st in rows:
+        prompt = str(st.prompt or "").strip()
+        slot = _canonical_platform(str(st.platform or ""))
+        if not prompt or not slot:
+            continue
+        key = f"{prompt}||{slot}"
+        answer = str(st.answer_content or "").strip()
+        shot = str(st.page_screenshot or "").strip()
+        raw = st.raw_result_json if isinstance(st.raw_result_json, dict) else {}
+        share = ""
+        for cand in (
+            raw.get("share_url"),
+            raw.get("snapshot_url"),
+            raw.get("page_url"),
+            (raw.get("result") or {}).get("share_url") if isinstance(raw.get("result"), dict) else None,
+        ):
+            if cand and str(cand).strip().startswith("http"):
+                share = str(cand).strip()
+                break
+        refs: list[str] = []
+        for lst_name in ("citation_list_json", "reference_list_json"):
+            lst = getattr(st, lst_name, None)
+            if isinstance(lst, list):
+                for item in lst[:8]:
+                    if isinstance(item, dict):
+                        u = str(item.get("url") or item.get("link") or "").strip()
+                    else:
+                        u = str(item or "").strip()
+                    if u.startswith("http") and u not in refs:
+                        refs.append(u)
+        # 优先保留已有更完整的条目
+        prev = out.get(key) or {}
+        if prev.get("share_url") and not share and not answer:
+            continue
+        summary = answer[:400] if answer else str(prev.get("answer_summary") or "")
+        out[key] = {
+            "share_url": share or str(prev.get("share_url") or ""),
+            "snapshot_url": share or str(prev.get("snapshot_url") or ""),
+            "page_screenshot": shot or str(prev.get("page_screenshot") or ""),
+            "screenshot_url": shot or str(prev.get("screenshot_url") or ""),
+            "answer_summary": summary,
+            "references": refs or list(prev.get("references") or []),
+        }
+    return out
+
+
+def _lead_diagnosis_report_title(detail: dict[str, Any], result: dict[str, Any]) -> str:
+    """文件名带平台版本：SAB伟星拉链_豆包+ChatGPT综合_售前品牌诊断报告。"""
+    from app.services.molizhishu_catalog_service import get_supported_platform_catalog
+    from app.services.report_diagnosis_cockpit_service import diagnosis_export_title
+
+    catalog = {
+        str(item.get("code") or ""): str(item.get("name") or item.get("code") or "")
+        for item in get_supported_platform_catalog()
+    }
+    labels: list[str] = []
+    for row in result.get("platform_stats") or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("platform") or "").strip()
+        if code:
+            labels.append(catalog.get(code) or code)
+    if not labels:
+        for code in detail.get("platforms") or []:
+            c = str(code or "").strip()
+            if c:
+                labels.append(catalog.get(c) or c)
+    # 去重保序
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for name in labels:
+        if name in seen:
+            continue
+        seen.add(name)
+        uniq.append(name)
+    brand = str(detail.get("brand_name") or result.get("brand_name") or "品牌").strip()
+    return diagnosis_export_title(brand, uniq)
 
 
 def _refresh_diagnosis_daily_ranks_for_export(

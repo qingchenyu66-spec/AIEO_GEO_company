@@ -180,8 +180,9 @@ export function formatBoardScheduleLine(asset: BrandAsset | null, brief: Workspa
     monthly: '每月',
   }
   const prefix = typeLabels[scheduleType || ''] || '监测'
-  if (times.length) return `${prefix} ${times.length} 次 · ${times.join(', ')}`
-  if (asset?.schedule_frequency) return `${prefix} · 每天 ${asset.schedule_frequency} 次`
+  // 2026-08-21 - 工作台服务信息勿摊具体时刻 - 只保留「每日 N 次」
+  if (times.length) return `${prefix} ${times.length} 次`
+  if (asset?.schedule_frequency) return `${prefix} ${asset.schedule_frequency} 次`
   return brief?.next_schedule_hint || '按监测计划执行'
 }
 

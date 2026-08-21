@@ -447,12 +447,20 @@ def revise_lead_diagnosis_create_approval(
     if not brand:
         raise ValueError("原单缺少品牌名称，无法保存")
 
+    from app.services.lead_diagnosis_service import can_edit_lead_diagnosis_regions
+
+    # 2026-08-11 - 无企业地区编辑权仍可选诊断地区 - 审批采用同口径
+    if can_edit_lead_diagnosis_regions(db, current):
+        next_regions = patch.get("region_codes", adopted.get("region_codes"))
+    else:
+        next_regions = adopted.get("region_codes")
+
     merged = {
         **adopted,
         "brand_name": brand,
         "competitors": patch.get("competitors", adopted.get("competitors")),
         "platforms": patch.get("platforms", adopted.get("platforms")),
-        "region_codes": patch.get("region_codes", adopted.get("region_codes")),
+        "region_codes": next_regions,
         "schedule_days": patch.get("schedule_days", adopted.get("schedule_days")),
         "prompts": patch.get("prompts", adopted.get("prompts")),
         "contact_note": patch.get("contact_note", adopted.get("contact_note")),

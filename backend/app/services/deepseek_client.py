@@ -22,6 +22,175 @@ class DeepseekApiError(RuntimeError):
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.I)
 
+_STAGE_KEYS = ("all", "recognition", "selection", "procurement", "risk")
+_STAGE_LABELS = {
+    # 2026-08-20 - 与顶栏/桌面 G 一致：竞品对标，不再写技术选型
+    "all": "管理层摘要",
+    "recognition": "品牌认知",
+    "selection": "竞品对标",
+    "procurement": "推荐名单",
+    "risk": "口碑评价",
+}
+_PRIORITY_DEFAULTS = (
+    ("p0", "P0 · 场景攻坚", "status-risk", "缺口明显"),
+    ("p1", "P1 · 平台覆盖", "status-gap", "需结构化"),
+    ("p2", "P2 · 优势放大", "status-ok", "基础较强"),
+)
+_ACTION_DEFAULTS = (
+    ("p0", "P0 · 30 天", "夯实决策底稿"),
+    ("p1", "P1 · 60 天", "提升前三占比"),
+    ("p2", "P2 · 90 天", "扩大权威引用"),
+)
+
+
+def _normalize_cockpit_narrative(payload: dict[str, Any], *, brand: str) -> dict[str, Any]:
+    """收敛驾驶舱叙事 JSON，保证壳字段齐全。"""
+    stage_in = payload.get("stage_copy") if isinstance(payload.get("stage_copy"), dict) else {}
+    stage_copy: dict[str, dict[str, str]] = {}
+    for key in _STAGE_KEYS:
+        row = stage_in.get(key) if isinstance(stage_in.get(key), dict) else {}
+        title = str(row.get("title") or "").strip() or f"{brand} AI 可见度仍有提升空间"
+        if "<span>" not in title:
+            title = f"{title}<span>明确推荐位</span>" if key == "all" else title
+        stage_copy[key] = {
+            "label": str(row.get("label") or _STAGE_LABELS[key]).strip() or _STAGE_LABELS[key],
+            "title": title,
+            "summary": str(row.get("summary") or "").strip() or f"{brand} 监测窗口内的可见度判断。",
+        }
+
+    raw_priority = payload.get("priority_items") if isinstance(payload.get("priority_items"), list) else []
+    priority_items: list[dict[str, str]] = []
+    for idx, defaults in enumerate(_PRIORITY_DEFAULTS):
+        level_class, level, tone, tone_label = defaults
+        row = raw_priority[idx] if idx < len(raw_priority) and isinstance(raw_priority[idx], dict) else {}
+        priority_items.append(
+            {
+                "level_class": level_class,
+                "level": str(row.get("level") or level).strip() or level,
+                "tone": str(row.get("tone") or tone).strip() or tone,
+                "tone_label": str(row.get("tone_label") or tone_label).strip() or tone_label,
+                "title": str(row.get("title") or f"{level_class.upper()} 行动").strip(),
+                "body": str(row.get("body") or "基于监测短板给出的优先动作。").strip(),
+            }
+        )
+
+    raw_risks = payload.get("risk_rows") if isinstance(payload.get("risk_rows"), list) else []
+    risk_rows: list[dict[str, str]] = []
+    for item in raw_risks[:5]:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic") or "").strip()
+        if not topic:
+            continue
+        priority = str(item.get("priority") or "P1").strip().upper()
+        if priority not in {"P0", "P1", "P2"}:
+            priority = "P1"
+        risk_rows.append(
+            {
+                "topic": topic,
+                "models": str(item.get("models") or "多平台").strip() or "多平台",
+                "impact": str(item.get("impact") or "影响入围").strip() or "影响入围",
+                "evidence": str(item.get("evidence") or "案例与权威信源").strip() or "案例与权威信源",
+                "priority": priority,
+                "pill": "risk-high" if priority == "P0" else "risk-medium",
+            }
+        )
+    if len(risk_rows) < 3:
+        for item in priority_items:
+            risk_rows.append(
+                {
+                    "topic": item["title"],
+                    "models": "已监测平台",
+                    "impact": "影响入围与推荐位" if item["level_class"] == "p0" else "影响说服力",
+                    # 2026-08-13 - 禁止空泛「案例与权威信源」；证据必须来自优先项正文
+                    "evidence": item["body"],
+                    "priority": item["level"].split("·", 1)[0].strip() or "P1",
+                    "pill": "risk-high" if item["level_class"] == "p0" else "risk-medium",
+                }
+            )
+            if len(risk_rows) >= 4:
+                break
+
+    raw_actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+    actions: list[dict[str, Any]] = []
+    for idx, defaults in enumerate(_ACTION_DEFAULTS):
+        level_class, level, impact = defaults
+        row = raw_actions[idx] if idx < len(raw_actions) and isinstance(raw_actions[idx], dict) else {}
+        bullets_raw = row.get("bullets") if isinstance(row.get("bullets"), list) else []
+        bullets = [str(x).strip() for x in bullets_raw if str(x).strip()][:5]
+        base = priority_items[idx] if idx < len(priority_items) else {}
+        if len(bullets) < 3:
+            bullets = [
+                f"要解决的问法/问题：{base.get('title') or '监测短板'}",
+                f"数据证据：{str(base.get('body') or '暂无数据')[:80]}",
+                "复测方式：同问法×已监测平台复跑，对比获客提及率/均排/Top3",
+            ]
+        actions.append(
+            {
+                "level_class": level_class,
+                "level": str(row.get("level") or level).strip() or level,
+                "impact": str(row.get("impact") or impact).strip() or impact,
+                "title": str(row.get("title") or base.get("title") or level).strip(),
+                "body": str(row.get("body") or base.get("body") or "按阶段推进内容与信源建设。").strip(),
+                "bullets": bullets,
+            }
+        )
+
+    # 2026-08-21 - 生成后 scrub：客户可见禁「选型标准/选型路径」品类，对齐换皮版-G
+    def _scrub(s: str) -> str:
+        text = str(s or "")
+        for old, new in (
+            ("选型标准问法", "推荐类问法"),
+            ("选型路径问法", "推荐类问法"),
+            ("选择标准类问法", "推荐类问法"),
+            ("选择标准问法", "推荐类问法"),
+            ("选型标准意图", "推荐意图"),
+            ("选型路径意图", "推荐意图"),
+            ("选型标准", "推荐名单"),
+            ("选型路径", "推荐名单"),
+            ("选择标准", "推荐名单"),
+            ("竞品对比", "竞品对标"),
+            ("技术选型", "竞品对标"),
+        ):
+            text = text.replace(old, new)
+        return text
+
+    for key, row in stage_copy.items():
+        stage_copy[key] = {
+            "label": _scrub(row["label"]) if key != "selection" else _STAGE_LABELS["selection"],
+            "title": _scrub(row["title"]),
+            "summary": _scrub(row["summary"]),
+        }
+        if key == "selection" and any(
+            tok in f"{row.get('title')}{row.get('summary')}" for tok in ("选型标准", "技术选型", "选型类问题")
+        ):
+            stage_copy[key] = {
+                "label": _STAGE_LABELS["selection"],
+                "title": f"{brand}非品牌词获客里要<span>盯紧竞品同框</span>",
+                "summary": f"对照竞品在非品牌词回答中的共现与位次，判断{brand}是否被挤出同框。",
+            }
+    for item in priority_items:
+        item["title"] = _scrub(item["title"])
+        item["body"] = _scrub(item["body"])
+        item["level"] = _scrub(item["level"])
+        item["tone_label"] = _scrub(item["tone_label"])
+    for item in risk_rows:
+        for field in ("topic", "models", "impact", "evidence"):
+            item[field] = _scrub(item[field])
+    for item in actions:
+        item["title"] = _scrub(item["title"])
+        item["body"] = _scrub(item["body"])
+        item["impact"] = _scrub(item["impact"])
+        item["bullets"] = [_scrub(x) for x in item["bullets"]]
+
+    return {
+        "stage_copy": stage_copy,
+        "priority_items": priority_items,
+        "risk_rows": risk_rows[:5],
+        "actions": actions,
+        "source": "deepseek",
+    }
+
 
 class DeepseekClient:
     def __init__(self) -> None:
@@ -234,6 +403,7 @@ class DeepseekClient:
             "你是品牌舆情分析助手。根据 AI 搜索/问答原文，判断对指定品牌的情感倾向。"
             "口径适中：有清晰优势/认可可判正面，不要过度压成中性。只输出 JSON，不要解释。"
         )
+
         user_prompt = (
             f"品牌名称：{brand_name}\n"
             "请对下列编号摘录分别判定情感：positive（正面）、neutral（中性）、negative（负面）。\n"
@@ -629,24 +799,27 @@ class DeepseekClient:
         prompt_section = ""
         if prompt_lines:
             prompt_section = "分语义词表现：\n" + "\n".join(prompt_lines) + "\n\n"
-        # 2026-08-04 - 情绪键中英混用会导致模型误写「均为0」；统一成中文计数再喂给模型
+        # 2026-08-14 - 情绪占比分母=全部完成样本（含未知），禁止只用已标注算出虚高 80%
         from app.services.report_period_content_service import normalize_sentiment_counts
 
         sent_norm = normalize_sentiment_counts(sentiment_counts)
         pos_n = int(sent_norm.get("正面") or 0)
         neu_n = int(sent_norm.get("中性") or 0)
         neg_n = int(sent_norm.get("负面") or 0)
-        sent_total = pos_n + neu_n + neg_n
-        if sent_total > 0:
+        unk_n = int(sent_norm.get("未知") or 0)
+        completed_n = int(kpis.get("completed_count") or 0) or (pos_n + neu_n + neg_n + unk_n)
+        if completed_n > 0:
+            neg_rate = round(neg_n * 100 / completed_n, 1)
             sentiment_line = (
-                f"情绪分布：正面/中性/负面 = {pos_n}/{neu_n}/{neg_n}"
-                f"（合计 {sent_total}，占比 "
-                f"{round(pos_n * 100 / sent_total, 1)}%/"
-                f"{round(neu_n * 100 / sent_total, 1)}%/"
-                f"{round(neg_n * 100 / sent_total, 1)}%）"
+                f"情绪分布（全样本 {completed_n}）："
+                f"正面/中性/负面/未知 = {pos_n}/{neu_n}/{neg_n}/{unk_n}；"
+                f"负面占比 {neg_rate}%（{neg_n}/{completed_n}），"
+                f"正面占比 {round(pos_n * 100 / completed_n, 1)}%，"
+                f"未知 {round(unk_n * 100 / completed_n, 1)}%。"
+                f"写分析时负面/正面占比必须用上述全样本分母，禁止只用已标注子集重算。"
             )
         else:
-            sentiment_line = "情绪分布：暂无有效情绪标注样本"
+            sentiment_line = "情绪分布：暂无完成样本"
         user_prompt = (
             f"品牌：{brand_name}\n"
             f"企业：{company_name or brand_name}\n"
@@ -787,6 +960,291 @@ class DeepseekClient:
             "source_action_tips": source_action_tips,
             "priority_actions": priority_actions,
         }
+
+    def generate_cockpit_narrative(
+        self,
+        *,
+        brand_name: str,
+        facts: dict[str, Any],
+    ) -> dict[str, Any]:
+        """驾驶舱专用文案包（一次调用）：阶段文案 + P0/P1/P2 + 风险表 + 30/60/90 行动。
+
+        2026-08-13 - 数字仍由监测映射；模型只写叙事，禁止改 KPI
+        2026-08-13 - 接入品牌诊断分层提示词：监测事实→口径计算→分析判断→建议动作
+        """
+        if not self.report_enabled:
+            raise DeepseekApiError("未开启 deepseek_report_enabled")
+
+        brand = str(brand_name or "").strip() or "品牌"
+        weak = facts.get("weak_prompts") or []
+        strong = facts.get("strong_prompts") or []
+        platforms = facts.get("platform_rows") or []
+        competitors = facts.get("competitors") or []
+        competitor_stats = facts.get("competitor_stats") if isinstance(facts.get("competitor_stats"), list) else []
+        kpis = facts.get("kpis") or {}
+        lanes = facts.get("kpi_lanes") if isinstance(facts.get("kpi_lanes"), dict) else {}
+        acq = lanes.get("acquisition") if isinstance(lanes.get("acquisition"), dict) else {}
+        defense = lanes.get("brand_defense") if isinstance(lanes.get("brand_defense"), dict) else {}
+        sample_basis = facts.get("sample_basis") if isinstance(facts.get("sample_basis"), dict) else {}
+        # 2026-08-13 - 格级 lane 曾缺 prompt_count → 模型写「防守问法数=0」与下方品牌问法冲突
+        if "prompt_count" not in acq:
+            acq = {
+                **acq,
+                "prompt_count": int(sample_basis.get("nonbrand_prompt_count") or 0),
+            }
+        if "prompt_count" not in defense:
+            defense = {
+                **defense,
+                "prompt_count": int(sample_basis.get("brand_prompt_count") or 0),
+            }
+        all_kpi = lanes.get("all") if isinstance(lanes.get("all"), dict) else {}
+        taxonomy = facts.get("prompt_taxonomy") if isinstance(facts.get("prompt_taxonomy"), list) else []
+        intent_basis = facts.get("intent_basis") if isinstance(facts.get("intent_basis"), dict) else {}
+        if not intent_basis:
+            kb = facts.get("kpi_basis") if isinstance(facts.get("kpi_basis"), dict) else {}
+            raw_intents = kb.get("intents") if isinstance(kb.get("intents"), dict) else {}
+            intent_basis = {
+                str(code): lanes for code, lanes in raw_intents.items() if isinstance(lanes, dict)
+            }
+
+        def _m(block: dict[str, Any], key: str, *, pct: bool = False) -> str:
+            raw = block.get(key)
+            if raw is None or raw == "":
+                return "暂无数据"
+            try:
+                num = float(raw)
+            except (TypeError, ValueError):
+                return "暂无数据"
+            return f"{num:.1f}%" if pct else f"{num:.1f}"
+
+        weak_lines = [
+            f"- {item.get('prompt')}: 格级提及率 {item.get('mention_rate')}%，均排 {item.get('avg_rank') or '暂无数据'}"
+            f"{('；回答命中率 ' + str(item.get('answer_hit_rate')) + '%' ) if item.get('answer_hit_rate') is not None else ''}"
+            for item in weak[:6]
+            if isinstance(item, dict)
+        ]
+        strong_lines = [
+            f"- {item.get('prompt')}: 格级提及率 {item.get('mention_rate')}%，均排 {item.get('avg_rank') or '暂无数据'}"
+            f"{('；回答命中率 ' + str(item.get('answer_hit_rate')) + '%' ) if item.get('answer_hit_rate') is not None else ''}"
+            for item in strong[:4]
+            if isinstance(item, dict)
+        ]
+        plat_lines = [
+            (
+                f"- {item.get('name')}: 提及率 "
+                f"{('暂无数据' if item.get('positive') is None else str(item.get('positive')) + '%')}，"
+                f"均排 {item.get('rank') if item.get('rank') not in (None, '') else '暂无数据'}"
+            )
+            for item in platforms[:8]
+            if isinstance(item, dict)
+        ]
+        tax_lines = []
+        for item in taxonomy[:12]:
+            if not isinstance(item, dict):
+                continue
+            hit = item.get("answer_hit_rate")
+            hit_txt = (
+                f"，回答命中率 {hit}%"
+                if hit is not None and hit != ""
+                else ""
+            )
+            tax_lines.append(
+                f"- [{item.get('lane_label')}/{item.get('filter_label') or item.get('intent_label') or '未归类'}] "
+                f"{item.get('prompt')}: 格级提及率 {item.get('mention_rate')}%，"
+                f"均排 {item.get('avg_rank') if item.get('avg_rank') not in (None, '') else '暂无数据'}"
+                f"{hit_txt}，样本 {item.get('sample_count') or 0}"
+            )
+        intent_lines: list[str] = []
+        for code, intent_lanes in intent_basis.items():
+            if not isinstance(intent_lanes, dict):
+                continue
+            label = str(intent_lanes.get("label") or code)
+            nb = intent_lanes.get("nonbrand") if isinstance(intent_lanes.get("nonbrand"), dict) else {}
+            bd = intent_lanes.get("brand") if isinstance(intent_lanes.get("brand"), dict) else {}
+            intent_lines.append(
+                f"- {label}({code}): 非品牌格 {int(nb.get('total_cells') or 0)}"
+                f"（提及 {int(nb.get('mention_cells') or 0)}，率 {_m(nb, 'mention_rate', pct=True)}，"
+                f"均排 {_m(nb, 'avg_rank')}）；"
+                f"品牌格 {int(bd.get('total_cells') or 0)}"
+                f"（提及 {int(bd.get('mention_cells') or 0)}，率 {_m(bd, 'mention_rate', pct=True)}，"
+                f"均排 {_m(bd, 'avg_rank')}）"
+            )
+        scope_note = str(facts.get("platform_scope_note") or "").strip()
+        monitored = facts.get("monitored_platforms") or []
+        if isinstance(monitored, list) and monitored:
+            monitored_txt = "、".join(str(x) for x in monitored if str(x).strip())
+        else:
+            monitored_txt = "（见平台槽位）"
+        platform_count = int(facts.get("platform_count") or len(platforms) or 0)
+        filter_mode = str(facts.get("filter_mode") or "intent")
+        p1_level = "P1 · 问法补强" if platform_count <= 1 else "P1 · 平台覆盖"
+        p0_level = "P0 · 意图攻坚" if filter_mode == "intent" else "P0 · 场景攻坚"
+
+        json_schema = (
+            "{\n"
+            '  "stage_copy": {\n'
+            '    "all": {"label":"管理层摘要","title":"含一个 <span>强调片段</span> 的标题 HTML","summary":"执行摘要：3-5个监测事实，须写明主 KPI 基于非品牌词获客"},\n'
+            '    "recognition": {"label":"品牌认知","title":"...","summary":"可含品牌词防守口径；事实与推断分开"},\n'
+            '    "selection": {"label":"竞品对标","title":"...","summary":"非品牌词共现/竞品同框"},\n'
+            '    "procurement": {"label":"推荐名单","title":"...","summary":"推荐名单/入围类"},\n'
+            '    "risk": {"label":"口碑评价","title":"...","summary":"口碑/风险；品牌词仅作防守分析"}\n'
+            "  },\n"
+            '  "priority_items": [\n'
+            f'    {{"level_class":"p0","level":"{p0_level}","tone":"status-risk","tone_label":"缺口明显","title":"18字内","body":"须含：对应问法+数据证据+影响判断+优先级"}},\n'
+            f'    {{"level_class":"p1","level":"{p1_level}","tone":"status-gap","tone_label":"需结构化","title":"18字内","body":"须含：对应问法+数据证据+影响判断+优先级"}},\n'
+            '    {"level_class":"p2","level":"P2 · 优势放大","tone":"status-ok","tone_label":"基础较强","title":"18字内","body":"须含：对应问法+数据证据+影响判断+优先级"}\n'
+            "  ],\n"
+            '  "risk_rows": [\n'
+            '    {"topic":"风险/问题（可含问法）","models":"监测覆盖范围","impact":"影响判断","evidence":"数据证据+建议证据","priority":"P0|P1","pill":"risk-high|risk-medium"}\n'
+            "  ],\n"
+            '  "actions": [\n'
+            '    {"level_class":"p0","level":"P0 · 30 天","impact":"短标签","title":"标题","body":"绑定问法与预期指标","bullets":["内容载体","预期改善指标","复测方式"]},\n'
+            '    {"level_class":"p1","level":"P1 · 60 天","impact":"短标签","title":"标题","body":"绑定问法与预期指标","bullets":["内容载体","预期改善指标","复测方式"]},\n'
+            '    {"level_class":"p2","level":"P2 · 90 天","impact":"短标签","title":"标题","body":"绑定问法与预期指标","bullets":["内容载体","预期改善指标","复测方式"]}\n'
+            "  ]\n"
+            "}"
+        )
+        system_prompt = (
+            "你是 GEO / AI 搜索可见度诊断分析师。"
+            "请基于输入的监测数据生成品牌诊断报告（输出为驾驶舱 JSON，不是自由长文）。\n"
+            "硬性要求：\n"
+            "1. 不得编造数据。\n"
+            "2. 所有数值必须来自输入数据，不允许自行估算。\n"
+            "3. 必须区分：监测事实（直接来自数据）、分析判断（基于事实的合理推断）、优化建议（可执行动作）。"
+            "无法从输入数据支持的结论必须标注为「推断」或不输出。\n"
+            "4. 品牌词与非品牌词必须分开计算；禁止把品牌词数据混入主 KPI。\n"
+            "5. 主 KPI 默认使用非品牌词获客口径："
+            "获客提及率、获客平均推荐位、获客 Top3 率；品牌词问题不得进入这三项。\n"
+            "6. 品牌词只用于品牌防守、口碑承接、竞品比较分析。\n"
+            "7. 如果某项数据缺失，写「暂无数据」，不要补数字。\n"
+            "8. 不要使用夸张营销话术。\n"
+            "9. 不要把某个行业模板强套到所有品牌。\n"
+            "10. 风险、优先级、行动建议必须引用具体问法和数据证据；禁止无数据来源的泛化建议。\n"
+            "11. 每条问法须先分类：brand_query/non_brand_query；scene（电梯/机场/高铁/公交地铁/LED/none）；"
+            # 2026-08-21 - 客户可见禁「选型标准/选型路径」品类；意图仅推荐名单/竞品对标/口碑评价/品牌认知（对齐换皮版-G 可见栏）
+            "intent（推荐名单/竞品对标/口碑评价/品牌认知；禁止在 title/body/summary 写「选型标准」「选型路径」「选择标准」；"
+            "阶段条 selection 必须写竞品对标，不得写技术选型或选型类问题）。"
+            "scene!=none 时第二维为场景筛选，否则为问法意图。\n"
+            "12. 若非品牌词获客问法数=0：三项主 KPI（获客提及率/均排/Top3）必须全部写「暂无数据」，"
+            "禁止用品牌词或全量数据回填；执行摘要必须明确："
+            "本次样本只能评估品牌防守，不能评估自然获客可见度。\n"
+            "13. 主 KPI 数字必须直接引用输入中的 kpi_basis / kpi_lanes 格级结果，禁止自行重算或用 sample_basis 跨日率替代主 KPI。\n"
+            "14. 若 intent_basis / kpi_basis.intents 某意图 total_cells>0，禁止写该意图「无样本/无数据」；"
+            "须引用该意图格级 mention_rate / avg_rank。"
+            "品牌词意图（口碑/品牌排名）用 brand 车道，勿套非品牌获客主 KPI；"
+            "口碑若非品牌格=0但品牌格>0，必须写品牌防守口径，禁止把「非品牌口碑0格」写成主风险。\n"
+            "15. 平台均排必须引用平台槽位已给出的均排；禁止在有均排数字时写「暂无数据」。\n"
+            # 2026-08-21 - 强弱问法已是格级提及率；sample_basis 只能称回答命中率
+            "16. weak_prompts/strong_prompts 中的「提及率」已是问法×平台格级，必须原样引用；"
+            "sample_basis 数字只能称为「回答命中率」，禁止再叫「提及率」，"
+            "禁止同一段里把格级提及率与回答命中率写成互相矛盾的同一口径。\n"
+            # 2026-08-21 - 认知页禁把无防守绑成无法评估口碑；覆盖含 0% 意图
+            "17. recognition（品牌认知）阶段：品牌词防守问法数为 0 时，只能写「无法评估品牌词防守/点名排名」，"
+            "禁止写「无法评估品牌口碑」；口碑结论只放 risk（口碑评价）阶段。"
+            "某意图格级提及率为 0% 仍算已覆盖，禁止因 0% 写该意图「未监测/无样本」。\n"
+            "品牌诊断报告的主结论不得由模型自由发挥，必须由「监测事实 → 口径计算 → 分析判断 → 建议动作」逐层生成；"
+            "任何无法从输入数据支持的结论都必须标注为「推断」或不输出。\n"
+            "平台口径：未出现在监测平台列表中的平台=未监测，禁止写成提及率 0；"
+            "禁止把系统约束句原文写进客户可见文案。\n"
+            "若事实包 competitor_stats 中存在 hit_count>0，竞品对标阶段禁止写「未见/未提供竞品共现或同框」，必须引用具体竞品名与共现率；"
+            "分析判断须写本品相对这些竞品的差距（同框强度/推荐位/证据）及可执行优化；"
+            "禁止写「不是没有竞品」「并非没有竞品」这类纠错套话。\n"
+            "title 可含单个 <span>…</span> 强调，其余字段纯文本。"
+            "priority_items 必须恰好 3 条且 level_class 依次为 p0/p1/p2；"
+            "actions 必须恰好 3 条对应 30/60/90 天；risk_rows 4~5 条。"
+            "禁止验收口径、死日期单点承诺；量化用「争取提到约 A%～B%」表述。"
+            "只输出 JSON。"
+        )
+        acq_count = int(acq.get("prompt_count") or 0)
+        acq_zero_note = (
+            "【硬约束】非品牌词获客问法数=0：主 KPI 三项必须为「暂无数据」，不得回填；"
+            "结论只能谈品牌防守，不能谈自然获客可见度。\n"
+            if acq_count <= 0
+            else ""
+        )
+        # 2026-08-20 - 共现率进事实区，避免模型只看见名单就写「未见同框」
+        comp_hit_rows = [
+            r
+            for r in competitor_stats[:8]
+            if isinstance(r, dict) and str(r.get("name") or "").strip()
+        ]
+        if any(int(r.get("hit_count") or 0) > 0 for r in competitor_stats if isinstance(r, dict)):
+            comp_block = (
+                f"竞品名单：{('、'.join(str(x) for x in competitors[:8]) if competitors else '未配置')}\n"
+                "竞品共现（非品牌词获客样本，须直接引用；hit_count>0 时禁止写未见/未提供同框）：\n"
+                + "\n".join(
+                    f"- {str(r.get('name') or '').strip()}: 共现率 {float(r.get('rate') or 0):.1f}%"
+                    f"（命中 {int(r.get('hit_count') or 0)}/{int(r.get('sample_total') or 0)}）"
+                    for r in comp_hit_rows
+                )
+                + "\n\n"
+            )
+        else:
+            comp_block = (
+                f"竞品名单：{('、'.join(str(x) for x in competitors[:8]) if competitors else '未配置')}\n"
+                "竞品共现：暂无命中（才可写未见同框）。\n\n"
+            )
+
+        user_prompt = (
+            f"品牌：{brand}\n"
+            f"第二轴模式：{filter_mode}（scene=按场景归类；intent=按意图归类）\n"
+            f"本窗监测平台（共 {platform_count} 个）：{monitored_txt}\n"
+            f"平台口径（仅供遵守，勿原文写入客户文案）：{scope_note or '仅评价已列出的平台'}\n"
+            f"{comp_block}"
+            "【核心口径】\n"
+            "A. 品牌词：含品牌名/别名/公司名、品牌+竞品对比、品牌怎么样/靠谱吗。\n"
+            "B. 非品牌词：不含品牌名，但体现主动寻找方案/产品/机构/服务/推荐名单。\n"
+            "主指标只基于非品牌词：获客提及率、获客平均推荐位、获客 Top3 率。\n"
+            "品牌词单独：品牌防守提及率、品牌口碑情绪、品牌词平均排名、竞品对比表现。\n\n"
+            f"{acq_zero_note}"
+            "【已计算口径（直接引用，勿重算）】\n"
+            f"- 非品牌词获客：问法数 {acq_count}，"
+            f"获客提及率 {_m(acq, 'mention_rate', pct=True)}，"
+            f"获客均排 {_m(acq, 'avg_rank')}，"
+            f"获客 Top3 {_m(acq, 'top3_rate', pct=True)}\n"
+            f"- 品牌词防守：问法数 {defense.get('prompt_count', 0)}，"
+            f"防守提及率 {_m(defense, 'mention_rate', pct=True)}，"
+            f"品牌词均排 {_m(defense, 'avg_rank')}，"
+            f"Top3 {_m(defense, 'top3_rate', pct=True)}\n"
+            f"- 全量辅助：问法数 {all_kpi.get('prompt_count', 0)}，"
+            f"全量提及率 {_m(all_kpi, 'mention_rate', pct=True)}，"
+            f"全量均排 {_m(all_kpi, 'avg_rank')}，"
+            f"全量 Top3 {_m(all_kpi, 'top3_rate', pct=True)}，"
+            f"负面关联 {_m(all_kpi, 'negative_rate', pct=True)}，"
+            f"信源引用 {_m(all_kpi, 'citation_rate', pct=True)}\n"
+            f"- 壳映射主 KPI（=非品牌词获客；样本为 0 时三项均为暂无数据）："
+            f"提及率 {_m(kpis, 'visibility', pct=True)}，"
+            f"均排 {_m(kpis, 'rank')}，"
+            f"Top3 {_m(kpis, 'decision', pct=True)}，"
+            f"负面 {_m(kpis, 'negative', pct=True)}，"
+            f"引用 {_m(kpis, 'citation', pct=True)}\n\n"
+            "【问法归类与样本】\n"
+            f"{chr(10).join(tax_lines) or '- 暂无数据'}\n\n"
+            "【意图格级样本（有格则禁止写无样本）】\n"
+            f"{chr(10).join(intent_lines) or '- 暂无意图切片'}\n\n"
+            "【非品牌词弱问法】\n"
+            f"{chr(10).join(weak_lines) or '- 暂无数据'}\n\n"
+            "【非品牌词强问法】\n"
+            f"{chr(10).join(strong_lines) or '- 暂无数据'}\n\n"
+            "【平台槽位（仅这些有样本）】\n"
+            f"{chr(10).join(plat_lines) or '- 暂无数据'}\n\n"
+            "请按「执行摘要 / 核心指标口径 / 问法归类结论 / 关键问题诊断 / 优化建议」组织内容，"
+            "并映射到下列 JSON 字段（all.summary=执行摘要；priority/risk=关键问题；actions=优化建议）。\n"
+            f"请输出 JSON：\n{json_schema}"
+        )
+        content = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.35,
+            max_tokens=3200,
+            source="cockpit-narrative",
+        )
+        payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            raise DeepseekApiError("DeepSeek 驾驶舱 JSON 格式错误")
+        return _normalize_cockpit_narrative(payload, brand=brand)
 
     def generate_source_value_analyses(
         self,
@@ -1042,23 +1500,17 @@ class DeepseekClient:
         """Extract brand list rank from a monitor answer using ranking rules."""
         aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
         truncate_note = "（正文已截断）" if truncated else ""
-        # 2026-08-19 - 过紧会逼只报一块；改自主分类。总排与分类排分开，矩阵位次只用分类排
-        # 2026-08-19 - 主表有则用主表；主表没有再用「其他值得关注」（19227906）
-        # 2026-08-19 - evidence 改写空格/** 会整条丢 rank，提示要求原样复制
         system_prompt = (
-            "你是 GEO 品牌监测排名分析助手。请自己阅读正文、自行划分推荐类别，"
-            "分别给出总排和分类排。不要套固定的「必须选中国市场/必须只留一块名单」。\n"
-            "总排 overall_rank：正文里所有推荐名单中的公司，按首次出现顺序排成一条序列，目标品牌的位次。"
-            "如何选择、如何解读、总结、注意事项、引用角标里的点名不算选手。\n"
-            "分类排 category_ranks：按正文自己的结构归类（小节标题、表格分区、梯队、场景、全球/中国等），"
-            "每一类内单独从 1 计数。同一品牌可出现在多类。总排和分类排允许不同，禁止用总排冒充分类排。\n"
-            "矩阵选类：正式主表（排行榜/对比表/有排名列的表格）优先于补充名单。"
-            "主表里有目标品牌 → category 必须是该主表，分类排用主表序；补充名单即使更靠前也不得盖掉。"
-            "主表没有 → 再用「其他值得关注 / 其他实力品牌参考 / 其他知名品牌」等补充名单"
-            "（含引用块 >），类内从 1 计数；禁止当旁白剔除，禁止填进主表当第11名。\n"
-            "表格一格内顿号并列多家时，分类排按格内顺序计。"
-            "evidence 必须从正文连续原样复制（含空格、**、编号），禁止改写。"
-            "只输出 JSON。"
+            "你是 GEO 品牌监测排名分析助手。请根据 AI 回答正文，判断目标品牌在「与监测词最相关的小节/表格」中的推荐位次。"
+            "排名规则：\n"
+            "1. 优先看与监测词/问题语义最匹配的 ##/### 小节或表格；在该小节内按 1. 2. 3. 或表格行序计数。\n"
+            "2. 若存在 Markdown 表格且含企业名列，按表格行序排名。\n"
+            "3. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null。\n"
+            "4. 不要把全篇第一次出现的段落序号当作排名；不要跨小节累计。\n"
+            # 2026-07-29 - 选型表「首选」第一行被判成备选第4 - 明确首选列优先于备选/补充表
+            "5. 表格若有「首选推荐/首选」与「备选」列：品牌在首选列出现时，以该表中首次作为首选的数据行序为 rank；"
+            "仅在备选列出现才用备选行序。优先「选型建议/场景推荐」主表，不要用「其他补充」或回答前的思考过程压过主表。\n"
+            "6. 只输出 JSON，不要解释。"
         )
         user_prompt = (
             f"监测词：{monitor_keyword}\n"
@@ -1067,19 +1519,16 @@ class DeepseekClient:
             f"{truncate_note}\n\n"
             "回答正文：\n"
             f"{answer_text}\n\n"
-            "输出 JSON（字段示例，数字不要照抄）：\n"
+            "输出 JSON：\n"
             "{\n"
             '  "brand_mentioned": true,\n'
-            '  "overall_rank": null,\n'
-            '  "category_ranks": [\n'
-            '    {"category": "类别名", "rank": null}\n'
-            "  ],\n"
-            '  "category": "主表有则填主表类名，否则填补充名单类名",\n'
-            '  "rank_basis": "section_bullet",\n'
-            '  "confidence": 0.0,\n'
-            '  "evidence": ""\n'
+            '  "rank": 4,\n'
+            '  "category": "区域优质工程商",\n'
+            '  "rank_basis": "section_list",\n'
+            '  "confidence": 0.92,\n'
+            '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
             "}\n"
-            "rank_basis 取值：section_bullet | cell_enum | markdown_table | preferred_column | prose | none\n"
+            "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
             "confidence 范围 0~1。"
         )
         content = self.chat_completion(
@@ -1088,7 +1537,7 @@ class DeepseekClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=800,
+            max_tokens=512,
             source="rank_fallback",
         )
         payload = self._parse_json_payload(content)

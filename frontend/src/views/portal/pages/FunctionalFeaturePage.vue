@@ -677,7 +677,8 @@ onUnmounted(() => {
         />
 
         <div v-else-if="functionalPage.mode === 'report'" class="report-preview">
-          <h3>{{ brandAsset?.brand_name || '艾迪亚' }} GEO 监测诊断报告</h3>
+          <!-- 2026-08-20 - 报告预览标题勿默认艾迪亚 - 无品牌资产时用中性兜底 -->
+          <h3>{{ brandAsset?.brand_name || '本品牌' }} GEO 监测诊断报告</h3>
           <p>本周期共完成 {{ monitorSummary?.subtask_count || 0 }} 个检测子任务，品牌提及率 {{ monitorSummary?.mention_rate || 0 }}%，平均推荐排名 {{ monitorSummary?.avg_rank || '-' }}。主要优化方向集中在高权威信源、竞品对比内容和移动端结果稳定性。</p>
           <div class="report-table">
             <span>平台</span><span>提及率</span><span>平均排名</span><span>建议动作</span>

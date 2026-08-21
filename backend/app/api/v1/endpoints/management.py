@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session, require_platform
@@ -1513,6 +1513,18 @@ def management_create_user(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        # 2026-08-20 - 软删账号/编码撞库时给可读原因，勿只回 IntegrityError
+        db.rollback()
+        raw = str(getattr(exc, "orig", None) or exc)
+        detail = "数据库保存失败：唯一约束冲突"
+        if "ix_sys_user_username" in raw or "username" in raw.lower():
+            detail = "登录账号已被占用（含已删除账号），请更换登录名或先恢复旧账号"
+        elif "uk_user_identity_code" in raw or "identity_code" in raw.lower():
+            detail = "用户身份编码冲突，请刷新后重试或联系管理员"
+        elif "ix_sys_tenant_code" in raw or "sys_tenant" in raw.lower():
+            detail = "企业编码冲突，请更换企业名称后重试"
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"数据库保存失败：{exc.__class__.__name__}") from exc

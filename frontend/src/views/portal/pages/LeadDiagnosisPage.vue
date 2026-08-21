@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Download,
   FileText,
@@ -18,11 +19,15 @@ import {
   Zap,
 } from '@lucide/vue'
 import { initChart, type ECharts } from '../../../utils/echartsLoader'
-import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
+import {
+  classifyLeadConfigPrompt,
+  displayOrEmpty,
+} from '../composables/leadDiagnosisConfigDisplay'
 import '../../../styles/lead-diagnosis.css'
 
 const {
@@ -32,6 +37,8 @@ const {
   exportingFormat,
   exportProgress,
   detailLoading,
+  previewHtmlLoading,
+  previewHtmlUrl,
   loadError,
   selectedId,
   detail,
@@ -43,6 +50,7 @@ const {
   createForm,
   canCreate,
   canExport,
+  canEditRegions,
   filteredRecords,
   statsSummary,
   kpis,
@@ -75,6 +83,8 @@ const {
   formatDateTime,
   formatLeadCreator,
   filledPromptCount,
+  promptQuality,
+  generateBalancedPrompts,
   scheduleTimeline,
   schedulePlanSummary,
   progressPercent,
@@ -90,6 +100,7 @@ const {
   handleRefresh,
   handleForceRun,
   handleCancel,
+  handleFinalizeEarly,
   handleRunSlot,
   canRunScheduleSlot,
   submittingSlotKey,
@@ -133,6 +144,46 @@ function listProgress(item: { completed_run_count: number; schedule_total_count?
     if (index === item.completed_run_count && item.completed_run_count < total) return 'running'
     return ''
   })
+}
+
+/** 2026-08-21 - 任务配置展示建单全量；空字段统一「未填写」 */
+const configPromptRows = computed(() => {
+  const row = detail.value
+  if (!row) return []
+  const brand = String(row.brand_name || '')
+  const aliases = Array.isArray(row.brand_aliases) ? row.brand_aliases.map(String) : []
+  return (row.prompts || []).map((prompt, index) => {
+    const meta = classifyLeadConfigPrompt(prompt, brand, aliases)
+    return {
+      index: index + 1,
+      prompt: String(prompt || '').trim() || '未填写',
+      ...meta,
+    }
+  })
+})
+
+const configPlatformConfigured = computed(() => {
+  const codes = detail.value?.platforms || []
+  if (!codes.length) return [] as Array<{ code: string; label: string }>
+  return codes.map((code) => ({
+    code,
+    label: platformLabelMap[code] || code,
+  }))
+})
+
+/** 2026-08-21 - 任务配置分块默认折叠，避免整页过长 */
+const configSectionOpen = ref<Record<string, boolean>>({
+  brand: true,
+  scope: false,
+  prompts: true,
+  meta: false,
+})
+
+function toggleConfigSection(key: string) {
+  configSectionOpen.value = {
+    ...configSectionOpen.value,
+    [key]: !configSectionOpen.value[key],
+  }
 }
 
 const rankTrendChartRef = ref<HTMLElement | null>(null)
@@ -216,12 +267,11 @@ async function renderPromptCharts() {
 }
 
 watch([detailTab, rankTrend, trackedEntities, selectedId], async () => {
-  if (detailTab.value !== 'report' || !rankTrend.value.length) {
+  // 2026-08-12 - 诊断结论改驾驶舱 iframe，不再渲染页内趋势图
+  if (detailTab.value === 'report' || !rankTrend.value.length) {
     disposeRankTrendChart()
     return
   }
-  await nextTick()
-  await renderRankTrendChart()
 }, { deep: true })
 
 watch([detailTab, promptAnalytics, trackedEntities, selectedId], () => {
@@ -240,8 +290,8 @@ onUnmounted(() => {
       <div class="lead-create-hero">
         <div>
           <span class="lead-eyebrow">售前诊断任务</span>
-          <h2>创建一份可交付的潜客诊断</h2>
-          <p>系统会在指定时段采集 AI 平台回答，自动沉淀健康分、平台表现、引用来源与诊断建议。</p>
+          <h2>创建售前 AI 可见度诊断</h2>
+          <p>先生成标准诊断问法，再采集 AI 平台回答，输出可交付报告。</p>
         </div>
         <button type="button" class="lead-icon-btn" @click="closeCreatePanel">
           <ArrowLeft :size="17" /> 返回列表
@@ -250,20 +300,37 @@ onUnmounted(() => {
 
       <div class="lead-step-bar">
         <span :class="{ active: createStep === 1 }"><b>01</b> 客户与品牌</span>
-        <span :class="{ active: createStep === 2 }"><b>02</b> 检测问题</span>
+        <span :class="{ active: createStep === 2 }"><b>02</b> 诊断问法</span>
       </div>
 
       <div v-if="createStep === 1" class="lead-form lead-form-card">
         <div class="lead-form-grid">
           <label class="lead-field lead-field-wide">
             <span>品牌名称 *</span>
-            <input v-model="createForm.brand_name" placeholder="例如：北京艾迪亚控股集团有限公司" />
+            <input v-model="createForm.brand_name" placeholder="例如：客户品牌全称" />
+          </label>
+          <label class="lead-field lead-field-wide">
+            <span>品牌别名 / 露出词（可选）</span>
+            <!-- 2026-08-20 - 别名示例勿写死旧客户名 -->
+            <input v-model="createForm.brand_aliases" placeholder="多个用逗号分隔，例如：品牌简称, 品牌别称" />
+          </label>
+          <label class="lead-field lead-field-wide">
+            <span>官网 URL（强烈建议）</span>
+            <input v-model="createForm.website_url" placeholder="https://www.example.com" />
+          </label>
+          <label class="lead-field">
+            <span>所属行业 / 业务类型</span>
+            <input v-model="createForm.industry" placeholder="例如：服饰辅料 / RPA / 户外广告" />
+          </label>
+          <label class="lead-field">
+            <span>主要产品 / 采购场景</span>
+            <input v-model="createForm.product_focus" placeholder="例如：拉链 / 智能体平台" />
           </label>
           <label class="lead-field lead-field-wide">
             <span>主要竞品</span>
             <input v-model="createForm.competitors" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
           </label>
-          <label class="lead-field lead-field-wide">
+          <label v-if="canEditRegions" class="lead-field lead-field-wide">
             <span>监测地区</span>
             <RegionMultiSelect v-model="createForm.region_codes" />
           </label>
@@ -323,10 +390,25 @@ onUnmounted(() => {
       </div>
 
       <div v-else class="lead-form lead-form-card">
+        <div class="lead-form-hint" style="margin-bottom:12px">
+          <Lightbulb :size="16" />
+          <span>
+            问法质量：非品牌 <b>{{ promptQuality.nonbrandN }}</b> / 3，品牌 <b>{{ promptQuality.brandN }}</b> / 2，总计 <b>{{ promptQuality.total }}</b> / 5。
+            建议非品牌≥3、品牌≥2，否则获客主 KPI 可能暂无。
+          </span>
+        </div>
+        <div class="lead-form-actions" style="justify-content:flex-start;margin-bottom:12px">
+          <button type="button" class="lead-secondary-btn" @click="generateBalancedPrompts">
+            <Sparkles :size="15" /> 一键生成标准问法
+          </button>
+        </div>
         <div class="lead-prompt-stack">
           <div v-for="(tpl, index) in promptTemplates" :key="index" class="lead-prompt-row">
             <label class="lead-field lead-prompt-field">
-              <span>问题 {{ index + 1 }}{{ index === 0 ? ' *' : '' }}</span>
+              <span>
+                问题 {{ index + 1 }}{{ index === 0 ? ' *' : '' }}
+                <em style="margin-left:6px;font-style:normal;color:#6b7280">{{ tpl.lane === 'brand' ? '品牌防守' : '非品牌获客' }}</em>
+              </span>
               <input v-model="createForm.prompts[index]" :placeholder="tpl.value" />
             </label>
             <button type="button" class="lead-template-btn" @click="applyPromptTemplate(index)">
@@ -340,7 +422,7 @@ onUnmounted(() => {
         </label>
         <div class="lead-form-hint">
           <Lightbulb :size="16" />
-          <span>已填写 <b>{{ filledPromptCount }}</b> / 5 个问题。建议覆盖推荐、排名、选购、竞品比较与可信度。</span>
+          <span>已填写 <b>{{ filledPromptCount }}</b> / 5 个问题。非品牌问法不含品牌名；品牌问法含品牌名并计入防守口径。</span>
         </div>
         <div class="lead-form-actions">
           <button type="button" class="lead-secondary-btn" @click="createStep = 1">上一步</button>
@@ -464,15 +546,21 @@ onUnmounted(() => {
               >
                 取消任务
               </button>
+              <button
+                v-if="canCreate && (detail?.status === 'pending' || detail?.status === 'collecting')"
+                type="button"
+                class="lead-secondary-btn small"
+                @click="handleFinalizeEarly"
+              >
+                提前结束并生成报告
+              </button>
               <button v-if="canCreate && detail?.status !== 'ready' && detail?.status !== 'canceled' && detail?.status !== 'failed'" type="button" class="lead-secondary-btn small" @click="handleForceRun">
                 <Zap :size="16" /> 立即抓取下一档
               </button>
-              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-secondary-btn small" :disabled="exporting" @click="handleExport('html')">
+              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport('html')">
                 <Download :size="16" /> {{ exportingFormat === 'html' ? (exportProgress || '导出中…') : '下载 HTML' }}
               </button>
-              <button v-if="canExport && detail?.status === 'ready'" type="button" class="lead-primary-btn small" :disabled="exporting" @click="handleExport('pdf')">
-                <Download :size="16" /> {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '下载 PDF' }}
-              </button>
+              <!-- 2026-08-12 - 诊断改驾驶舱 - 暂隐藏 PDF，仅 HTML -->
             </div>
           </header>
 
@@ -500,7 +588,8 @@ onUnmounted(() => {
               <div class="lead-kpi">
                 <label>采集进度</label>
                 <strong>{{ progressPercent }}%</strong>
-                <span>{{ detail.completed_run_count }}/{{ detail.schedule_total_count ?? scheduleTotal }} 次完成</span>
+                <!-- 2026-08-14 - 计划档 ≠ 子任务数，勿只写 9/9 与驾驶舱 270 对不上 -->
+                <span>计划 {{ detail.completed_run_count }}/{{ detail.schedule_total_count ?? scheduleTotal }} 档 · 子任务 {{ Number(kpis.completed_count ?? 0) || '—' }}</span>
               </div>
             </div>
 
@@ -565,102 +654,32 @@ onUnmounted(() => {
               </div>
             </section>
 
-            <section v-else-if="detailTab === 'report'" class="lead-panel">
+            <section v-else-if="detailTab === 'report'" class="lead-panel lead-panel-cockpit">
               <div class="lead-panel-title">
                 <h3>诊断结论</h3>
-                <p>用于售前沟通的摘要、优势、风险与优化建议。</p>
+                <p>态势感知平台（与下载 HTML 同源）</p>
               </div>
               <div v-if="detail.status !== 'ready'" class="lead-form-hint">
                 <Lightbulb :size="16" />
                 <span>诊断尚未完成，请等待计划抓取全部结束或刷新进度。</span>
               </div>
-              <div v-else class="lead-report-layout">
-                <section v-if="rankTrend.length" class="lead-report-section wide">
-                  <h4>平均排名趋势图</h4>
-                  <p class="lead-report-intro">品牌及竞品平均排名，数值越小表示 AI 推荐越靠前。</p>
-                  <div ref="rankTrendChartRef" class="lead-rank-trend-chart" />
-                </section>
-
-                <section v-if="brandCityRankings.length" class="lead-report-section wide">
-                  <h4>品牌区域排名</h4>
-                  <p class="lead-report-intro">按监测地区汇总的品牌与竞品平均排名、提及率。</p>
-                  <div
-                    v-for="block in brandCityRankings"
-                    :key="String(block.region_code || block.region_name)"
-                    class="lead-city-rank-block"
-                  >
-                    <h5>{{ block.region_name }} · 样本 {{ block.sample_count }}</h5>
-                    <div class="lead-query-grid head city-rank">
-                      <span>品牌</span><span>提及率</span><span>平均排名</span>
-                    </div>
-                    <div
-                      v-for="row in (block.rows as Array<Record<string, unknown>>)"
-                      :key="String(row.name)"
-                      class="lead-query-grid city-rank"
-                      :class="{ 'is-brand': row.is_brand, 'is-competitor': row.is_competitor }"
-                    >
-                      <span>{{ row.name }}</span>
-                      <span>{{ row.mention_rate }}%</span>
-                      <span :class="rankToneClass(row.avg_rank as number | null)">{{ formatRank(row.avg_rank as number | null) }}</span>
-                    </div>
-                  </div>
-                </section>
-
-                <section v-if="executiveSummary || diagnosisBlock.sentiment_summary || highlights.length" class="lead-report-section wide">
-                  <h4>核心洞察</h4>
-                  <p class="lead-report-intro">基于多轮抓取、语义词矩阵与引用信源交叉验证。</p>
-                  <p v-if="executiveSummary || diagnosisBlock.sentiment_summary" class="lead-report-lead">
-                    {{ executiveSummary || diagnosisBlock.sentiment_summary }}
-                  </p>
-                  <ul v-if="highlights.length" class="lead-report-highlights">
-                    <li v-for="(line, index) in highlights" :key="index">{{ line }}</li>
-                  </ul>
-                </section>
-
-                <section v-if="hasReportSections" class="lead-report-section wide lead-report-analysis">
-                  <h4>{{ analysisSectionTitle }}</h4>
-                  <p class="lead-report-intro">基于监测样本、竞品对标与引用信源交叉分析，形成可落地的优化路径。</p>
-                  <div
-                    v-for="(label, key) in sectionLabels"
-                    :key="key"
-                    v-show="reportSections[key]"
-                    class="lead-report-analysis-item"
-                  >
-                    <h5>{{ label }}</h5>
-                    <div class="lead-report-analysis-body">
-                      <p v-for="(para, index) in splitNarrativeParagraphs(reportSections[key])" :key="index">{{ para }}</p>
-                    </div>
-                  </div>
-                </section>
-
-                <section v-else-if="diagnosisBlock.strength_points || diagnosisBlock.weakness_points || diagnosisBlock.recommendation" class="lead-report-section wide lead-report-analysis">
-                  <h4>{{ analysisSectionTitle }}</h4>
-                  <div v-if="diagnosisBlock.strength_points" class="lead-report-analysis-item">
-                    <h5>优势亮点</h5>
-                    <div class="lead-report-analysis-body">
-                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.strength_points)" :key="`s-${index}`">{{ para }}</p>
-                    </div>
-                  </div>
-                  <div v-if="diagnosisBlock.weakness_points" class="lead-report-analysis-item">
-                    <h5>待改善项</h5>
-                    <div class="lead-report-analysis-body">
-                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.weakness_points)" :key="`w-${index}`">{{ para }}</p>
-                    </div>
-                  </div>
-                  <div v-if="diagnosisBlock.recommendation" class="lead-report-analysis-item">
-                    <h5>GEO 优化建议</h5>
-                    <div class="lead-report-analysis-body">
-                      <p v-for="(para, index) in splitNarrativeParagraphs(diagnosisBlock.recommendation)" :key="`r-${index}`">{{ para }}</p>
-                    </div>
-                  </div>
-                </section>
+              <div v-else class="lead-cockpit-preview">
+                <div v-if="previewHtmlLoading && !previewHtmlUrl" class="lead-empty lead-empty-stage">驾驶舱加载中…</div>
+                <iframe
+                  v-else-if="previewHtmlUrl"
+                  :key="previewHtmlUrl"
+                  class="lead-html-frame"
+                  :src="previewHtmlUrl"
+                  title="售前诊断驾驶舱预览"
+                />
+                <div v-else class="lead-empty lead-empty-stage">预览暂不可用，可尝试下载 HTML</div>
               </div>
             </section>
 
             <section v-else-if="detailTab === 'queries'" class="lead-panel">
               <div class="lead-panel-title">
-                <h3>语义词排名与提及率</h3>
-                <p>按每个检测问题汇总品牌、竞品及头部机构的排名与提及表现。</p>
+                <h3>语义词排名与回答命中</h3>
+                <p>按每个检测问题汇总品牌、竞品及头部机构的排名与回答命中表现（主报告提及率以格级露出为准）。</p>
               </div>
               <div v-if="!promptAnalytics.length" class="lead-form-hint">
                 <Lightbulb :size="16" /><span>暂无分语义词数据。</span>
@@ -669,7 +688,7 @@ onUnmounted(() => {
                 <header>
                   <b>{{ block.prompt }}</b>
                   <small>
-                    样本 {{ block.sample_count }} · 品牌提及率 {{ block.brand_mention_rate }}% · 平均排名 {{ formatRank(block.brand_avg_rank) }}
+                    样本 {{ block.sample_count }} · 回答命中率 {{ block.brand_mention_rate }}% · 平均排名 {{ formatRank(block.brand_avg_rank) }}
                   </small>
                 </header>
                 <div v-if="(block.round_trend as Array<Record<string, unknown>>)?.length" class="lead-query-charts">
@@ -679,7 +698,7 @@ onUnmounted(() => {
                   </div>
                 </div>
                 <div v-if="(block.mention_table as Array<Record<string, unknown>>)?.length" class="lead-query-chart-card">
-                  <div class="lead-query-subtitle">品牌提及率分析</div>
+                  <div class="lead-query-subtitle">品牌回答命中率分析</div>
                   <div :ref="el => bindPromptMentionRef(index, el as Element | null)" class="lead-mention-chart" />
                 </div>
                 <div v-if="(block.round_trend as Array<Record<string, unknown>>)?.length" class="lead-query-subtitle">品牌排名变化趋势</div>
@@ -709,9 +728,9 @@ onUnmounted(() => {
                   <span>{{ formatRank(row.rank) }}</span>
                   <span>{{ row.is_brand ? '目标品牌' : row.is_competitor ? '竞品' : '—' }}</span>
                 </div>
-                <div class="lead-query-subtitle">提及率统计</div>
+                <div class="lead-query-subtitle">回答命中率统计</div>
                 <div class="lead-query-grid head mention">
-                  <span>品牌</span><span>提及次数</span><span>提及率</span><span>平均排名</span>
+                  <span>品牌</span><span>命中次数</span><span>回答命中率</span><span>平均排名</span>
                 </div>
                 <div
                   v-for="row in (block.mention_table as Array<Record<string, unknown>> || [])"
@@ -773,31 +792,103 @@ onUnmounted(() => {
             <section v-else class="lead-panel">
               <div class="lead-panel-title">
                 <h3>任务配置</h3>
-                <p>售前诊断的输入范围与创建记录。</p>
+                <p>建单完整输入（只读）。点击标题展开 / 收起各块。</p>
               </div>
-              <div v-if="detail.creator" class="lead-config-group">
-                <h4>创建信息</h4>
-                <div class="lead-config-list">
-                  <div><strong>创建人</strong><span>{{ formatLeadCreator(detail.creator) }}</span></div>
-                  <div v-if="detail.creator.username"><strong>登录账号</strong><span>{{ detail.creator.username }}</span></div>
-                  <div><strong>创建时间</strong><span>{{ formatDateTime(detail.created_at) }}</span></div>
-                  <div><strong>诊断日期</strong><span>{{ detail.diagnosis_date }}</span></div>
-                  <div v-if="detail.plan_end_date"><strong>计划截止</strong><span>{{ detail.plan_end_date }}</span></div>
-                  <div v-if="detail.schedule_total_count"><strong>抓取计划</strong><span>共 {{ detail.schedule_total_count }} 次（{{ detail.schedule_days || scheduleDays }} 天 × 每日 {{ (detail.schedule_times || scheduleSlots).length }} 档）</span></div>
-                </div>
-              </div>
-              <div class="lead-config-group">
-                <h4>检测配置</h4>
-                <div class="lead-config-list">
-                  <div><strong>检测问题</strong><span>{{ (detail.prompts || []).join('；') }}</span></div>
-                  <div><strong>诊断平台</strong><span>{{ (detail.platforms || []).map(code => platformLabelMap[code] || code).join('、') || '未指定（兼容旧单按全量可提交平台）' }}</span></div>
-                  <div><strong>竞品</strong><span>{{ (detail.competitors || []).join('、') || '未填写' }}</span></div>
-                  <div><strong>监测地区</strong><span>{{ regionLabels(detail.region_codes) }}</span></div>
-                  <div><strong>抓取时段</strong><span>{{ (detail.schedule_times || scheduleSlots).join('、') }}</span></div>
-                  <div v-if="detail.contact_name"><strong>联系人</strong><span>{{ detail.contact_name }}</span></div>
-                  <div v-if="detail.contact_phone"><strong>联系电话</strong><span>{{ detail.contact_phone }}</span></div>
-                  <div v-if="detail.contact_note"><strong>销售备注</strong><span>{{ detail.contact_note }}</span></div>
-                </div>
+
+              <div class="lead-config-accordion">
+                <section class="lead-config-block" :class="{ open: configSectionOpen.brand }">
+                  <button type="button" class="lead-config-block-head" @click="toggleConfigSection('brand')">
+                    <span>品牌与上下文</span>
+                    <ChevronDown :size="16" />
+                  </button>
+                  <div v-show="configSectionOpen.brand" class="lead-config-block-body">
+                    <div class="lead-config-list">
+                      <div><strong>品牌名称</strong><span>{{ displayOrEmpty(detail.brand_name) }}</span></div>
+                      <div><strong>露出词 / 别名</strong><span>{{ displayOrEmpty((detail.brand_aliases || []).join('、')) }}</span></div>
+                      <div><strong>官网</strong><span>{{ displayOrEmpty(detail.lead_context?.website_url) }}</span></div>
+                      <div><strong>行业</strong><span>{{ displayOrEmpty(detail.lead_context?.industry) }}</span></div>
+                      <div><strong>产品焦点</strong><span>{{ displayOrEmpty(detail.lead_context?.product_focus) }}</span></div>
+                      <div><strong>采购场景</strong><span>{{ displayOrEmpty(detail.lead_context?.purchase_scenario) }}</span></div>
+                      <div><strong>来源备注</strong><span>{{ displayOrEmpty(detail.lead_context?.source) }}</span></div>
+                      <div><strong>竞品</strong><span>{{ displayOrEmpty((detail.competitors || []).join('、')) }}</span></div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="lead-config-block" :class="{ open: configSectionOpen.scope }">
+                  <button type="button" class="lead-config-block-head" @click="toggleConfigSection('scope')">
+                    <span>监测范围</span>
+                    <ChevronDown :size="16" />
+                  </button>
+                  <div v-show="configSectionOpen.scope" class="lead-config-block-body">
+                    <div class="lead-config-list">
+                      <div class="lead-config-platforms">
+                        <strong>诊断平台</strong>
+                        <div v-if="configPlatformConfigured.length" class="lead-config-platform-badges">
+                          <PlatformBadge
+                            v-for="item in configPlatformConfigured"
+                            :key="`cfg-${item.code}`"
+                            :code="item.code"
+                            size="sm"
+                            :label="item.label"
+                          />
+                        </div>
+                        <span v-else class="lead-config-muted">未填写</span>
+                      </div>
+                      <div><strong>监测地区</strong><span>{{ displayOrEmpty(regionLabels(detail.region_codes)) }}</span></div>
+                      <div><strong>诊断天数</strong><span>{{ detail.schedule_days != null ? `${detail.schedule_days} 天` : '未填写' }}</span></div>
+                      <div><strong>抓取时段</strong><span>{{ displayOrEmpty((detail.schedule_times || scheduleSlots).join('、')) }}</span></div>
+                      <div>
+                        <strong>抓取计划</strong>
+                        <span>
+                          共 {{ detail.schedule_total_count ?? scheduleTotal }} 次
+                          （{{ detail.schedule_days || scheduleDays }} 天 × 每日 {{ (detail.schedule_times || scheduleSlots).length }} 档）
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="lead-config-block" :class="{ open: configSectionOpen.prompts }">
+                  <button type="button" class="lead-config-block-head" @click="toggleConfigSection('prompts')">
+                    <span>检测问法（{{ configPromptRows.length }}）</span>
+                    <ChevronDown :size="16" />
+                  </button>
+                  <div v-show="configSectionOpen.prompts" class="lead-config-block-body">
+                    <div v-if="!configPromptRows.length" class="lead-form-hint">
+                      <Lightbulb :size="16" /><span>未填写检测问题。</span>
+                    </div>
+                    <ol v-else class="lead-config-prompts">
+                      <li v-for="row in configPromptRows" :key="`${row.index}-${row.prompt}`">
+                        <div class="lead-config-prompt-meta">
+                          <b>问题 {{ row.index }}</b>
+                          <em :class="row.isBrand ? 'is-brand' : 'is-acq'">{{ row.laneLabel }}</em>
+                          <em class="is-report">报告归类 · {{ row.reportLabel }}</em>
+                        </div>
+                        <p>{{ row.prompt }}</p>
+                      </li>
+                    </ol>
+                  </div>
+                </section>
+
+                <section class="lead-config-block" :class="{ open: configSectionOpen.meta }">
+                  <button type="button" class="lead-config-block-head" @click="toggleConfigSection('meta')">
+                    <span>创建与计划</span>
+                    <ChevronDown :size="16" />
+                  </button>
+                  <div v-show="configSectionOpen.meta" class="lead-config-block-body">
+                    <div class="lead-config-list">
+                      <div><strong>创建人</strong><span>{{ detail.creator ? formatLeadCreator(detail.creator) : '未填写' }}</span></div>
+                      <div><strong>登录账号</strong><span>{{ displayOrEmpty(detail.creator?.username) }}</span></div>
+                      <div><strong>创建时间</strong><span>{{ displayOrEmpty(formatDateTime(detail.created_at)) }}</span></div>
+                      <div><strong>更新时间</strong><span>{{ displayOrEmpty(formatDateTime(detail.updated_at)) }}</span></div>
+                      <div><strong>诊断日期</strong><span>{{ displayOrEmpty(detail.diagnosis_date) }}</span></div>
+                      <div><strong>计划截止</strong><span>{{ displayOrEmpty(detail.plan_end_date) }}</span></div>
+                      <div><strong>状态</strong><span>{{ statusLabels[detail.status] || detail.status }}</span></div>
+                      <div><strong>销售备注</strong><span>{{ displayOrEmpty(detail.contact_note) }}</span></div>
+                    </div>
+                  </div>
+                </section>
               </div>
             </section>
           </template>

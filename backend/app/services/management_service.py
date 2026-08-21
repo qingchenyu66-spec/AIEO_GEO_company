@@ -490,14 +490,18 @@ def create_managed_user(
     *,
     commit: bool = True,
 ) -> User:
-    exists = db.scalar(select(User).where(User.username == payload.username, User.deleted.is_(False)))
+    # 2026-08-20 - username 库级唯一含软删行；只查未删会漏拦，落成裸 IntegrityError
+    username = str(payload.username or "").strip()
+    exists = db.scalar(select(User).where(User.username == username))
     if exists is not None:
+        if exists.deleted:
+            raise ValueError(f"账号「{username}」已删除，请在「已删除账号」中恢复，或更换登录名")
         raise ValueError("账号已存在")
     _reject_garbled_text(payload.display_name, "用户姓名")
     assert_actor_can_assign_identities(db, creator_identity, list(payload.identities))
 
     user = User(
-        username=payload.username,
+        username=username,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
         created_by=creator.id,

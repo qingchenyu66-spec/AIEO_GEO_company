@@ -286,10 +286,10 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "executive_summary": ai_insights.get("executive_summary"),
         "highlights": snapshot.get("highlights") or ai_insights.get("highlights") or [],
         "diagnosis": diagnosis,
-        "platform_stats": snapshot.get("platform_stats") or [],
-        "top_sources": snapshot.get("top_sources") or [],
-        "prompt_analytics": snapshot.get("prompt_analytics") or [],
-        "source_analysis": snapshot.get("source_analysis") or {},
+        "platform_stats": snapshot.get("platform_stats") or content.get("platform_stats") or [],
+        "top_sources": snapshot.get("top_sources") or content.get("top_sources") or [],
+        "prompt_analytics": snapshot.get("prompt_analytics") or content.get("prompt_analytics") or [],
+        "source_analysis": snapshot.get("source_analysis") or content.get("source_analysis") or {},
         "rank_trend": snapshot.get("rank_trend") or [],
         "tracked_entities": snapshot.get("tracked_entities") or [],
         "brand_city_rankings": snapshot.get("brand_city_rankings") or [],
@@ -308,9 +308,19 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "contact_phone": content.get("contact_phone") or "",
         "contact_name": content.get("contact_name") or "",
         "competitors": content.get("competitors") or [],
+        # 2026-08-14 - 驾驶舱竞品条要吃共现率；漏传 → width 变 0 像「没有」
+        "competitor_stats": content.get("competitor_stats") or [],
+        "competitors_mined": content.get("competitors_mined") or [],
         # 2026-08-04 - 结项完整版 HTML 读 completion_pack
         "completion_pack": content.get("completion_pack") or {},
         "kpis": kpis,
+        # 2026-08-13 - 问法×平台快照证据漏传 → cockpit（曾导致热力全是「无快照」）
+        "snapshot_evidence": content.get("snapshot_evidence") or {},
+        # 2026-08-13 - 驾驶舱 DeepSeek 叙事包
+        "cockpit_narrative": content.get("cockpit_narrative") or {},
+        # 2026-08-13 - 入口上下文透传 cockpit（官网/行业/产品）
+        "lead_context": content.get("lead_context") or content.get("input_context") or {},
+        "input_context": content.get("input_context") or content.get("lead_context") or {},
     }
 
 def _build_pdf(payload: dict[str, Any], platform_names: dict[str, str]) -> bytes:
@@ -972,6 +982,51 @@ def _build_docx(payload: dict[str, Any], platform_names: dict[str, str]) -> byte
     return buffer.getvalue()
 
 
+def _diagnosis_html_with_cockpit_narrative(
+    db: Session,
+    report: dict[str, Any],
+    payload: dict[str, Any],
+    platform_names: dict[str, str],
+    *,
+    theme: str,
+) -> str:
+    """诊断 HTML：缺叙事时 DeepSeek 生成一次并写回 report_content_json。
+
+    2026-08-20 - 产品接驾驶舱 G 模板；叙事失败不阻断 HTML
+    """
+    from app.services.report_diagnosis_cockpit_service import ensure_cockpit_narrative
+    from app.services.report_molizhishu_html_service import build_molizhishu_html
+
+    had = isinstance(payload.get("cockpit_narrative"), dict) and bool(
+        (payload.get("cockpit_narrative") or {}).get("stage_copy")
+    )
+    payload = ensure_cockpit_narrative(payload)
+    narr = payload.get("cockpit_narrative")
+    if (
+        not had
+        and isinstance(narr, dict)
+        and narr.get("stage_copy")
+        and int(report.get("id") or 0) > 0
+        and int(report.get("tenant_id") or 0) > 0
+    ):
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+
+            from app.models.report import GeoReport
+
+            row = db.get(GeoReport, int(report["id"]))
+            if row is not None:
+                stored = dict(row.report_content_json or {})
+                stored["cockpit_narrative"] = narr
+                row.report_content_json = stored
+                flag_modified(row, "report_content_json")
+                db.add(row)
+                db.commit()
+        except Exception:
+            pass
+    return build_molizhishu_html(payload, platform_names, theme=theme)
+
+
 def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str = "b") -> str:
     """报告中心 HTML 预览：周期环比模板 + 售前诊断改版模板。"""
     payload = _normalize_export_payload(report)
@@ -995,9 +1050,10 @@ def build_report_html_preview(db: Session, report: dict[str, Any], *, theme: str
         return build_completion_deck_html(payload, platform_names, embed_assets=False)
 
     if report_type == "diagnosis":
-        from app.services.report_molizhishu_html_service import build_molizhishu_html
-
-        return build_molizhishu_html(payload, platform_names, theme=theme)
+        # 2026-08-20 - 方案 B - 驾驶舱叙事懒生成 + 模板 G
+        return _diagnosis_html_with_cockpit_narrative(
+            db, report, payload, platform_names, theme=theme
+        )
 
     raise ValueError(f"unsupported html preview report type: {report_type}")
 
@@ -1025,9 +1081,9 @@ def build_report_html_download(db: Session, report: dict[str, Any], *, theme: st
         return build_completion_deck_html(payload, platform_names, embed_assets=True)
 
     if report_type == "diagnosis":
-        from app.services.report_molizhishu_html_service import build_molizhishu_html
-
-        return build_molizhishu_html(payload, platform_names, theme=theme)
+        return _diagnosis_html_with_cockpit_narrative(
+            db, report, payload, platform_names, theme=theme
+        )
 
     raise ValueError(f"unsupported html download report type: {report_type}")
 
@@ -1059,6 +1115,8 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
                 in {"weekly", "monthly", "quarterly", "annual"}
                 else COMPLETION_DECK_PIPELINE
                 if str(report.get("report_type") or "") == "completion"
+                else "cockpit-g-v13"  # 2026-08-21 - 覆盖按已配置意图；认知页禁口碑串台
+                if str(report.get("report_type") or "") == "diagnosis"
                 else "diag-pack-v1"
             ),
         ]

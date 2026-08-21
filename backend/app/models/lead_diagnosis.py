@@ -19,6 +19,22 @@ class LeadDiagnosis(Base):
     contact_name: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="联系人姓名")
     contact_phone: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="联系电话")
     contact_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="销售备注")
+    # 2026-08-13 - 入口官网/行业/产品勿塞 contact_note - 独立 JSON，旧单默认 {}
+    lead_context_json: Mapped[dict] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("(JSON_OBJECT())"),
+        comment="诊断上下文字典：website_url/industry/product_focus/purchase_scenario/source",
+    )
+    # 2026-08-13 - 可选露出词/别名，供监测匹配与售前聚合；空则自动从全称派生
+    brand_aliases_json: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("(JSON_ARRAY())"),
+        comment="品牌别名/露出词列表",
+    )
     prompts_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="检测问题列表，最多5条")
     competitors_json: Mapped[list] = mapped_column(JSON, nullable=False, comment="竞品名称列表")
     # 2026-07-29 - 新建诊断需指定平台 - 落库所选可提交平台码，提交时不再隐式全目录

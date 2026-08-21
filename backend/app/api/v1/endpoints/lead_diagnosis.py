@@ -1,7 +1,7 @@
 """售前诊断 API。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, get_current_session
@@ -12,12 +12,15 @@ from app.services.approval_service import queue_or_run
 from app.services.lead_diagnosis_service import (
     assert_lead_diagnosis_create_allowed,
     build_lead_diagnosis_export,
+    build_lead_diagnosis_preview_html,
     cancel_lead_diagnosis,
     create_lead_diagnosis,
+    finalize_lead_diagnosis_early,
     get_lead_diagnosis,
     list_lead_diagnoses,
     refresh_lead_diagnosis_runs,
     require_lead_diagnosis_access,
+    sanitize_lead_region_codes_for_grants,
     submit_due_lead_run,
     update_lead_diagnosis,
 )
@@ -49,6 +52,11 @@ def create_record(
         assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    # 2026-08-11 - 无企业地区编辑权仍可选诊断地区 - 入队前清空，避免审批 diff 假变更
+    payload = payload.model_copy(
+        update={"region_codes": sanitize_lead_region_codes_for_grants(db, current, payload.region_codes)},
+    )
 
     def _execute():
         return create_lead_diagnosis(db, current, payload)
@@ -130,6 +138,21 @@ def cancel_record(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.post("/{lead_id}/finalize-early", response_model=ApiResponse[dict])
+def finalize_early_record(
+    lead_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """提前收官：跳过剩余场次，用已完成数据生成报告。"""
+    try:
+        return ApiResponse(data=finalize_lead_diagnosis_early(db, current, lead_id))
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("/{lead_id}/submit-run", response_model=ApiResponse[dict])
 def submit_run(
     lead_id: int,
@@ -175,10 +198,29 @@ def refresh_record(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.get("/{lead_id}/preview/html")
+def preview_lead_diagnosis_html(
+    lead_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """售前诊断驾驶舱 HTML 预览（与下载 HTML 同源）。"""
+    try:
+        require_lead_diagnosis_access(db, current, "can_export")
+        html = build_lead_diagnosis_preview_html(db, lead_id, current=current)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="诊断预览生成失败") from exc
+    return HTMLResponse(content=html)
+
+
 @router.post("/{lead_id}/export-jobs", response_model=ApiResponse[dict])
 def create_export_job(
     lead_id: int,
-    export_format: str = Query(default="pdf", alias="format"),
+    export_format: str = Query(default="html", alias="format"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -191,9 +233,10 @@ def create_export_job(
         detail = get_lead_diagnosis(db, lead_id, current=current)
         if detail.get("status") != "ready":
             raise ValueError("诊断尚未完成，暂无法导出")
-        fmt = (export_format or "pdf").lower()
-        if fmt not in {"pdf", "docx", "html"}:
-            raise ValueError(f"不支持的导出格式: {export_format}")
+        fmt = (export_format or "html").lower()
+        # 2026-08-12 - 诊断改驾驶舱 - 导出仅开放 html（pdf/docx 在 build_report_export 也会拦）
+        if fmt not in {"html"}:
+            raise ValueError("诊断报告暂仅支持 HTML 下载")
         job = start_export_job(
             kind="lead_diagnosis",
             ref_id=lead_id,

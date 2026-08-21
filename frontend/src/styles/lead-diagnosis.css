@@ -567,6 +567,35 @@
   border-radius: 8px;
 }
 
+/* 2026-08-12 - 售前诊断结论改驾驶舱 iframe */
+.lead-panel-cockpit {
+  display: flex;
+  flex-direction: column;
+  min-height: min(78vh, 920px);
+  padding-bottom: 12px;
+}
+
+.lead-cockpit-preview {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid #d9e6f5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f5f7fb;
+}
+
+.lead-html-frame {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: min(72vh, 860px);
+  height: min(72vh, 860px);
+  border: 0;
+  background: #f5f7fb;
+}
+
 .lead-panel-title {
   margin-bottom: 18px;
 }
@@ -878,6 +907,121 @@
 
 .lead-config-list strong {
   color: #6a7f9a;
+}
+
+/* 2026-08-21 - 任务配置分块折叠 + 平台双行徽章 */
+.lead-config-accordion {
+  display: grid;
+  gap: 10px;
+}
+
+.lead-config-block {
+  border: 1px solid #dce9f8;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.lead-config-block-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0;
+  background: #f6f9fd;
+  color: #17395f;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lead-config-block-head svg {
+  flex-shrink: 0;
+  color: #6a7f9a;
+  transition: transform .18s ease;
+}
+
+.lead-config-block.open .lead-config-block-head svg {
+  transform: rotate(180deg);
+}
+
+.lead-config-block-body {
+  padding: 12px 14px 14px;
+  border-top: 1px solid #e8eef6;
+}
+
+.lead-config-platforms {
+  align-items: start;
+}
+
+.lead-config-platform-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lead-config-muted {
+  color: #6a7f9a;
+}
+
+.lead-config-prompts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.lead-config-prompts li {
+  padding: 12px 14px;
+  border: 1px solid #dce9f8;
+  border-radius: 6px;
+  background: #fbfdff;
+}
+
+.lead-config-prompt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.lead-config-prompt-meta b {
+  color: #17395f;
+  font-size: 13px;
+}
+
+.lead-config-prompt-meta em {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.lead-config-prompt-meta em.is-acq {
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.lead-config-prompt-meta em.is-brand {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.lead-config-prompt-meta em.is-report {
+  color: #6a7f9a;
+  background: #f3f6fa;
+}
+
+.lead-config-prompts p {
+  margin: 0;
+  color: #334e6f;
+  line-height: 1.55;
+  word-break: break-word;
 }
 
 .lead-create {

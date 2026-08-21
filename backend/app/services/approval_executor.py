@@ -338,7 +338,9 @@ def _exec_lead_create(db: Session, current: CurrentSession, record: OperationApp
     requester, requester_identity = _requester_actor(db, record)
     actor = CurrentSession(user=requester, identity=requester_identity)
     payload = LeadDiagnosisCreateRequest.model_validate(data.get("body") or data)
-    return create_lead_diagnosis(db, actor, payload, enforce_position_platforms=False)
+    return create_lead_diagnosis(
+        db, actor, payload, enforce_position_platforms=False, enforce_region_grants=False,
+    )
 
 
 def _exec_lead_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:

@@ -29,12 +29,22 @@ export interface LeadDiagnosisSchedulePlanItem {
   region_code?: string | null
 }
 
+export interface LeadContext {
+  website_url?: string
+  industry?: string
+  product_focus?: string
+  purchase_scenario?: string
+  source?: string
+}
+
 export interface LeadDiagnosisItem {
   id: number
   brand_name: string
   contact_name?: string | null
   contact_phone?: string | null
   contact_note?: string | null
+  lead_context?: LeadContext | null
+  brand_aliases?: string[]
   prompts: string[]
   competitors: string[]
   platforms?: string[]
@@ -67,11 +77,13 @@ export interface CreateLeadDiagnosisPayload {
   brand_name: string
   prompts: string[]
   competitors?: string[]
+  brand_aliases?: string[]
   platforms: string[]
   region_codes?: string[]
   contact_name?: string
   contact_phone?: string
   contact_note?: string
+  lead_context?: LeadContext
   diagnosis_date?: string
   schedule_days?: number
   start_immediately?: boolean
@@ -99,6 +111,11 @@ export async function cancelLeadDiagnosis(leadId: number): Promise<LeadDiagnosis
   return response.data.data
 }
 
+export async function finalizeLeadDiagnosisEarly(leadId: number): Promise<LeadDiagnosisDetail> {
+  const response = await http.post(`/v1/lead-diagnosis/${leadId}/finalize-early`)
+  return response.data.data
+}
+
 export async function refreshLeadDiagnosis(leadId: number): Promise<LeadDiagnosisDetail> {
   const response = await http.post(`/v1/lead-diagnosis/${leadId}/refresh`)
   return response.data.data
@@ -117,9 +134,24 @@ export async function submitLeadDiagnosisRun(
   return response.data.data
 }
 
+export async function fetchLeadDiagnosisPreviewHtml(leadId: number): Promise<string> {
+  // 2026-08-12 - 售前详情驾驶舱 iframe - 带鉴权拉 HTML，避免裸 src 空白
+  const response = await http.get(`/v1/lead-diagnosis/${leadId}/preview/html`, {
+    responseType: 'text',
+    timeout: 90000,
+    headers: { Accept: 'text/html', 'Content-Type': undefined as unknown as string },
+    transformResponse: [(data) => data],
+  })
+  const html = typeof response.data === 'string' ? response.data : String(response.data ?? '')
+  if (!html || html.trimStart().startsWith('{')) {
+    throw new Error('诊断预览返回非 HTML，请重新登录后重试')
+  }
+  return html
+}
+
 export async function downloadLeadDiagnosisExport(
   leadId: number,
-  format: 'pdf' | 'docx' | 'html' = 'pdf',
+  format: 'pdf' | 'docx' | 'html' = 'html',
   onProgress?: (label: string, pct?: number | null) => void,
 ) {
   // 异步任务 + 轮询；就绪后走浏览器原生下载（避免 XHR 整包进内存干等）
