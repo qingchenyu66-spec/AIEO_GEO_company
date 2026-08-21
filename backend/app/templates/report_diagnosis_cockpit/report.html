@@ -1111,7 +1111,8 @@
       <section id="sources" aria-labelledby="sources-title">
         <div class="section-heading"><div><span class="section-index">04 / SOURCE</span><h2 id="sources-title">信源影响：让模型先接触完整、可信、可验证的信息</h2><p>{{ sources_subtitle }}</p></div></div>
         <div class="two-col equal">
-          <div class="panel"><div class="panel-head"><div><h3>监测信源影响指数（频次归一）</h3><p>相对指数按监测引用域名频次归一到 0–100。</p></div></div><div class="panel-body source-list" id="sourceList"></div></div>
+          <!-- 2026-08-21 - 信源次数易被读成占比/影响强度 - 标题副标题改成累计引用口径 -->
+          <div class="panel"><div class="panel-head"><div><h3>监测信源引用频次（归一）</h3><p>按监测窗口内「引用链接出现次数」累计；权重是相对最高站归一到 0–100，不是占比。</p></div></div><div class="panel-body source-list" id="sourceList"></div></div>
           <div class="panel"><div class="panel-head"><div><h3>官网内容可引用性审计</h3><p>根据官网公开栏目做的结构性判断，不代表技术真实性审计。</p></div></div><div class="panel-body audit-list">
               {% for row in audit_rows %}
               <div class="audit-row"><div class="audit-label"><strong>{{ row.title }}</strong><span>{{ row.desc }}</span></div><span class="status-pill {{ row.tone }}">{{ row.tone_label }}</span></div>

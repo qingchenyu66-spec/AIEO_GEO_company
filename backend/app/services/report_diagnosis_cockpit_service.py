@@ -3096,7 +3096,8 @@ def build_diagnosis_cockpit_context(
             "body": (
                 f"<strong>全量辅助：</strong>品牌相关引用 / 全部引用 = "
                 f"{int(brand_refs)}/{int(total_refs)} ≈ {_fmt_metric(citation, suffix='%')}。"
-                f"<ul class='dialog-points'><li>下方域名列表的「权重」为频次归一，不是百分比本身。</li>"
+                # 2026-08-21 - 与信源图副标题对齐：次数=引用链接累计，权重≠占比
+                f"<ul class='dialog-points'><li>下方次数按引用链接出现累计；「权重」为相对最高站归一，不是百分比。</li>"
                 f"<li>无引用分母时为暂无，不是 0%。</li></ul>"
             ),
         },

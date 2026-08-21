@@ -1115,7 +1115,7 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
                 in {"weekly", "monthly", "quarterly", "annual"}
                 else COMPLETION_DECK_PIPELINE
                 if str(report.get("report_type") or "") == "completion"
-                else "cockpit-g-v13"  # 2026-08-21 - 覆盖按已配置意图；认知页禁口碑串台
+                else "cockpit-g-v14"  # 2026-08-21 - 信源图标题副标题改累计引用口径
                 if str(report.get("report_type") or "") == "diagnosis"
                 else "diag-pack-v1"
             ),
