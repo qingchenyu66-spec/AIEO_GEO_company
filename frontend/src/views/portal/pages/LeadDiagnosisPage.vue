@@ -23,7 +23,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { useLeadDiagnosis } from '../composables/useLeadDiagnosis'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
-import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart, splitNarrativeParagraphs } from '../composables/leadDiagnosisCharts'
+import { rankToneClass, renderEntityRankTrendChart, renderMentionRateBarChart } from '../composables/leadDiagnosisCharts'
 import {
   classifyLeadConfigPrompt,
   displayOrEmpty,
@@ -56,15 +56,10 @@ const {
   kpis,
   diagnosisBlock,
   platformStats,
-  highlights,
-  reportSections,
   promptAnalytics,
   sourceAnalysis,
   rankTrend,
-  brandCityRankings,
   trackedEntities,
-  executiveSummary,
-  hasReportSections,
   regionLabels,
   diagnosisPlatformOptions,
   promptTemplates,
@@ -106,15 +101,6 @@ const {
   submittingSlotKey,
   handleExport,
 } = useLeadDiagnosis()
-
-const sectionLabels: Record<string, string> = {
-  industry_analysis: '1. 行业分析',
-  ranking_analysis: '2. 排名分析',
-  mention_analysis: '3. 提及率分析',
-  source_analysis: '4. 引用网站分析',
-  action_recommendations: '5. 优化建议',
-}
-const analysisSectionTitle = '数据分析与优化建议'
 
 const workflowSteps = [
   { title: '录入客户画像', desc: '品牌、竞品与核心问题', icon: Target },
@@ -186,8 +172,6 @@ function toggleConfigSection(key: string) {
   }
 }
 
-const rankTrendChartRef = ref<HTMLElement | null>(null)
-let rankTrendChart: ECharts | null = null
 const promptTrendRefs = new Map<number, HTMLElement>()
 const promptMentionRefs = new Map<number, HTMLElement>()
 const promptTrendCharts = new Map<number, ECharts>()
@@ -199,29 +183,6 @@ function bindPromptTrendRef(index: number, el: Element | null) {
 
 function bindPromptMentionRef(index: number, el: Element | null) {
   if (el instanceof HTMLElement) promptMentionRefs.set(index, el)
-}
-
-async function renderRankTrendChart() {
-  if (!rankTrendChartRef.value || !rankTrend.value.length || !detail.value) return
-  if (!rankTrendChart) {
-    rankTrendChart = await initChart(rankTrendChartRef.value, 'diagnosis')
-  }
-  const entities = trackedEntities.value.length
-    ? trackedEntities.value
-    : [detail.value.brand_name, ...(detail.value.competitors || [])].filter(Boolean).slice(0, 4)
-  renderEntityRankTrendChart(
-    rankTrendChart,
-    rankTrend.value,
-    detail.value.brand_name,
-    entities as string[],
-  )
-}
-
-function disposeRankTrendChart() {
-  if (rankTrendChart) {
-    rankTrendChart.dispose()
-    rankTrendChart = null
-  }
 }
 
 function disposePromptCharts() {
@@ -266,20 +227,11 @@ async function renderPromptCharts() {
   }
 }
 
-watch([detailTab, rankTrend, trackedEntities, selectedId], async () => {
-  // 2026-08-12 - 诊断结论改驾驶舱 iframe，不再渲染页内趋势图
-  if (detailTab.value === 'report' || !rankTrend.value.length) {
-    disposeRankTrendChart()
-    return
-  }
-}, { deep: true })
-
 watch([detailTab, promptAnalytics, trackedEntities, selectedId], () => {
   void renderPromptCharts()
 }, { deep: true })
 
 onUnmounted(() => {
-  disposeRankTrendChart()
   disposePromptCharts()
 })
 </script>
