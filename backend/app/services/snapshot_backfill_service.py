@@ -543,13 +543,29 @@ def apply_snapshot_backfill(
         )
 
     url_raw = str(snapshot_url or "").strip()
-    # 无链接：只改排名，快照 URL / 正文 / 信源沿用原值
+    # 2026-08-21 - 截图 CDN/代理图被填进「分享链接」会误走解析；图链不算分享页，并入已有快照后再走只改排名
+    if url_raw and is_image_screenshot_url(url_raw):
+        if not (subtask.page_screenshot or "").strip():
+            subtask.page_screenshot = url_raw
+        url_raw = ""
+    # 无分享页：只改排名，须已有模力正文/截图（或 raw 里仍有）；缺口空格必须贴分享链接
     if not url_raw:
         if mention_position is None:
             raise ValueError("未填写分享链接时，请填写品牌排名")
-        if not (subtask.answer_content or subtask.page_screenshot):
-            raise ValueError("当前无可用快照，请粘贴分享链接补录")
         previous_raw = dict(subtask.raw_result_json or {})
+        if not (subtask.answer_content or "").strip():
+            raw_ans = previous_raw.get("answerContent") or previous_raw.get("answer_content")
+            if isinstance(raw_ans, str) and raw_ans.strip():
+                subtask.answer_content = raw_ans
+        if not (subtask.page_screenshot or "").strip():
+            raw_shot = previous_raw.get("pageScreenshot") or previous_raw.get("page_screenshot")
+            if isinstance(raw_shot, str) and raw_shot.strip():
+                subtask.page_screenshot = raw_shot
+        has_mol_result = bool(
+            (subtask.answer_content or "").strip() or (subtask.page_screenshot or "").strip()
+        )
+        if not has_mol_result:
+            raise ValueError("当前无可用快照，请粘贴分享链接补录")
         clear_subtask_backfill_dismiss(subtask)
         subtask.error_message = None
         subtask.status = "completed"

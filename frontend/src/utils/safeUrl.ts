@@ -15,9 +15,13 @@ export function safeExternalUrl(raw: string | null | undefined): string | null {
   }
 }
 
-/** 快照代理/补录自截图路径不可当作补录「分享页 URL」回填。 */
+/** 快照图（代理路径 / 模力 CDN / 常见图片后缀）不可当作补录「分享页 URL」回填。 */
 export function isProxiedScreenshotUrl(raw: string | null | undefined): boolean {
   const text = (raw || '').trim()
   if (!text) return false
-  return /\/api\/v1\/media\/(?:shot|backfill-shot)\//.test(text)
+  if (/\/api\/v1\/media\/(?:shot|backfill-shot)\//.test(text)) return true
+  const low = text.toLowerCase()
+  // 2026-08-21 - 模力截图 CDN 曾被预填进分享链接，提交走解析失败或清空后误报无快照
+  if (low.includes('img.molizhishu')) return true
+  return /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(text)
 }

@@ -620,6 +620,128 @@ def test_apply_snapshot_backfill_screenshot_fail_does_not_store_share_link(db_se
     assert subtask.raw_result_json.get("screenshot_pending") is False
 
 
+def test_apply_snapshot_backfill_rank_only_rejects_empty_without_share(db_session) -> None:
+    """只改排名：无模力正文/截图且未贴分享链接 → 拒绝。"""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from app.services.snapshot_backfill_service import apply_snapshot_backfill
+
+    task = GeoMonitorTask(
+        task_id="task-rank-empty",
+        monitor_keywords="品牌A",
+        status="failed",
+        total_items=1,
+        completed_items=0,
+        failed_items=1,
+        prompts_json=["问题B"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank-empty",
+        task_id="task-rank-empty",
+        platform="doubao",
+        mode="standard",
+        prompt="问题B",
+        status="failed",
+        answer_content=None,
+        page_screenshot=None,
+        mention_position=None,
+        raw_result_json={"source": "gap_backfill"},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+    with pytest.raises(ValueError, match="当前无可用快照"):
+        apply_snapshot_backfill(
+            db_session,
+            subtask_id="st-rank-empty",
+            snapshot_url=None,
+            mention_position=1,
+            current=current,
+        )
+
+
+def test_apply_snapshot_backfill_image_url_treated_as_existing_shot(db_session, monkeypatch) -> None:
+    """误填模力截图 CDN 时按已有快照只改排名，不抓分享页。"""
+    from types import SimpleNamespace
+
+    from app.services.snapshot_backfill_service import apply_snapshot_backfill
+
+    shot = "https://img.molizhishu.com/screenshots/2026/08/21/demo_doubao.png"
+    task = GeoMonitorTask(
+        task_id="task-rank-img",
+        monitor_keywords="品牌A",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["问题B"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank-img",
+        task_id="task-rank-img",
+        platform="doubao",
+        mode="standard",
+        prompt="问题B",
+        status="completed",
+        answer_content="已有回答",
+        page_screenshot=shot,
+        mention_position=5,
+        raw_result_json={"source": "remote"},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+
+    def _should_not_fetch(*_args, **_kwargs):
+        raise AssertionError("image url must not fetch share page")
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.fetch_share_page",
+        _should_not_fetch,
+    )
+    result = apply_snapshot_backfill(
+        db_session,
+        subtask_id="st-rank-img",
+        snapshot_url=shot,
+        mention_position=2,
+        current=current,
+    )
+    assert result.get("rank_only") is True
+    assert subtask.mention_position == 2
+    assert subtask.answer_content == "已有回答"
+    assert subtask.page_screenshot == shot
+
+
 def test_apply_snapshot_backfill_rank_only_keeps_snapshot(db_session, monkeypatch) -> None:
     from types import SimpleNamespace
 

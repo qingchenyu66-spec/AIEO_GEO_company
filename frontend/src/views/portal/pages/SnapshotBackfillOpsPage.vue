@@ -600,12 +600,25 @@ function statusAllowsSnapshotBackfill(status: string | null | undefined) {
   return TERMINAL_BACKFILL_STATUSES.has(value)
 }
 
-function openBackfillFromDetail() {
+async function openBackfillFromDetail() {
   if (!canSubmitBackfill.value || !detailSubtask.value) return
   // 2026-08-11 - 监测未终态就补录会被同步盖掉
   if (!statusAllowsSnapshotBackfill(detailSubtask.value.status)) {
     ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
     return
+  }
+  // 2026-08-21 - 抽屉缓存可能缺正文/截图，只改排名误判无模力结果；打开前再拉详情
+  const sid = detailSubtask.value.subtask_id
+  if (sid) {
+    try {
+      detailSubtask.value = await loadSubtask(sid)
+      if (detailItem.value) {
+        detailItem.value = mergeSnapshotBackfillItem(detailItem.value, detailSubtask.value)
+      }
+    } catch (error: unknown) {
+      notifyOperationError(error, '加载子任务失败')
+      return
+    }
   }
   backfillTarget.value = detailSubtask.value
   backfillVisible.value = true
