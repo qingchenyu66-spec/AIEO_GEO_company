@@ -58,7 +58,6 @@ const {
   platformStats,
   promptAnalytics,
   sourceAnalysis,
-  rankTrend,
   trackedEntities,
   regionLabels,
   diagnosisPlatformOptions,
