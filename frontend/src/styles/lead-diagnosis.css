@@ -42,6 +42,10 @@
   gap: 14px;
   padding: 18px;
   border-radius: 8px;
+  /* 2026-08-21 - 左栏跟右侧同高，列表吃满剩余高度，少任务时不出现无意义滚动条 */
+  min-height: 0;
+  height: 100%;
+  max-height: calc(100vh - 190px);
 }
 
 .lead-rail-head h3 {
@@ -230,9 +234,37 @@
 .lead-rail-list {
   display: grid;
   gap: 9px;
-  max-height: calc(100vh - 430px);
-  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-right: 2px;
+  /* 2026-08-21 - 系统默认滚动条太丑；细轨 + 内容不够时 auto 不显示 */
+  scrollbar-width: thin;
+  scrollbar-color: #b7cce3 transparent;
+}
+
+.lead-rail-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lead-rail-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lead-rail-list::-webkit-scrollbar-thumb {
+  background: #c5d6ea;
+  border-radius: 999px;
+}
+
+.lead-rail-list::-webkit-scrollbar-thumb:hover {
+  background: #9bb8d6;
+}
+
+.lead-rail-list::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .lead-rail-item {
@@ -1293,8 +1325,14 @@
     grid-template-columns: 1fr;
   }
 
+  .lead-rail {
+    max-height: none;
+    height: auto;
+  }
+
   .lead-rail-list {
-    max-height: 360px;
+    /* 窄屏仍限高，避免整页被列表撑爆；够短时同样不出现滚动条 */
+    max-height: min(70vh, 640px);
   }
 
   .lead-workflow,
