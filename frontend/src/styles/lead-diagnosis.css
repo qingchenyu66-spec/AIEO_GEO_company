@@ -3,12 +3,17 @@
   display: grid;
   grid-template-columns: 336px minmax(0, 1fr);
   gap: 20px;
-  min-height: calc(100vh - 190px);
+  align-items: stretch;
+  /* 2026-08-21 - 左右同高撑满内容区；仅 min-height 时子项 height:100% 不生效，列表仍被压矮 */
+  height: calc(100vh - 168px);
+  min-height: calc(100vh - 168px);
   color: #10233f;
 }
 
 .lead-workspace.is-creating {
   grid-template-columns: 1fr;
+  height: auto;
+  min-height: calc(100vh - 168px);
 }
 
 .lead-eyebrow {
@@ -42,10 +47,9 @@
   gap: 14px;
   padding: 18px;
   border-radius: 8px;
-  /* 2026-08-21 - 左栏跟右侧同高，列表吃满剩余高度，少任务时不出现无意义滚动条 */
   min-height: 0;
   height: 100%;
-  max-height: calc(100vh - 190px);
+  overflow: hidden;
 }
 
 .lead-rail-head h3 {
@@ -238,8 +242,8 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
-  /* 2026-08-21 - 系统默认滚动条太丑；细轨 + 内容不够时 auto 不显示 */
+  padding-right: 4px;
+  /* 2026-08-21 - 内容不够高时不出现滚动条；有滚动时用细轨 */
   scrollbar-width: thin;
   scrollbar-color: #b7cce3 transparent;
 }
@@ -261,10 +265,14 @@
   background: #9bb8d6;
 }
 
-.lead-rail-list::-webkit-scrollbar-button {
-  display: none;
+.lead-rail-list::-webkit-scrollbar-button,
+.lead-rail-list::-webkit-scrollbar-button:start:decrement,
+.lead-rail-list::-webkit-scrollbar-button:end:increment,
+.lead-rail-list::-webkit-scrollbar-button:single-button {
+  display: block;
   width: 0;
   height: 0;
+  background: transparent;
 }
 
 .lead-rail-item {
@@ -376,6 +384,12 @@
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #b7cce3 transparent;
 }
 
 .lead-stage-hero {
@@ -427,8 +441,10 @@
 .lead-welcome {
   display: grid;
   justify-items: center;
+  align-content: center;
   gap: 14px;
-  min-height: 500px;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 42px;
   border-radius: 8px;
   text-align: center;
@@ -1323,16 +1339,28 @@
 @media (max-width: 1180px) {
   .lead-workspace {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
   }
 
   .lead-rail {
-    max-height: none;
     height: auto;
+    overflow: visible;
   }
 
   .lead-rail-list {
-    /* 窄屏仍限高，避免整页被列表撑爆；够短时同样不出现滚动条 */
-    max-height: min(70vh, 640px);
+    /* 窄屏仍限高，约 8 条卡片量级；够短时不出现滚动条 */
+    flex: none;
+    max-height: min(72vh, 760px);
+  }
+
+  .lead-stage {
+    height: auto;
+    overflow: visible;
+  }
+
+  .lead-welcome {
+    min-height: 420px;
   }
 
   .lead-workflow,
