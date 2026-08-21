@@ -3,17 +3,14 @@
   display: grid;
   grid-template-columns: 336px minmax(0, 1fr);
   gap: 20px;
-  align-items: stretch;
-  /* 2026-08-21 - 左右同高撑满内容区；仅 min-height 时子项 height:100% 不生效，列表仍被压矮 */
-  height: calc(100vh - 168px);
+  align-items: start;
+  /* 2026-08-21 - 已弃用整页 height:100vh 双栏内滚：操作别扭；改回文档流，只加高左列表 */
   min-height: calc(100vh - 168px);
   color: #10233f;
 }
 
 .lead-workspace.is-creating {
   grid-template-columns: 1fr;
-  height: auto;
-  min-height: calc(100vh - 168px);
 }
 
 .lead-eyebrow {
@@ -47,8 +44,10 @@
   gap: 14px;
   padding: 18px;
   border-radius: 8px;
-  min-height: 0;
-  height: 100%;
+  /* 左栏随内容增高，不锁死视口 */
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
   overflow: hidden;
 }
 
@@ -240,10 +239,11 @@
   gap: 9px;
   flex: 1 1 auto;
   min-height: 0;
+  /* 约 8～10 条卡片高度；条目少时区域仍够高，不出现滚动条 */
+  height: min(760px, calc(100vh - 320px));
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
-  /* 2026-08-21 - 内容不够高时不出现滚动条；有滚动时用细轨 */
   scrollbar-width: thin;
   scrollbar-color: #b7cce3 transparent;
 }
@@ -384,12 +384,6 @@
   flex-direction: column;
   gap: 16px;
   min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: #b7cce3 transparent;
 }
 
 .lead-stage-hero {
@@ -441,10 +435,8 @@
 .lead-welcome {
   display: grid;
   justify-items: center;
-  align-content: center;
   gap: 14px;
-  flex: 1 1 auto;
-  min-height: 0;
+  min-height: 520px;
   padding: 42px;
   border-radius: 8px;
   text-align: center;
@@ -1339,28 +1331,17 @@
 @media (max-width: 1180px) {
   .lead-workspace {
     grid-template-columns: 1fr;
-    height: auto;
-    min-height: 0;
   }
 
   .lead-rail {
-    height: auto;
+    position: static;
+    max-height: none;
     overflow: visible;
   }
 
   .lead-rail-list {
-    /* 窄屏仍限高，约 8 条卡片量级；够短时不出现滚动条 */
-    flex: none;
-    max-height: min(72vh, 760px);
-  }
-
-  .lead-stage {
     height: auto;
-    overflow: visible;
-  }
-
-  .lead-welcome {
-    min-height: 420px;
+    max-height: min(72vh, 760px);
   }
 
   .lead-workflow,
