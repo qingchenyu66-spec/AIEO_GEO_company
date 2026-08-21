@@ -2923,7 +2923,8 @@ def build_diagnosis_cockpit_context(
     sources: list[dict[str, Any]] = []
     if isinstance(domains, list) and domains:
         max_c = max(int(d.get("count") or 0) for d in domains if isinstance(d, dict)) or 1
-        for d in domains[:8]:
+        # 2026-08-21 - 信源条偏少 - 展示从 8 提到 11
+        for d in domains[:11]:
             if not isinstance(d, dict):
                 continue
             name = str(d.get("site_cn") or d.get("site") or d.get("domain") or d.get("name") or "").strip()
