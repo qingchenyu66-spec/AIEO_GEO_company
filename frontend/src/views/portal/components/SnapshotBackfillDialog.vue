@@ -39,7 +39,6 @@ const hasExistingAnswer = computed(() => Boolean(props.subtask?.answer_content?.
 // 2026-08-21 - 只改排名须已有模力正文或截图；图链不算分享页
 const hasExistingSnapshot = computed(() => Boolean((props.subtask?.page_screenshot || '').trim()))
 const hasMolResult = computed(() => hasExistingAnswer.value || hasExistingSnapshot.value)
-const parsedRank = computed(() => parseSnapshotBackfillMentionPosition(form.mention_position))
 
 /** 分享页链接（排除截图 CDN/代理图） */
 function isSharePageUrl(raw: string): boolean {
