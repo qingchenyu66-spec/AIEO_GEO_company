@@ -108,3 +108,44 @@ def test_overlay_brand_kpi_from_daily_stats_replaces_brand_row():
     # 竞品行不被日表覆盖
     comp = next(r for r in out["rows"] if not r["is_brand"])
     assert comp["mention_rate"] == 10.0
+
+
+def test_overlay_skips_when_prompt_filter_set():
+    """有监测词时日表无词维，不得盖掉 live 按词结果。"""
+    from datetime import datetime
+    from unittest.mock import MagicMock, patch
+
+    from app.services.competitor_analytics_service import _overlay_brand_kpi_from_daily_stats
+
+    payload = {
+        "rows": [
+            {"name": "本品牌", "is_brand": True, "mention_rate": 12.5, "mention_count": 1, "avg_rank": 2.0},
+        ],
+        "mention_trends": {
+            "labels": ["08-06"],
+            "series": [{"name": "本品牌", "is_brand": True, "values": [12.5]}],
+        },
+        "platform_rows": [],
+        "sample_total": 8,
+        "brand_kpi_basis": "live_subtask",
+    }
+    with patch(
+        "app.services.monitor_stats_service.brand_period_metrics_from_daily_stats",
+    ) as metrics_fn:
+        out = _overlay_brand_kpi_from_daily_stats(
+            MagicMock(),
+            1,
+            payload,
+            range_start=datetime(2026, 8, 6),
+            range_end=datetime(2026, 8, 12),
+            platform_filters=[],
+            brand_display="本品牌",
+            sorted_days=["2026-08-06"],
+            trend_labels=["08-06"],
+            prompt_filter="初一同步辅导书推荐",
+        )
+    metrics_fn.assert_not_called()
+    brand = next(r for r in out["rows"] if r["is_brand"])
+    assert brand["mention_rate"] == 12.5
+    assert out["brand_kpi_basis"] == "live_subtask"
+    assert out["mention_trends"]["series"][0]["values"] == [12.5]

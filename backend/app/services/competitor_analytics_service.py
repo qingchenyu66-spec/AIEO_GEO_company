@@ -879,6 +879,7 @@ def _aggregate_competitor_stats(
         range_start=range_start,
         range_end=range_end,
         platform_filters=platform_filters,
+        prompt_filter=prompt_filter,
         brand_display=brand_display,
         sorted_days=sorted_days,
         trend_labels=trend_labels,
@@ -896,12 +897,17 @@ def _overlay_brand_kpi_from_daily_stats(
     brand_display: str,
     sorted_days: list[str],
     trend_labels: list[str],
+    prompt_filter: str = "",
 ) -> dict[str, Any]:
     """本品牌+竞品提及率/均排/趋势对齐日表（B3+）。
 
     2026-08-17 - 竞品也吃日表；无竞品日表时竞品行保留 live（未回填窗兜底）
     2026-08-13 - 方案 A：近 7 日「本品牌提及率」与本期结论同源
     """
+    # 2026-08-21 - 词筛选时日表无 prompt 维，覆盖会钉死提及率/折线 - 有词跳过 overlay 留 live
+    if str(prompt_filter or "").strip():
+        return payload
+
     from app.services.brand_service import tenant_purchased_platforms
     from app.services.monitor_stats_service import (
         brand_period_metrics_from_daily_stats,
