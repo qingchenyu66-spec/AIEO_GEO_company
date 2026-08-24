@@ -8,3 +8,5 @@ export const PlatformAdminKey: InjectionKey<PlatformAdminContext> = Symbol('plat
 export const WorkspaceFullscreenKey: InjectionKey<WorkspaceFullscreenContext> = Symbol('workspace-fullscreen')
 export const PortalNavigateKey: InjectionKey<(menuCode: string, replace?: boolean, extraQuery?: Record<string, string>) => void> = Symbol('portal-navigate')
 export const ApprovalPendingRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('approval-pending-refresh')
+export const PlatformBrandLogoTenantKey: InjectionKey<import('vue').Ref<number | null>> = Symbol('platform-brand-logo-tenant')
+export const PlatformTenantsRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('platform-tenants-refresh')

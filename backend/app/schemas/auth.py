@@ -32,6 +32,8 @@ class IdentityInfo(BaseModel):
     position_code: str | None = None
     tenant_id: int | None
     tenant_name: str | None
+    tenant_has_logo: bool = False
+    tenant_logo_updated_at: str | None = None
     is_default: bool
 
 

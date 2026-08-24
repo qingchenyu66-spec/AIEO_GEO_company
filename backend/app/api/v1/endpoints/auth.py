@@ -67,6 +67,12 @@ def identity_info(identity: UserIdentity, db: Session) -> dict:
         position_code=position_code,
         tenant_id=identity.tenant_id,
         tenant_name=identity.tenant.name if identity.tenant else None,
+        tenant_has_logo=bool(identity.tenant and identity.tenant.logo_path),
+        tenant_logo_updated_at=(
+            identity.tenant.logo_updated_at.isoformat(sep=" ", timespec="seconds")
+            if identity.tenant and identity.tenant.logo_updated_at
+            else None
+        ),
         is_default=identity.is_default,
     ).model_dump()
 

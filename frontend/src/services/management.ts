@@ -48,6 +48,8 @@ export interface TenantInfo {
   schedule_frequency?: number | null
   /** 创建时：名称命中软删企业，已允许新建 */
   name_was_purged?: boolean
+  has_logo?: boolean
+  logo_updated_at?: string | null
 }
 
 /** 与企业管理「服务中」口径一致：启用、非人工停服/取消，且在服务期内 */
@@ -260,6 +262,19 @@ export async function deleteManagementPosition(positionId: number): Promise<void
 export async function getTenants(): Promise<TenantInfo[]> {
   const response = await http.get('/v1/management/tenants')
   return response.data.data
+}
+
+export async function uploadTenantLogo(tenantId: number, file: File): Promise<{ tenant_id: number; has_logo: boolean; logo_updated_at: string | null }> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await http.post(`/v1/management/tenants/${tenantId}/logo`, form)
+  invalidateCache('/v1/management/tenants')
+  return response.data.data
+}
+
+export function tenantLogoUrl(tenantId: number, logoUpdatedAt?: string | null): string {
+  const query = logoUpdatedAt ? `?v=${encodeURIComponent(logoUpdatedAt)}` : ''
+  return `/api/v1/management/tenants/${tenantId}/logo${query}`
 }
 
 export async function getOperationLogs(): Promise<OperationLogRecord[]> {

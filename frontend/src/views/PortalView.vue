@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceFullscreen } from '../composables/useWorkspaceFullscreen'
 import type { MenuInfo } from '../services/auth'
-import { getTenants } from '../services/management'
+import { getTenants, tenantLogoUrl } from '../services/management'
 import {
   getBrandAsset,
   type BrandAsset, type BrandCompetitor,
@@ -14,7 +14,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey, PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -281,6 +281,44 @@ function parseRouteTenantId(): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+const platformBrandLogoTenantId = ref<number | null>(null)
+provide(PlatformBrandLogoTenantKey, platformBrandLogoTenantId)
+
+const effectiveTenantIdForLogo = computed(() => {
+  if (isPreviewActive.value) return parsePreviewTenantId(route)
+  if (!isPlatform.value) return auth.session?.identity?.tenant_id ?? null
+  return parseRouteTenantId() ?? platformBrandLogoTenantId.value
+})
+
+async function ensureTenantsForLogo() {
+  if (!isPlatform.value) return
+  const tenantId = effectiveTenantIdForLogo.value
+  if (!tenantId) return
+  try {
+    tenants.value = await withRetry(() => getTenants())
+  } catch {
+    /* 侧栏 Logo 失败时回退默认亦智图标 */
+  }
+}
+
+provide(PlatformTenantsRefreshKey, ensureTenantsForLogo)
+
+const brandLogoSrc = computed(() => {
+  const tenantId = effectiveTenantIdForLogo.value
+  if (!tenantId) return undefined
+  if (!isPlatform.value) {
+    if (!auth.session?.identity?.tenant_has_logo) return undefined
+    return tenantLogoUrl(tenantId, auth.session.identity.tenant_logo_updated_at)
+  }
+  const tenant = tenants.value.find(item => item.id === tenantId)
+  if (tenant?.has_logo) return tenantLogoUrl(tenantId, tenant.logo_updated_at)
+  // 2026-08-24 - 品牌审核编辑页无 query.tenant_id，刚上传后列表可能未刷新，仍尝试拉取
+  if (platformBrandLogoTenantId.value === tenantId) {
+    return tenantLogoUrl(tenantId, tenant?.logo_updated_at)
+  }
+  return undefined
+})
+
 function shouldPrefetchBrandAsset() {
   // Brand audit / realtime load their own asset. Reports & admin pages must not hit /brand/asset.
   return shouldPrefetchBrandForMenu(activeMenuCode.value)
@@ -394,6 +432,10 @@ watch(() => route.query.tenant_id, () => {
 onMounted(refreshMenusFromServer)
 onMounted(() => {
   void loadBrandAssetData()
+  void ensureTenantsForLogo()
+})
+watch(effectiveTenantIdForLogo, () => {
+  void ensureTenantsForLogo()
 })
 </script>
 
@@ -425,6 +467,7 @@ onMounted(() => {
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
     :preview-mode="isPreviewActive"
+    :brand-logo-src="brandLogoSrc"
     @toggle-user-submenu="toggleUserSubmenu"
     @toggle-menu-pin="toggleMenuPin"
     @select-menu="selectMenu"

@@ -3,6 +3,7 @@ import { computed, inject, onMounted } from 'vue'
 import { MoreHorizontal } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
+import TenantLogoField from '../../../components/TenantLogoField.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
@@ -83,6 +84,11 @@ const {
   tenantDialog,
   creatingDraftTenant,
   tenantForm,
+  pendingTenantLogoPreview,
+  pendingTenantLogoFileName,
+  editingTenantLogoSrc,
+  onTenantLogoPick,
+  clearPendingTenantLogo,
   tenantTransferDialog,
   tenantTransferTarget,
   tenantTransferOwnerId,
@@ -387,6 +393,15 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <RegionMultiSelect
             v-model="brandForm.region_codes"
             :disabled="!canEditRegions"
+          />
+        </label>
+        <label v-if="canEditTenantList" class="form-field-full">
+          <span>企业 Logo</span>
+          <TenantLogoField
+            :preview-src="pendingTenantLogoPreview || editingTenantLogoSrc || undefined"
+            :file-name="pendingTenantLogoFileName"
+            @pick="onTenantLogoPick"
+            @clear="clearPendingTenantLogo"
           />
         </label>
         <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
@@ -857,9 +872,18 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <label><span>企业名称</span><input v-model="tenantForm.name" placeholder="例如 北京某某科技有限公司" /></label>
         <label><span>服务开始日期</span><input v-model="tenantForm.service_start_date" type="date" /></label>
         <label><span>服务结束日期</span><input v-model="tenantForm.service_end_date" type="date" /></label>
+        <label class="form-field-full">
+          <span>企业 Logo（选填）</span>
+          <TenantLogoField
+            :preview-src="pendingTenantLogoPreview || undefined"
+            :file-name="pendingTenantLogoFileName"
+            @pick="onTenantLogoPick"
+            @clear="clearPendingTenantLogo"
+          />
+        </label>
       </div>
       <template #footer>
-        <button class="plain-btn" @click="tenantDialog = false">取消</button>
+        <button class="plain-btn" @click="tenantDialog = false; clearPendingTenantLogo()">取消</button>
         <button class="primary-btn" :disabled="loadingBrand" @click="goNextFromTenantDialog">下一步</button>
       </template>
     </el-dialog>

@@ -41,6 +41,7 @@ defineProps<{
   fullscreen?: boolean
   pendingApprovalCount?: number
   previewMode?: boolean
+  brandLogoSrc?: string
 }>()
 
 const emit = defineEmits<{
@@ -104,7 +105,7 @@ function onUserMenuCommand(command: string) {
       <div class="brand">
         <!-- 2026-08-20 - 对齐生产：无 brand-head；固定钮 absolute 不占流，悬停不拽方标 -->
         <div class="brand-mark brand-mark--logo" aria-hidden="true">
-          <AppBrandLogo variant="icon" alt="" />
+          <AppBrandLogo variant="icon" alt="" :src="brandLogoSrc" />
         </div>
         <div>
           <strong>GEO Monitor</strong>

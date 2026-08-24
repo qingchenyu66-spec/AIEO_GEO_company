@@ -19,6 +19,8 @@ class Tenant(Base):
     stop_reason: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="停服原因：manual人工停服、canceled未开始取消、expired到期")
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="停服时间")
     stopped_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("sys_user.id"), nullable=True, comment="停服操作人ID")
+    logo_path: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="企业 Logo 相对路径")
+    logo_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="企业 Logo 更新时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False, comment="逻辑删除")

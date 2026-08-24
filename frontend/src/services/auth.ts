@@ -12,6 +12,8 @@ export interface IdentityInfo {
   position_code?: string | null
   tenant_id: number | null
   tenant_name: string | null
+  tenant_has_logo?: boolean
+  tenant_logo_updated_at?: string | null
   is_default: boolean
 }
 

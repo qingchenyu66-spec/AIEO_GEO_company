@@ -1,10 +1,10 @@
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable,
+  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable, uploadTenantLogo, tenantLogoUrl,
   type TenantInfo,
   type TenantSalesOwner,
 } from '../../../services/management'
@@ -24,6 +24,8 @@ import {
   sortTenantsWithPin,
   writeEnterprisePin,
 } from './useEnterprisePin'
+import { PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey } from '../injectionKeys'
+import { TENANT_LOGO_ACCEPT, TENANT_LOGO_MAX_BYTES } from '../../../constants/tenantLogo'
 
 export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files'
 
@@ -153,6 +155,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const tenantDialog = ref(false)
   const creatingDraftTenant = ref(false)
   const tenantForm = reactive({ name: '', code: '', service_start_date: '', service_end_date: '' })
+  const pendingTenantLogoFile = ref<File | null>(null)
+  const pendingTenantLogoPreview = ref<string | null>(null)
+  const pendingTenantLogoFileName = computed(() => pendingTenantLogoFile.value?.name || '')
+
+  const platformBrandLogoTenantId = inject(PlatformBrandLogoTenantKey, null)
+  const refreshPlatformTenants = inject(PlatformTenantsRefreshKey, null)
+
   const tenantTransferDialog = ref(false)
   const tenantTransferTarget = ref<TenantInfo | null>(null)
   const tenantTransferOwnerId = ref<number | null>(null)
@@ -236,6 +245,26 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     schedule_frequency: 3,
     schedule_weekdays: [] as number[],
     schedule_month_days_text: '',
+  })
+
+  watch(
+    () => (enterpriseDetailMode.value && brandForm.tenant_id ? brandForm.tenant_id : null),
+    (tenantId) => {
+      if (platformBrandLogoTenantId) platformBrandLogoTenantId.value = tenantId
+    },
+    { immediate: true },
+  )
+  onBeforeUnmount(() => {
+    if (platformBrandLogoTenantId) platformBrandLogoTenantId.value = null
+  })
+
+  const editingTenant = computed(() => tenants.value.find(item => item.id === brandForm.tenant_id) || null)
+  const editingTenantLogoSrc = computed(() => {
+    if (pendingTenantLogoPreview.value) return pendingTenantLogoPreview.value
+    const tenant = editingTenant.value
+    if (tenant?.has_logo) return tenantLogoUrl(tenant.id, tenant.logo_updated_at)
+    if (brandForm.tenant_id) return tenantLogoUrl(brandForm.tenant_id)
+    return ''
   })
 
   // 2026-08-05 - 企业列表置顶仅本人可见 - localStorage 单 id，新置顶覆盖旧的
@@ -830,6 +859,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function openEnterpriseDetail(tenant: TenantInfo) {
+    clearPendingTenantLogo()
     const firstVisibleTab = visibleEnterpriseTabs.value[0]?.code
     if (!firstVisibleTab) {
       ElMessage.warning('当前职位只有企业列表权限，没有企业详情配置权限')
@@ -861,6 +891,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   function backToEnterpriseList() {
+    clearPendingTenantLogo()
     creatingDraftTenant.value = false
     enterpriseDetailMode.value = false
     brandAsset.value = null
@@ -976,6 +1007,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         brandForm.tenant_id = saved.tenant_id
         await loadEnterpriseList()
       }
+      const logoTenantId = brandForm.tenant_id || saved.tenant_id
+      // 2026-08-24 - 企业侧栏 Logo - 新建与编辑保存后均可补传/替换
+      if (logoTenantId && pendingTenantLogoFile.value) {
+        await uploadPendingTenantLogo(logoTenantId)
+        await loadEnterpriseList()
+        await refreshPlatformTenants?.()
+      }
       const listIndex = tenants.value.findIndex(item => item.id === brandForm.tenant_id)
       if (listIndex >= 0) {
         tenants.value.splice(listIndex, 1, {
@@ -1069,6 +1107,48 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       notifyError(error, '品牌词配置保存失败')
     } finally {
       loadingBrand.value = false
+    }
+  }
+
+  function clearPendingTenantLogo() {
+    if (pendingTenantLogoPreview.value?.startsWith('blob:')) {
+      URL.revokeObjectURL(pendingTenantLogoPreview.value)
+    }
+    pendingTenantLogoFile.value = null
+    pendingTenantLogoPreview.value = null
+  }
+
+  function onTenantLogoPick(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    const allowed = TENANT_LOGO_ACCEPT.split(',').map(item => item.trim().toLowerCase())
+    const ext = file.name.includes('.') ? `.${file.name.split('.').pop()?.toLowerCase() || ''}` : ''
+    const mimeOk = file.type && allowed.includes(file.type.toLowerCase())
+    const extOk = ext && allowed.includes(ext)
+    if (!mimeOk && !extOk) {
+      ElMessage.warning('Logo 仅支持 PNG / JPG / WebP')
+      return
+    }
+    if (file.size > TENANT_LOGO_MAX_BYTES) {
+      ElMessage.warning('Logo 不能超过 2MB')
+      return
+    }
+    clearPendingTenantLogo()
+    pendingTenantLogoFile.value = file
+    pendingTenantLogoPreview.value = URL.createObjectURL(file)
+  }
+
+  async function uploadPendingTenantLogo(tenantId: number) {
+    if (!pendingTenantLogoFile.value) return
+    try {
+      await uploadTenantLogo(tenantId, pendingTenantLogoFile.value)
+    } catch (error: unknown) {
+      notifyError(error, '企业 Logo 上传失败')
+      throw error
+    } finally {
+      clearPendingTenantLogo()
     }
   }
 
@@ -1487,6 +1567,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     tenantDialog,
     creatingDraftTenant,
     tenantForm,
+    pendingTenantLogoPreview,
+    pendingTenantLogoFileName,
+    editingTenantLogoSrc,
+    onTenantLogoPick,
+    clearPendingTenantLogo,
     tenantTransferDialog,
     tenantTransferTarget,
     tenantTransferOwnerId,

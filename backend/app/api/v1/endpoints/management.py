@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -88,6 +89,7 @@ from app.services.permission_service import (
     list_roles_by_identity_type,
 )
 from app.services.tenant_scope import ensure_sales_tenant_access, is_platform_admin_identity, sales_owned_tenant_ids
+from app.services.tenant_logo_service import resolve_tenant_logo_path, save_tenant_logo, tenant_logo_media_type
 from app.services.approval_service import can_review_approvals, queue_or_run
 
 router = APIRouter(prefix="/management")
@@ -276,6 +278,10 @@ def tenant_to_dict(
         "service_start_date": tenant.service_start_date.isoformat() if tenant.service_start_date else None,
         "service_end_date": tenant.service_end_date.isoformat() if tenant.service_end_date else None,
         "schedule_frequency": _schedule_daily_count(resolved_asset),
+        "has_logo": bool(tenant.logo_path),
+        "logo_updated_at": tenant.logo_updated_at.isoformat(sep=" ", timespec="seconds")
+        if tenant.logo_updated_at
+        else None,
     }
 
 
@@ -1242,6 +1248,61 @@ def management_update_tenant(
         became_active=tenant_service_is_operational(tenant) and not was_operational,
     )
     return ApiResponse(data=tenant_to_dict(tenant, db=db))
+
+
+@router.post("/tenants/{tenant_id}/logo", response_model=ApiResponse[dict])
+async def management_upload_tenant_logo(
+    tenant_id: int,
+    file: UploadFile = File(...),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """上传企业 Logo（平台端，png/jpg/webp ≤2MB）。"""
+    require_platform(current)
+    _require_platform_menu(db, current, "platform.audit.list", "can_update", "当前账号无权上传企业 Logo")
+    guard_sales_tenant(db, current, tenant_id)
+    try:
+        data = await save_tenant_logo(db, current, tenant_id, file)
+        write_management_log(
+            db,
+            current,
+            "企业 Logo",
+            f"上传企业 Logo：tenant_id={tenant_id}",
+            target_module="企业管理",
+            target_id=tenant_id,
+            tenant_id=tenant_id,
+        )
+        db.commit()
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Logo 上传失败：{exc}") from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/tenants/{tenant_id}/logo")
+def management_get_tenant_logo(
+    tenant_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """读取企业 Logo（鉴权 + 租户范围）。"""
+    try:
+        tenant, file_path = resolve_tenant_logo_path(db, current, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FileResponse(
+        path=file_path,
+        media_type=tenant_logo_media_type(file_path),
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.get("/tenant-sales-owners", response_model=ApiResponse[list[dict]])

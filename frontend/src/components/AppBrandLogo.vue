@@ -1,12 +1,16 @@
 <script setup lang="ts">
-withDefaults(
+import { computed } from 'vue'
+
+const props = withDefaults(
   defineProps<{
     variant?: 'icon' | 'full' | 'stacked'
     alt?: string
+    src?: string
   }>(),
   {
     variant: 'icon',
     alt: '亦智广告',
+    src: '',
   },
 )
 
@@ -16,11 +20,13 @@ const srcMap = {
   full: '/logo-full.png',
   stacked: '/logo-stacked.png',
 } as const
+
+const resolvedSrc = computed(() => props.src || srcMap[props.variant])
 </script>
 
 <template>
   <img
-    :src="srcMap[variant]"
+    :src="resolvedSrc"
     :alt="alt"
     class="app-brand-logo"
     :class="`app-brand-logo--${variant}`"
