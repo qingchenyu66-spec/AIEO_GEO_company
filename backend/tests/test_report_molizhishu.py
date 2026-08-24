@@ -2,7 +2,6 @@
 
 from datetime import datetime
 
-from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
 from app.services.report_molizhishu_context_service import build_molizhishu_report_context
 from app.services.report_molizhishu_fragments import (
     render_competitor_landscape_table,
@@ -124,74 +123,6 @@ def _demo_payload() -> dict:
             "action_recommendations": "<p>采取措施建议</p>",
         },
     }
-
-
-def test_molizhishu_ranking_rows_aggregates_same_day_to_daily_mean() -> None:
-    """同日多时段必须合成日均，禁止按 09:30/14:30 分行。"""
-    from datetime import datetime
-
-    from app.services.lead_diagnosis_analytics import _build_molizhishu_ranking_rows
-
-    runs = {
-        "t1": _RunStub("202607020930", "2026-07-02 09:30", "t1"),
-        "t2": _RunStub("202607021430", "2026-07-02 14:30", "t2"),
-    }
-    subtasks = [
-        _SubtaskStub(
-            task_id="t1",
-            prompt="p",
-            rankings=[{"name": "春全合珠宝", "rank": 4, "category": "默认分类"}],
-            updated_at=datetime(2026, 7, 2, 9, 40),
-        ),
-        _SubtaskStub(
-            task_id="t2",
-            prompt="p",
-            rankings=[{"name": "春全合珠宝", "rank": 2, "category": "默认分类"}],
-            updated_at=datetime(2026, 7, 2, 14, 40),
-        ),
-    ]
-    rows = _build_molizhishu_ranking_rows(
-        subtasks,
-        brand="春全合珠宝",
-        competitors=[],
-        task_run_map=runs,
-    )
-    brand_rows = [row for row in rows if row["is_brand"] and row["type_label"] == "最近"]
-    assert len(brand_rows) == 1
-    assert brand_rows[0]["rank_display"] == "3"
-    assert brand_rows[0]["collected_at"] == "2026-07-02"
-    assert ":" not in brand_rows[0]["collected_at"]
-
-
-def test_molizhishu_ranking_rows_labels_recent_best_worst() -> None:
-    runs = {
-        "t1": _RunStub("202607020930", "2026-07-02 09:30", "t1"),
-        "t2": _RunStub("202607090930", "2026-07-09 09:30", "t2"),
-    }
-    subtasks = [
-        _SubtaskStub(
-            task_id="t1",
-            prompt="p",
-            rankings=[{"name": "春全合珠宝", "rank": 5, "category": "默认分类"}],
-            updated_at=datetime(2026, 7, 2, 9, 40),
-        ),
-        _SubtaskStub(
-            task_id="t2",
-            prompt="p",
-            rankings=[{"name": "春全合珠宝", "rank": 1, "category": "默认分类"}],
-            updated_at=datetime(2026, 7, 9, 9, 40),
-        ),
-    ]
-    rows = _build_molizhishu_ranking_rows(
-        subtasks,
-        brand="春全合珠宝",
-        competitors=[],
-        task_run_map=runs,
-    )
-    labels = {row["type_label"] for row in rows if row["is_brand"]}
-    assert "最近" in labels
-    assert "最优" in labels
-    assert "最差" in labels
 
 
 def test_prompt_chart_kpis_span() -> None:

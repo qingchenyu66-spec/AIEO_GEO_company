@@ -81,7 +81,7 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   'platform.audit.purge': { can_delete: '彻底删除' },
   'platform.audit.schedule': { can_export: '查看', can_update: '编辑监控计划' },
   'platform.audit.competitors': { can_export: '查看', can_update: '编辑竞品' },
-  'platform.lead_diagnosis': { can_export: '查看/导出 PDF', can_create: '新建诊断' },
+  'platform.lead_diagnosis': { can_export: '查看/导出 HTML', can_create: '新建诊断' },
   'platform.snapshot_backfill': { can_export: '查看待补录', can_update: '提交补录' },
   'platform.reports': { can_export: '查看/导出', can_create: '生成诊断' },
   'platform.alerts': { can_export: '查看', can_update: '配置规则' },

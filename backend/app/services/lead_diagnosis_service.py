@@ -1,4 +1,4 @@
-"""售前线索诊断：按计划天数×每日时段抓取、汇总统计、PDF 导出。"""
+"""售前线索诊断：按计划天数×每日时段抓取、汇总统计、HTML 导出。"""
 
 from __future__ import annotations
 
@@ -2019,14 +2019,14 @@ def import_tenant_lead_diagnosis(
 def build_lead_diagnosis_export(
     db: Session,
     lead_id: int,
-    export_format: str = "pdf",
+    export_format: str = "html",
     *,
     current: CurrentSession | None = None,
 ) -> tuple[bytes, str, str]:
     report = _build_lead_diagnosis_report_payload(db, lead_id, current=current)
     from app.services.report_export_service import build_report_export
 
-    fmt = _resolve_export_format(export_format)
+    fmt = _resolve_lead_export_format(export_format)
     return build_report_export(report, fmt, db=db)
 
 
@@ -2235,6 +2235,14 @@ def _refresh_diagnosis_daily_ranks_for_export(
     flag_modified(lead, "diagnosis_result_json")
     db.commit()
     return refreshed
+
+
+def _resolve_lead_export_format(export_format: str) -> str:
+    """2026-08-24 - 产品仅保留 HTML 下载。"""
+    normalized = (export_format or "html").lower()
+    if normalized != "html":
+        raise ValueError("售前诊断仅支持 HTML 导出")
+    return "html"
 
 
 def _resolve_export_format(export_format: str) -> str:

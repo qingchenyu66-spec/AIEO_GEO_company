@@ -17,7 +17,7 @@ def build_molizhishu_html(
 ) -> str:
     """返回完整 HTML 字符串，供浏览器预览或另存为 .html。
 
-    2026-08-20 - 诊断预览/HTML 改 AI 可见度驾驶舱（模板 G 视觉）；旧幻灯仍可由 render_molizhishu_report_html 调用
+    2026-08-20 - 诊断预览/HTML 走 AI 可见度驾驶舱（模板 G）；旧幻灯 render_molizhishu_report_html 仅 dev 脚本保留
     """
     from app.services.report_diagnosis_cockpit_service import render_diagnosis_cockpit_html
 

@@ -1205,6 +1205,10 @@ def build_report_export(
     platform_names = _platform_label_map()
     report_type = str(payload.get("report_type") or "")
 
+    # 2026-08-24 - 售前诊断已下线 PDF/Word，仅 HTML（驾驶舱 G）
+    if report_type == "diagnosis" and export_format != "html":
+        raise ValueError("售前诊断仅支持 HTML 导出")
+
     if export_format == "pdf" and report_type in PERIOD_COMPARISON_REPORT_TYPES:
         if db is None:
             raise ValueError("周期报告 PDF 导出需要数据库会话")
@@ -1267,7 +1271,7 @@ def build_report_export(
 
 
 def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict[str, str], *, theme: str = "b") -> bytes:
-    """售前诊断走模力浅色模板；其余报告优先 Premium；Playwright 不可用时回退 ReportLab。"""
+    """周期/结项等走 Premium PDF；售前诊断不走此路径（仅 HTML）。"""
     import logging
 
     from app.services.report_premium_context_service import enrich_export_payload_for_premium
@@ -1275,9 +1279,7 @@ def _build_pdf_premium_or_fallback(payload: dict[str, Any], platform_names: dict
 
     logger = logging.getLogger(__name__)
     if payload.get("report_type") == "diagnosis":
-        from app.services.report_molizhishu_pdf_service import build_molizhishu_pdf
-
-        return build_molizhishu_pdf(payload, platform_names, theme=theme)
+        raise ValueError("售前诊断已下线 PDF 导出")
 
     enriched = enrich_export_payload_for_premium(payload, report_type=payload.get("report_type"))
     try:

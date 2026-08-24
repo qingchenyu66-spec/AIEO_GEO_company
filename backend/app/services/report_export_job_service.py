@@ -154,8 +154,8 @@ def _lead_fingerprint(db, lead_id: int, export_format: str, theme: str) -> str:
     stamp = ""
     if row is not None:
         stamp = f"{row.updated_at}|{row.status}|{bool(row.diagnosis_result_json)}"
-    asset = _molizhishu_asset_stamp() if export_format == "pdf" else ""
-    raw = f"lead|{lead_id}|{export_format}|{theme}|{stamp}|{asset}"
+    # 2026-08-24 - 售前仅 html 导出，指纹不再掺 IDEA 母版 stamp
+    raw = f"lead|{lead_id}|{export_format}|{theme}|{stamp}|html-embed-v1"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
@@ -378,9 +378,10 @@ def pregenerate_report_exports(report_id: int, *, theme: str = "b") -> list[dict
 
 
 def pregenerate_lead_diagnosis_exports(lead_id: int, *, theme: str = "b") -> list[dict[str, Any]]:
-    """售前诊断 ready 后预热 PDF/HTML（与页面下载按钮一致），复用指纹缓存。
+    """售前诊断 ready 后预热 HTML 导出（与页面「下载 HTML」一致），复用指纹缓存。
 
     2026-08-07 - 周期报有预生成、售前没有；补齐同口径，首次下载少等。
+    2026-08-24 - 产品已下线 PDF，仅预热 html；预览 iframe 仍走 preview 接口不落盘。
     """
     from app.models.lead_diagnosis import LeadDiagnosis
 
@@ -395,7 +396,7 @@ def pregenerate_lead_diagnosis_exports(lead_id: int, *, theme: str = "b") -> lis
         db.close()
 
     jobs: list[dict[str, Any]] = []
-    for export_format in ("pdf", "html"):
+    for export_format in ("html",):
         try:
             jobs.append(
                 start_export_job(

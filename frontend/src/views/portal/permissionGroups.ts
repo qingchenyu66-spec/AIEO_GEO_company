@@ -32,7 +32,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
   if (key === 'audit') return '企业列表可单独控制新增/编辑、停止服务；彻底删除仅平台管理员；资料、服务地区、监测词、平台范围（可多选具体平台）、监控计划、竞品和上传文件可拆分授权。'
   if (key === 'analysis') return '报告中心支持查看/导出；周期报告自动发布至客户端，企业诊断仅运营内部使用。'
   if (key === 'users') return '用户新增下分平台/客户两种创建能力；用户列表、职位管理、操作审批可单独授权。'
-  if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 PDF。'
+  if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 HTML。'
   if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'
   if (key === 'system') return '系统配置可按「接口密钥 / 调度策略 / 缓存与队列 / 通知规则 / 菜单权限」拆分授权；操作日志与模型平台单独控制。'
   return '平台运营端用于内部管理，可按职位控制新增、编辑、禁用和导出。'

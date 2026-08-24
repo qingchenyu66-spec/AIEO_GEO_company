@@ -105,7 +105,7 @@ const workflowSteps = [
   { title: '录入客户画像', desc: '品牌、竞品与核心问题', icon: Target },
   { title: '多日定时采集', desc: `默认 ${scheduleDays} 天 × ${scheduleSlots.join(' / ')}（可改天数）`, icon: TimerReset },
   { title: '生成诊断结论', desc: '聚合平台表现、排名与引用信源', icon: Sparkles },
-  { title: '交付 PDF', desc: '可直接用于售前沟通', icon: FileText },
+  { title: '交付 HTML', desc: '可直接用于售前沟通', icon: FileText },
 ]
 
 function slotClass(state: string) {
@@ -329,7 +329,7 @@ onUnmounted(() => {
           <span>
             提交后共 <b>{{ createScheduleTotal }}</b> 次抓取
             （{{ clampScheduleDays(createForm.schedule_days) }} 天 × 每天 <b>{{ scheduleSlots.join(' / ') }}</b>）；
-            若创建时已错过当日早场，剩余时段顺延，全部完成后可导出 PDF。
+            若创建时已错过当日早场，剩余时段顺延，全部完成后可下载 HTML。
           </span>
         </div>
         <div class="lead-form-actions">

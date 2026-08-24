@@ -302,13 +302,17 @@ def download_export_job(
 @router.get("/{lead_id}/export")
 def export_record(
     lead_id: int,
-    export_format: str = Query(default="pdf", alias="format"),
+    export_format: str = Query(default="html", alias="format"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> Response:
     try:
         require_lead_diagnosis_access(db, current, "can_export")
-        content, filename, mime = build_lead_diagnosis_export(db, lead_id, export_format=export_format, current=current)
+        # 2026-08-24 - 与 export-jobs 一致，直连导出仅 html
+        fmt = (export_format or "html").lower()
+        if fmt != "html":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="售前诊断仅支持 HTML 导出")
+        content, filename, mime = build_lead_diagnosis_export(db, lead_id, export_format=fmt, current=current)
         return Response(
             content=content,
             media_type=mime,

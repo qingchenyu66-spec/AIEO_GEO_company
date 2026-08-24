@@ -733,7 +733,7 @@ def _build_molizhishu_ranking_rows(
     competitors: list[str],
     task_run_map: dict[str, LeadDiagnosisRun],
 ) -> list[dict[str, Any]]:
-    """最近 / 最优 / 最差：按自然日均位；分类一律「默认分类」（贴金样一词一页）。"""
+    """最近 / 最优 / 最差：按自然日均位（legacy 幻灯 PDF 用，生产诊断已不再写入）。"""
     if not rows or not task_run_map:
         return []
 
@@ -1187,12 +1187,6 @@ def build_lead_diagnosis_analytics(
                 "ranking_list": _build_prompt_ranking_list(
                     rows, brand=brand, competitors=competitors, task_run_map=task_run_map,
                 ),
-                "molizhishu_ranking_rows": _build_molizhishu_ranking_rows(
-                    rows,
-                    brand=brand,
-                    competitors=competitors,
-                    task_run_map=task_run_map,
-                ),
                 "round_trend": _build_prompt_round_trend(
                     rows,
                     brand=brand,
@@ -1278,7 +1272,6 @@ def refresh_daily_rank_fields_in_diagnosis_result(
             refreshed.append(block)
             continue
         updated = dict(block)
-        updated["molizhishu_ranking_rows"] = list(live.get("molizhishu_ranking_rows") or [])
         updated["ranking_list"] = list(live.get("ranking_list") or [])
         updated["round_trend"] = list(live.get("round_trend") or [])
         refreshed.append(updated)

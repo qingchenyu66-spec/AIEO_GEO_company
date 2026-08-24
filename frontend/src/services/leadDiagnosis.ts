@@ -151,7 +151,7 @@ export async function fetchLeadDiagnosisPreviewHtml(leadId: number): Promise<str
 
 export async function downloadLeadDiagnosisExport(
   leadId: number,
-  format: 'pdf' | 'docx' | 'html' = 'html',
+  format: 'html' = 'html',
   onProgress?: (label: string, pct?: number | null) => void,
 ) {
   // 异步任务 + 轮询；就绪后走浏览器原生下载（避免 XHR 整包进内存干等）
@@ -166,14 +166,14 @@ export async function downloadLeadDiagnosisExport(
 
   let filename = String(job.filename || `lead-diagnosis-${leadId}.${format}`)
   if (job.status === 'ready') {
-    onProgress?.(format === 'pdf' ? 'PDF生成中…' : '生成中…', 100)
+    onProgress?.('生成中…', 100)
   } else {
     const started = Date.now()
     const maxWaitMs = 10 * 60 * 1000
     while (Date.now() - started < maxWaitMs) {
       const statusResp = await http.get(`/v1/lead-diagnosis/export-jobs/${jobId}`, { timeout: 30000 })
       const statusJob = statusResp.data?.data || {}
-      const label = String(statusJob.progress || (format === 'pdf' ? 'PDF渲染中…' : '内容写入中…'))
+      const label = String(statusJob.progress || '内容写入中…')
       const pct = typeof statusJob.progress_pct === 'number' ? statusJob.progress_pct : undefined
       onProgress?.(label, pct)
       if (statusJob.filename) filename = String(statusJob.filename)
