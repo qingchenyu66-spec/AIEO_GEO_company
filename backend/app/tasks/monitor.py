@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from celery.exceptions import Ignore
+from celery.exceptions import Ignore, Retry
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 from sqlalchemy import select
@@ -421,6 +421,81 @@ def scan_pending_syncs(
     logger.info("scan_pending_syncs enqueued=%s skipped=%s", enqueued, skipped)
     record_beat_scan("app.tasks.monitor.scan_pending_syncs", result)
     return result
+
+
+@celery_app.task(
+    name="app.tasks.monitor.process_molizhishu_callback_task",
+    bind=True,
+    max_retries=8,
+    default_retry_delay=30,
+    queue="sync",
+    # 2026-08-21 - 回调重活出 HTTP：与 sync 同队列、同任务锁
+    soft_time_limit=540,
+    time_limit=600,
+)
+def process_molizhishu_callback_task(self, event_id: int) -> dict[str, Any]:
+    """处理已入队的模力回调事件（排名补算 / 日统计等）。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled", "event_id": event_id}
+
+    from app.models.monitor import GeoMonitorCallbackEvent
+    from app.services.molizhishu_callback_service import process_molizhishu_callback_event
+
+    db = SessionLocal()
+    try:
+        event = db.get(GeoMonitorCallbackEvent, int(event_id))
+        if event is None:
+            return {"status": "missing", "event_id": event_id}
+        if event.process_status in {"processed", "ignored"}:
+            return {
+                "status": event.process_status,
+                "event_id": event_id,
+                "task_id": event.task_id,
+            }
+        task_id = str(event.task_id or "").strip() or "unknown-callback"
+        with redis_lock(f"sync-task:{task_id}", ttl_seconds=600) as acquired:
+            if not acquired:
+                raise self.retry(countdown=30)
+            return process_molizhishu_callback_event(db, int(event_id))
+    except Retry:
+        raise
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=min(120, 15 * (self.request.retries + 1)))
+        logger.exception("process_molizhishu_callback failed event_id=%s", event_id)
+        return {"status": "failed", "event_id": event_id, "message": str(exc)[:240]}
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.monitor.build_ranking_matrix_job_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=20,
+    queue="default",
+    # 2026-08-21 - 矩阵异步构建走 default，避免堵 sync 回调
+    soft_time_limit=240,
+    time_limit=300,
+)
+def build_ranking_matrix_job_task(self, job_id: str) -> dict[str, Any]:
+    if not settings.celery_enabled:
+        return {"status": "disabled", "job_id": job_id}
+
+    from app.services.ranking_matrix_job_service import run_matrix_job
+
+    db = SessionLocal()
+    try:
+        return run_matrix_job(db, str(job_id))
+    except Retry:
+        raise
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=20)
+        logger.exception("build_ranking_matrix_job failed job_id=%s", job_id)
+        return {"status": "failed", "job_id": job_id, "message": str(exc)[:240]}
+    finally:
+        db.close()
 
 
 @celery_app.task(

@@ -51,17 +51,24 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 )
             raise
         finally:
-            if "response" in locals():
-                duration_ms = int((time.perf_counter() - start) * 1000)
-                if _should_log(request.url.path):
-                    log_fn = logger.error if status_code >= 500 else logger.info
-                    log_fn(
-                        "request method=%s path=%s status=%s duration_ms=%s tenant_id=%s request_id=%s",
-                        request.method,
-                        request.url.path,
-                        status_code,
-                        duration_ms,
-                        request.query_params.get("tenant_id") or "-",
-                        request_id,
-                    )
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            path = request.url.path
+            if _should_log(path):
+                log_fn = logger.error if status_code >= 500 else logger.info
+                log_fn(
+                    "request method=%s path=%s status=%s duration_ms=%s tenant_id=%s request_id=%s",
+                    request.method,
+                    path,
+                    status_code,
+                    duration_ms,
+                    request.query_params.get("tenant_id") or "-",
+                    request_id,
+                )
+                # 2026-08-21 - 稳定性⑥：采样进 Redis 环，供 P95/告警
+                try:
+                    from app.services.stability_metrics_service import record_request_latency
+
+                    record_request_latency(path, duration_ms, status_code)
+                except Exception:
+                    pass
             reset_request_id(token)

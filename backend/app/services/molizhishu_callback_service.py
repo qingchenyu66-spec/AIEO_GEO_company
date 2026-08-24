@@ -1,4 +1,7 @@
-"""模力指数 Webhook 回调：鉴权、幂等、落库。"""
+"""模力指数 Webhook 回调：鉴权、幂等、落库。
+
+2026-08-21 - 稳定性桌面方案①：HTTP 只验签落事件+入队，重活进 Celery sync 队列
+"""
 
 from __future__ import annotations
 
@@ -93,18 +96,15 @@ def _apply_callback_payload(db: Session, task: GeoMonitorTask, data: dict[str, A
 
 
 def _post_commit_side_effects(db: Session, task: GeoMonitorTask) -> None:
-    try:
-        from app.services.monitor_stats_service import refresh_stats_for_task
+    # 2026-08-21 - 稳定性④：回调后统一日统计+失效+作废窗口快照
+    from app.services.monitor_mutation_service import after_monitor_data_change
 
-        refresh_stats_for_task(db, task.task_id)
-        db.commit()
-    except Exception as exc:
-        logger.warning("callback refresh_stats failed task_id=%s error=%s", task.task_id, exc)
-        db.rollback()
-
-    from app.services.monitor_service import invalidate_monitor_summary_cache
-
-    invalidate_monitor_summary_cache(task.tenant_id)
+    after_monitor_data_change(
+        db,
+        tenant_id=task.tenant_id,
+        task_id=task.task_id,
+        bust_overview=False,
+    )
     try:
         from app.services.brand_analysis_service import parse_sentiments_after_brand_word_sync
 
@@ -113,36 +113,33 @@ def _post_commit_side_effects(db: Session, task: GeoMonitorTask) -> None:
         logger.warning("callback brand_word sentiment failed task_id=%s error=%s", task.task_id, exc)
 
 
-def ingest_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    处理模力 Callback。
-    2026-07-27 - 回调接收端未落地 - 幂等写 geo_monitor_callback_event + 复用 upsert/排名补算
-    - 同 payload_hash 幂等：直接成功
-    - 未知 taskId：记 ignored 并 2xx，避免对方无限重试
-    """
-    if not isinstance(payload, dict) or not payload:
-        raise ValueError("回调体必须是非空 JSON 对象")
+def _duplicate_result(event: GeoMonitorCallbackEvent, task_id: str) -> dict[str, Any]:
+    return {
+        "task_id": task_id,
+        "status": "duplicate",
+        "process_status": event.process_status,
+        "event_id": event.id,
+    }
 
-    task_id = str(payload.get("taskId") or "").strip()
-    if not task_id:
-        raise ValueError("回调缺少 taskId")
 
-    digest = _payload_hash(payload)
+def _create_or_get_callback_event(
+    db: Session,
+    *,
+    task_id: str,
+    digest: str,
+    payload: dict[str, Any],
+) -> tuple[GeoMonitorCallbackEvent, bool]:
+    """返回 (event, created)。created=False 表示同 hash 已存在（幂等）。"""
     existing = db.scalar(
         select(GeoMonitorCallbackEvent).where(GeoMonitorCallbackEvent.payload_hash == digest)
     )
     if existing is not None:
-        return {
-            "task_id": task_id,
-            "status": "duplicate",
-            "process_status": existing.process_status,
-            "event_id": existing.id,
-        }
+        return existing, False
 
     event = GeoMonitorCallbackEvent(
         task_id=task_id,
         payload_hash=digest,
-        process_status="received",
+        process_status="queued",
         payload_json=payload,
         received_at=datetime.now(),
     )
@@ -155,14 +152,27 @@ def ingest_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str
             select(GeoMonitorCallbackEvent).where(GeoMonitorCallbackEvent.payload_hash == digest)
         )
         if raced is not None:
-            return {
-                "task_id": task_id,
-                "status": "duplicate",
-                "process_status": raced.process_status,
-                "event_id": raced.id,
-            }
+            return raced, False
         raise
+    return event, True
 
+
+def process_molizhishu_callback_event(db: Session, event_id: int) -> dict[str, Any]:
+    """按事件 ID 执行落库/排名/日统计（供 Celery 或同步兜底）。"""
+    event = db.get(GeoMonitorCallbackEvent, event_id)
+    if event is None:
+        raise ValueError(f"回调事件不存在: {event_id}")
+
+    task_id = str(event.task_id or "").strip()
+    if event.process_status in {"processed", "ignored"}:
+        return {
+            "task_id": task_id,
+            "status": event.process_status,
+            "process_status": event.process_status,
+            "event_id": event.id,
+        }
+
+    payload = event.payload_json if isinstance(event.payload_json, dict) else {}
     task = _load_task(db, task_id)
     if task is None:
         event.process_status = "ignored"
@@ -185,25 +195,12 @@ def ingest_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str
         db.commit()
     except Exception as exc:
         db.rollback()
-        # 重新附着事件行并标记失败；仍向上抛，由 endpoint 决定是否 5xx 触发对方重试
-        event = db.scalar(
-            select(GeoMonitorCallbackEvent).where(GeoMonitorCallbackEvent.payload_hash == digest)
-        )
+        event = db.get(GeoMonitorCallbackEvent, event_id)
         if event is None:
-            event = GeoMonitorCallbackEvent(
-                task_id=task_id,
-                payload_hash=digest,
-                process_status="failed",
-                payload_json=payload,
-                error_message=str(exc)[:2000],
-                received_at=datetime.now(),
-                processed_at=datetime.now(),
-            )
-            db.add(event)
-        else:
-            event.process_status = "failed"
-            event.error_message = str(exc)[:2000]
-            event.processed_at = datetime.now()
+            raise
+        event.process_status = "failed"
+        event.error_message = str(exc)[:2000]
+        event.processed_at = datetime.now()
         db.commit()
         raise
 
@@ -215,3 +212,92 @@ def ingest_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str
         "event_id": event.id,
         "task_status": task.status,
     }
+
+
+def _enqueue_callback_event(event_id: int, task_id: str) -> bool:
+    """投递 Celery；成功 True。失败由调用方同步兜底。"""
+    from app.tasks.monitor import process_molizhishu_callback_task
+
+    celery_task_id = f"molizhishu-callback-{event_id}"
+    try:
+        process_molizhishu_callback_task.apply_async(
+            kwargs={"event_id": int(event_id)},
+            task_id=celery_task_id,
+        )
+        return True
+    except Exception as exc:
+        message = str(exc).lower()
+        if "already exists" in message or "duplicate" in message:
+            return True
+        logger.warning(
+            "enqueue molizhishu callback failed event_id=%s task_id=%s error=%s",
+            event_id,
+            task_id,
+            exc,
+        )
+        return False
+
+
+def accept_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """HTTP 快路径：验过 token 后写事件并入队；Celery 关/入队失败则同步处理。"""
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("回调体必须是非空 JSON 对象")
+
+    task_id = str(payload.get("taskId") or "").strip()
+    if not task_id:
+        raise ValueError("回调缺少 taskId")
+
+    digest = _payload_hash(payload)
+    event, created = _create_or_get_callback_event(
+        db, task_id=task_id, digest=digest, payload=payload
+    )
+    if not created:
+        db.commit()
+        return _duplicate_result(event, task_id)
+
+    # 未知任务：当场忽略，不占队列
+    if _load_task(db, task_id) is None:
+        event.process_status = "ignored"
+        event.error_message = "本地无此任务"
+        event.processed_at = datetime.now()
+        db.commit()
+        logger.warning("molizhishu callback ignored unknown task_id=%s", task_id)
+        return {
+            "task_id": task_id,
+            "status": "ignored",
+            "process_status": "ignored",
+            "event_id": event.id,
+        }
+
+    db.commit()
+
+    if settings.celery_enabled and _enqueue_callback_event(event.id, task_id):
+        return {
+            "task_id": task_id,
+            "status": "accepted",
+            "process_status": "queued",
+            "event_id": event.id,
+        }
+
+    # Celery 关闭或入队失败：同步兜底，避免丢回调
+    return process_molizhishu_callback_event(db, event.id)
+
+
+def ingest_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """同步完整处理（单测/运维兜底）；生产 HTTP 走 accept_molizhishu_callback。"""
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("回调体必须是非空 JSON 对象")
+
+    task_id = str(payload.get("taskId") or "").strip()
+    if not task_id:
+        raise ValueError("回调缺少 taskId")
+
+    digest = _payload_hash(payload)
+    event, created = _create_or_get_callback_event(
+        db, task_id=task_id, digest=digest, payload=payload
+    )
+    if not created:
+        return _duplicate_result(event, task_id)
+
+    db.commit()
+    return process_molizhishu_callback_event(db, event.id)

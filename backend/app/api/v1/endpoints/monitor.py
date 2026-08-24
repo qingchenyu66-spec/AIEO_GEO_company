@@ -12,7 +12,6 @@ from app.core.read_cache import (
     MANAGEMENT_OVERVIEW_CACHE_KEY,
     MANAGEMENT_OVERVIEW_CACHE_TTL,
     MONITOR_SUMMARY_CACHE_TTL,
-    RANKING_MATRIX_CACHE_TTL,
     WORKSPACE_BRIEF_CACHE_TTL,
     get_or_build_json_cache,
     monitor_summary_cache_key,
@@ -41,7 +40,7 @@ from app.services.monitor_service import (
     submit_monitor_task,
     sync_monitor_task,
 )
-from app.services.molizhishu_callback_service import ingest_molizhishu_callback, verify_callback_token
+from app.services.molizhishu_callback_service import accept_molizhishu_callback, verify_callback_token
 from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
@@ -76,7 +75,10 @@ async def molizhishu_callback(
     token: str | None = Query(default=None, description="回调鉴权 token"),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """模力指数 Webhook：无 JWT，靠 query token；幂等写入子任务结果。"""
+    """模力指数 Webhook：无 JWT，靠 query token。
+
+    2026-08-21 - 稳定性①：HTTP 只验签+落事件+入队；排名/日统计在 Celery sync（锁也在 worker）
+    """
     if not verify_callback_token(token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="回调鉴权失败")
     try:
@@ -86,24 +88,15 @@ async def molizhishu_callback(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="回调体必须是 JSON 对象")
 
-    task_id = str(payload.get("taskId") or "").strip()
-    from app.core.redis_client import redis_lock
-
-    # 与手动/Celery sync 共用锁，避免并发写花子任务
-    lock_key = f"sync-task:{task_id}" if task_id else "sync-task:unknown-callback"
-    with redis_lock(lock_key, ttl_seconds=600) as acquired:
-        if not acquired:
-            # 返回 409 会触发模力退避重试，合理
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="任务正在同步中，请稍后重试")
-        try:
-            result = ingest_molizhishu_callback(db, payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"回调处理失败：{exc}",
-            ) from exc
+    try:
+        result = accept_molizhishu_callback(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"回调处理失败：{exc}",
+        ) from exc
     return ApiResponse(data=result)
 
 
@@ -227,11 +220,16 @@ def monitor_ranking_matrix(
     monitor_keyword: str | None = None,
     exposure_term: str | None = None,
     limit_rows: int = 120,
+    async_miss: bool = Query(
+        default=True,
+        description="缓存未命中时入队异步构建（桌面稳定性③）；false 则同步构建",
+    ),
     tenant_id: int | None = Query(default=None, description="平台端客户预览时指定企业"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """Return prompt × snapshot ranking matrix for customer realtime monitor."""
+    from app.services.ranking_matrix_job_service import resolve_ranking_matrix_response
     from app.services.tenant_scope import resolve_customer_preview_tenant_id
 
     scoped_tenant_id: int | None = None
@@ -270,6 +268,8 @@ def monitor_ranking_matrix(
                 limit_rows=limit_rows,
                 tenant_id=scoped_tenant_id,
             )
+            if isinstance(data, dict):
+                data = {**data, "matrix_status": "ready"}
         else:
             cache_key = ranking_matrix_cache_key(
                 current.identity.identity_type,
@@ -301,16 +301,40 @@ def monitor_ranking_matrix(
                     tenant_id=scoped_tenant_id,
                 )
 
-            data = get_or_build_json_cache(
-                cache_key,
-                _build,
-                ttl_seconds=RANKING_MATRIX_CACHE_TTL,
-                lock_ttl_seconds=60,
-                wait_seconds=2.0,
+            # 2026-08-21 - 稳定性③：租户矩阵 miss 默认异步，避免拖死 API worker
+            data = resolve_ranking_matrix_response(
+                cache_key=cache_key,
+                builder=_build,
+                build_params={
+                    "identity_id": int(current.identity.id),
+                    "tenant_id": int(scoped_tenant_id) if scoped_tenant_id is not None else None,
+                    "platform": platform,
+                    "start_date": start_date.isoformat() if start_date else None,
+                    "end_date": end_date.isoformat() if end_date else None,
+                    "keyword": keyword,
+                    "monitor_group": monitor_group,
+                    "keyword_group": keyword_group,
+                    "monitor_keyword": monitor_keyword,
+                    "exposure_term": exposure_term,
+                    "limit_rows": int(limit_rows),
+                },
+                prefer_async=bool(async_miss),
             )
     except Exception as exc:
         raise_read_endpoint_error(exc, context="monitor.ranking_matrix")
     return ApiResponse(data=data)
+
+
+@router.get("/ranking-matrix/jobs/{job_id}", response_model=ApiResponse[dict])
+def monitor_ranking_matrix_job(
+    job_id: str,
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    """轮询矩阵异步任务状态；ready 时带回完整矩阵。"""
+    from app.services.ranking_matrix_job_service import get_matrix_job_status
+
+    _ = current  # 需登录；结果本身按原请求身份写入的 cache_key 隔离
+    return ApiResponse(data=get_matrix_job_status(job_id))
 
 
 @router.get("/workspace-brief", response_model=ApiResponse[dict])
@@ -363,6 +387,21 @@ def monitor_workspace_brief(
 
     start_key = start_date.isoformat() if start_date else None
     end_key = end_date.isoformat() if end_date else None
+    # 2026-08-21 - 稳定性⑤：默认 7/30 日窗优先吃预聚合快照
+    if purpose == "geo" and scope == "full":
+        from app.services.window_snapshot_service import get_window_snapshot, match_workspace_window_days
+
+        window_days = match_workspace_window_days(start_date, end_date)
+        if window_days:
+            snap = get_window_snapshot(
+                db,
+                tenant_id=resolved_tenant_id,
+                kind="workspace_brief",
+                window_days=window_days,
+            )
+            if snap:
+                return ApiResponse(data={**snap, "window_snapshot": True, "window_days": window_days})
+
     # 2026-08-07 - 观察号与主账号分缓存，避免平台收窄互相污染
     cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key, scope, purpose) + observer_cache_suffix(current)
     try:
@@ -811,6 +850,17 @@ def monitor_subtask_detail(
         db.add(subtask)
         db.commit()
         db.refresh(subtask)
+        # 2026-08-21 - 稳定性④：详情补空排名后重算日表并清缓存
+        from app.services.monitor_mutation_service import after_monitor_data_change
+
+        after_monitor_data_change(
+            db,
+            tenant_id=task.tenant_id,
+            task=task,
+            subtask=subtask,
+            previous_stat_date=None,
+            bust_overview=True,
+        )
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = _keyword_groups_for_tenant(db, task.tenant_id)
     display = serialize_subtask_for_display(

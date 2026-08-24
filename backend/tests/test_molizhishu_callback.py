@@ -218,6 +218,7 @@ def test_http_callback_rejects_invalid_json(callback_client) -> None:
 
 
 def test_http_callback_unknown_task_returns_200(callback_client, cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", False)
     monkeypatch.setattr("app.api.v1.endpoints.monitor.get_db", lambda: cb_db)
     # FastAPI Depends 需 override
     from app.core.database import get_db
@@ -238,6 +239,7 @@ def test_http_callback_unknown_task_returns_200(callback_client, cb_db, monkeypa
 
 
 def test_http_callback_processes_known_task(callback_client, cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", False)
     cb_db.add(_monitor_task(task_id="http-known"))
     cb_db.commit()
     from app.core.database import get_db
@@ -255,5 +257,36 @@ def test_http_callback_processes_known_task(callback_client, cb_db, monkeypatch)
         assert body["data"]["status"] == "processed"
         sub = cb_db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == "sub_http_1"))
         assert sub is not None
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_http_callback_accepts_when_celery_enqueues(callback_client, cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", True)
+    cb_db.add(_monitor_task(task_id="http-queued"))
+    cb_db.commit()
+    from app.core.database import get_db
+
+    app.dependency_overrides[get_db] = lambda: cb_db
+    try:
+        with patch(
+            "app.services.molizhishu_callback_service._enqueue_callback_event",
+            return_value=True,
+        ):
+            resp = callback_client.post(
+                f"{CALLBACK_PATH}?token={TEST_TOKEN}",
+                json=_sample_callback(task_id="http-queued", subtask_id="sub_queued_1"),
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 0
+        assert body["data"]["status"] == "accepted"
+        assert body["data"]["process_status"] == "queued"
+        event = cb_db.scalar(select(GeoMonitorCallbackEvent))
+        assert event is not None
+        assert event.process_status == "queued"
+        # 尚未被 worker 处理，子任务不应已写入
+        sub = cb_db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == "sub_queued_1"))
+        assert sub is None
     finally:
         app.dependency_overrides.pop(get_db, None)

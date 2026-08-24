@@ -30,7 +30,10 @@ celery_app.conf.update(
         "app.tasks.monitor.finalize_lead_diagnoses": {"queue": "default"},
         "app.tasks.monitor.scan_pending_syncs": {"queue": "sync"},
         "app.tasks.monitor.sync_one_monitor_task": {"queue": "sync"},
+        "app.tasks.monitor.process_molizhishu_callback_task": {"queue": "sync"},
+        "app.tasks.monitor.build_ranking_matrix_job_task": {"queue": "default"},
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
+        "app.tasks.monitoring.warm_window_snapshots": {"queue": "default"},
         "app.tasks.monitor.scan_due_scheduled_reports": {"queue": "default"},
         "app.tasks.monitor.expire_overdue_tenant_services": {"queue": "default"},
         "app.tasks.monitor.activate_due_tenants_and_kick_brand_words": {"queue": "submit"},
@@ -71,6 +74,12 @@ celery_app.conf.update(
         "check-queue-backlog": {
             "task": "app.tasks.monitoring.check_queue_backlog",
             "schedule": crontab(minute="*/5"),
+        },
+        "warm-window-snapshots": {
+            "task": "app.tasks.monitoring.warm_window_snapshots",
+            # 2026-08-21 - 稳定性⑤：每小时预热近 7/30 日工作台快照
+            "schedule": crontab(minute=20),
+            "kwargs": {"limit": 80},
         },
         "scan-due-lead-diagnosis": {
             "task": "app.tasks.monitor.scan_due_lead_diagnosis",

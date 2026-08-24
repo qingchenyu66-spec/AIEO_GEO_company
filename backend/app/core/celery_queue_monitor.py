@@ -714,6 +714,17 @@ def evaluate_queue_alerts(snapshot: dict[str, Any] | None = None, *, persist: bo
                 }
             )
 
+    # 2026-08-21 - 稳定性⑥：并入 API P95 / 回调失败率 / 矩阵耗时
+    try:
+        from app.services.stability_metrics_service import (
+            collect_stability_metrics,
+            evaluate_stability_alerts,
+        )
+
+        alerts.extend(evaluate_stability_alerts(collect_stability_metrics()))
+    except Exception:
+        logger.exception("Failed to evaluate stability alerts")
+
     if persist:
         _persist_alert_snapshot(snapshot, alerts)
         for alert in alerts:

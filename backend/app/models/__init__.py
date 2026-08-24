@@ -13,6 +13,7 @@ from app.models.monitor import (
     GeoMonitorSourceDaily,
     GeoMonitorSubtask,
     GeoMonitorTask,
+    GeoMonitorWindowSnapshot,
 )
 from app.models.knowledge import KnowledgeFile
 from app.models.ops import OperationLog, SystemConfig, OpsOverviewRollup
@@ -23,6 +24,7 @@ from app.models.notification import SystemNotification, SystemNotificationRead
 from app.models.announcement import Announcement, AnnouncementAck, AnnouncementMedia
 
 __all__ = [
+    "GeoMonitorWindowSnapshot",
     "GeoMonitorCallbackEvent",
     "GeoMonitorCompetitorDailyStat",
     "GeoMonitorDailyStat",

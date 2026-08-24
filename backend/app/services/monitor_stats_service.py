@@ -554,6 +554,17 @@ def refresh_stats_after_subtask_backfill(
             task.tenant_id,
             exc,
         )
+    # 2026-08-21 - 稳定性④/⑤：补录后作废窗口快照
+    try:
+        from app.services.window_snapshot_service import invalidate_window_snapshots_for_tenant
+
+        invalidate_window_snapshots_for_tenant(db, int(task.tenant_id))
+    except Exception as exc:
+        logger.warning(
+            "invalidate_window_snapshots after backfill failed tenant_id=%s error=%s",
+            task.tenant_id,
+            exc,
+        )
     # 2026-08-17 - 补录 HTTP 30s 超时：艾迪亚信源日表同步重刷可达 8–12s+，改异步（日表仍同步）
     try:
         from app.services.monitor_source_rollup_service import enqueue_source_daily_after_backfill

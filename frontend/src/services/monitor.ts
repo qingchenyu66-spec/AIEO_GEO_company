@@ -509,7 +509,45 @@ export async function getRankingMatrix(
   config?: import('./http').GeoHttpRequestConfig,
 ): Promise<RankingMatrix> {
   const response = await http.get('/v1/monitor/ranking-matrix', { params, ...config })
-  return response.data.data
+  let data = response.data.data as RankingMatrix & {
+    matrix_status?: string
+    job_id?: string
+    status?: string
+    error?: string
+  }
+  // 2026-08-21 - 稳定性③：缓存未命中返回 processing 时轮询 job
+  if (data?.matrix_status === 'processing' && data.job_id) {
+    const jobId = data.job_id
+    const started = Date.now()
+    const timeoutMs = 90_000
+    while (Date.now() - started < timeoutMs) {
+      if (config?.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError')
+      }
+      await new Promise(r => setTimeout(r, 2500))
+      if (config?.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError')
+      }
+      const jobResp = await http.get(`/v1/monitor/ranking-matrix/jobs/${encodeURIComponent(jobId)}`, {
+        ...config,
+      })
+      const jobData = jobResp.data.data as typeof data
+      if (jobData?.matrix_status === 'ready' && Array.isArray(jobData.rows)) {
+        data = jobData
+        break
+      }
+      if (jobData?.matrix_status === 'failed') {
+        throw new Error(jobData.error || '排名矩阵计算失败')
+      }
+      if (jobData?.matrix_status === 'missing') {
+        throw new Error('排名矩阵任务已失效，请重试')
+      }
+    }
+    if (data?.matrix_status === 'processing') {
+      throw new Error('排名矩阵计算超时，请稍后刷新')
+    }
+  }
+  return data
 }
 
 export interface WorkspaceBriefQuery {

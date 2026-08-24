@@ -54,6 +54,13 @@ def _detailed_health_payload(db: Session) -> dict:
     redis_status = redis_health()
     celery_status = celery_health()
     queue_snapshot = get_queue_monitor_snapshot() if settings.celery_enabled else None
+    stability = None
+    try:
+        from app.services.stability_metrics_service import collect_stability_metrics
+
+        stability = collect_stability_metrics(db)
+    except Exception:
+        stability = {"status": "error", "detail": "稳定性指标采集失败"}
     return {
         "service": settings.app_name,
         "environment": settings.app_env,
@@ -64,6 +71,7 @@ def _detailed_health_payload(db: Session) -> dict:
         "molizhishu": _molizhishu_health(public=False),
         "playwright_chromium": playwright_chromium_health(),
         "celery_queues": queue_snapshot,
+        "stability": stability,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

@@ -79,13 +79,21 @@ cd "$ROOT/frontend"
 npm ci --legacy-peer-deps
 npm run build
 
+echo "==> API 快/重/回调三进程"
+bash "$ROOT/scripts/setup_api_split_services.sh"
+cp "$ROOT/deploy/nginx/geo-http-prod-split.conf" /etc/nginx/sites-available/geo-http.conf
+nginx -t
+
 echo "==> restart services"
-systemctl restart geo-api
+systemctl restart geo-api geo-api-heavy geo-api-callback
 systemctl restart geo-celery-beat geo-celery-submit geo-celery-sync geo-celery-default || true
 systemctl reload nginx
 
 echo "==> health check"
-sleep 2
-curl -sf http://127.0.0.1:8001/api/v1/health | head -c 200
-echo
+sleep 3
+for port in 8001 8002 8003; do
+  curl -sf "http://127.0.0.1:${port}/api/v1/health" | head -c 120
+  echo " (port ${port})"
+done
+curl -sf -o /dev/null -w "https:%{http_code}\n" https://www.aieokj.com/api/v1/health || true
 echo "DEPLOY_OK"

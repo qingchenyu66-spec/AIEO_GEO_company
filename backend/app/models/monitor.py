@@ -177,6 +177,34 @@ class GeoMonitorSourceDaily(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class GeoMonitorWindowSnapshot(Base):
+    """企业常用窗口预聚合（近 7/30 日工作台等）。
+
+    2026-08-21 - 稳定性⑤：页面默认读快照，数据变更后作废再预热
+    """
+
+    __tablename__ = "geo_monitor_window_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "kind",
+            "window_days",
+            "as_of_date",
+            "filter_fp",
+            name="uk_geo_monitor_window_snapshot",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, comment="workspace_brief 等")
+    window_days: Mapped[int] = mapped_column(Integer, nullable=False, comment="7 或 30")
+    as_of_date: Mapped[date] = mapped_column(Date, index=True, nullable=False, comment="窗口截止日")
+    filter_fp: Mapped[str] = mapped_column(String(40), nullable=False, default="default")
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
 class GeoMonitorCallbackEvent(Base):
     """模力指数回调事件，做幂等和问题追踪。"""
 

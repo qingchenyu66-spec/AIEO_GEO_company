@@ -2020,20 +2020,15 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
             db.commit()
         raise
     db.commit()
-    try:
-        from app.services.monitor_stats_service import refresh_stats_for_task
+    # 2026-08-21 - 稳定性④：同步成功后统一编排（日统计+缓存+窗口快照）
+    from app.services.monitor_mutation_service import after_monitor_data_change
 
-        refresh_stats_for_task(db, task_id)
-        db.commit()
-    except Exception as exc:
-        # 2026-08-10 - daily_stat 死锁后会话 PendingRollback，勿让后续 get_monitor_task 再炸
-        logger.warning("refresh_stats_for_task failed task_id=%s error=%s", task_id, exc)
-        try:
-            db.rollback()
-        except Exception:
-            pass
-    # ponytail: 日统计落库后再清缓存，避免冷读打到旧 daily_stat
-    invalidate_monitor_summary_cache(task.tenant_id)
+    after_monitor_data_change(
+        db,
+        tenant_id=task.tenant_id,
+        task_id=task_id,
+        bust_overview=False,
+    )
     try:
         from app.services.brand_analysis_service import parse_sentiments_after_brand_word_sync
 
