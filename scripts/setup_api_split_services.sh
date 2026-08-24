@@ -34,4 +34,5 @@ write_unit geo-api-callback 8003 1
 
 systemctl daemon-reload
 systemctl enable geo-api geo-api-heavy geo-api-callback
+systemctl start geo-api-heavy geo-api-callback || true
 echo "API_SPLIT_UNITS_OK"
