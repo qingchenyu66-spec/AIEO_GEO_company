@@ -34,8 +34,6 @@ HEAVY_MARKERS = (
 
 FAST_P95_WARN_MS = 2000
 FAST_P95_CRIT_MS = 5000
-HEAVY_P95_WARN_MS = 10000
-HEAVY_P95_CRIT_MS = 30000
 CALLBACK_FAIL_RATE_WARN = 0.05
 CALLBACK_FAIL_RATE_CRIT = 0.15
 MATRIX_JOB_WARN_MS = 60000
@@ -225,7 +223,7 @@ def evaluate_stability_alerts(metrics: dict[str, Any] | None = None) -> list[dic
     alerts: list[dict[str, Any]] = []
     lanes = (metrics.get("latency") or {}).get("lanes") or {}
     fast_p95 = (lanes.get("fast") or {}).get("p95_ms")
-    heavy_p95 = (lanes.get("heavy") or {}).get("p95_ms")
+    # 2026-08-24 - 重 API P95 误报多且规则页不可配 - 停站内通知，指标仍采样
     if fast_p95 is not None and fast_p95 >= FAST_P95_CRIT_MS:
         alerts.append(
             {
@@ -246,28 +244,6 @@ def evaluate_stability_alerts(metrics: dict[str, Any] | None = None) -> list[dic
                 "message": f"快通道 P95 {int(fast_p95)}ms，阈值 {FAST_P95_WARN_MS}ms",
                 "queued": int(fast_p95),
                 "threshold": FAST_P95_WARN_MS,
-            }
-        )
-    if heavy_p95 is not None and heavy_p95 >= HEAVY_P95_CRIT_MS:
-        alerts.append(
-            {
-                "queue": "api_heavy_p95",
-                "level": "critical",
-                "title": "重 API P95 过高",
-                "message": f"重通道 P95 {int(heavy_p95)}ms，阈值 {HEAVY_P95_CRIT_MS}ms",
-                "queued": int(heavy_p95),
-                "threshold": HEAVY_P95_CRIT_MS,
-            }
-        )
-    elif heavy_p95 is not None and heavy_p95 >= HEAVY_P95_WARN_MS:
-        alerts.append(
-            {
-                "queue": "api_heavy_p95",
-                "level": "warning",
-                "title": "重 API P95 预警",
-                "message": f"重通道 P95 {int(heavy_p95)}ms，阈值 {HEAVY_P95_WARN_MS}ms",
-                "queued": int(heavy_p95),
-                "threshold": HEAVY_P95_WARN_MS,
             }
         )
 

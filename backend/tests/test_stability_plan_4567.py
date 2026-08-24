@@ -35,6 +35,16 @@ def test_evaluate_stability_alerts_fast_p95():
     assert any(a["queue"] == "api_fast_p95" and a["level"] == "critical" for a in alerts)
 
 
+def test_evaluate_stability_alerts_skips_heavy_p95():
+    metrics = {
+        "latency": {"lanes": {"fast": {"p95_ms": 100}, "heavy": {"p95_ms": 15000}, "callback": {}}},
+        "callback": {"hours": 24, "total": 0, "failed": 0, "failure_rate": 0},
+        "matrix_jobs": {"max_ms": None},
+    }
+    alerts = evaluate_stability_alerts(metrics)
+    assert not any(a["queue"] == "api_heavy_p95" for a in alerts)
+
+
 def test_evaluate_stability_alerts_callback_rate():
     metrics = {
         "latency": {"lanes": {}},
