@@ -1,0 +1,134 @@
+[
+  {
+    "id": "airport_tier_integrated_agent",
+    "note": "机场广告：整合代理档第1，禁止跨前面档累加到7/9",
+    "brand_terms": ["艾迪亚", "艾迪亚控股集团有限公司"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["艾迪亚控股", "麦迪威", "狼界"],
+      "rank": 1,
+      "category": "三、整合代理 / 性价比型",
+      "rank_basis": "section_bullet",
+      "confidence": 0.92
+    },
+    "expect_rank": 1,
+    "expect_category_contains": "整合"
+  },
+  {
+    "id": "board_cross_tier_dawangye",
+    "note": "板材：国产档第4，禁止进口3+国产4=7",
+    "brand_terms": ["大王椰"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["福人", "靓时", "红棉", "大王椰", "千山"],
+      "rank": 4,
+      "category": "国产高端饰面",
+      "rank_basis": "section_list",
+      "confidence": 0.9
+    },
+    "expect_rank": 4
+  },
+  {
+    "id": "board_wrong_cumulative_corrected_by_ordered",
+    "note": "LLM 口算跨档 rank=7，ordered_brands 档内第4 → 校正为4",
+    "brand_terms": ["大王椰"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["福人", "靓时", "红棉", "大王椰"],
+      "rank": 7,
+      "category": "国产高端饰面",
+      "rank_basis": "section_list",
+      "confidence": 0.88
+    },
+    "expect_rank": 4,
+    "expect_rank_basis": "ordered_brands_check"
+  },
+  {
+    "id": "led_selection_advice_keeps_rank",
+    "note": "LED：选择建议表走 B，推荐列位次",
+    "brand_terms": ["艾迪亚"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["蓝色光标", "艾迪亚控股集团"],
+      "rank": 2,
+      "category": "四、选择建议",
+      "rank_basis": "markdown_table",
+      "confidence": 0.85
+    },
+    "expect_rank": 2,
+    "expect_category_contains": "选择建议"
+  },
+  {
+    "id": "wanwei_prose_fulltext_rank",
+    "note": "万唯：无分类表时走 C 全文出场",
+    "brand_terms": ["万唯"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["一本", "领跑", "万唯"],
+      "rank": 3,
+      "category": "全文出场",
+      "rank_basis": "prose",
+      "confidence": 0.8
+    },
+    "expect_rank": 3
+  },
+  {
+    "id": "metro_beijing_core_first",
+    "note": "地铁北京：核心资源方列表第1",
+    "brand_terms": ["艾迪亚"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["艾迪亚传媒", "北京亦智"],
+      "rank": 1,
+      "category": "全国整合代理商",
+      "rank_basis": "section_list",
+      "confidence": 0.9
+    },
+    "expect_rank": 1
+  },
+  {
+    "id": "designer_tier_dawangye",
+    "note": "设计师饰面板子弹档第3，不是第一梯队第7",
+    "brand_terms": ["大王椰"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["华富立", "靓时", "大王椰"],
+      "rank": 3,
+      "category": "国产设计师向高端饰面板",
+      "rank_basis": "section_bullet",
+      "confidence": 0.9
+    },
+    "expect_rank": 3,
+    "expect_category_contains": "设计师"
+  },
+  {
+    "id": "metro_multi_city_tier_four",
+    "note": "地铁全国多城联动第4，禁止单城8家累加成12",
+    "brand_terms": ["艾迪亚"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["德高中国", "雅仕维传媒", "华铁传媒", "艾迪亚控股", "博视得"],
+      "rank": 4,
+      "category": "全国多城联动型",
+      "rank_basis": "section_bullet",
+      "confidence": 0.9
+    },
+    "expect_rank": 4,
+    "expect_category_contains": "全国多城"
+  },
+  {
+    "id": "metro_wrong_cumulative_corrected_by_ordered",
+    "note": "LLM 跨城累加 rank=12，ordered_brands 档内第4 → 校正为4",
+    "brand_terms": ["艾迪亚"],
+    "llm_payload": {
+      "brand_mentioned": true,
+      "ordered_brands": ["德高中国", "雅仕维传媒", "华铁传媒", "艾迪亚控股"],
+      "rank": 12,
+      "category": "全国多城联动型",
+      "rank_basis": "section_bullet",
+      "confidence": 0.85
+    },
+    "expect_rank": 4,
+    "expect_rank_basis": "ordered_brands_check"
+  }
+]

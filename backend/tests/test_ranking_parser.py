@@ -37,6 +37,148 @@ def test_parse_holding_group_short_name_in_numbered_headers():
     assert rank == 4
 
 
+def test_company_detail_fields_do_not_inflate_section_rank():
+    """高性价比档：联系方式/总部不当选手；艾迪亚档内第3不是第5。"""
+    text = """
+## 二、高性价比服务商推荐
+### 6. **成都狼界广告传播有限公司**
+- **成立时间**：2011年
+- **联系方式**：15982158849，官网 www.langjiegg.com
+### 7. **联岸传媒集团有限公司**
+- **总部**：北京
+- **核心优势**：运营北上广深电梯广告
+### 8. **艾迪亚控股集团**
+- **成立时间**：1998年
+- **核心优势**：全国200+城市优质LED点位
+"""
+    entries = parse_answer_rankings(text)
+    names = [item["name"] for item in entries]
+    assert "联系方式" not in names
+    assert "总部" not in names
+    brand = next(item for item in entries if "艾迪亚" in item["name"])
+    assert brand["rank"] == 3
+    assert "高性价比" in str(brand["category"] or "")
+
+
+def test_pipe_numbered_board_brands_keep_section_order():
+    """### 7）大王椰｜… 挂在 ## 国产主流，档内第7；福人⭐加粗不被吞。"""
+    text = """
+## 国产主流品牌（性价比首选）
+### 1）万华禾香板｜禾香板（秸秆基材）
+### 2）鲁丽｜欧松板OSB/LSB
+### 3）兔宝宝｜生态板、多层板、颗粒板、欧松板
+### 4）千年舟｜颗粒板、多层板、LSB板
+### 5）莫干山｜多层板见长
+### 6）福人、红棉花｜颗粒板精板
+### 7）大王椰、伟业
+"""
+    entries = parse_answer_rankings(text)
+    brand = next(item for item in entries if "大王椰" in item["name"])
+    assert brand["rank"] == 7
+    assert "国产主流" in str(brand["category"] or "")
+    assert not any(item["name"] in {"生态板", "多层板", "颗粒板"} for item in entries)
+
+    beauty = """
+## 🇨🇳 国产高端｜颜值主力
+1. **福人（福建国企）⭐国产颜值标杆**
+2. **大王椰**
+3. **华富立（华立股份）**
+"""
+    beauty_entries = parse_answer_rankings(beauty)
+    names = [item["name"] for item in beauty_entries]
+    assert "福人" in names
+    assert next(item for item in beauty_entries if "大王椰" in item["name"])["rank"] == 2
+
+
+def test_caution_bullet_does_not_inflate_mainstream_rank():
+    """福人下「注意：区分…」不当选手，大王椰仍是国产主流第7。"""
+    text = """
+## 国产主流靠谱品牌
+### 1）兔宝宝
+### 2）莫干山
+### 3）千年舟
+### 4）万华
+### 5）鲁丽
+### 6）福人家居
+- 注意：区分**福人家居（正品）**和福人木业
+### 7）大王椰
+"""
+    entries = parse_answer_rankings(text)
+    assert not any(item["name"] == "注意" for item in entries)
+    brand = next(item for item in entries if "大王椰" in item["name"])
+    assert brand["rank"] == 7
+
+
+def test_geo_place_headers_do_not_steal_store_rank():
+    """区县小标题不当选手；大王椰在区县列表里从第1计。"""
+    text = """
+## 二、分区域知名品牌授权门店
+### 城关区（东岗）
+1. 大王椰板材：大西北板材市场
+2. 千年舟板材运营中心：大西北板材市场A105号
+### 西固区
+大王椰板材｜西固中路1288号
+"""
+    entries = parse_answer_rankings(text)
+    assert not any(item["name"] in {"城关区", "西固区"} for item in entries)
+    brand = next(item for item in entries if item["name"] == "大王椰板材" and item["rank"] == 1)
+    assert brand["category"] and "城关" in brand["category"]
+
+
+def test_flagship_store_brand_names_stay_in_numbered_list():
+    """精材艺匠旗舰店是品牌名不是地址行，荔城区内排第1。"""
+    text = """
+## 荔城区
+1. **精材艺匠黄浦木业旗舰店**
+2. **大王椰板材（荔城店）**
+"""
+    entries = parse_answer_rankings(text)
+    section = [item for item in entries if item.get("category") == "荔城区"]
+    assert [item["name"] for item in section] == ["精材艺匠黄浦木业旗舰店", "大王椰板材"]
+    assert section[1]["rank"] == 2
+
+
+def test_authorized_store_brand_headers_not_store_lines():
+    """### 品牌下挂门店；下一 ### 品牌继续同段计位，福庆不当 category。"""
+    text = """
+## 一、国产一线品牌授权门店（兔宝宝/莫干山/千年舟/福庆/大王椰）
+### 兔宝宝（ENF生态板、多层板）[citation:9]
+1. 秦淮卡子门京东MALL整家店
+2. 建邺金盛国际全屋店
+### 莫干山板材[citation:11]
+1. 弘阳装饰城店｜雨花台区
+### 千年舟板材
+1. 长江装饰城同洲木业店
+### 福庆板材（江苏本土品牌）[citation:10]
+1. 桥北弘阳家居店
+### 大王椰板材南京运营中心
+"""
+    entries = parse_answer_rankings(text)
+    assert not any("整家店" in item["name"] or item["name"].endswith("家居店") for item in entries)
+    brand = next(item for item in entries if "大王椰" in item["name"])
+    assert brand["rank"] == 5
+    assert "福庆" not in str(brand.get("category") or "")
+    assert "国产一线" in str(brand.get("category") or "")
+
+
+def test_soe_section_single_brand_is_rank_one():
+    """### 国企背景 下唯一 * **金隅** → 档内第1，不被国际段吞。"""
+    text = """
+### 🌍 国际一线品牌：技术引领，高端优选
+*   **西卡 (Sika)**：环氧
+*   **亚地斯 (Ardex)**：快干
+### 🏛️ 国企背景品牌：安全合规，大型公建首选
+这类品牌在防火、环保等硬性指标上具有天然优势。
+*   **金隅涂料**：A级防火
+### 🇨🇳 国内市场化品牌：灵活高效，性价比高
+*   **秀珀 (Supe)**：性价比
+"""
+    entries = parse_answer_rankings(text)
+    brand = next(item for item in entries if "金隅" in item["name"])
+    assert brand["rank"] == 1
+    assert "国企" in str(brand.get("category") or "")
+
+
 def test_parse_numbered_category_heading_keeps_local_bullets():
     """### 3. 中国本土市场活跃榜单 开新段；鸿联是该类 bullet 第2，标题不当选手。"""
     text = """

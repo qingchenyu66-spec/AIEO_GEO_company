@@ -192,6 +192,156 @@ def _normalize_cockpit_narrative(payload: dict[str, Any], *, brand: str) -> dict
     }
 
 
+# 改 prompt 时跑 tests/test_rank_prompt_contract.py，确保硬约束未丢
+RANK_PROMPT_CONTRACT_MARKERS: tuple[str, ...] = (
+    "计位优先级",
+    "禁止跨档",
+    "计位范围锁定",
+    "地理分区",
+    "ordered_brands",
+    "首选/备选",
+    "需求→推荐品牌",
+    "rank_basis=prose",
+    "category_ranks",
+    "城市名",
+    "brand_mentioned=false",
+    "section_list",
+    "section_bullet",
+    "markdown_table",
+)
+
+
+def _build_brand_rank_prompts(
+    *,
+    monitor_keyword: str,
+    prompt: str,
+    aliases: str,
+    answer_text: str,
+    truncate_note: str,
+) -> tuple[str, str]:
+    """排名 LLM 提示词（system + user）。语义与 2026-08-24 口径一致，去重复案例。"""
+    system_prompt = (
+        "你是 GEO 品牌监测排名分析助手。根据 AI「正式回答」正文，判断目标品牌的位次。"
+        "计位优先级（严格按序，只选一层）：\n"
+        "A. 有分类/分档（进口/国产、一手资源/整合代理、一线/二梯队等 ##/###）→ "
+        "仅在目标所在档内按行序计位，category 抄该档标题；禁止跨档累加。\n"
+        "B. 无分档但有品牌对比表/编号推荐列表 → 按表数据行或列表项顺序计位。\n"
+        "C. 以上都没有 → 全文出场序：按品牌样实体出现先后计位（含选择建议、决策清单、顺口提及），"
+        "rank_basis=prose；禁止因「只是顺口提到」报 rank=null。\n"
+        "硬性规则：\n"
+        "1. 只看正式回答；忽略思考过程、搜索结果、网页标题、引用角标、页眉品牌名。\n"
+        "2. 【计位范围锁定】走 A 时 ordered_brands 只写目标所在最小独立分组（档/小节/城市子组）"
+        "内的主列表项（编号或 bullet），禁止跨档、跨小节、跨城市子组合并累加；"
+        "地理分区/市场集散地等标题只划定范围，本身不占 rank、不得当 rank1。"
+        "反例：进口3家+国产第4个目标 → rank=4 非 7；二档第1个整合商 → rank=1 非前两档累加；"
+        "「单城官方」8家+「全国联动」第4个目标 → rank=4、ordered_brands 仅该档5项，非 12。\n"
+        "3. 主推荐表优先于特色视角/备选/补充段；若输出 category_ranks，矩阵取主表最靠前一条。\n"
+        "4. 表格按数据行序（表头不算）；有首选/备选列时首选列优先，仅备选列出现才用备选行序；"
+        "选择建议表按「需求→推荐品牌」列出场序。\n"
+        "5. 先写 ordered_brands（至少前8个，不足全写），rank=目标在其中的 1-based 下标，二者必须一致；"
+        "C 时 ordered_brands 为全文品牌实体去重保序。\n"
+        "6. category：A/B 抄小节或表标题；C 可写「全文出场」或所在小节标题。\n"
+        "7. 正文完全未出现目标及别名 → brand_mentioned=false、rank=null、ordered_brands=[]；"
+        "只要出现过 → brand_mentioned=true 且必须给出 rank。\n"
+        "8. 城市名（北京/上海/广州等）不是品牌，不得计入 ordered_brands。\n"
+        "9. 只输出 JSON，不要解释。"
+    )
+    user_prompt = (
+        f"监测词：{monitor_keyword}\n"
+        f"问题：{prompt}\n"
+        f"目标品牌及别名：{aliases}\n"
+        f"{truncate_note}\n\n"
+        "回答正文：\n"
+        f"{answer_text}\n\n"
+        "按 system 规则 A→B→C 判断；先写 ordered_brands 再定 rank。仅输出 JSON：\n"
+        "{\n"
+        '  "brand_mentioned": true,\n'
+        '  "ordered_brands": ["品牌A", "品牌B"],\n'
+        '  "rank": 2,\n'
+        '  "category": "小节或表标题",\n'
+        '  "rank_basis": "section_list|section_bullet|markdown_table|prose|none",\n'
+        '  "confidence": 0.92,\n'
+        '  "evidence": "原文片段≤80字"\n'
+        "}"
+    )
+    return system_prompt, user_prompt
+
+
+def _build_brand_rank_prompts_legacy(
+    *,
+    monitor_keyword: str,
+    prompt: str,
+    aliases: str,
+    answer_text: str,
+    truncate_note: str,
+) -> tuple[str, str]:
+    """2026-08-24 瘦身前快照，仅审计脚本对比用。"""
+    system_prompt = (
+        "你是 GEO 品牌监测排名分析助手。请根据 AI「正式回答」正文，判断目标品牌的位次。"
+        "计位优先级（必须按此顺序，只能选一层）：\n"
+        "A. 有分类/分档（如进口/国产、一手资源/整合代理、一线/二梯队等 ##/### 小节）→ "
+        "只在目标品牌所在那一档内按行序计位，category 抄该档标题；禁止跨档累加。\n"
+        "B. 无可用分类位次、但有品牌对比表/编号推荐列表 → 按表数据行或列表项顺序计位。\n"
+        "C. 以上都没有 → 全文出场序：在正式回答中按「品牌样实体」出现先后，"
+        "目标品牌是第几个就 rank=几（含选择建议、决策清单、顺口点名等散文提及）；"
+        "rank_basis=prose。禁止因为「只是顺口提到」就报 rank=null。\n"
+        "排名细则：\n"
+        "1. 只看正式回答；忽略思考过程、搜索结果、网页标题、引用角标、"
+        "Shared Conversation 页眉里的品牌名。\n"
+        "2. 【分档硬规则】走 A 时：ordered_brands 只能写目标所在那一档的品牌。"
+        "错误示例：进口档已有3家，国产档第4个是目标 → 正确 rank=4；禁止 rank=7（3+4）。"
+        "又例：一档4家核心资源方 + 二档第1个整合服务商 → 正确 rank=1（二档内），禁止 rank=5。\n"
+        "3. 主推荐表与「特色视角/备选/补充」同时有目标品牌时，优先主表（A/B），不要改用次要段。\n"
+        "4. 表格含品牌列时按数据行序（表头不算）；有「首选/备选」列时：首选列出现用首选行序，"
+        "仅在备选列出现才用备选行序。选择建议表若有「需求→推荐品牌」列，按推荐列品牌出现序。\n"
+        "5. 必须先写出本次计位所用序列 ordered_brands（至少前 8 个，不足则全写），"
+        "再把目标品牌在该数组中的 1-based 下标作为 rank；rank 必须与 ordered_brands 一致。"
+        "走 C 全文时，ordered_brands 为全文中依次出现的品牌样实体（去重保序）。\n"
+        "6. category：走 A/B 时抄原文小节/表格标题；走 C 时可写「全文出场」或所在小节标题。\n"
+        "7. 正文完全未出现目标品牌及别名 → brand_mentioned=false、rank=null、ordered_brands=[]。"
+        "只要出现过（含顺口提），brand_mentioned=true 且必须给出 rank（走 A/B/C 之一）。\n"
+        "8. 不要跨小节累计；不要把思考过程里的点名当作家。\n"
+        "9. 若输出 category_ranks：每个正式分类各给一条；矩阵最终取主表中最靠前的一条，"
+        "次要段不要压过主表。\n"
+        "10. 【城市分组禁止累加】一档内按城市分子组（如「**北京**：公司A；公司B」「**上海**：…」）时，"
+        "ordered_brands 只写目标所在那一档的主列表项（编号/bullet），不要把各城市子列表首尾相接。"
+        "例：「一、单城官方」下列 8 家 +「二、全国多城联动」第 4 个是目标 → rank=4、"
+        "ordered_brands 仅含该档 5 项，禁止 rank=12（8+4）。\n"
+        "11. 城市名（北京/上海/广州等）不是品牌，不得计入 ordered_brands。\n"
+        "12. 只输出 JSON，不要解释。"
+    )
+    user_prompt = (
+        f"监测词：{monitor_keyword}\n"
+        f"问题：{prompt}\n"
+        f"目标品牌及别名：{aliases}\n"
+        f"{truncate_note}\n\n"
+        "回答正文：\n"
+        f"{answer_text}\n\n"
+        "提醒：先判断走 A 分类 / B 表列表 / C 全文；"
+        "分档时若正文有「## 进口 … 1.A 2.B 3.C」和「## 国产 … 1.D 2.E 3.目标 4.F」，"
+        "目标在国产档 → ordered_brands 只能类似 [\"D\",\"E\",\"目标\",\"F\"]，rank=3，"
+        "禁止混入进口档或 rank=6。\n"
+        "地铁/公交例：「一、单城官方」按城市列公司 +「二、全国多城联动」bullet 列表，"
+        "目标在第二节第 4 条 → rank=4，category 抄「全国多城联动」，"
+        "ordered_brands 只写第二节 5 个品牌，禁止把第一节各城市公司累加成 8 再 +4。\n\n"
+        "输出 JSON：\n"
+        "{\n"
+        '  "brand_mentioned": true,\n'
+        '  "ordered_brands": ["品牌A", "品牌B", "品牌C"],\n'
+        '  "rank": 3,\n'
+        '  "category": "热门品牌速览",\n'
+        '  "rank_basis": "markdown_table",\n'
+        '  "confidence": 0.92,\n'
+        '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
+        "}\n"
+        "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
+        "confidence 范围 0~1。\n"
+        "自检：①目标是 ordered_brands 第 k 个则 rank=k；"
+        "②走 A 时 ordered_brands 未混入其他档；③有露出则 rank 不得为 null。"
+    )
+    return system_prompt, user_prompt
+
+
 class DeepseekClient:
     def __init__(self) -> None:
         self.timeout = settings.deepseek_timeout_seconds
@@ -1496,55 +1646,27 @@ class DeepseekClient:
         prompt: str,
         answer_text: str,
         truncated: bool = False,
+        prompt_variant: str = "current",
     ) -> dict[str, Any]:
         """Extract brand list rank from a monitor answer using ranking rules."""
         aliases = "、".join(term.strip() for term in brand_terms if str(term or "").strip())
         truncate_note = "（正文已截断）" if truncated else ""
         # 2026-08-21 - 方案 C：强制先列主表品牌序再报位次；忽略思考/搜索引用区品牌名
         # 2026-08-21 - 补强：只用主推荐表/主列表，禁止次要段（纠人工改过的错因 1/4/5）
-        system_prompt = (
-            "你是 GEO 品牌监测排名分析助手。请根据 AI「正式回答」正文，判断目标品牌在「主推荐表/主列表」中的位次。"
-            "排名规则：\n"
-            "1. 只看正式回答中的主推荐表或主编号列表；忽略思考过程、搜索结果、网页标题、引用角标里的品牌名。\n"
-            "2. 主表定义：标题含「速览/主流/十大/品牌推荐/推荐清单/一线/综合」等，或正文中最先出现的品牌对比表/"
-            "1.2.3. 主推荐列表。分档文（入门/中端/高端）时：目标品牌所在那一档内按行序计位，"
-            "并把 category 写成该档标题；不要跨档累计。\n"
-            "3. 禁止用次要段计位：如「其他值得关注」「特色视角」「单科专项」「小四门」「备选/补充/拓展」"
-            "「选购建议/避坑/如何选择」。若品牌只在次要段出现、主表没有，才可用次要段，并在 category 标明该次要标题。\n"
-            "4. 若存在 Markdown/文本表格且含品牌列，优先按该主表数据行序排名（表头不算）。\n"
-            "5. 必须先写出主表/主列表中按出现顺序的品牌名数组 ordered_brands（至少前 8 个，不足则全写），"
-            "再把目标品牌在该数组中的 1-based 下标作为 rank；rank 必须与 ordered_brands 一致。\n"
-            "6. category 必须抄原文小节/表格标题，禁止编造与正文无关的类目名。\n"
-            "7. 品牌未出现在任何推荐列表/表格中则 brand_mentioned=false、rank=null、ordered_brands=[]。\n"
-            "8. 不要跨小节累计；不要把「浏览网页/搜索结果」标题当作家。\n"
-            # 2026-07-29 - 选型表「首选」第一行被判成备选第4 - 明确首选列优先于备选/补充表
-            "9. 表格若有「首选推荐/首选」与「备选」列：品牌在首选列出现时，以该表中首次作为首选的数据行序为 rank；"
-            "仅在备选列出现才用备选行序。\n"
-            "10. 若输出 category_ranks：每个正式主表各给一条；矩阵最终取主表中最靠前的一条，"
-            "次要段条目不要用来压过主表。\n"
-            "11. 只输出 JSON，不要解释。"
+        # 2026-08-24 - 近3天错样：分档跨段累加（进口3+国产4=7）、思考区品牌污染
+        # 2026-08-24 - 口径收口：有分类算分类 → 有表算表 → 否则全文出场（含顺口提）；禁止有露出却 rank=null
+        # 2026-08-24 - prompt 瘦身：合并跨档/跨段/城市子组为「计位范围锁定」；user 去掉重复案例与自检
+        builder = (
+            _build_brand_rank_prompts_legacy
+            if str(prompt_variant or "current").strip().lower() == "legacy"
+            else _build_brand_rank_prompts
         )
-        user_prompt = (
-            f"监测词：{monitor_keyword}\n"
-            f"问题：{prompt}\n"
-            f"目标品牌及别名：{aliases}\n"
-            f"{truncate_note}\n\n"
-            "回答正文：\n"
-            f"{answer_text}\n\n"
-            "输出 JSON：\n"
-            "{\n"
-            '  "brand_mentioned": true,\n'
-            '  "ordered_brands": ["品牌A", "品牌B", "品牌C"],\n'
-            '  "rank": 3,\n'
-            '  "category": "热门品牌速览",\n'
-            '  "rank_basis": "markdown_table",\n'
-            '  "confidence": 0.92,\n'
-            '  "evidence": "引用原文中品牌所在列表行（不超过80字）"\n'
-            "}\n"
-            "rank_basis 取值：section_list | section_bullet | markdown_table | prose | none\n"
-            "confidence 范围 0~1。\n"
-            "自检：若目标品牌是 ordered_brands 第 k 个，则 rank 必须等于 k；"
-            "category 必须能在正文标题中找到原文。"
+        system_prompt, user_prompt = builder(
+            monitor_keyword=monitor_keyword,
+            prompt=prompt,
+            aliases=aliases,
+            answer_text=answer_text,
+            truncate_note=truncate_note,
         )
         content = self.chat_completion(
             messages=[

@@ -46,7 +46,7 @@ SUBSECTION_LABELS = frozenset({
     "渠道能力", "品牌能力", "服务体系", "资源体系", "核心亮点", "主要优势",
     "资源覆盖", "服务特色", "特色服务", "适合客户", "适合对象", "适合需求",
     "覆盖范围", "服务范围", "服务优势", "服务特点", "资源规模", "资源真实性",
-    "核心资质",
+    "核心资质", "业务覆盖",
     # 公司详情 / 选型段标题（常见被误当成选手）
     "成立时间", "注册资金", "一站式服务", "标杆项目", "全链条资质", "生产设备齐全",
     "选择建议", "补充推荐", "选择要点", "按需求类型选", "核实资质", "看案例",
@@ -103,12 +103,16 @@ _REGION_LABEL_RE = re.compile(
     r"[\u4e00-\u9fff]{1,3}(?:省|市|区)"
     r")$"
 )
+_SCENE_SUBSECTION_RE = re.compile(
+    r"(?:单城市深耕|多城市全国统投|多城.*统投|候车亭/灯箱|候车亭.*灯箱)"
+)
+_ROLE_LABEL_BULLET_RE = re.compile(r"^(?:区域型|整合代理|资源型|代理型)\s*[：:]")
 _NON_RANK_CATEGORY_HINTS = (
     "判断标准", "挑选", "如何选", "怎么选", "注意事项", "总结", "结语",
     "核心判断", "选型建议", "快速对照", "快速参考", "对照",
     "关键考量", "决策路径", "评估", "checklist", "Checklist",
     "下一步", "建议的下一步", "维度", "关键问题",
-    "选择建议", "补充推荐", "选择要点", "案例总结",
+    "补充推荐", "选择要点", "案例总结",
     # 2026-08-17 - 「简单选购建议」下编号项被当品牌 → 榜尾脏行撑到第18
     "选购建议", "简单选购", "购买建议", "选购要点",
     "排名陷阱", "必须警惕", "选购决策", "小贴士",
@@ -161,11 +165,83 @@ def _clean_item_name(text: str) -> str:
     return value.strip()
 
 
+def _has_company_entity_signal(name: str) -> bool:
+    """公司/集团/传媒等实体信号——详情字段（总部/联系方式）没有。"""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return False
+    if _COMPANY_ENTITY_HINT_RE.search(cleaned):
+        return True
+    return any(hint in cleaned for hint in _CORP_NAME_HINTS)
+
+
+def _is_metadata_field_label(name: str) -> bool:
+    """公司详情字段（联系方式/总部/官网…），不是选手。
+
+    2026-08-24 - 不靠逐个加词；无实体信号 + 字段族后缀即挡
+    """
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return True
+    if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
+        return True
+    if _FIELD_LABEL_RE.match(cleaned):
+        return True
+    if _has_company_entity_signal(cleaned):
+        return False
+    if re.fullmatch(
+        r"[\u4e00-\u9fffA-Za-z0-9]{1,8}(?:方式|热线|电话|官网|网址|邮箱|微信|地址)",
+        cleaned,
+    ):
+        return True
+    if cleaned in {"总部", "电话", "地址", "官网", "网址", "邮箱", "微信", "热线"}:
+        return True
+    return False
+
+
+def _bullet_field_value(body: str) -> str:
+    """`- **标签**：值` → 冒号后正文（去引用）。"""
+    text = str(body or "")
+    parts = re.split(r"[：:]", text, maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    value = re.sub(r"\[citation:\d+\]", "", parts[1], flags=re.I)
+    value = re.sub(r"\*\*", "", value)
+    return value.strip()
+
+
+def _is_peer_company_bullet(name: str, body: str) -> bool:
+    """公司详情块内：同段新公司 bullet 才放行；字段 bullet 继续跳过。
+
+    2026-08-24 - 有实体信号直接放行；无信号则靠长描述区分「白马户外：…」与「总部：北京」
+    """
+    if not name or not _looks_like_company_list_name(name):
+        return False
+    if _is_metadata_field_label(name):
+        return False
+    if _has_company_entity_signal(name):
+        return True
+    value = _bullet_field_value(body)
+    if len(value) < 18:
+        return False
+    if re.match(r"^(官网|电话|服务热线|https?://|www\.|[\d\-＋+\s]{6,})", value, re.I):
+        return False
+    return True
+
+
 def _looks_like_company_list_name(name: str) -> bool:
     cleaned = str(name or "").strip()
     if not cleaned or len(cleaned) > 40:
         return False
     if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
+        return False
+    # 递归注意：_is_metadata_field_label 会再调 subsection；字段族在此挡「联系方式」
+    if cleaned in {"总部", "电话", "地址", "官网", "网址", "邮箱", "微信", "热线"}:
+        return False
+    if not _has_company_entity_signal(cleaned) and re.fullmatch(
+        r"[\u4e00-\u9fffA-Za-z0-9]{1,8}(?:方式|热线|电话|官网|网址|邮箱|微信|地址)",
+        cleaned,
+    ):
         return False
     if cleaned in _NON_COMPANY_TOKENS:
         return False
@@ -191,11 +267,13 @@ def _looks_like_company_list_name(name: str) -> bool:
     if cleaned in {
         "地址", "电话", "业务范围", "本地优势", "适合对象", "全媒体平台", "服务能力",
         "资源覆盖", "客户口碑", "推荐理由", "核心资源", "核心优势", "资源规模",
+        "业务覆盖",
         "技术亮点", "成本优势", "灵活性", "组合投放", "注重互动", "明确目标",
         "-", "—",
     }:
         return False
-    if cleaned.startswith(("不要", "确认", "注重", "明确", "核实")):
+    # 2026-08-24 - 「注意：区分福人家居…」被当选手 → 国产主流大王椰 7→8；挡提示语前缀
+    if cleaned.startswith(("不要", "确认", "注重", "明确", "核实", "注意", "提醒")):
         return False
     # 2026-08-17 - 「防潮和防霉」「铁路局媒介资源」「深圳宝安、天津…」误占类内槽
     if re.fullmatch(r"[\u4e00-\u9fff]{2,4}[和与][\u4e00-\u9fff]{2,4}", cleaned) and not any(
@@ -247,6 +325,88 @@ def _company_from_numbered_heading(content: str) -> str | None:
     return name
 
 
+def _nominees_from_pipe_numbered_heading(content: str) -> list[str] | None:
+    """### 7）大王椰｜生态板 / ### 7.大王椰｜… / ### 7）大王椰、伟业 → 档内选手名。
+
+    2026-08-24 - 无「有限公司」后缀的板材品牌编号标题也要进父级 ## 段计数
+    仅阿拉伯数字编号；中文「二、」仍是 ## 分段标题
+    """
+    text = _TIER_MEDAL_RE.sub("", str(content or "").strip()).strip()
+    text = re.sub(r"\[citation:\d+\]", "", text, flags=re.I).strip()
+    match = re.match(r"^(\d+)\s*[、.．)）]\s*(.+)$", text)
+    if not match:
+        return None
+    body = match.group(2).strip()
+    # ｜ 后是品类/卖点，不当选手；子类判断只看品牌侧，避免「千年舟｜高性价比一线」被一线误杀
+    brand_part = re.split(r"[｜|]", body, maxsplit=1)[0].strip()
+    brand_part = re.sub(r"[（(][^）)]*[)）]", "", brand_part).strip()
+    if not brand_part:
+        return None
+    if _is_non_rank_category(brand_part) or _looks_like_subcategory_header(brand_part):
+        return None
+    if "、" in brand_part or "，" in brand_part:
+        parts = re.split(r"[、，,]", brand_part)
+    else:
+        parts = [brand_part]
+    names: list[str] = []
+    for part in parts:
+        cleaned = _clean_item_name(part)
+        if not cleaned:
+            continue
+        if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
+            continue
+        if _looks_like_company_list_name(cleaned) or (
+            2 <= len(cleaned) <= 12 and not any(ch in cleaned for ch in "，。；！？：:")
+        ):
+            names.append(cleaned)
+    return names or None
+
+
+def _looks_like_store_list_name(name: str) -> bool:
+    """门店/地址行：不当品牌选手（品牌授权门店清单里的 1.xx店）。"""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return False
+    if re.search(r"(运营中心|专卖店|旗舰店|总代理)$", cleaned) and any(
+        hint in cleaned for hint in ("板材", "涂料", "传媒", "广告", "集团", "公司", "木业", "家居", "饰材", "全屋")
+    ):
+        return False
+    # 装饰城店｜地址 — 仍是门店
+    head = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
+    if re.search(r"(整家店|家居店|装饰城店|商场店|体验店)$", head):
+        return True
+    if head.endswith("店") and not any(hint in head for hint in _CORP_NAME_HINTS):
+        return True
+    if re.search(r"[路街巷号区楼层]\d|\d号|地铁站", cleaned):
+        return True
+    return False
+
+
+def _looks_like_geo_place_label(name: str) -> bool:
+    """地理分区/市场集散地标题：划定列表范围，不是品牌选手。
+
+    2026-08-24 - 城关区/婺城区·建材市场/东阳市 误占榜导致门店推荐 rank 前移
+    """
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return False
+    if re.match(r"^[\U0001F300-\U0001FAFF\U00002600-\U000027BF]", cleaned):
+        return True
+    core = re.sub(r"[（(][^）)]*[)）]", "", cleaned).strip()
+    core = re.sub(r"\[citation:\d+\]", "", core, flags=re.I).strip()
+    if "·" in core and re.search(r"(?:区|县|市|镇|新区|乡|街道)·", core):
+        return True
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,10}(?:区|县|市|州|盟|新区)$", core):
+        if not any(hint in core for hint in _CORP_NAME_HINTS):
+            return True
+    if re.search(r"(?:建材市场|建材城|博览城|家居城|装饰城|大市场|批发市场|商业城)$", core):
+        if not any(hint in core for hint in ("板材", "涂料", "传媒", "广告", "集团", "公司", "木业")):
+            return True
+    if cleaned.startswith(("问清楚", "优先选", "认准", "散户", "量大")):
+        return True
+    return False
+
+
 def _is_non_rank_category(category: str | None) -> bool:
     text = str(category or "").strip()
     return bool(text) and any(hint in text for hint in _NON_RANK_CATEGORY_HINTS)
@@ -254,11 +414,15 @@ def _is_non_rank_category(category: str | None) -> bool:
 
 def _extract_list_item_name(text: str) -> str:
     """Extract company name from bullet: **公司**：说明 / 西南：公司 / 公司：说明."""
-    raw = re.sub(r"^[-•·▪*]\s*", "", (text or "").strip())
+    # 2026-08-24 - 勿用裸 * 剥列表符，否则 **福人** 被吃成 *福人**，加粗名丢失
+    raw = re.sub(r"^[-•·▪]\s+", "", (text or "").strip())
+    raw = re.sub(r"^\*(?!\*)\s+", "", raw)
     # **公司名** / **公司名**：说明（优先，避免被「地区：公司」规则抢成描述句）
     bold = re.match(r"^\*\*([^*]+)\*\*", raw)
     if bold:
         company = re.split(r"[（(]", bold.group(1).strip())[0].strip()
+        # ⭐标签 / 评星后缀不当进名字
+        company = re.split(r"[⭐★☆]", company, maxsplit=1)[0].strip()
         company = re.split(r"[、，,/／]", company)[0].strip()
         cleaned = _clean_item_name(company)
         if cleaned:
@@ -357,6 +521,7 @@ _TABLE_COMPANY_HEADERS = (
     "代表公司",
     "代表厂商",
     "推荐公司",
+    "推荐选择",
     "供应商",
     "服务商",
     "供应商梯队",
@@ -603,11 +768,69 @@ def _tsv_row_company_names(line: str, company_col: int) -> list[str]:
     ]
 
 
+def _scene_subsection_key(line: str) -> str | None:
+    """需求场景子段（单城市/多城市/候车亭）— 只作计位锚点，不当公司。"""
+    text = str(line or "").strip()
+    # 2026-08-24 - 公司 bullet 描述含「候车亭起家」误触 shelter，吞掉白马户外等首条
+    if BULLET_ITEM_RE.match(text) and re.search(r"\*\*[^*]+\*\*[：:]", text):
+        return None
+    if re.search(r"多城市全国统投|多城.{0,6}统投", text):
+        return "multi_city"
+    if "单城市深耕" in text:
+        return "single_city"
+    if re.search(r"候车亭\s*/\s*灯箱", text) or re.search(r"候车亭.{0,4}灯箱", text):
+        return "shelter"
+    return None
+
+
+def _extract_bullet_brand_candidates(line: str) -> list[str]:
+    """并列 bullet：**A、B、C等** / 整合代理：如A、B、C等。
+
+    2026-08-24 - 地铁/机场/公交元宝粘行并列组，档内位次=该 bullet 序号
+    """
+    raw = re.sub(r"^[-•·▪*]\s*", "", str(line or "").strip())
+    names: list[str] = []
+
+    def collect(parts: list[str]) -> list[str]:
+        out: list[str] = []
+        for part in parts:
+            cleaned = _clean_item_name(re.sub(r"等$", "", part.strip()))
+            if cleaned and _looks_like_company_list_name(cleaned):
+                out.append(cleaned)
+        return out
+
+    bold_match = re.match(r"^\*\*([^*]+)\*\*(?:[：:]|$)", raw)
+    if bold_match:
+        head = re.sub(r"等$", "", bold_match.group(1).strip())
+        if re.search(r"[、，,]", head):
+            names = collect(re.split(r"[、，,]", head))
+            if len(names) >= 2:
+                return names
+
+    if _ROLE_LABEL_BULLET_RE.match(raw) or re.search(r"[：:]\s*如", raw):
+        like_match = re.search(r"如\s*([^。；\n]+)", raw)
+        if like_match:
+            chunk = like_match.group(1).strip()
+            chunk = re.split(r"等", chunk, maxsplit=1)[0]
+            chunk = re.sub(r"[（(][^）)]*[)）]", "", chunk)
+            chunk = re.sub(r"\*\*([^*]+)\*\*", r"\1", chunk)
+            if re.search(r"[、，,]", chunk):
+                names = collect(re.split(r"[、，,]", chunk))
+                if names:
+                    return names
+    return []
+
+
 def _split_combined_header_brands(text: str) -> list[str]:
     """### 艾迪亚控股、澜翼传媒、麦迪威广告 → 多个品牌名（同段并列排名）。"""
     cleaned = re.sub(r"^#+\s*", "", (text or "").strip())
-    cleaned = re.sub(r"^\d+[\.、．]\s*", "", cleaned)
-    if not cleaned or ("、" not in cleaned and "，" not in cleaned):
+    cleaned = re.sub(r"\[citation:\d+\]", "", cleaned, flags=re.I).strip()
+    # 2026-08-24 - ｜后是卖点；冒号后描述里的中文逗号不是品牌顿号
+    cleaned = re.split(r"[｜|]", cleaned, maxsplit=1)[0].strip()
+    if "：" in cleaned or ":" in cleaned:
+        return []
+    cleaned = re.sub(r"^(?:[一二三四五六七八九十百]+|\d+)\s*[、.．)）]\s*", "", cleaned).strip()
+    if not cleaned or "、" not in cleaned:
         return []
     # 一、行业双寡头 这类章节标题不要拆成多个品牌
     if SECTION_TITLE_RE.match(cleaned):
@@ -615,10 +838,11 @@ def _split_combined_header_brands(text: str) -> list[str]:
     if _looks_like_subcategory_header(cleaned):
         return []
     head = re.sub(r"[（(][^）)]*[)）]", "", cleaned).strip()
-    if "、" not in head and "，" not in head:
+    if "、" not in head:
         return []
-    parts = re.split(r"[、，,]", head)
+    parts = re.split(r"[、]", head)
     names = [_clean_item_name(part.strip()) for part in parts if part.strip()]
+    names = [name for name in names if name and _looks_like_company_list_name(name)]
     if len(names) < 2:
         return []
     if any(len(name) > 36 for name in names):
@@ -652,14 +876,27 @@ def _is_subsection_label(content: str) -> bool:
 def _looks_like_subcategory_header(content: str) -> bool:
     """### 区域优质工程商 / 🥇 一线… → 子分类标题，不是公司名。"""
     cleaned = re.sub(r"^[#\s\d\.、]+", "", (content or "").strip())
-    cleaned = re.sub(r"[（(].*[)）]$", "", cleaned).strip()
+    cleaned = re.sub(r"\[citation:\d+\]", "", cleaned, flags=re.I).strip()
+    # 2026-08-24 - 先剥括号说明，避免「福庆板材（江苏本土品牌）」因「本土」误判子类
+    cleaned = re.sub(r"[（(][^）)]*[)）]", "", cleaned).strip()
     if not cleaned or NUMBERED_TITLE_RE.match(cleaned):
         return False
     if _TIER_MEDAL_RE.match(cleaned):
         return True
     cleaned = _TIER_MEDAL_RE.sub("", cleaned).strip()
+    # 剥 emoji 前缀（🌍🏛️🇨🇳）
+    cleaned = re.sub(r"^[\U0001F300-\U0001F9FF\u2600-\u27BF]+\s*", "", cleaned).strip()
     if SECTION_TITLE_RE.match(cleaned):
         return True
+    # 像「### 福庆板材」品牌授权标题不是子类；「区域优质工程商/头部上市大厂」仍是子类
+    brand_probe = _clean_item_name(cleaned)
+    if (
+        brand_probe
+        and re.search(r"(板材|涂料|传媒|广告|光电|科技|家居)$", brand_probe)
+        and _looks_like_company_list_name(brand_probe)
+        and not any(hint in brand_probe for hint in ("一线", "二线", "三线", "梯队", "榜单", "巨头"))
+    ):
+        return False
     return any(hint in cleaned for hint in _SUBCATEGORY_HINTS)
 
 
@@ -825,6 +1062,8 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     current_category: str | None = None
     current_section: str | None = None
     appearance_counters: dict[str | None, int] = {}
+    scene_subsection: str | None = None
+    scene_counters: dict[str, int] = {}
     in_company_block = False
 
     def append_item(name: str, rank: int | None, *, category: str | None = None) -> None:
@@ -836,8 +1075,19 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             return
         if cleaned in _NON_COMPANY_TOKENS:
             return
+        # 2026-08-24 - 授权门店清单里的「xx整家店」不当品牌
+        if _looks_like_store_list_name(cleaned):
+            return
+        # 2026-08-24 - 区县/市场标题不当选手（门店推荐里常见）
+        if _looks_like_geo_place_label(cleaned):
+            return
+        if _SCENE_SUBSECTION_RE.search(cleaned) or cleaned in {"区域型", "整合代理"}:
+            return
         bucket = category if category is not None else (current_section or current_category)
-        if _is_non_rank_category(bucket):
+        # 2026-08-24 - 「选择建议」表按推荐列计位；散文贴士仍跳过
+        if _is_non_rank_category(bucket) and not (
+            rank is not None and "选择建议" in str(bucket or "")
+        ):
             return
         if rank is None:
             appearance_counters[bucket] = appearance_counters.get(bucket, 0) + 1
@@ -911,24 +1161,36 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         if header:
             end_tsv_mode()
             level, content = header
+            content = re.sub(r"\[citation:\d+\]", "", content, flags=re.I).strip()
             numbered_company = _company_from_numbered_heading(content)
             if numbered_company:
                 # ### 一、广州伟源光电科技有限公司（…）→ 选手，不是分类
                 append_item(numbered_company, None)
                 in_company_block = True
                 continue
+            # 2026-08-24 - ### 7）大王椰｜生态板 / ### 7.大王椰 → 父级 ## 段内计位
+            if level >= 3:
+                pipe_nominees = _nominees_from_pipe_numbered_heading(content)
+                if pipe_nominees:
+                    shared_rank = _next_section_rank(appearance_counters, current_section)
+                    for name in pipe_nominees:
+                        append_item(name, shared_rank, category=current_section or current_category)
+                    in_company_block = True
+                    continue
             numbered = NUMBERED_TITLE_RE.match(content)
             if numbered:
                 body = numbered.group(2).strip()
+                brand_side = re.split(r"[｜|]", body, maxsplit=1)[0].strip()
                 # 2026-08-18 - ### 3. 中国本土市场活跃榜单 不是公司；当选手还会挡住后面 - **鸿联九五**
-                if _is_non_rank_category(body) or _looks_like_subcategory_header(body):
+                # 2026-08-24 - 「千年舟｜高性价比一线」品牌侧不是子类，勿整行当段名
+                if _is_non_rank_category(brand_side) or _looks_like_subcategory_header(brand_side):
                     cat = _extract_category_name(body) or body
                     current_section = cat
                     current_category = cat
                     appearance_counters.setdefault(current_section, 0)
                     in_company_block = False
                     continue
-                append_item(body, _next_section_rank(appearance_counters, current_section))
+                append_item(brand_side, _next_section_rank(appearance_counters, current_section))
                 in_company_block = True
                 continue
             if level == 1:
@@ -944,6 +1206,8 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 current_section = _extract_category_name(line)
                 current_category = current_section
                 appearance_counters.setdefault(current_section, 0)
+                scene_subsection = None
+                scene_counters.clear()
                 in_company_block = False
                 continue
             if level == 3 and _looks_like_subcategory_header(content):
@@ -975,6 +1239,12 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 appearance_counters.setdefault(current_section, 0)
                 in_company_block = False
                 continue
+            if _looks_like_geo_place_label(_clean_item_name(content)):
+                current_section = _extract_category_name(line)
+                current_category = current_section
+                appearance_counters[current_section] = 0
+                in_company_block = False
+                continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True
             continue
@@ -1002,25 +1272,79 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             continue
 
         if in_company_block:
-            # 同段下一家编号公司：结束上家详情块
-            peer = LIST_ITEM_RE.match(line)
-            if peer:
-                append_item(peer.group(4), None)
-                in_company_block = True
+            # 2026-08-24 - 整合代理：如A、B、C 仍在公司块内，须放行给并列 bullet 分支
+            if _extract_bullet_brand_candidates(line):
+                in_company_block = False
+            else:
+                peer = LIST_ITEM_RE.match(line)
+                if peer:
+                    append_item(peer.group(4), None)
+                    in_company_block = True
+                    continue
+                # 2026-08-24 - 详情字段（无实体信号）跳过；同段新公司 bullet 才放行
+                bullet_match = BULLET_ITEM_RE.match(line)
+                if bullet_match and re.search(r"\*\*[^*]+\*\*", line):
+                    body = bullet_match.group(1) or bullet_match.group(2) or ""
+                    name = _extract_list_item_name(body)
+                    if _is_peer_company_bullet(name, body):
+                        in_company_block = False
+                    else:
+                        continue
+                else:
+                    continue
+
+        scene_key = _scene_subsection_key(line)
+        if scene_key:
+            scene_subsection = scene_key
+            scene_counters[scene_key] = 0
+            in_company_block = False
+            continue
+
+        combo_brands = _extract_bullet_brand_candidates(line)
+        if combo_brands:
+            bucket = current_section or current_category
+            if scene_subsection:
+                scene_counters[scene_subsection] = scene_counters.get(scene_subsection, 0) + 1
+                bullet_rank = scene_counters[scene_subsection]
+            else:
+                appearance_counters[bucket] = appearance_counters.get(bucket, 0) + 1
+                bullet_rank = appearance_counters[bucket]
+            for brand in combo_brands:
+                cleaned = _clean_item_name(brand)
+                if cleaned and _looks_like_company_list_name(cleaned):
+                    results.append({"name": cleaned, "rank": bullet_rank, "category": bucket})
+            in_company_block = True
+            continue
+
+        if _ROLE_LABEL_BULLET_RE.match(re.sub(r"^[-•·▪*]\s*", "", line)):
+            bucket = current_section or current_category
+            # 2026-08-24 - 区域型/整合代理 仅作标签行；有「如A、B」时已在 combo_brands 分支处理
+            if not re.search(r"[：:]\s*如", line):
+                appearance_counters[bucket] = appearance_counters.get(bucket, 0) + 1
+            in_company_block = False
             continue
 
         match = LIST_ITEM_RE.match(line)
         if match:
             # 分段重排：段内按出场序计位；编号公司后进入详情块，忽略核心优势等 bullet
             before = len(results)
-            append_item(match.group(4), None)
+            if scene_subsection:
+                scene_counters[scene_subsection] = scene_counters.get(scene_subsection, 0) + 1
+                append_item(match.group(4), scene_counters[scene_subsection], category=current_section or current_category)
+            else:
+                append_item(match.group(4), None)
             if len(results) > before:
                 in_company_block = True
             continue
 
         bullet = BULLET_ITEM_RE.match(line)
         if bullet:
-            append_item(bullet.group(1) or bullet.group(2) or "", None)
+            body = bullet.group(1) or bullet.group(2) or ""
+            if scene_subsection:
+                scene_counters[scene_subsection] = scene_counters.get(scene_subsection, 0) + 1
+                append_item(body, scene_counters[scene_subsection], category=current_section or current_category)
+            else:
+                append_item(body, None)
             continue
 
     flush_table_buffer()
