@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,10 +19,12 @@ from app.models.brand import BrandAsset
 from app.models.lead_diagnosis import LeadDiagnosisRun
 from app.models.monitor import (
     GeoMonitorCallbackEvent,
+    GeoMonitorCompetitorDailyStat,
     GeoMonitorDailyStat,
     GeoMonitorScheduleRun,
     GeoMonitorSubtask,
     GeoMonitorTask,
+    GeoMonitorWindowSnapshot,
 )
 from app.models.notification import SystemNotification
 from app.services.molizhishu_callback_service import (
@@ -51,6 +53,8 @@ def deep_db():
             GeoMonitorSubtask.__table__,
             GeoMonitorCallbackEvent.__table__,
             GeoMonitorDailyStat.__table__,
+            GeoMonitorCompetitorDailyStat.__table__,
+            GeoMonitorWindowSnapshot.__table__,
             GeoMonitorScheduleRun.__table__,
             LeadDiagnosisRun.__table__,
             BrandAsset.__table__,
@@ -270,7 +274,7 @@ def test_post_commit_refreshes_stats_and_busts_cache(deep_db) -> None:
     ):
         _post_commit_side_effects(deep_db, task)
 
-    bust.assert_called_once_with(9)
+    bust.assert_called_once_with(9, bust_overview=False)
     row = deep_db.scalar(
         select(GeoMonitorDailyStat).where(
             GeoMonitorDailyStat.tenant_id == 9,
@@ -312,37 +316,69 @@ def test_ingest_calls_post_commit_after_success(deep_db) -> None:
     post.assert_called_once()
 
 
-# --- 5. Redis 锁冲突 → 409 ---
+# --- 5. HTTP 快路径：未知任务 ignored / 已知任务 accepted ---
 
 
-def test_http_409_when_sync_lock_not_acquired(deep_client, deep_db) -> None:
+def test_http_unknown_task_returns_ignored(deep_client, deep_db) -> None:
+    """2026-08-24 - 稳定性①：HTTP 不再抢 sync 锁，未知 task 当场 ignored 仍 200。"""
     app.dependency_overrides[get_db] = lambda: deep_db
     try:
-        @contextmanager
-        def _busy_lock(*_a, **_k):
-            yield False
-
-        with patch("app.core.redis_client.redis_lock", _busy_lock):
-            resp = deep_client.post(
-                f"{CALLBACK_PATH}?token={TEST_TOKEN}",
-                json={"taskId": "locked-task", "status": "completed", "subTaskList": []},
-            )
-        assert resp.status_code == 409
+        resp = deep_client.post(
+            f"{CALLBACK_PATH}?token={TEST_TOKEN}",
+            json={"taskId": "ghost-task", "status": "completed", "subTaskList": []},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "ignored"
     finally:
         app.dependency_overrides.pop(get_db, None)
 
 
-# --- 6. 落库异常 → 5xx + event=failed ---
-
-
-def test_http_500_marks_event_failed(deep_client, deep_db) -> None:
-    deep_db.add(_task(task_id="boom-task"))
+def test_http_accepted_when_enqueue_succeeds(deep_client, deep_db, monkeypatch) -> None:
+    deep_db.add(_task(task_id="queued-task"))
     deep_db.commit()
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", True)
     app.dependency_overrides[get_db] = lambda: deep_db
     try:
         with patch(
-            "app.services.molizhishu_callback_service._apply_callback_payload",
-            side_effect=RuntimeError("simulated ingest boom"),
+            "app.services.molizhishu_callback_service._enqueue_callback_event",
+            return_value=True,
+        ):
+            resp = deep_client.post(
+                f"{CALLBACK_PATH}?token={TEST_TOKEN}",
+                json={
+                    "taskId": "queued-task",
+                    "status": "completed",
+                    "totalItems": 1,
+                    "completedItems": 1,
+                    "failedItems": 0,
+                    "subTaskList": [],
+                },
+            )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "accepted"
+        assert resp.json()["data"]["process_status"] == "queued"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+# --- 6. 入队失败同步兜底异常 → 5xx + event=failed ---
+
+
+def test_http_500_marks_event_failed(deep_client, deep_db, monkeypatch) -> None:
+    deep_db.add(_task(task_id="boom-task"))
+    deep_db.commit()
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", True)
+    app.dependency_overrides[get_db] = lambda: deep_db
+    try:
+        with (
+            patch(
+                "app.services.molizhishu_callback_service._enqueue_callback_event",
+                return_value=False,
+            ),
+            patch(
+                "app.services.molizhishu_callback_service._apply_callback_payload",
+                side_effect=RuntimeError("simulated ingest boom"),
+            ),
         ):
             resp = deep_client.post(
                 f"{CALLBACK_PATH}?token={TEST_TOKEN}",
@@ -377,11 +413,10 @@ def test_csrf_exempt_allows_callback_without_csrf_header(deep_client, deep_db) -
         deep_client.cookies.set("geo_access_token", "fake-session")
         deep_client.cookies.set("geo_csrf_token", "token-a")
         with (
-            patch("app.services.molizhishu_callback_service.fill_missing_subtask_ranks_for_task", return_value=0),
-            patch("app.services.monitor_auto_retry_service.apply_auto_retry_results"),
-            patch("app.services.monitor_auto_retry_service.launch_auto_retries_for_task", return_value=[]),
-            patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task", return_value=0),
-            patch("app.services.molizhishu_callback_service._post_commit_side_effects"),
+            patch(
+                "app.services.molizhishu_callback_service._enqueue_callback_event",
+                return_value=True,
+            ),
         ):
             # 故意不带 / 错 CSRF header；豁免路径应放行（非 403）
             resp = deep_client.post(
@@ -407,7 +442,7 @@ def test_csrf_exempt_allows_callback_without_csrf_header(deep_client, deep_db) -
             )
         assert resp.status_code != 403
         assert resp.status_code == 200
-        assert resp.json()["data"]["status"] == "processed"
+        assert resp.json()["data"]["status"] == "accepted"
     finally:
         settings.auth_csrf_enabled = False
         deep_client.cookies.clear()
