@@ -15,7 +15,7 @@ _CACHE_PATH = Path(__file__).resolve().parents[2] / ".cache" / "source_category_
 
 # (id, 中文标签, keywords, domains, host_suffixes)
 _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = [
-    ("encyclopedia", "百科", ("百科",), ("baike.baidu.com", "wikipedia.org", "wiki"), ()),
+    ("encyclopedia", "百科", (), ("baike.baidu.com", "baike.com", "wikipedia.org", "wiki"), ()),
     ("government", "政府/事业", ("人民政府", "政务", "gov.cn"), (), (".gov.cn", ".gov")),
     (
         "enterprise",
@@ -110,14 +110,26 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
             "liebiao.com",
             "docin.com",
             "doc88.com",
+            # 2026-08-25 - 党媒/财经门户补规则，减少落「其他」
+            "bjd.com.cn",
+            "bjnews.com.cn",
+            "eastmoney.com",
+            "stockstar.com",
+            "people.com.cn",
+            "xinhuanet.com",
+            "ce.cn",
+            "stcn.com",
+            "cnstock.com",
+            "baijiahao.baidu.com",
+            "pedaily.cn",
         ),
         (),
     ),
     (
         "ecommerce",
         "电商/交易",
-        ("旗舰店", "商城", "店铺"),
-        ("taobao.com", "tmall.com", "jd.com", "1688.com"),
+        (),
+        ("taobao.com", "tmall.com", "jd.com", "1688.com", "pinduoduo.com", "yangkeduo.com"),
         (),
     ),
     (
@@ -143,6 +155,29 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
 CATEGORY_LABEL_BY_ID = {row[0]: row[1] for row in _CATEGORY_RULES}
 CATEGORY_LABEL_BY_ID["other"] = "其他"
 VALID_CATEGORY_IDS = frozenset(CATEGORY_LABEL_BY_ID)
+
+# 2026-08-25 - 经销商 heuristic 勿误伤大平台子域（投资界/百度地图等）
+_CORPORATE_HEURISTIC_DENY_SUFFIXES: tuple[str, ...] = (
+    "baidu.com",
+    "china.cn",
+    "sina.com.cn",
+    "sina.cn",
+    "sohu.com",
+    "163.com",
+    "qq.com",
+    "eastmoney.com",
+    "cnstock.com",
+    "pedaily.cn",
+    "weibo.com",
+    "zhihu.com",
+    "toutiao.com",
+    "ixigua.com",
+    "apple.com",
+    "google.com",
+    "ctrip.com",
+    "mapbar.com",
+    "360.cn",
+)
 
 
 def normalize_host(raw: str | None) -> str:
@@ -171,6 +206,27 @@ def category_label(category_id: str | None) -> str:
     return CATEGORY_LABEL_BY_ID.get(key, CATEGORY_LABEL_BY_ID["other"])
 
 
+def _host_matches_domain(host: str, domain: str) -> bool:
+    """host 精确或后缀匹配；禁止 jd.com 子串误伤 bjd.com.cn。"""
+    if not host or not domain:
+        return False
+    if domain == "bbs.":
+        return host.startswith("bbs.") or ".bbs." in host
+    bare = domain.lstrip(".")
+    return host == bare or host.endswith(f".{bare}")
+
+
+def _host_on_deny_platform(host: str) -> bool:
+    reg = registrable_domain(host)
+    for suffix in _CORPORATE_HEURISTIC_DENY_SUFFIXES:
+        if (
+            _host_matches_domain(host, suffix)
+            or _host_matches_domain(reg, suffix)
+        ):
+            return True
+    return False
+
+
 def _match_rule(
     rule: tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]],
     *,
@@ -183,9 +239,7 @@ def _match_rule(
         if host == bare or host.endswith(f".{bare}"):
             return True
     for domain in domains:
-        if not domain:
-            continue
-        if host == domain or host.endswith(f".{domain}") or domain in text:
+        if domain and _host_matches_domain(host, domain):
             return True
     for keyword in keywords:
         if keyword.lower() in text:
@@ -193,9 +247,36 @@ def _match_rule(
     return False
 
 
+def _rule_category_for_host(host: str) -> str:
+    """仅按 host 走规则表（不含标题 heuristic / 缓存）。"""
+    if not host:
+        return "other"
+    text = host.lower()
+    for rule in _CATEGORY_RULES:
+        if rule[0] == "official":
+            continue
+        if _match_rule(rule, text=text, host=host):
+            return rule[0]
+    official_rule = next(rule for rule in _CATEGORY_RULES if rule[0] == "official")
+    if _match_rule(official_rule, text=text, host=host):
+        return "official"
+    return "other"
+
+
+def _prune_cache_entries(cache: dict[str, str]) -> dict[str, str]:
+    """去掉与 host 规则表冲突的 LLM 缓存项。"""
+    pruned: dict[str, str] = {}
+    for host, cid in cache.items():
+        rule_id = _rule_category_for_host(host)
+        if rule_id != "other" and rule_id != cid:
+            continue
+        pruned[host] = cid
+    return pruned
+
+
 def _looks_like_corporate_site_page(raw_text: str, host: str) -> bool:
     """经销商/门店自建站：标题常写「公司简介」或「业务|公司名」但不含「官网」二字。"""
-    if not host:
+    if not host or _host_on_deny_platform(host):
         return False
     text = re.sub(r"\s+", "", str(raw_text or ""))
     if not text:
@@ -217,7 +298,7 @@ def _looks_like_corporate_site_page(raw_text: str, host: str) -> bool:
     if any(suffix in text for suffix in ("股份有限公司", "有限责任公司", "有限公司", "集团有限公司")):
         if any(sep in text for sep in ("|", "_", "｜")):
             return True
-        if any(token in text for token in ("装饰材料", "门店", "旗舰店", "专卖", "经销", "贸易")):
+        if any(token in text for token in ("装饰材料", "门店", "专卖", "经销", "贸易")):
             return True
     return False
 
@@ -237,10 +318,6 @@ def classify_source_category_id(
     host = normalize_host(domain) or normalize_host(url)
     if lookup_official_site_label(host, official_site_labels):
         return "official"
-    if use_cache and host:
-        cached = get_cached_category_id(host)
-        if cached:
-            return cached
 
     text = f"{title or ''} {site or ''} {url or ''} {host}".lower()
     raw_text = f"{title or ''} {site or ''} {url or ''} {host}"
@@ -257,6 +334,12 @@ def classify_source_category_id(
     # 2026-08-25 - 经销商/门店自建站标题常无「官网」二字，用公司简介/公司全称等识别
     if host and _looks_like_corporate_site_page(raw_text, host):
         return "official"
+
+    # 2026-08-25 - 规则表优先于 LLM 缓存，避免旧缓存覆盖 dianhua.cn 等已补域名规则
+    if use_cache and host:
+        cached = get_cached_category_id(host)
+        if cached:
+            return cached
 
     # 2026-08-25 - 未知域名默认「其他」，勿再虚高官网占比
     return "other"
@@ -296,9 +379,33 @@ def _load_category_cache() -> dict[str, str]:
             cid = str(value or "").strip()
             if host and cid in VALID_CATEGORY_IDS:
                 out[host] = cid
-        return out
+        pruned = _prune_cache_entries(out)
+        if len(pruned) != len(out):
+            _save_category_cache(pruned)
+            logger.info(
+                "source category cache pruned: %d -> %d entries",
+                len(out),
+                len(pruned),
+            )
+        return pruned
     except Exception:
         return {}
+
+
+def sanitize_category_cache() -> int:
+    """主动清理与规则表冲突的缓存；返回删除条数。"""
+    cache = _load_category_cache()
+    if not _CACHE_PATH.exists():
+        return 0
+    try:
+        raw = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+        before = len(raw) if isinstance(raw, dict) else 0
+    except Exception:
+        before = len(cache)
+    removed = max(0, before - len(cache))
+    if removed:
+        _save_category_cache(cache)
+    return removed
 
 
 def _save_category_cache(cache: dict[str, str]) -> None:
@@ -332,7 +439,12 @@ def merge_category_cache(updates: dict[str, str]) -> None:
     for raw_host, raw_cid in updates.items():
         host = normalize_host(raw_host)
         cid = str(raw_cid or "").strip()
-        if host and cid in VALID_CATEGORY_IDS and cache.get(host) != cid:
+        if not host or cid not in VALID_CATEGORY_IDS:
+            continue
+        rule_id = _rule_category_for_host(host)
+        if rule_id != "other" and rule_id != cid:
+            continue
+        if cache.get(host) != cid:
             cache[host] = cid
             changed = True
     if changed:
@@ -472,31 +584,3 @@ def enqueue_source_category_labeling(items: list[dict[str, Any]]) -> bool:
         except Exception:
             pass
         return False
-
-
-# ponytail: self-check
-assert classify_source_category_id(domain="zhihu.com") == "qa"
-assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
-assert classify_source_category_id(domain="dianhua.cn", site="电话邦") == "enterprise"
-assert classify_source_category_id(
-    title="大王椰板材店",
-    url="https://www.dianhua.cn/x",
-    site="电话邦",
-) == "enterprise"
-assert classify_source_category_id(
-    title="公司简介_海南装饰材料,海口装饰材料,海南旺顺祥业贸易有限公司",
-    url="https://www.hkwsxy.com/about.html",
-) == "official"
-assert classify_source_category_id(
-    title="海南装饰材料|海口装饰材料|海口旺顺祥业贸易有限公司",
-    url="https://hkwsxy.com/",
-) == "official"
-assert classify_source_category_id(
-    title="大王椰官方网站-饰面美学大师",
-    url="https://m.dwywood.com/news/info/73.html",
-) == "official"
-assert classify_source_category_id(domain="unknown-vertical.example") == "other"
-assert classify_source_category_id(
-    domain="imtcmkj.com",
-    official_site_labels={"imtcmkj.com": "艾迪亚"},
-) == "official"

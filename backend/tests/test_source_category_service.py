@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from app.services.source_category_service import (
     classify_source_category_id,
     classify_source_category_label,
@@ -36,6 +38,15 @@ def test_dealer_corporate_site_is_official() -> None:
     )
 
 
+def test_rule_table_beats_stale_llm_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.source_category_service._CACHE_PATH",
+        tmp_path / "cache.json",
+    )
+    merge_category_cache({"dianhua.cn": "other"})
+    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
+
+
 def test_dianhua_directory_is_enterprise() -> None:
     assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
     assert classify_source_category_label(domain="dianhua.cn") == "企业库/工商"
@@ -52,6 +63,82 @@ def test_dianhua_directory_is_enterprise() -> None:
 def test_pchouse_is_media_not_official() -> None:
     assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
     assert classify_source_category_label(domain="m.pchouse.com.cn") == "行业媒体"
+    assert (
+        classify_source_category_id(
+            title="有安全可靠的板材吗?哪个品牌好?_百科精选_太平洋家居",
+            url="https://m.pchouse.com.cn/post/1",
+            site="太平洋家居网",
+        )
+        == "media"
+    )
+
+
+def test_bjd_is_media_not_ecommerce() -> None:
+    assert (
+        classify_source_category_id(
+            domain="news.bjd.com.cn",
+            site="北京日报网",
+            title="装修选材关注点:一线板材品牌怎么选_京报网",
+        )
+        == "media"
+    )
+    assert classify_source_category_id(domain="xinwen.bjd.com.cn") == "media"
+
+
+def test_ecommerce_requires_host_not_title_keyword() -> None:
+    assert (
+        classify_source_category_id(
+            title="没穿几次 消费者质疑知名品牌淘宝旗舰店",
+            domain="ce.cn",
+            site="中国经济网",
+        )
+        == "media"
+    )
+    assert (
+        classify_source_category_id(
+            title="会员商城系统哪家强",
+            url="https://m.fkw.com/a/1",
+        )
+        == "other"
+    )
+    assert classify_source_category_id(url="https://item.jd.com/123.html") == "ecommerce"
+
+
+def test_corporate_heuristic_skips_major_platform_subdomains() -> None:
+    assert (
+        classify_source_category_id(
+            title="景典传媒_北京景典传媒科技股份有限公司|投资界",
+            url="https://m.pedaily.cn/company/1",
+            site="投资界",
+        )
+        == "media"
+    )
+
+
+def test_cache_prunes_rule_conflicts(tmp_path, monkeypatch) -> None:
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr("app.services.source_category_service._CACHE_PATH", cache_path)
+    cache_path.write_text(
+        '{"dianhua.cn":"qa","news.bjd.com.cn":"ecommerce","cold-vertical.example":"media"}',
+        encoding="utf-8",
+    )
+    from app.services.source_category_service import _load_category_cache, sanitize_category_cache
+
+    loaded = _load_category_cache()
+    assert "dianhua.cn" not in loaded
+    assert "news.bjd.com.cn" not in loaded
+    assert loaded.get("cold-vertical.example") == "media"
+    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
+    assert classify_source_category_id(domain="news.bjd.com.cn") == "media"
+
+
+def test_merge_cache_rejects_rule_conflicts(tmp_path, monkeypatch) -> None:
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr("app.services.source_category_service._CACHE_PATH", cache_path)
+    merge_category_cache({"dianhua.cn": "qa", "cold-vertical.example": "forum"})
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert "dianhua.cn" not in payload
+    assert payload.get("cold-vertical.example") == "forum"
 
 
 def test_unknown_domain_defaults_other() -> None:

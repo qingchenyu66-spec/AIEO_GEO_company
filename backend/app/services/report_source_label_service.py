@@ -595,12 +595,3 @@ assert (
     == "艾迪亚"
 )
 assert short_entity_label("艾迪亚控股集团有限公司") == "艾迪亚"
-assert classify_source_category(domain="zhihu.com") == "问答社区"
-assert classify_source_category(domain="weibo.com") == "社交媒体"
-assert (
-    classify_source_category(
-        domain="imtcmkj.com",
-        official_site_labels={"imtcmkj.com": "艾迪亚"},
-    )
-    == "官网/企业站点"
-)

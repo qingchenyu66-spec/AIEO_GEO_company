@@ -13,8 +13,7 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
     id: 'encyclopedia',
     label: '百科',
     color: '#9b7ae7',
-    keywords: ['百科'],
-    domains: ['baike.baidu.com', 'wikipedia.org', 'wiki'],
+    domains: ['baike.baidu.com', 'baike.com', 'wikipedia.org', 'wiki'],
   },
   {
     id: 'government',
@@ -111,14 +110,24 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
       'liebiao.com',
       'docin.com',
       'doc88.com',
+      'bjd.com.cn',
+      'bjnews.com.cn',
+      'eastmoney.com',
+      'stockstar.com',
+      'people.com.cn',
+      'xinhuanet.com',
+      'ce.cn',
+      'stcn.com',
+      'cnstock.com',
+      'baijiahao.baidu.com',
+      'pedaily.cn',
     ],
   },
   {
     id: 'ecommerce',
     label: '电商/交易',
     color: '#ec4899',
-    keywords: ['旗舰店', '商城', '店铺'],
-    domains: ['taobao.com', 'tmall.com', 'jd.com', '1688.com'],
+    domains: ['taobao.com', 'tmall.com', 'jd.com', '1688.com', 'pinduoduo.com', 'yangkeduo.com'],
   },
   {
     id: 'official',
@@ -204,6 +213,23 @@ function hostsMatch(left: string, right: string) {
   return left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`)
 }
 
+const CORPORATE_HEURISTIC_DENY_SUFFIXES = [
+  'baidu.com', 'china.cn', 'sina.com.cn', 'sina.cn', 'sohu.com', '163.com', 'qq.com',
+  'eastmoney.com', 'cnstock.com', 'pedaily.cn', 'weibo.com', 'zhihu.com', 'toutiao.com',
+  'ixigua.com', 'apple.com', 'google.com', 'ctrip.com', 'mapbar.com', '360.cn',
+]
+
+function hostMatchesDomain(host: string, domain: string) {
+  if (!host || !domain) return false
+  if (domain === 'bbs.') return host.startsWith('bbs.') || host.includes('.bbs.')
+  const bare = domain.replace(/^\./, '')
+  return host === bare || host.endsWith(`.${bare}`)
+}
+
+function hostOnDenyPlatform(host: string) {
+  return CORPORATE_HEURISTIC_DENY_SUFFIXES.some(suffix => hostMatchesDomain(host, suffix))
+}
+
 function matchRule(rule: SourceCategoryRule, text: string, host: string) {
   if (rule.hostSuffixes?.some(suffix => {
     const bare = suffix.replace(/^\./, '')
@@ -211,7 +237,7 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
   })) {
     return true
   }
-  if (rule.domains?.some(domain => host === domain || host.endsWith(`.${domain}`) || text.includes(domain))) {
+  if (rule.domains?.some(domain => hostMatchesDomain(host, domain))) {
     return true
   }
   if (rule.keywords?.some(keyword => text.includes(keyword.toLowerCase()))) {
@@ -221,7 +247,7 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
 }
 
 function looksLikeCorporateSitePage(rawText: string, host: string) {
-  if (!host) return false
+  if (!host || hostOnDenyPlatform(host)) return false
   const text = rawText.replace(/\s+/g, '')
   if (!text) return false
   if (['公司简介', '企业简介', '集团简介', '企业介绍', '关于我们', '联系我们', '官方网站', '官网']
@@ -230,7 +256,7 @@ function looksLikeCorporateSitePage(rawText: string, host: string) {
   }
   if (['股份有限公司', '有限责任公司', '有限公司', '集团有限公司'].some(suffix => text.includes(suffix))) {
     if (['|', '_', '｜'].some(sep => text.includes(sep))) return true
-    if (['装饰材料', '门店', '旗舰店', '专卖', '经销', '贸易'].some(token => text.includes(token))) return true
+    if (['装饰材料', '门店', '专卖', '经销', '贸易'].some(token => text.includes(token))) return true
   }
   return false
 }
@@ -293,6 +319,9 @@ if (!import.meta.env.PROD) {
       url: 'https://www.hkwsxy.com/about.html',
     }, 'official'],
     [{ title: '大王椰官方网站-饰面美学大师', url: 'https://m.dwywood.com/news/info/73.html' }, 'official'],
+    [{ title: '百科精选帖', url: 'https://m.pchouse.com.cn/post' }, 'media'],
+    [{ title: '旗舰店报道', url: 'https://news.bjd.com.cn/a/1', site: '北京日报网' }, 'media'],
+    [{ title: '会员商城系统', url: 'https://m.fkw.com/a/1' }, 'other'],
   ]
   for (const [input, expected] of checks) {
     const actual = sourceCategory(input)
