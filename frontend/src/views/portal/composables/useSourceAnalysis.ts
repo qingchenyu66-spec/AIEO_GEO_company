@@ -29,6 +29,21 @@ export { sourceCategoryLabels, sourceCategory, sourceCategoryLabel }
 export type SourceDatePreset = '7' | '30' | 'all'
 export type SourceRankTab = 'branded' | 'all'
 
+// 2026-08-25 - 分平台信源结构条参差不齐 - 最大余额法保证各段整数%之和严格为 100
+function integerPercentParts(counts: number[], total: number): number[] {
+  if (total <= 0) return counts.map(() => 0)
+  const raw = counts.map(count => (count / total) * 100)
+  const parts = raw.map(value => Math.floor(value))
+  let gap = 100 - parts.reduce((sum, value) => sum + value, 0)
+  const ranked = raw
+    .map((value, index) => ({ index, frac: value - parts[index] }))
+    .sort((a, b) => b.frac - a.frac || a.index - b.index)
+  for (let i = 0; i < gap; i += 1) {
+    parts[ranked[i].index] += 1
+  }
+  return parts
+}
+
 export type SourceRow = SourceStatRow & {
   category: SourceCategory
   has_exposure: boolean
@@ -550,13 +565,15 @@ export function useSourceAnalysis(options?: {
       map[source.category] = (map[source.category] || 0) + source.count
       return map
     }, {} as Record<string, number>)
-    const denom = total || 1
+    const types = activeCategoryKeys.value
+    const counts = types.map(type => categoryMap[type] || 0)
+    const values = integerPercentParts(counts, total)
     return {
       platform,
       total,
-      categories: activeCategoryKeys.value.map(type => ({
+      categories: types.map((type, index) => ({
         type,
-        value: total ? Math.round(((categoryMap[type] || 0) / denom) * 100) : 0,
+        value: values[index],
       })),
     }
   })

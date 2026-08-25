@@ -48,6 +48,40 @@ type EchartsRuntime = Awaited<ReturnType<typeof loadEchartsRuntime>>
 
 let echartsRuntime: EchartsRuntime | null = null
 
+// 2026-08-25 - 分平台信源结构圆角参差 - ECharts 不支持 borderRadius 回调，改写到 data.itemStyle
+function sourceStructureRowEdgeIndexes(
+  row: PortalChartData['sourceStructureRows'][number],
+  categoryKeys: string[],
+): { first: number; last: number } {
+  if ((row.total ?? 0) <= 0) return { first: -1, last: -1 }
+  let first = -1
+  let last = -1
+  categoryKeys.forEach((key, index) => {
+    const value = row.categories.find(item => item.type === key)?.value || 0
+    if (value > 0) {
+      if (first < 0) first = index
+      last = index
+    }
+  })
+  return { first, last }
+}
+
+function sourceStructureSegmentRadius(
+  index: number,
+  first: number,
+  last: number,
+): [number, number, number, number] | 0 {
+  if (index < 0 || first < 0 || last < 0) return 0
+  const roundLeft = index === first
+  const roundRight = index === last
+  if (roundLeft && roundRight) return [8, 8, 8, 8]
+  if (roundLeft) return [8, 0, 0, 8]
+  if (roundRight) return [0, 8, 8, 0]
+  return 0
+}
+
+const SOURCE_STRUCTURE_BAR_RADIUS_FULL: [number, number, number, number] = [8, 8, 8, 8]
+
 async function ensureEchartsRuntime(): Promise<EchartsRuntime> {
   if (!echartsRuntime) {
     echartsRuntime = await loadEchartsRuntime('portal')
@@ -492,8 +526,12 @@ export function usePortalCharts(refs: PortalChartRefs) {
             stack: 'source',
             barMaxWidth: 22,
             barCategoryGap: barGap,
-            data: rows.map(row => (row.total ?? 0) > 0 ? 0 : 100),
-            itemStyle: { color: '#e8edf3', borderRadius: [0, 8, 8, 0] },
+            data: rows.map(row => (
+              (row.total ?? 0) > 0
+                ? 0
+                : { value: 100, itemStyle: { borderRadius: SOURCE_STRUCTURE_BAR_RADIUS_FULL } }
+            )),
+            itemStyle: { color: '#e8edf3' },
           },
           ...categoryKeys.map((type, index) => ({
             name: data.sourceCategoryLabels[type],
@@ -503,11 +541,14 @@ export function usePortalCharts(refs: PortalChartRefs) {
             barCategoryGap: barGap,
             data: rows.map(row => {
               if ((row.total ?? 0) === 0) return 0
-              return row.categories.find(item => item.type === type)?.value || 0
+              const value = row.categories.find(item => item.type === type)?.value || 0
+              if (value <= 0) return 0
+              const { first, last } = sourceStructureRowEdgeIndexes(row, categoryKeys)
+              const borderRadius = sourceStructureSegmentRadius(index, first, last)
+              return borderRadius ? { value, itemStyle: { borderRadius } } : value
             }),
             itemStyle: {
               color: sourceCategoryColor(type),
-              borderRadius: index === categoryKeys.length - 1 ? [0, 8, 8, 0] : 0,
             },
           })),
         ],
