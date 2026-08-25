@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -122,8 +123,19 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
     (
         "official",
         "官网/企业站点",
-        ("官网", "官方网站", "homepage", "企业介绍", "关于我们"),
-        (),
+        (
+            "官网",
+            "官方网站",
+            "homepage",
+            "企业介绍",
+            "关于我们",
+            "公司简介",
+            "企业简介",
+            "集团简介",
+            "欢迎您访问",
+            "欢迎访问",
+        ),
+        ("dwywood.com",),
         (),
     ),
 ]
@@ -181,6 +193,35 @@ def _match_rule(
     return False
 
 
+def _looks_like_corporate_site_page(raw_text: str, host: str) -> bool:
+    """经销商/门店自建站：标题常写「公司简介」或「业务|公司名」但不含「官网」二字。"""
+    if not host:
+        return False
+    text = re.sub(r"\s+", "", str(raw_text or ""))
+    if not text:
+        return False
+    if any(
+        token in text
+        for token in (
+            "公司简介",
+            "企业简介",
+            "集团简介",
+            "企业介绍",
+            "关于我们",
+            "联系我们",
+            "官方网站",
+            "官网",
+        )
+    ):
+        return True
+    if any(suffix in text for suffix in ("股份有限公司", "有限责任公司", "有限公司", "集团有限公司")):
+        if any(sep in text for sep in ("|", "_", "｜")):
+            return True
+        if any(token in text for token in ("装饰材料", "门店", "旗舰店", "专卖", "经销", "贸易")):
+            return True
+    return False
+
+
 def classify_source_category_id(
     *,
     domain: str | None = None,
@@ -202,6 +243,7 @@ def classify_source_category_id(
             return cached
 
     text = f"{title or ''} {site or ''} {url or ''} {host}".lower()
+    raw_text = f"{title or ''} {site or ''} {url or ''} {host}"
     for rule in _CATEGORY_RULES:
         if rule[0] == "official":
             continue
@@ -210,6 +252,10 @@ def classify_source_category_id(
 
     official_rule = next(rule for rule in _CATEGORY_RULES if rule[0] == "official")
     if _match_rule(official_rule, text=text, host=host):
+        return "official"
+
+    # 2026-08-25 - 经销商/门店自建站标题常无「官网」二字，用公司简介/公司全称等识别
+    if host and _looks_like_corporate_site_page(raw_text, host):
         return "official"
 
     # 2026-08-25 - 未知域名默认「其他」，勿再虚高官网占比
@@ -433,9 +479,22 @@ assert classify_source_category_id(domain="zhihu.com") == "qa"
 assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
 assert classify_source_category_id(domain="dianhua.cn", site="电话邦") == "enterprise"
 assert classify_source_category_id(
-    title="大王椰板材(宣城店)-电话邦",
-    url="https://www.dianhua.cn/xxx",
+    title="大王椰板材店",
+    url="https://www.dianhua.cn/x",
+    site="电话邦",
 ) == "enterprise"
+assert classify_source_category_id(
+    title="公司简介_海南装饰材料,海口装饰材料,海南旺顺祥业贸易有限公司",
+    url="https://www.hkwsxy.com/about.html",
+) == "official"
+assert classify_source_category_id(
+    title="海南装饰材料|海口装饰材料|海口旺顺祥业贸易有限公司",
+    url="https://hkwsxy.com/",
+) == "official"
+assert classify_source_category_id(
+    title="大王椰官方网站-饰面美学大师",
+    url="https://m.dwywood.com/news/info/73.html",
+) == "official"
 assert classify_source_category_id(domain="unknown-vertical.example") == "other"
 assert classify_source_category_id(
     domain="imtcmkj.com",

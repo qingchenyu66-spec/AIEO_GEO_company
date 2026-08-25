@@ -12,6 +12,30 @@ from app.services.source_category_service import (
 )
 
 
+def test_dealer_corporate_site_is_official() -> None:
+    assert (
+        classify_source_category_id(
+            title="公司简介_海南装饰材料,海口装饰材料,海南旺顺祥业贸易有限公司",
+            url="https://www.hkwsxy.com/about.html",
+        )
+        == "official"
+    )
+    assert (
+        classify_source_category_id(
+            title="海南装饰材料|海口装饰材料|海口旺顺祥业贸易有限公司",
+            url="https://hkwsxy.com/",
+        )
+        == "official"
+    )
+    assert (
+        classify_source_category_id(
+            title="大王椰官方网站-饰面美学大师",
+            url="https://m.dwywood.com/news/info/73.html",
+        )
+        == "official"
+    )
+
+
 def test_dianhua_directory_is_enterprise() -> None:
     assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
     assert classify_source_category_label(domain="dianhua.cn") == "企业库/工商"

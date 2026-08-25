@@ -124,7 +124,11 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
     id: 'official',
     label: '官网/企业站点',
     color: '#326fea',
-    keywords: ['官网', '官方网站', 'homepage', '企业介绍', '关于我们'],
+    keywords: [
+      '官网', '官方网站', 'homepage', '企业介绍', '关于我们',
+      '公司简介', '企业简介', '集团简介', '欢迎您访问', '欢迎访问',
+    ],
+    domains: ['dwywood.com'],
   },
   {
     id: 'other',
@@ -216,6 +220,21 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
   return false
 }
 
+function looksLikeCorporateSitePage(rawText: string, host: string) {
+  if (!host) return false
+  const text = rawText.replace(/\s+/g, '')
+  if (!text) return false
+  if (['公司简介', '企业简介', '集团简介', '企业介绍', '关于我们', '联系我们', '官方网站', '官网']
+    .some(token => text.includes(token))) {
+    return true
+  }
+  if (['股份有限公司', '有限责任公司', '有限公司', '集团有限公司'].some(suffix => text.includes(suffix))) {
+    if (['|', '_', '｜'].some(sep => text.includes(sep))) return true
+    if (['装饰材料', '门店', '旗舰店', '专卖', '经销', '贸易'].some(token => text.includes(token))) return true
+  }
+  return false
+}
+
 export function sourceCategory(
   source: { title?: string; url?: string; site?: string | null; category?: string | null },
   options?: { brandOfficialHost?: string | null; brandKnownHosts?: string[] },
@@ -225,6 +244,7 @@ export function sourceCategory(
     return preset as SourceCategory
   }
   const text = `${source.title || ''} ${source.site || ''} ${source.url || ''}`.toLowerCase()
+  const rawText = `${source.title || ''} ${source.site || ''} ${source.url || ''}`
   const host = normalizeHost(source.url || '')
 
   const knownHosts = [
@@ -244,6 +264,8 @@ export function sourceCategory(
 
   const officialRule = SOURCE_CATEGORY_RULES.find(rule => rule.id === 'official')
   if (officialRule && matchRule(officialRule, text, host)) return 'official'
+
+  if (host && looksLikeCorporateSitePage(rawText, host)) return 'official'
 
   return SOURCE_CATEGORY_FALLBACK
 }
@@ -266,6 +288,11 @@ if (!import.meta.env.PROD) {
     [{ title: '某行业观察', url: 'https://news.pchouse.com.cn/post' }, 'media'],
     [{ title: '某行业观察', url: 'https://example.org/post' }, 'other'],
     [{ title: '大王椰板材店', url: 'https://www.dianhua.cn/x', site: '电话邦' }, 'enterprise'],
+    [{
+      title: '公司简介_海南装饰材料,海口装饰材料,海南旺顺祥业贸易有限公司',
+      url: 'https://www.hkwsxy.com/about.html',
+    }, 'official'],
+    [{ title: '大王椰官方网站-饰面美学大师', url: 'https://m.dwywood.com/news/info/73.html' }, 'official'],
   ]
   for (const [input, expected] of checks) {
     const actual = sourceCategory(input)
