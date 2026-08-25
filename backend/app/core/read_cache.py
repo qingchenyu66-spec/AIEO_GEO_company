@@ -27,6 +27,7 @@ MANAGEMENT_OVERVIEW_ROLLUP_TTL = 600
 # 方案 B：监测摘要 / 竞品对比用较长 TTL，补录与品牌变更会 invalidate
 MONITOR_SUMMARY_CACHE_TTL = 300
 WORKSPACE_BRIEF_CACHE_TTL = 45
+INCLUSION_SNAPSHOTS_CACHE_TTL = 60
 CELERY_MONITOR_CACHE_TTL = 20
 SENTIMENT_KEYWORDS_CACHE_TTL = 120
 COMPETITOR_COMPARE_CACHE_TTL = 300
@@ -115,6 +116,32 @@ def source_stats_config_fingerprint(
 def source_stats_cache_key(tenant_id: int, cutoff_day: str, config_fp: str = "default") -> str:
     # v5：聚合行带 site 中文站名；升版本强制丢弃无 site 的旧缓存
     return f"monitor:source-stats:v5:{tenant_id}:{cutoff_day}:{config_fp}"
+
+
+def inclusion_snapshots_pool_cache_key(
+    tenant_id: int,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    platform: str | None,
+    keyword: str | None,
+) -> str:
+    return (
+        f"monitor:inclusion:v1:{tenant_id}:"
+        f"{start_date or 'default'}:{end_date or 'default'}:"
+        f"{platform or 'all'}:{keyword or '-'}"
+    )
+
+
+def inclusion_snapshots_ranked_cache_key(
+    tenant_id: int,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    platform: str | None,
+    keyword: str | None,
+) -> str:
+    return f"{inclusion_snapshots_pool_cache_key(tenant_id, start_date=start_date, end_date=end_date, platform=platform, keyword=keyword)}:ranked"
 
 
 def competitor_compare_cache_key(
@@ -327,6 +354,7 @@ def invalidate_dashboard_caches(
         delete_cache_pattern(f"monitor:source-stats:v3:{tenant_id}:*")
         delete_cache_pattern(f"monitor:source-stats:v4:{tenant_id}:*")
         delete_cache_pattern(f"monitor:source-stats:v5:{tenant_id}:*")
+        delete_cache_pattern(f"monitor:inclusion:v1:{tenant_id}:*")
         delete_cache_pattern(f"analytics:competitor-compare:v1:*:{tenant_id}:*")
         delete_cache_pattern(f"analytics:competitor-compare:v2:*:{tenant_id}:*")
         delete_cache_pattern(f"analytics:sentiment-keywords:v1:*:{tenant_id}:*")
@@ -337,6 +365,7 @@ def invalidate_dashboard_caches(
         _memory_delete_prefix(f"monitor:summary:")
         _memory_delete_prefix(f"monitor:workspace-brief:")
         _memory_delete_prefix(f"monitor:source-stats:")
+        _memory_delete_prefix(f"monitor:inclusion:")
         _memory_delete_prefix(f"monitor:ranking-matrix:")
         _memory_delete_prefix(f"analytics:competitor-compare:")
         _memory_delete_prefix(f"analytics:sentiment-keywords:")

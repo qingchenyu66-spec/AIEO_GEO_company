@@ -9,6 +9,7 @@ import {
   getMonitorSubtask,
   type MonitorSubtask,
   type WorkspaceSnapshot,
+  type InclusionSnapshotsResult,
 } from '../../../services/monitor'
 import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { notifyOperationError } from '../../../utils/requestError'
@@ -27,9 +28,13 @@ const props = defineProps<{
 }>()
 
 const loading = ref(false)
+const paging = ref(false)
 const snapshots = ref<WorkspaceSnapshot[]>([])
 const page = ref(1)
 const total = ref(0)
+/** 2026-08-25 - 收录明细翻页慢 - 同条件页缓存 + 静默预取下一页 */
+const pageCache = new Map<string, InclusionSnapshotsResult>()
+let loadSeq = 0
 /** 本格局部筛选：默认只看有位次；「含未提及」含无位次。切换会重新请求。 */
 const rankScope = ref<'ranked' | 'all'>('ranked')
 
@@ -121,35 +126,105 @@ function closeSnapshot() {
   snapshotListRank.value = null
 }
 
-async function loadSnapshots() {
-  loading.value = true
+function buildPageCacheKey(targetPage: number) {
+  return JSON.stringify({
+    tenantId: props.tenantId ?? null,
+    startDate: props.startDate || '',
+    endDate: props.endDate || '',
+    platformFilter: props.platformFilter || '',
+    keywordFilter: (props.keywordFilter || '').trim(),
+    rankScope: rankScope.value,
+    page: targetPage,
+  })
+}
+
+function clearPageCache() {
+  pageCache.clear()
+}
+
+function applySnapshotResult(data: InclusionSnapshotsResult | null | undefined) {
+  snapshots.value = data?.recent_snapshots || []
+  total.value = Number(data?.total ?? snapshots.value.length) || 0
+}
+
+async function fetchSnapshotsPage(targetPage: number) {
+  const cacheKey = buildPageCacheKey(targetPage)
+  const cached = pageCache.get(cacheKey)
+  if (cached) return cached
+  const data = await withRetry(() => getInclusionSnapshots({
+    tenant_id: props.tenantId ?? undefined,
+    start_date: props.startDate || undefined,
+    end_date: props.endDate || undefined,
+    platform: props.platformFilter || undefined,
+    keyword: (props.keywordFilter || '').trim() || undefined,
+    page: targetPage,
+    limit: PAGE_SIZE,
+    rank_scope: rankScope.value,
+  }, { silentError: true }))
+  pageCache.set(cacheKey, data)
+  return data
+}
+
+function prefetchNextPage(currentPage: number, totalCount: number) {
+  const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const nextPage = currentPage + 1
+  if (nextPage > pages) return
+  const nextKey = buildPageCacheKey(nextPage)
+  if (pageCache.has(nextKey)) return
+  void fetchSnapshotsPage(nextPage).catch(() => {})
+}
+async function loadSnapshots(targetPage = page.value) {
+  const cacheKey = buildPageCacheKey(targetPage)
+  const cached = pageCache.get(cacheKey)
+  if (cached) {
+    applySnapshotResult(cached)
+    prefetchNextPage(targetPage, total.value)
+    return
+  }
+  const seq = ++loadSeq
+  loading.value = !snapshots.value.length
+  paging.value = true
   try {
-    const data = await withRetry(() => getInclusionSnapshots({
-      tenant_id: props.tenantId ?? undefined,
-      start_date: props.startDate || undefined,
-      end_date: props.endDate || undefined,
-      platform: props.platformFilter || undefined,
-      keyword: (props.keywordFilter || '').trim() || undefined,
-      page: page.value,
-      limit: PAGE_SIZE,
-      rank_scope: rankScope.value,
-    }, { silentError: true }))
-    snapshots.value = data?.recent_snapshots || []
-    total.value = Number(data?.total ?? snapshots.value.length) || 0
+    const data = await fetchSnapshotsPage(targetPage)
+    if (seq !== loadSeq) return
+    applySnapshotResult(data)
+    prefetchNextPage(targetPage, total.value)
   } catch (error: unknown) {
+    if (seq !== loadSeq) return
     notifyOperationError(error, '收录明细加载失败')
     snapshots.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+      paging.value = false
+    }
   }
 }
-
 function goPage(next: number) {
   const clamped = Math.min(Math.max(1, next), totalPages.value)
   if (clamped === page.value) return
-  page.value = clamped
-  void loadSnapshots()
+  if (pageCache.has(buildPageCacheKey(clamped))) {
+    page.value = clamped
+    void loadSnapshots(clamped)
+    return
+  }
+  void (async () => {
+    paging.value = true
+    const seq = ++loadSeq
+    try {
+      const data = await fetchSnapshotsPage(clamped)
+      if (seq !== loadSeq) return
+      page.value = clamped
+      applySnapshotResult(data)
+      prefetchNextPage(clamped, Number(data?.total ?? 0))
+    } catch (error: unknown) {
+      if (seq !== loadSeq) return
+      notifyOperationError(error, '收录明细加载失败')
+    } finally {
+      if (seq === loadSeq) paging.value = false
+    }
+  })()
 }
 
 onMounted(() => {
@@ -159,8 +234,9 @@ onMounted(() => {
 watch(
   () => [props.tenantId, props.startDate, props.endDate, props.platformFilter, props.keywordFilter, rankScope.value] as const,
   () => {
+    clearPageCache()
     page.value = 1
-    void loadSnapshots()
+    void loadSnapshots(1)
   },
 )
 </script>
@@ -236,12 +312,12 @@ watch(
     </div>
 
     <div v-if="total > PAGE_SIZE" class="source-soft-pager">
-      <button type="button" class="source-soft-btn" :disabled="page <= 1 || loading" @click="goPage(page - 1)">
+      <button type="button" class="source-soft-btn" :disabled="page <= 1 || loading || paging" @click="goPage(page - 1)">
         <ChevronLeft :size="14" />
         上一页
       </button>
       <span>共 {{ total }} 条 · {{ page }} / {{ totalPages }}</span>
-      <button type="button" class="source-soft-btn" :disabled="page >= totalPages || loading" @click="goPage(page + 1)">
+      <button type="button" class="source-soft-btn" :disabled="page >= totalPages || loading || paging" @click="goPage(page + 1)">
         下一页
         <ChevronRight :size="14" />
       </button>

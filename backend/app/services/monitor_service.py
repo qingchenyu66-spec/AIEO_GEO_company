@@ -7411,76 +7411,22 @@ def _inclusion_scan_columns(*, with_refs: bool) -> list[Any]:
     return cols
 
 
-def list_inclusion_snapshots(
+def _build_inclusion_light_pool(
     db: Session,
-    current: CurrentSession,
     *,
-    start_date: date | None = None,
-    end_date: date | None = None,
-    tenant_id: int | None = None,
-    platform: str | None = None,
-    keyword: str | None = None,
-    page: int = 1,
-    limit: int = 10,
-    rank_scope: str = "ranked",
-) -> dict[str, Any]:
-    """信源页「收录明细」专用：按周期/平台直查子任务，避免吃 workspace-brief 全局 24 条样本。
-
-    「8 次引用」是信源引用次数；本列表是监测子任务行。
-    rank_scope=ranked|all 与前端「有位次/含未提及」对齐；勿用 prefer_ranked，否则有位次装满后切换无差别。
-    进池优先 schedule_key 业务日 task_id（与热力同源），禁止只靠 updated_at 截断。
-    2026-07-30 - 收录明细条数假齐+只堆最新天 - 返回截断前 total，按 detect_day 轮询，服务端分页
-    2026-07-30 - 含未提及/翻页 5s - 轻量扫池只 hydrate 当前页；池内有位次用 mention_position 近似
-    """
+    tenant_id: int,
+    trend_start: datetime,
+    trend_end: datetime,
+    range_end: datetime,
+    platform_key: str,
+    purchased_set: set[str],
+    keyword: str | None,
+    asset,
+    keyword_group_rows,
+) -> list[dict[str, Any]] | None:
+    """收录明细轻量候选池：扫子任务 + detect_day 收口 + 日轮询，不含 hydration。"""
     from types import SimpleNamespace
 
-    tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
-    range_end = customer_display_cutoff()
-    start_at = datetime.combine(start_date, time.min) if start_date else None
-    end_at = datetime.combine(end_date, time.max) if end_date else None
-    trend_start, trend_end = customer_display_date_range(
-        start_at=start_at,
-        end_at=end_at,
-        default_lookback_days=7 if not start_at and not end_at else None,
-    )
-    page = max(1, int(page or 1))
-    limit = max(1, min(50, int(limit or 10)))
-
-    asset = get_brand_asset(db, tenant_id)
-    keyword_group_rows = list_keyword_groups(db, tenant_id)
-    keyword_groups = [
-        keyword_group_to_dict(item)
-        for item in keyword_group_rows
-        if item.status and item.monitor_keyword
-    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
-    purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
-    purchased_set = set(purchased_platforms)
-
-    scope = str(rank_scope or "ranked").strip().lower()
-    if scope not in {"ranked", "all"}:
-        scope = "ranked"
-
-    empty = {
-        "recent_snapshots": [],
-        "purchased_platforms": purchased_platforms,
-        "rank_scope": scope,
-        "total": 0,
-        "page": page,
-        "page_size": limit,
-    }
-
-    platform_key = str(platform or "").strip()
-    if platform_key in ("", "all"):
-        platform_key = ""
-    if platform_key and purchased_set:
-        from app.core.platform_order import expand_platform_codes
-
-        if platform_key not in expand_platform_codes(purchased_set):
-            return empty
-
-    # 2026-07-27 - 收录明细须跟上边近7/30/全部同一周期：可见性按 detect_day∈[start,昨日]
-    # 2026-07-31 - 批量回写 updated_at 占满扫描窗导致有位次也全空 - 改按 schedule_key 业务日进池（与热力/词×平台同源）
-    # 已弃用：按 updated_at DESC limit 800/5000 再滤 detect_day
     period_start, period_end_day = _workspace_period_day_bounds(trend_start, trend_end, range_end)
     start_key, end_key_exclusive = _workspace_schedule_key_bounds(period_start, period_end_day)
     schedule_task_ids = [
@@ -7506,7 +7452,6 @@ def list_inclusion_snapshots(
     if schedule_task_ids:
         conditions.append(GeoMonitorSubtask.task_id.in_(schedule_task_ids))
     else:
-        # 无调度记录时回退宽窗（旧数据/手工任务）；仍靠下方 detect_day 收口
         lookback_start = trend_start - timedelta(days=14)
         conditions.append(
             or_(
@@ -7526,12 +7471,7 @@ def list_inclusion_snapshots(
 
         conditions.append(GeoMonitorSubtask.platform.in_(expand_platform_codes(purchased_set)))
 
-    # 2026-08-03 - 有位次仍出未提及 - SQL mention_position 与 _resolve_brand_rank 口径不一致，不在 SQL 预筛
-    # ponytail: ranked 在 hydration 后按 brand_rank 过滤；扫描窗可能略大，上限 scan_limit 兜底。
-
-    # 调度窗内行数通常可控；仍设天花板防异常租户拖垮
     scan_limit = 8000
-    # 2026-07-31 - 顶栏搜标题收录明细搜不到 - 有 keyword 时把 reference 标题带进轻池再筛
     keyword_q = str(keyword or "").strip()
     scan_stmt = (
         select(*_inclusion_scan_columns(with_refs=bool(keyword_q)))
@@ -7542,7 +7482,7 @@ def list_inclusion_snapshots(
     )
     scan_rows = list(db.execute(scan_stmt).all())
     if not scan_rows:
-        return empty
+        return None
 
     task_ids = list({row.task_id for row in scan_rows if row.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
@@ -7597,7 +7537,6 @@ def list_inclusion_snapshots(
             )
         light_candidates.append(light_row)
 
-    # 已在 SQL 按 scope 过滤；池内用 all 保持时间序 + 日轮询
     pool = _workspace_period_snapshot_pool(
         light_candidates,
         trend_start=trend_start,
@@ -7606,30 +7545,160 @@ def list_inclusion_snapshots(
         rank_scope="all",
         diversify_days=True,
     )
-    pool = _filter_inclusion_snapshots_by_keyword(pool, keyword)
+    return _filter_inclusion_snapshots_by_keyword(pool, keyword)
+
+
+def _hydrate_inclusion_ranked_rows(
+    db: Session,
+    *,
+    tenant_id: int,
+    pool: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    asset = get_brand_asset(db, tenant_id)
+    keyword_group_rows = list_keyword_groups(db, tenant_id)
+    keyword_groups = [
+        keyword_group_to_dict(item)
+        for item in keyword_group_rows
+        if item.status and item.monitor_keyword
+    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
+    match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
+    ranked: list[dict[str, Any]] = []
+    for batch_start in range(0, len(pool), _INCLUSION_HYDRATE_BATCH):
+        batch_light = pool[batch_start: batch_start + _INCLUSION_HYDRATE_BATCH]
+        for row in _hydrate_inclusion_light_batch(
+            db,
+            batch_light,
+            asset=asset,
+            keyword_groups=keyword_groups,
+            match_terms=match_terms,
+        ):
+            if _inclusion_snapshot_has_display_rank(row):
+                ranked.append(row)
+    return ranked
+
+
+def list_inclusion_snapshots(
+    db: Session,
+    current: CurrentSession,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    tenant_id: int | None = None,
+    platform: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    limit: int = 10,
+    rank_scope: str = "ranked",
+) -> dict[str, Any]:
+    """信源页「收录明细」专用：按周期/平台直查子任务，避免吃 workspace-brief 全局 24 条样本。
+
+    「8 次引用」是信源引用次数；本列表是监测子任务行。
+    rank_scope=ranked|all 与前端「有位次/含未提及」对齐；勿用 prefer_ranked，否则有位次装满后切换无差别。
+    进池优先 schedule_key 业务日 task_id（与热力同源），禁止只靠 updated_at 截断。
+    2026-07-30 - 收录明细条数假齐+只堆最新天 - 返回截断前 total，按 detect_day 轮询，服务端分页
+    2026-07-30 - 含未提及/翻页 5s - 轻量扫池只 hydrate 当前页；池内有位次用 mention_position 近似
+    2026-08-25 - 翻页每次都重扫+重 hydrate - 轻量池与有位次全量列表短 TTL 缓存，翻页只切片
+    """
+    from app.core.read_cache import (
+        INCLUSION_SNAPSHOTS_CACHE_TTL,
+        get_or_build_json_cache,
+        inclusion_snapshots_pool_cache_key,
+        inclusion_snapshots_ranked_cache_key,
+    )
+
+    tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
+    range_end = customer_display_cutoff()
+    start_at = datetime.combine(start_date, time.min) if start_date else None
+    end_at = datetime.combine(end_date, time.max) if end_date else None
+    trend_start, trend_end = customer_display_date_range(
+        start_at=start_at,
+        end_at=end_at,
+        default_lookback_days=7 if not start_at and not end_at else None,
+    )
+    page = max(1, int(page or 1))
+    limit = max(1, min(50, int(limit or 10)))
+
+    asset = get_brand_asset(db, tenant_id)
+    keyword_group_rows = list_keyword_groups(db, tenant_id)
+    keyword_groups = [
+        keyword_group_to_dict(item)
+        for item in keyword_group_rows
+        if item.status and item.monitor_keyword
+    ] if keyword_group_rows else active_keyword_groups(db, tenant_id)
+    purchased_platforms = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
+    purchased_set = set(purchased_platforms)
+
+    scope = str(rank_scope or "ranked").strip().lower()
+    if scope not in {"ranked", "all"}:
+        scope = "ranked"
+
+    empty = {
+        "recent_snapshots": [],
+        "purchased_platforms": purchased_platforms,
+        "rank_scope": scope,
+        "total": 0,
+        "page": page,
+        "page_size": limit,
+    }
+
+    platform_key = str(platform or "").strip()
+    if platform_key in ("", "all"):
+        platform_key = ""
+    if platform_key and purchased_set:
+        from app.core.platform_order import expand_platform_codes
+
+        if platform_key not in expand_platform_codes(purchased_set):
+            return empty
+
+    pool_cache_key = inclusion_snapshots_pool_cache_key(
+        tenant_id,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        platform=platform_key or None,
+        keyword=str(keyword or "").strip() or None,
+    )
+    pool = get_or_build_json_cache(
+        pool_cache_key,
+        lambda: _build_inclusion_light_pool(
+            db,
+            tenant_id=tenant_id,
+            trend_start=trend_start,
+            trend_end=trend_end,
+            range_end=range_end,
+            platform_key=platform_key,
+            purchased_set=purchased_set,
+            keyword=keyword,
+            asset=asset,
+            keyword_group_rows=keyword_group_rows,
+        ),
+        ttl_seconds=INCLUSION_SNAPSHOTS_CACHE_TTL,
+        lock_ttl_seconds=30,
+        wait_seconds=8.0,
+    )
+    if not pool:
+        return empty
+
     match_terms = _ranking_match_terms(asset, keyword_groups) if asset else []
     offset = (page - 1) * limit
 
     if scope == "ranked":
-        # 2026-08-03 - 有位次仍出未提及 - 按 hydration 后 brand_rank 计数/分页，勿信 mention_position
-        recent_snapshots: list[dict[str, Any]] = []
-        total_ranked = 0
-        for batch_start in range(0, len(pool), _INCLUSION_HYDRATE_BATCH):
-            batch_light = pool[batch_start: batch_start + _INCLUSION_HYDRATE_BATCH]
-            for row in _hydrate_inclusion_light_batch(
-                db,
-                batch_light,
-                asset=asset,
-                keyword_groups=keyword_groups,
-                match_terms=match_terms,
-            ):
-                if not _inclusion_snapshot_has_display_rank(row):
-                    continue
-                if total_ranked >= offset and len(recent_snapshots) < limit:
-                    recent_snapshots.append(row)
-                total_ranked += 1
+        ranked_cache_key = inclusion_snapshots_ranked_cache_key(
+            tenant_id,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
+            platform=platform_key or None,
+            keyword=str(keyword or "").strip() or None,
+        )
+        ranked_rows = get_or_build_json_cache(
+            ranked_cache_key,
+            lambda: _hydrate_inclusion_ranked_rows(db, tenant_id=tenant_id, pool=pool),
+            ttl_seconds=INCLUSION_SNAPSHOTS_CACHE_TTL,
+            lock_ttl_seconds=60,
+            wait_seconds=12.0,
+        )
+        total_ranked = len(ranked_rows)
         return {
-            "recent_snapshots": recent_snapshots,
+            "recent_snapshots": ranked_rows[offset: offset + limit],
             "purchased_platforms": purchased_platforms,
             "rank_scope": scope,
             "total": total_ranked,
