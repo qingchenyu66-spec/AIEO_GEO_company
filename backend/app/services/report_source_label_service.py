@@ -76,56 +76,6 @@ _DOMAIN_CN_NAMES: dict[str, str] = {
     "hezegd.com": "菏泽广电网",
 }
 
-_CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = [
-    ("encyclopedia", "百科", ("百科",), ("baike.baidu.com", "wikipedia.org", "wiki"), ()),
-    ("government", "政府/事业", ("人民政府", "政务", "gov.cn"), (), (".gov.cn", ".gov")),
-    (
-        "enterprise",
-        "企业库/工商",
-        ("企查查", "天眼查", "爱企查", "工商信息", "企业信用"),
-        ("tianyancha.com", "qcc.com", "qichacha.com", "aiqicha.baidu.com", "gsxt.gov.cn"),
-        (),
-    ),
-    ("qa", "问答社区", ("问答", "知乎"), ("zhihu.com", "zhidao.baidu.com", "stackoverflow.com"), ()),
-    (
-        "social",
-        "社交媒体",
-        ("微博", "小红书"),
-        (
-            "weibo.com",
-            "weixin.qq.com",
-            "mp.weixin.qq.com",
-            "douyin.com",
-            "xiaohongshu.com",
-            "xhslink.com",
-        ),
-        (),
-    ),
-    ("forum", "论坛社区", ("论坛", "贴吧"), ("tieba.baidu.com", "v2ex.com", "douban.com", "bbs."), ()),
-    (
-        "video",
-        "视频平台",
-        ("视频", "bilibili", "b站"),
-        ("bilibili.com", "b23.tv", "youku.com", "iqiyi.com", "v.qq.com"),
-        (),
-    ),
-    (
-        "media",
-        "行业媒体",
-        ("媒体", "新闻", "资讯", "报道"),
-        ("sohu.com", "163.com", "sina.com.cn", "ifeng.com", "thepaper.cn", "36kr.com", "huxiu.com"),
-        (),
-    ),
-    (
-        "ecommerce",
-        "电商/交易",
-        ("旗舰店", "商城", "店铺"),
-        ("taobao.com", "tmall.com", "jd.com", "1688.com"),
-        (),
-    ),
-    ("official", "官网/企业站点", ("官网", "官方网站", "homepage", "企业介绍", "关于我们"), (), ()),
-]
-
 _TITLE_SITE_RE = re.compile(r"(?:_|[-–—]\s*)([\u4e00-\u9fffA-Za-z0-9·]{2,24})$")
 _PUBLISHER_HINT_RE = re.compile(
     r"网|新闻|日报|晚报|时报|媒体|资讯|头条|百科|论坛|博客|视频|电台|电视|客户端|周刊|杂志|值得买|招标|广告|职友"
@@ -410,25 +360,14 @@ def classify_source_category(
     official_site_labels: dict[str, str] | None = None,
 ) -> str:
     """返回网站类别中文标签。"""
-    host = normalize_host(domain) or normalize_host(url)
-    if lookup_official_site_label(host, official_site_labels):
-        return "官网/企业站点"
-    text = f"{title or ''} {url or ''} {host}".lower()
-    for _cid, label, keywords, domains, suffixes in _CATEGORY_RULES:
-        if _cid == "official":
-            continue
-        if any(host.endswith(suf.lstrip(".")) or host.endswith(suf) for suf in suffixes if suf):
-            return label
-        if any(host == d or host.endswith(f".{d}") or d in text for d in domains if d):
-            return label
-        if any(kw.lower() in text for kw in keywords):
-            return label
-    for _cid, label, keywords, domains, suffixes in _CATEGORY_RULES:
-        if _cid != "official":
-            continue
-        if any(kw.lower() in text for kw in keywords):
-            return label
-    return "官网/企业站点" if host and not any(ch.isdigit() for ch in host[:2]) else "其他"
+    from app.services.source_category_service import classify_source_category_label
+
+    return classify_source_category_label(
+        domain=domain,
+        url=url,
+        title=title,
+        official_site_labels=official_site_labels,
+    )
 
 
 def enrich_source_row(

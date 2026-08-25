@@ -75,7 +75,7 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
     id: 'media',
     label: '行业媒体',
     color: '#20b8c9',
-    keywords: ['媒体', '新闻', '资讯', '报道'],
+    keywords: ['媒体', '新闻', '资讯', '报道', '家居网', '汽车之家'],
     domains: [
       'sohu.com',
       '163.com',
@@ -84,6 +84,26 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
       'thepaper.cn',
       '36kr.com',
       'huxiu.com',
+      // 2026-08-25 - 垂直行业媒体补规则，与后端 source_category_service 对齐
+      'pchouse.com.cn',
+      'yiche.com',
+      'autohome.com.cn',
+      'maigoo.com',
+      'smzdm.com',
+      'jiemian.com',
+      'to8to.com',
+      'shangyexinzhi.com',
+      'cnblogs.com',
+      'jianshu.com',
+      'csdn.net',
+      'toutiao.com',
+      'ixigua.com',
+      'zgswcn.com',
+      'dzwww.com',
+      'lieju.com',
+      'liebiao.com',
+      'docin.com',
+      'doc88.com',
     ],
   },
   {
@@ -109,7 +129,7 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
 
 export type SourceCategory = (typeof SOURCE_CATEGORY_RULES)[number]['id']
 
-export const SOURCE_CATEGORY_FALLBACK: SourceCategory = 'official'
+export const SOURCE_CATEGORY_FALLBACK: SourceCategory = 'other'
 
 const PLATFORM_CATEGORY_IDS = new Set([
   'encyclopedia', 'government', 'enterprise', 'qa', 'social', 'forum', 'video', 'media', 'ecommerce',
@@ -190,9 +210,13 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
 }
 
 export function sourceCategory(
-  source: { title?: string; url?: string },
+  source: { title?: string; url?: string; category?: string | null },
   options?: { brandOfficialHost?: string | null; brandKnownHosts?: string[] },
 ): SourceCategory {
+  const preset = String(source.category || '').trim()
+  if (preset && preset in sourceCategoryLabels) {
+    return preset as SourceCategory
+  }
   const text = `${source.title || ''} ${source.url || ''}`.toLowerCase()
   const host = normalizeHost(source.url || '')
 
@@ -232,7 +256,8 @@ if (!import.meta.env.PROD) {
     [{ url: 'https://www.sohu.com/a/1' }, 'media'],
     [{ url: 'https://item.taobao.com/1' }, 'ecommerce'],
     [{ title: '品牌官方网站介绍' }, 'official'],
-    [{ title: '某行业观察', url: 'https://example.org/post' }, 'official'],
+    [{ title: '某行业观察', url: 'https://news.pchouse.com.cn/post' }, 'media'],
+    [{ title: '某行业观察', url: 'https://example.org/post' }, 'other'],
   ]
   for (const [input, expected] of checks) {
     const actual = sourceCategory(input)

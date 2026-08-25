@@ -1553,12 +1553,41 @@ def build_source_analysis_summary(
     except Exception:
         logger.exception("source analysis platform_stats failed tenant_id=%s", resolved)
 
+    from app.services.report_source_label_service import load_official_site_labels_for_brand
+    from app.services.source_category_service import (
+        collect_domains_for_llm_labeling,
+        enrich_source_stat_rows,
+        enqueue_source_category_labeling,
+    )
+
+    brand_name = ""
+    if asset is not None:
+        brand_name = (
+            str(getattr(asset, "brand_short_name", None) or "").strip()
+            or str(getattr(asset, "brand_name", None) or "").strip()
+            or str(getattr(asset, "company_full_name", None) or "").strip()
+        )
+    official_labels = load_official_site_labels_for_brand(brand_name, db=db) if brand_name else {}
+    source_stats = enrich_source_stat_rows(
+        list(bundle.get("source_stats") or []),
+        official_site_labels=official_labels,
+    )
+    source_stats_all = enrich_source_stat_rows(
+        list(bundle.get("source_stats_all") or []),
+        official_site_labels=official_labels,
+    )
+    llm_items = collect_domains_for_llm_labeling(
+        source_stats_all,
+        official_site_labels=official_labels,
+    )
+    enqueue_source_category_labeling(llm_items)
+
     return {
         "tenant_id": resolved,
         "start_date": start_d.isoformat() if start_d else None,
         "end_date": end_d.isoformat(),
-        "source_stats": bundle.get("source_stats") or [],
-        "source_stats_all": bundle.get("source_stats_all") or [],
+        "source_stats": source_stats,
+        "source_stats_all": source_stats_all,
         "source_citation_trend": bundle.get("source_citation_trend") or {
             "start_at": None,
             "end_at": None,

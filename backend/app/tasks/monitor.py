@@ -879,3 +879,22 @@ def warm_customer_source_daily(tenant_id: int) -> dict[str, Any]:
         finally:
             _clear_enqueued_mark(f"source-daily-warm:{tenant_id}")
             db.close()
+
+
+@celery_app.task(
+    name="app.tasks.monitor.label_unknown_source_categories",
+    ignore_result=True,
+    queue="default",
+)
+def label_unknown_source_categories(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """离线 LLM 标注未知信源域名类型，结果写入全局缓存。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled", "count": 0}
+    try:
+        from app.services.source_category_service import resolve_source_categories_with_llm
+
+        resolved = resolve_source_categories_with_llm(items or [])
+        return {"status": "ok", "count": len(resolved)}
+    except Exception as exc:
+        logger.exception("label_unknown_source_categories failed")
+        return {"status": "error", "error": str(exc)}

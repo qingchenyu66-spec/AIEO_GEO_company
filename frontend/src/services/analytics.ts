@@ -196,6 +196,8 @@ export type SourceStatRow = {
   questions?: string[]
   latest_time?: string | null
   has_exposure?: boolean
+  category?: string | null
+  category_label?: string | null
 }
 
 export type SourceCitationTrend = {

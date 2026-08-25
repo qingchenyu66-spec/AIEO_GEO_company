@@ -1583,6 +1583,76 @@ class DeepseekClient:
             out[host] = label
         return out
 
+    def resolve_domain_source_categories(
+        self,
+        items: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        """为未知域名选择信源类型 id；无把握则省略该键。"""
+        from app.services.source_category_service import CATEGORY_LABEL_BY_ID
+
+        cleaned: list[dict[str, Any]] = []
+        for raw in items[:40]:
+            host = str((raw or {}).get("domain") or "").strip().lower()
+            if not host:
+                continue
+            titles = [str(t).strip() for t in list((raw or {}).get("titles") or []) if str(t).strip()][:3]
+            if not titles:
+                continue
+            cleaned.append({"domain": host, "titles": titles})
+
+        if not cleaned or not self.report_enabled:
+            return {}
+
+        allowed = {
+            cid: label
+            for cid, label in CATEGORY_LABEL_BY_ID.items()
+            if cid not in {"other", "official"}
+        }
+        catalog = "\n".join(f"- {cid}: {label}" for cid, label in allowed.items())
+        blocks = []
+        for row in cleaned:
+            blocks.append(
+                f"域名: {row['domain']}\n"
+                f"引用标题样例: {json.dumps(row['titles'], ensure_ascii=False)}"
+            )
+        content = self.chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是中文信源网站类型标注助手。根据域名与引用标题，为每个域名选择最匹配的类型 id。"
+                        "硬性规则：\n"
+                        "1) 只能从给定类型 id 中选择；\n"
+                        "2) 明显是企业自己官网/主站才选 official；门户/垂直媒体/问答/电商等勿标 official；\n"
+                        "3) 无把握则省略该域名；\n"
+                        "4) 只输出 JSON：键=域名，值=类型 id。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"可选类型 id：\n{catalog}\n\n"
+                        "请处理：\n\n"
+                        + "\n\n".join(blocks)
+                        + '\n\n只输出 JSON，例如 {"cold.example":"media"}'
+                    ),
+                },
+            ],
+            temperature=0.0,
+            max_tokens=600,
+            source="source-category",
+        )
+        payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            return {}
+        out: dict[str, str] = {}
+        for key, value in payload.items():
+            host = str(key or "").strip().lower()
+            cid = str(value or "").strip()
+            if host and cid in allowed:
+                out[host] = cid
+        return out
+
     def parse_knowledge_document(
         self,
         *,

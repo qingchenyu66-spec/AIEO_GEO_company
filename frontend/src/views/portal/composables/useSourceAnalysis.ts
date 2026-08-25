@@ -194,10 +194,12 @@ function mapSourceRows(
   return rows.map(item => ({
     ...item,
     has_exposure: item.has_exposure ?? (item.exposure_terms || []).length > 0,
-    category: sourceCategory(item, {
-      brandOfficialHost,
-      brandKnownHosts,
-    }),
+    category: (item.category && item.category in sourceCategoryLabels
+      ? item.category
+      : sourceCategory(item, {
+        brandOfficialHost,
+        brandKnownHosts,
+      })) as SourceRow['category'],
   }))
 }
 
