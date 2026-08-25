@@ -68,12 +68,24 @@ def _join_list(items: list[Any] | None, *, limit: int = 8) -> str:
     return "、".join(values[:limit]) + f" 等 {len(values)} 项"
 
 
-def _change(field: str, *, before: str | None = None, after: str | None = None, kind: str = "update") -> dict[str, str]:
+def _change(
+    field: str,
+    *,
+    before: str | None = None,
+    after: str | None = None,
+    kind: str = "update",
+    before_image_url: str | None = None,
+    after_image_url: str | None = None,
+) -> dict[str, str]:
     item: dict[str, str] = {"field": field, "kind": kind}
     if before is not None:
         item["before"] = before
     if after is not None:
         item["after"] = after
+    if before_image_url:
+        item["before_image_url"] = before_image_url
+    if after_image_url:
+        item["after_image_url"] = after_image_url
     return item
 
 
@@ -99,6 +111,29 @@ def _group_keyword_list(group: dict[str, Any]) -> list[Any]:
     if group.get("monitor_keyword"):
         return [group.get("monitor_keyword")]
     return []
+
+
+def _logo_staging_change_row(db: Session | None, tenant_id: int | None, body: dict[str, Any]) -> dict[str, str] | None:
+    # 2026-08-25 - Logo 随企业资料进审批 - 预览展示新旧图
+    key = str(body.get("logo_staging_key") or "").strip()
+    if not key:
+        return None
+    after_url = f"/api/v1/brand/logo-staging/{key}"
+    before_url: str | None = None
+    before_label = "（无）"
+    if tenant_id and db is not None:
+        tenant = db.get(Tenant, tenant_id)
+        if tenant and tenant.logo_path:
+            before_url = f"/api/v1/management/tenants/{tenant_id}/logo"
+            before_label = "当前 Logo"
+    return _change(
+        "企业 Logo",
+        before=before_label,
+        after="新 Logo",
+        kind="add" if not before_url else "update",
+        before_image_url=before_url,
+        after_image_url=after_url,
+    )
 
 
 def _brand_bootstrap_changes(body: dict[str, Any]) -> list[dict[str, str]]:
@@ -158,6 +193,9 @@ def _brand_bootstrap_changes(body: dict[str, Any]) -> list[dict[str, str]]:
         category = str(item.get("category") or "").strip() or "直接竞品"
         competitor_labels.append(f"{name}（{category}）")
     rows.append(_change("竞品", after=_join_list(competitor_labels, limit=20), kind="add"))
+    logo_row = _logo_staging_change_row(None, None, body)
+    if logo_row:
+        rows.append(logo_row)
     return rows
 
 
@@ -188,6 +226,9 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
                     kind="add",
                 )
             )
+        logo_row = _logo_staging_change_row(db, tenant_id, body)
+        if logo_row:
+            rows.append(logo_row)
         return rows
 
     rows: list[dict[str, str]] = []
@@ -326,6 +367,10 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
     if old_platforms != new_platforms and not any(row.get("field", "").endswith("」平台") for row in rows):
         rows.append(_change("监测平台（汇总）", before=old_platforms, after=new_platforms))
 
+    logo_row = _logo_staging_change_row(db, tenant_id, body)
+    if logo_row:
+        rows.append(logo_row)
+
     if not rows:
         rows.append(_change("变更说明", after="提交内容与当前生效配置一致或差异未识别", kind="info"))
     return rows
@@ -333,6 +378,9 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
 
 def brand_asset_has_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> bool:
     """是否存在可识别的企业配置变更（用于无变更时跳过销售审批）。"""
+    # 2026-08-25 - Logo 暂存 key 本身即变更，勿因其它字段相同被短路
+    if str(body.get("logo_staging_key") or "").strip():
+        return True
     # 2026-07-29 - 无差异仍进审批制造空单：先用完整 diff 判定，确认无变更再短路
     rows = _brand_changes(db, tenant_id, body)
     for row in rows:

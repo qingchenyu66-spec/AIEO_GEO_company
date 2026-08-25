@@ -505,6 +505,10 @@ def reject_approval(
     record.reviewer_identity_id = current.identity.id
     record.review_comment = (comment or "").strip() or None
     record.reviewed_at = datetime.now(UTC)
+    # 2026-08-25 - Logo 进审批驳回 - 清理申请人暂存文件
+    from app.services.tenant_logo_service import cleanup_logo_staging_from_payload
+
+    cleanup_logo_staging_from_payload(record.payload_json, owner_user_id=record.requester_user_id)
     db.commit()
     db.refresh(record)
     from app.services.system_notification_service import (

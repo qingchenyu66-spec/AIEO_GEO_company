@@ -5,6 +5,8 @@ export interface ApprovalChangeItem {
   kind: 'add' | 'update' | 'delete' | 'info' | string
   before?: string
   after?: string
+  before_image_url?: string
+  after_image_url?: string
 }
 
 export interface ApprovalPreview {

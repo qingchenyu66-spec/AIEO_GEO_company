@@ -104,4 +104,6 @@ class BrandAssetSaveRequest(BaseModel):
     schedule_frequency: int = Field(default=3, ge=1, le=24)
     schedule_weekdays: list[int] = Field(default_factory=list)
     schedule_month_days: list[int] = Field(default_factory=list)
+    # 2026-08-25 - Logo 随企业资料进审批 - 先传暂存，审批通过后再落库
+    logo_staging_key: str | None = Field(default=None, max_length=64)
 

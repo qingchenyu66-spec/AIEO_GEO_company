@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import re
+import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
@@ -15,6 +19,8 @@ from app.services.tenant_scope import resolve_and_guard_tenant_id
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_FILE_SIZE = 2 * 1024 * 1024
 STORAGE_ROOT = Path(__file__).resolve().parents[2] / "storage" / "tenant-logos"
+STAGING_ROOT = Path(__file__).resolve().parents[2] / "storage" / "logo-staging"
+STAGING_KEY_RE = re.compile(r"^[a-f0-9]{32}$")
 
 MEDIA_TYPES = {
     ".png": "image/png",
@@ -114,3 +120,162 @@ def resolve_tenant_logo_path(
     if tenant is None or tenant.deleted:
         raise ValueError("企业不存在")
     return tenant, _safe_logo_path(tenant)
+
+
+def _validate_staging_key(staging_key: str) -> str:
+    key = str(staging_key or "").strip().lower()
+    if not STAGING_KEY_RE.fullmatch(key):
+        raise ValueError("无效的 Logo 暂存标识")
+    return key
+
+
+def _staging_dir(owner_user_id: int, staging_key: str) -> Path:
+    return STAGING_ROOT / str(int(owner_user_id)) / staging_key
+
+
+def _find_staging_logo_file(owner_user_id: int, staging_key: str) -> Path:
+    directory = _staging_dir(owner_user_id, staging_key)
+    if not directory.is_dir():
+        raise ValueError("Logo 暂存不存在或已过期")
+    for ext in ALLOWED_EXT:
+        candidate = directory / f"logo{ext}"
+        if candidate.is_file():
+            return candidate
+    raise ValueError("Logo 暂存文件不存在")
+
+
+def find_staging_logo_by_key(staging_key: str) -> tuple[int, Path]:
+    """按 staging_key 定位暂存文件（全局唯一）。"""
+    key = _validate_staging_key(staging_key)
+    if not STAGING_ROOT.is_dir():
+        raise ValueError("Logo 暂存不存在或已过期")
+    for user_dir in STAGING_ROOT.iterdir():
+        if not user_dir.is_dir() or not user_dir.name.isdigit():
+            continue
+        try:
+            return int(user_dir.name), _find_staging_logo_file(int(user_dir.name), key)
+        except ValueError:
+            continue
+    raise ValueError("Logo 暂存不存在或已过期")
+
+
+def can_access_logo_staging(db: Session, current: CurrentSession, owner_user_id: int) -> None:
+    if current.user.id == int(owner_user_id):
+        return
+    from app.services.approval_service import can_review_approvals
+
+    if not can_review_approvals(db, current):
+        raise PermissionError("无权查看该 Logo 暂存")
+
+
+def resolve_logo_staging_path(
+    db: Session,
+    current: CurrentSession,
+    *,
+    staging_key: str,
+) -> tuple[int, Path]:
+    owner_user_id, path = find_staging_logo_by_key(staging_key)
+    can_access_logo_staging(db, current, owner_user_id)
+    return owner_user_id, path
+
+
+async def save_logo_staging(current: CurrentSession, upload: UploadFile) -> dict:
+    """销售提交审批前暂存 Logo，审批通过后再落到企业目录。"""
+    original_name = Path(upload.filename or "").name.strip()
+    if not original_name:
+        raise ValueError("文件名不能为空")
+    file_ext = Path(original_name).suffix.lower()
+    if file_ext not in ALLOWED_EXT:
+        raise ValueError("Logo 仅支持 png/jpg/webp")
+
+    staging_key = uuid.uuid4().hex
+    directory = _staging_dir(current.user.id, staging_key)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"logo{file_ext}"
+
+    file_size = 0
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 256)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > MAX_FILE_SIZE:
+                    raise ValueError("Logo 不能超过 2MB")
+                out.write(chunk)
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    if file_size == 0:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise ValueError("不能上传空文件")
+    return {"staging_key": staging_key, "filename": original_name}
+
+
+def delete_logo_staging(*, staging_key: str, owner_user_id: int) -> None:
+    key = _validate_staging_key(staging_key)
+    shutil.rmtree(_staging_dir(int(owner_user_id), key), ignore_errors=True)
+
+
+def cleanup_logo_staging_from_payload(payload: dict | None, *, owner_user_id: int) -> None:
+    body = (payload or {}).get("body")
+    if not isinstance(body, dict):
+        return
+    key = str(body.get("logo_staging_key") or "").strip()
+    if key:
+        delete_logo_staging(staging_key=key, owner_user_id=owner_user_id)
+
+
+def apply_staging_logo_to_tenant(
+    db: Session,
+    *,
+    tenant_id: int,
+    staging_key: str,
+    owner_user_id: int,
+) -> dict:
+    """审批通过或免审时，将暂存 Logo 写入企业。"""
+    key = _validate_staging_key(staging_key)
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None or tenant.deleted:
+        raise ValueError("企业不存在")
+
+    source = _find_staging_logo_file(int(owner_user_id), key)
+    stored_rel = f"{tenant_id}/logo{source.suffix.lower()}"
+    target = STORAGE_ROOT / stored_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if tenant.logo_path and tenant.logo_path != stored_rel:
+        old = (STORAGE_ROOT / tenant.logo_path).resolve()
+        if old.is_file():
+            old.unlink(missing_ok=True)
+
+    shutil.copy2(source, target)
+    now = datetime.now()
+    tenant.logo_path = stored_rel
+    tenant.logo_updated_at = now
+    db.flush()
+    delete_logo_staging(staging_key=key, owner_user_id=int(owner_user_id))
+    return {"tenant_id": tenant_id, **serialize_tenant_logo_meta(tenant)}
+
+
+def maybe_apply_logo_staging_from_body(
+    db: Session,
+    *,
+    tenant_id: int,
+    body: dict | Any,
+    owner_user_id: int,
+) -> dict | None:
+    """审批通过或免审时，按请求体中的暂存 key 落库 Logo。"""
+    if hasattr(body, "logo_staging_key"):
+        key = str(getattr(body, "logo_staging_key") or "").strip()
+    else:
+        key = str((body or {}).get("logo_staging_key") or "").strip()
+    if not key:
+        return None
+    return apply_staging_logo_to_tenant(
+        db,
+        tenant_id=tenant_id,
+        staging_key=key,
+        owner_user_id=owner_user_id,
+    )

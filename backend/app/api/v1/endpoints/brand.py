@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -28,6 +29,12 @@ from app.services.approval_service import queue_or_run, requires_sales_approval
 from app.services.management_service import raise_if_new_tenant_name_unavailable
 from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
 from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
+from app.services.tenant_logo_service import (
+    maybe_apply_logo_staging_from_body,
+    resolve_logo_staging_path,
+    save_logo_staging,
+    tenant_logo_media_type,
+)
 from app.core.config import settings
 
 router = APIRouter(prefix="/brand")
@@ -116,6 +123,13 @@ def upsert_brand_asset(
         asset = save_brand_asset_maybe_bootstrap(
             db, payload, current, owner_user_id=current.user.id,
         )
+        # 2026-08-25 - Logo 随企业资料进审批 - 免审直执时同步落库
+        maybe_apply_logo_staging_from_body(
+            db,
+            tenant_id=asset.tenant_id,
+            body=payload,
+            owner_user_id=current.user.id,
+        )
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
         competitors = list_competitors(db, asset.tenant_id)
@@ -160,6 +174,44 @@ def upsert_brand_asset(
         db.rollback()
         raise_write_endpoint_error(exc, context="brand.upsert")
     return ApiResponse(data=result)
+
+
+@router.post("/logo-staging", response_model=ApiResponse[dict])
+async def upload_brand_logo_staging(
+    file: UploadFile = File(...),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """销售保存企业资料前暂存 Logo，随审批单 payload 提交。"""
+    require_any_update_permission(current, db, [
+        "platform.audit",
+        "platform.audit.profile",
+    ])
+    try:
+        data = await save_logo_staging(current, file)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.get("/logo-staging/{staging_key}")
+def get_brand_logo_staging(
+    staging_key: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """读取 Logo 暂存图（申请人或审批人）。"""
+    try:
+        _, file_path = resolve_logo_staging_path(db, current, staging_key=staging_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FileResponse(
+        file_path,
+        media_type=tenant_logo_media_type(file_path),
+        filename=file_path.name,
+    )
 
 
 @router.put("/brand-word-groups", response_model=ApiResponse[dict])

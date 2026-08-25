@@ -255,6 +255,15 @@ def _exec_brand_asset(db: Session, current: CurrentSession, record: OperationApp
     asset = save_brand_asset_maybe_bootstrap(
         db, payload, current, owner_user_id=record.requester_user_id,
     )
+    # 2026-08-25 - Logo 随企业资料进审批 - 通过后从暂存写入企业
+    from app.services.tenant_logo_service import maybe_apply_logo_staging_from_body
+
+    maybe_apply_logo_staging_from_body(
+        db,
+        tenant_id=asset.tenant_id,
+        body=payload,
+        owner_user_id=record.requester_user_id,
+    )
     return {"tenant_id": asset.tenant_id, "brand_name": asset.brand_name}
 
 

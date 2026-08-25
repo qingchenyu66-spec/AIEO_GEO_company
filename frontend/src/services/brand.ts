@@ -236,6 +236,7 @@ export interface BrandAssetPayload {
     website_url?: string | null
     category?: string | null
   }>
+  logo_staging_key?: string | null
 }
 
 export interface CompetitorPayload {
@@ -262,6 +263,17 @@ export async function saveBrandAsset(payload: BrandAssetPayload): Promise<BrandA
   const response = await http.put('/v1/brand/asset', payload)
   invalidateCache('/v1/brand/asset')
   return response.data.data
+}
+
+export async function uploadLogoStaging(file: File): Promise<{ staging_key: string; filename: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await http.post('/v1/brand/logo-staging', form)
+  return response.data.data
+}
+
+export function logoStagingUrl(stagingKey: string): string {
+  return `/api/v1/brand/logo-staging/${encodeURIComponent(stagingKey)}`
 }
 
 export interface BrandWordGroupsPayload {

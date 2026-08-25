@@ -405,8 +405,14 @@ onMounted(loadRows)
                 <tr v-for="(item, index) in row.preview?.changes as ApprovalChangeItem[]" :key="`${row.id}-${index}`">
                   <td><span class="approval-change-kind" :class="changeKindClass(item.kind)">{{ changeKindLabel(item.kind) }}</span></td>
                   <td>{{ item.field }}</td>
-                  <td>{{ item.before || '—' }}</td>
-                  <td>{{ item.after || '—' }}</td>
+                  <td>
+                    <img v-if="item.before_image_url" :src="item.before_image_url" class="approval-change-logo" alt="" />
+                    <template v-else>{{ item.before || '—' }}</template>
+                  </td>
+                  <td>
+                    <img v-if="item.after_image_url" :src="item.after_image_url" class="approval-change-logo" alt="" />
+                    <template v-else>{{ item.after || '—' }}</template>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -555,6 +561,13 @@ onMounted(loadRows)
 .approval-change-kind.is-update { background:#dbeafe; color:#1d4ed8; }
 .approval-change-kind.is-delete { background:#fee2e2; color:#b91c1c; }
 .approval-change-kind.is-info { background:#f3f4f6; color:#4b5563; }
+.approval-change-logo {
+  max-width: 80px;
+  max-height: 80px;
+  object-fit: contain;
+  vertical-align: middle;
+  display: block;
+}
 .approval-card-actions {
   display:flex;
   gap:8px;

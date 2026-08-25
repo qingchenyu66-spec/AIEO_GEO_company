@@ -4,12 +4,12 @@ import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable, uploadTenantLogo, tenantLogoUrl,
+  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable, tenantLogoUrl,
   type TenantInfo,
   type TenantSalesOwner,
 } from '../../../services/management'
 import {
-  createCompetitor, deleteCompetitor, defaultBrandWordGroupName, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, saveBrandWordGroups, updateCompetitor,
+  createCompetitor, deleteCompetitor, defaultBrandWordGroupName, defaultKeywordGroupName, getBrandAsset, keywordGroupDisplayName, keywordGroupMonitorKeywords, saveBrandAsset, saveBrandWordGroups, updateCompetitor, uploadLogoStaging,
   normalizePlatformSelection, normalizePlatformSelections, platformSelectionCodes,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
@@ -972,6 +972,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           }))
           .filter(item => item.name)
         : undefined
+      let logoStagingKey: string | null = null
+      if (pendingTenantLogoFile.value) {
+        const staged = await uploadLogoStaging(pendingTenantLogoFile.value)
+        logoStagingKey = staged.staging_key
+      }
       const saved = await saveBrandAsset({
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
@@ -994,11 +999,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         service_end_date: brandForm.service_end_date || null,
         brand_word_groups: brandWordGroups,
         competitors,
+        logo_staging_key: logoStagingKey,
       })
       if (isPendingApproval(saved)) {
         const msg = pendingApprovalMessage(saved, isDraftCreate ? '已提交审批，通过后企业才会创建' : '已提交审批，等待运营或管理员审核')
         if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
         else ElMessage.info(msg)
+        if (logoStagingKey) clearPendingTenantLogo()
         if (isDraftCreate) backToEnterpriseList()
         return
       }
@@ -1008,11 +1015,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         await loadEnterpriseList()
       }
       const logoTenantId = brandForm.tenant_id || saved.tenant_id
-      // 2026-08-24 - 企业侧栏 Logo - 新建与编辑保存后均可补传/替换
-      if (logoTenantId && pendingTenantLogoFile.value) {
-        await uploadPendingTenantLogo(logoTenantId)
-        await loadEnterpriseList()
-        await refreshPlatformTenants?.()
+      // 2026-08-25 - Logo 随企业资料进审批 - 直执成功时后端已从暂存落库
+      if (logoStagingKey) {
+        clearPendingTenantLogo()
+        if (logoTenantId) {
+          await loadEnterpriseList()
+          await refreshPlatformTenants?.()
+        }
       }
       const listIndex = tenants.value.findIndex(item => item.id === brandForm.tenant_id)
       if (listIndex >= 0) {
@@ -1138,18 +1147,6 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     clearPendingTenantLogo()
     pendingTenantLogoFile.value = file
     pendingTenantLogoPreview.value = URL.createObjectURL(file)
-  }
-
-  async function uploadPendingTenantLogo(tenantId: number) {
-    if (!pendingTenantLogoFile.value) return
-    try {
-      await uploadTenantLogo(tenantId, pendingTenantLogoFile.value)
-    } catch (error: unknown) {
-      notifyError(error, '企业 Logo 上传失败')
-      throw error
-    } finally {
-      clearPendingTenantLogo()
-    }
   }
 
   async function goNextFromTenantDialog() {
