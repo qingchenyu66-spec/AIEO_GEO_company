@@ -22,7 +22,14 @@ logger = logging.getLogger(__name__)
 BACKFILL_SHOT_PATH_PREFIX = "/api/v1/media/backfill-shot/"
 
 SCROLLERS: dict[str, list[str]] = {
-    "qianwen.com": ['[class*="answer"]', '[class*="page-content"]', '[class*="chat-room"]'],
+    # 2026-08-25 - 千问分享域是 qianwen.my.cn；page-content 能滚但展开截高度锁死，优先 answer/chat-room 整容器
+    "qianwen.com": [
+        '[class*="answer"]',
+        '[class*="chat-room"]',
+        '[class*="message-list-scroll"]',
+        '[class*="scroll-container"]',
+        '[class*="page-content"]',
+    ],
     "yb.tencent.com": [".agent-chat__list__content", ".app-share-ssr", "body"],
     "yuanbao.tencent.com": [".agent-chat__list__content", ".app-share-ssr", "body"],
     "kimi.com": [".share-content-container", ".share-detail"],
@@ -31,9 +38,31 @@ SCROLLERS: dict[str, list[str]] = {
     "doubao.com": ['[class*="message"]', '[class*="overflow-y-scroll"]', "#root"],
 }
 
+
+def _scroller_list(host: str) -> list[str]:
+    """按域名族取滚动容器候选（分享页常换二级域）。"""
+    h = (host or "").lower()
+    if h in SCROLLERS:
+        return list(SCROLLERS[h])
+    if "qianwen" in h or h.endswith("tongyi.com"):
+        return list(SCROLLERS["qianwen.com"])
+    if "kimi" in h or "moonshot" in h:
+        return list(SCROLLERS["kimi.com"])
+    if "deepseek" in h:
+        return list(SCROLLERS["deepseek.com"])
+    if "doubao" in h:
+        return list(SCROLLERS["doubao.com"])
+    if "yuanbao" in h or h in ("yb.tencent.com",):
+        return list(SCROLLERS["yuanbao.tencent.com"])
+    return []
+
+
 # 2026-08-07 - 补录 page_screenshot 误存分享链 - 拼接长图落本地 media，勿写链
+# 2026-08-25 - DeepSeek 分享页英文 Continue 按钮未藏 + 滚屏拼重复 - 扩隐藏文案；deepseek 先整容器截
+# 2026-08-25 - 豆包底栏「打开豆包 →」fixed 叠正文；仅匹配文案不够稳 - 再杀底部 fixed/sticky CTA
 HIDE_CHROME_JS = """() => {
   const kill = (el) => { if (el) el.style.setProperty('display', 'none', 'important'); };
+  const CTA_RE = /继续向千问提问|和元宝继续聊|打开豆包|和 DeepSeek 继续聊|Continue with DeepSeek|Continue with Doubao|在App中打开|打开 App/i;
   for (const el of document.querySelectorAll('div,span,a,header,button,img')) {
     const r = el.getBoundingClientRect();
     if (r.top < 0 || r.top > 140 || r.height <= 0 || r.height > 120) continue;
@@ -64,10 +93,53 @@ HIDE_CHROME_JS = """() => {
   }
   for (const el of document.querySelectorAll('button,a,div')) {
     const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
-    if (!t || t.length > 40) continue;
-    if (/继续向千问提问|和元宝继续聊|打开豆包|和 DeepSeek 继续聊/.test(t)) kill(el);
+    if (!t || t.length > 60) continue;
+    if (CTA_RE.test(t)) {
+      kill(el);
+      let p = el.parentElement;
+      for (let i = 0; i < 4 && p; i++) {
+        const pr = p.getBoundingClientRect();
+        const pt = (p.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (pr.height > 0 && pr.height < 120 && pt.length < 80) { kill(p); break; }
+        p = p.parentElement;
+      }
+    }
+  }
+  // 底部悬浮 CTA：文案节点可能被拆开，按 fixed/sticky + 贴底再杀一层
+  for (const el of document.querySelectorAll('button,a,div,footer')) {
+    const st = getComputedStyle(el);
+    if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+    const r = el.getBoundingClientRect();
+    if (r.height <= 0 || r.height > 160 || r.width < 40) continue;
+    if (r.top < window.innerHeight * 0.55) continue;
+    const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (t && t.length <= 220 && (CTA_RE.test(t) || /内容由AI生成|月之暗面|京ICP备2023011302/.test(t))) kill(el);
+  }
+  // 2026-08-25 - Kimi sticky 法律页脚滚屏时嵌进正文中间（上下色差缝）
+  for (const el of document.querySelectorAll('footer,div')) {
+    const cls = (el.className || '').toString();
+    const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (!t || t.length > 220) continue;
+    if (!(/legal-footer|share-actions/.test(cls) || /内容由AI生成.*月之暗面|京ICP备2023011302/.test(t))) continue;
+    if (/内容由AI生成|月之暗面|京ICP备/.test(t)) kill(el);
   }
 }"""
+
+
+def _frame_sig(im: Image.Image) -> bytes:
+    return im.convert("L").resize((64, 64)).tobytes()
+
+
+def _frame_near_dup(a: bytes, b: bytes, *, max_mad: float = 6.0) -> bool:
+    """滚屏相邻两帧是否近似同一屏（仅完全相等会漏掉轻微重排）。"""
+    if a == b:
+        return True
+    if len(a) != len(b) or not a:
+        return False
+    total = 0
+    for x, y in zip(a, b):
+        total += abs(x - y)
+    return (total / len(a)) <= max_mad
 
 
 def backfill_screenshot_dir() -> Path:
@@ -128,18 +200,27 @@ def _host(url: str) -> str:
 
 
 def _pick_scroller(page, host: str) -> str:
-    for sel in SCROLLERS.get(host, []) + ["main", "body"]:
-        ok = page.evaluate(
+    # 2026-08-25 - 优先真滚动容器（sh>ch）；body 常只有一屏却 sh>600，会截不全
+    cands = _scroller_list(host) + ["main", "body"]
+    tall: str | None = None
+    for sel in cands:
+        meta = page.evaluate(
             """(sel) => {
               const el = document.querySelector(sel);
-              if (!el) return false;
-              return el.scrollHeight > el.clientHeight + 40 || el.scrollHeight > 600;
+              if (!el) return null;
+              return { sh: el.scrollHeight || 0, ch: el.clientHeight || 0 };
             }""",
             sel,
         )
-        if ok:
+        if not meta:
+            continue
+        sh = int(meta.get("sh") or 0)
+        ch = int(meta.get("ch") or 0)
+        if sh > ch + 40:
             return sel
-    return "body"
+        if sh > 600 and tall is None:
+            tall = sel
+    return tall or "body"
 
 
 def _expand_scroller(page, sel: str) -> dict:
@@ -180,15 +261,16 @@ def _element_png(page, sel: str) -> bytes | None:
         meta = _expand_scroller(page, sel)
         if not meta.get("ok") or int(meta.get("h") or 0) < 200:
             return None
+        # 2026-08-25 - 千问 page-content：expand 后 getBoundingClientRect 仍一屏，勿当成功
+        sh = int(meta.get("sh") or 0)
+        h = int(meta.get("h") or 0)
+        if sh > 0 and h + 80 < sh:
+            return None
         page.wait_for_timeout(200)
         return page.locator(sel).first.screenshot(type="png", timeout=120000)
     except Exception as exc:
         logger.info("element screenshot failed sel=%s err=%s", sel, exc)
         return None
-
-
-def _frame_sig(im: Image.Image) -> bytes:
-    return im.convert("L").resize((64, 64)).tobytes()
 
 
 def _stitch_png(page, sel: str, *, overlap: int = 100) -> bytes:
@@ -219,7 +301,8 @@ def _stitch_png(page, sel: str, *, overlap: int = 100) -> bytes:
         frame = Image.open(BytesIO(page.screenshot(clip=box, type="png"))).convert("RGB")
         sig = _frame_sig(frame)
         # 2026-08-07 - 拼接重复段/表头翻倍 - 跳过与上一屏几乎相同的帧
-        if prev_sig is not None and sig == prev_sig:
+        # 2026-08-25 - 仅相等不够：DeepSeek 虚拟列表轻微重排仍会叠重复正文
+        if prev_sig is not None and _frame_near_dup(prev_sig, sig):
             page.evaluate(
                 """(a) => {
                   const el = document.querySelector(a.s);
@@ -284,7 +367,16 @@ def _quality_ok(png: bytes) -> bool:
         total += 1
         if v < 245:
             ink += 1
-    return total > 0 and (ink / total) >= 0.015
+    if total <= 0 or (ink / total) < 0.015:
+        return False
+    # 2026-08-25 - 千问 answer 展开后高度虚高、下半截空白 - 底部无墨迹则判失败改走滚屏
+    if h >= 1600:
+        bottom = im.crop((0, int(h * 0.65), w, h))
+        bp = list(bottom.getdata())
+        b_ink = sum(1 for v in bp if v < 245)
+        if bp and (b_ink / len(bp)) < 0.004:
+            return False
+    return True
 
 
 def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) -> str:
@@ -299,7 +391,12 @@ def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) ->
 
     host = _host(value)
     mobile = host in ("yb.tencent.com", "yuanbao.tencent.com")
-    prefer_expand = host not in ("deepseek.com",) and not mobile
+    deepseek = host == "deepseek.com" or host.endswith(".deepseek.com")
+    doubao = host == "doubao.com" or host.endswith(".doubao.com")
+    qianwen = "qianwen" in host or host.endswith("tongyi.com")
+    # 2026-08-25 - deepseek 也先整容器展开截，失败再滚屏拼（已弃用「deepseek 必拼」）
+    # 2026-08-25 - 千问 answer 展开虚高空白，优先真滚 page-content 拼接
+    prefer_expand = not mobile and not qianwen
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -332,14 +429,16 @@ def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) ->
             page.wait_for_timeout(200)
             sel = _pick_scroller(page, host)
             png: bytes | None = None
+            scrollers = _scroller_list(host)
             if prefer_expand:
-                for cand in SCROLLERS.get(host, []) + [sel]:
+                for cand in scrollers + [sel]:
                     png = _element_png(page, cand)
                     if png and _quality_ok(png):
                         break
                     png = None
             if png is None:
-                png = _stitch_png(page, sel)
+                # DeepSeek/豆包/千问滚屏叠得更狠，加大 overlap 去重条带
+                png = _stitch_png(page, sel, overlap=220 if (deepseek or doubao or qianwen) else 100)
             context.close()
         finally:
             browser.close()

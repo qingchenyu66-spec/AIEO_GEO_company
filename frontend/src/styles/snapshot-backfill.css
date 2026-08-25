@@ -573,9 +573,12 @@
   overflow-y: visible;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   background: #fbfcfd;
   /* 天数多时在方框内横滚；纵滚交给 .sb-main，避免滚轮被内层吃掉 */
   overscroll-behavior-x: contain;
+  /* 横滚条常被裁到看不见，强制可见便于拖整月 */
+  scrollbar-gutter: stable;
 }
 
 table.sb-matrix {
@@ -706,9 +709,12 @@ table.sb-matrix tbody th {
 }
 
 /* 2026-07-30 - 全部平台分块竖铺热力 - 每端独立词×日；侧栏锚点滚动 */
+/* 2026-08-25 - 整月列被父级撑开后 overflow-x:hidden 裁切且无横滚条 - 分块/包裹强制 minmax(0) 收缩，横滚留给 .sb-matrix-wrap */
 .sb-plat-blocks {
   display: grid;
   gap: 18px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .sb-plat-block {
@@ -717,6 +723,9 @@ table.sb-matrix tbody th {
   padding: 12px;
   background: #fafbfc;
   scroll-margin-top: 12px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .sb-plat-block.active {
