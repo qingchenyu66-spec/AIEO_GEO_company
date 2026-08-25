@@ -147,7 +147,7 @@ def test_official_exemption_brand_and_competitor() -> None:
         official_site_labels=labels,
     )
     assert brand_row["site_cn"] == "艾迪亚"
-    assert brand_row["category_label"] == "官网/企业站点"
+    assert brand_row["category_label"] == "官网/自有阵地"
 
     comp_row = enrich_source_row(
         {"domain": "m.focusmedia.cn"},
@@ -155,4 +155,4 @@ def test_official_exemption_brand_and_competitor() -> None:
         official_site_labels=labels,
     )
     assert comp_row["site_cn"] == "分众传媒"
-    assert comp_row["category_label"] == "官网/企业站点"
+    assert comp_row["category_label"] == "官网/自有阵地"

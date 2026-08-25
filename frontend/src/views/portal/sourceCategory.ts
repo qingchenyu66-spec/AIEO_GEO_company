@@ -7,39 +7,52 @@ export interface SourceCategoryRule {
   hostSuffixes?: string[]
 }
 
-/** 按优先级排列：先命中先返回；未识别平台类站点默认归官网/企业站点。 */
+/** 按优先级排列：先命中先返回；official 单独后置。 */
 export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
   {
     id: 'encyclopedia',
-    label: '百科',
+    label: '百科/知识库',
     color: '#9b7ae7',
-    domains: ['baike.baidu.com', 'baike.com', 'wikipedia.org', 'wiki'],
+    domains: ['baike.baidu.com', 'baike.com', 'baike.sogou.com', 'wikipedia.org', 'wiki'],
   },
   {
     id: 'government',
-    label: '政府/事业',
+    label: '政府/公共事业',
     color: '#64748b',
-    keywords: ['人民政府', '政务', 'gov.cn'],
+    keywords: ['人民政府', '政务', '公共资源交易'],
     hostSuffixes: ['.gov.cn', '.gov'],
   },
   {
     id: 'enterprise',
-    label: '企业库/工商',
+    label: '企业库/工商信息',
     color: '#6366f1',
-    keywords: ['企查查', '天眼查', '爱企查', '工商信息', '企业信用', '电话邦', '黄页', '查号', '名录'],
+    keywords: ['企查查', '天眼查', '爱企查', '启信宝', '工商信息', '企业信用', '水滴信用'],
     domains: [
       'tianyancha.com',
       'qcc.com',
       'qichacha.com',
       'aiqicha.baidu.com',
       'gsxt.gov.cn',
-      'dianhua.cn',
-      'mapbar.com',
-      '58.com',
-      'ganji.com',
-      'chinahr.com',
+      'qixin.com',
+      'shuidiqiye.com',
+      'qimingpian.com',
+    ],
+  },
+  {
+    id: 'recruitment',
+    label: '招聘/职场',
+    color: '#8b5cf6',
+    keywords: ['招聘', '直聘', '猎聘', '人才网', '求职', '看准网', '职友集'],
+    domains: [
+      'zhipin.com',
+      'liepin.com',
+      '51job.com',
+      'zhaopin.com',
+      'kanzhun.com',
       'jobui.com',
-      '11467.com',
+      'chinahr.com',
+      'lagou.com',
+      'maimai.cn',
     ],
   },
   {
@@ -47,63 +60,107 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
     label: '问答社区',
     color: '#35c58f',
     keywords: ['问答', '知乎'],
-    domains: ['zhihu.com', 'zhidao.baidu.com', 'stackoverflow.com'],
+    domains: ['zhihu.com', 'zhidao.baidu.com', 'wukong.com', 'stackoverflow.com'],
   },
   {
-    id: 'social',
-    label: '社交媒体',
-    color: '#f0b84e',
-    keywords: ['微博', '小红书'],
+    id: 'ranking',
+    label: '行业榜单/测评',
+    color: '#f59e0b',
+    keywords: ['十大品牌', '排行榜', '品牌排行', '选购指南', '横评', '品牌推荐', '口碑排行', '十大品牌网'],
+    domains: ['maigoo.com', 'cnpp.cn', 'cnpp100.com', 'chinapp.com', 'top10.cn'],
+  },
+  {
+    id: 'b2b',
+    label: 'B2B/黄页/渠道站',
+    color: '#0d9488',
+    keywords: ['黄页', '电话邦', '查号', '名录', '招商加盟', '供应商', '顺企', '马可波罗'],
     domains: [
-      'weibo.com',
-      'weixin.qq.com',
-      'mp.weixin.qq.com',
-      'douyin.com',
-      'xiaohongshu.com',
-      'xhslink.com',
+      'dianhua.cn',
+      'mapbar.com',
+      '58.com',
+      'ganji.com',
+      '11467.com',
+      'huicong.com',
+      'makepolo.com',
+      'chinabidding.com.cn',
+      'b2b168.com',
+      '51sole.com',
+      'gys.cn',
+      'hc360.com',
     ],
   },
   {
-    id: 'forum',
-    label: '论坛社区',
-    color: '#14b8a6',
-    keywords: ['论坛', '贴吧'],
-    domains: ['tieba.baidu.com', 'v2ex.com', 'douban.com', 'bbs.'],
+    id: 'local',
+    label: '地图/本地生活',
+    color: '#22c55e',
+    keywords: ['地图', '大众点评', '美团', '高德地图', '百度地图'],
+    domains: ['amap.com', 'gaode.com', 'dianping.com', 'meituan.com', 'map.baidu.com', 'map.qq.com'],
   },
   {
-    id: 'video',
-    label: '视频平台',
-    color: '#f97316',
-    keywords: ['视频', 'bilibili', 'b站'],
-    domains: ['bilibili.com', 'b23.tv', 'youku.com', 'iqiyi.com', 'v.qq.com'],
+    id: 'ecommerce',
+    label: '电商平台',
+    color: '#ec4899',
+    domains: [
+      'taobao.com',
+      'tmall.com',
+      'jd.com',
+      '1688.com',
+      'pinduoduo.com',
+      'yangkeduo.com',
+      'dangdang.com',
+      'amazon.cn',
+      'amazon.com',
+      'youzan.com',
+    ],
+  },
+  {
+    id: 'social',
+    label: '社交/内容平台',
+    color: '#f0b84e',
+    keywords: ['微博', '小红书', '公众号', '百家号', '头条号'],
+    domains: [
+      'weibo.com',
+      'weibo.cn',
+      'weixin.qq.com',
+      'mp.weixin.qq.com',
+      'douyin.com',
+      'iesdouyin.com',
+      'xiaohongshu.com',
+      'xhslink.com',
+      'bilibili.com',
+      'b23.tv',
+      'youku.com',
+      'iqiyi.com',
+      'v.qq.com',
+      'toutiao.com',
+      'm.toutiao.com',
+      'ixigua.com',
+      'baijiahao.baidu.com',
+    ],
   },
   {
     id: 'media',
-    label: '行业媒体',
+    label: '行业媒体/新闻',
     color: '#20b8c9',
-    keywords: ['媒体', '新闻', '资讯', '报道', '家居网', '汽车之家'],
+    keywords: ['媒体', '新闻', '资讯', '报道', '家居网', '新闻网', '日报', '晚报'],
     domains: [
       'sohu.com',
       '163.com',
       'sina.com.cn',
+      'sina.cn',
       'ifeng.com',
       'thepaper.cn',
       '36kr.com',
       'huxiu.com',
-      // 2026-08-25 - 垂直行业媒体补规则，与后端 source_category_service 对齐
       'pchouse.com.cn',
       'yiche.com',
       'autohome.com.cn',
-      'maigoo.com',
-      'smzdm.com',
       'jiemian.com',
       'to8to.com',
       'shangyexinzhi.com',
       'cnblogs.com',
       'jianshu.com',
       'csdn.net',
-      'toutiao.com',
-      'ixigua.com',
       'zgswcn.com',
       'dzwww.com',
       'lieju.com',
@@ -119,19 +176,27 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
       'ce.cn',
       'stcn.com',
       'cnstock.com',
-      'baijiahao.baidu.com',
       'pedaily.cn',
     ],
   },
   {
-    id: 'ecommerce',
-    label: '电商/交易',
-    color: '#ec4899',
-    domains: ['taobao.com', 'tmall.com', 'jd.com', '1688.com', 'pinduoduo.com', 'yangkeduo.com'],
+    id: 'forum',
+    label: '论坛/经验分享',
+    color: '#14b8a6',
+    keywords: ['论坛', '贴吧', '值得买', '经验'],
+    domains: [
+      'tieba.baidu.com',
+      'v2ex.com',
+      'douban.com',
+      'smzdm.com',
+      'chiphell.com',
+      'club.autohome.com.cn',
+      'bbs.',
+    ],
   },
   {
     id: 'official',
-    label: '官网/企业站点',
+    label: '官网/自有阵地',
     color: '#326fea',
     keywords: [
       '官网', '官方网站', 'homepage', '企业介绍', '关于我们',
@@ -151,9 +216,13 @@ export type SourceCategory = (typeof SOURCE_CATEGORY_RULES)[number]['id']
 
 export const SOURCE_CATEGORY_FALLBACK: SourceCategory = 'other'
 
-const PLATFORM_CATEGORY_IDS = new Set([
-  'encyclopedia', 'government', 'enterprise', 'qa', 'social', 'forum', 'video', 'media', 'ecommerce',
-])
+const LEGACY_CATEGORY_ALIASES: Record<string, SourceCategory> = {
+  video: 'social',
+}
+
+const PLATFORM_CATEGORY_IDS = new Set(
+  SOURCE_CATEGORY_RULES.map(rule => rule.id).filter(id => id !== 'official' && id !== 'other'),
+)
 
 export const sourceCategoryLabels: Record<SourceCategory, string> = Object.fromEntries(
   SOURCE_CATEGORY_RULES.map(rule => [rule.id, rule.label]),
@@ -168,11 +237,13 @@ export function createEmptyCategoryBucket(): Record<SourceCategory, number> {
 }
 
 export function sourceCategoryLabel(id: string) {
-  return sourceCategoryLabels[id as SourceCategory] || id
+  const key = LEGACY_CATEGORY_ALIASES[id] || id
+  return sourceCategoryLabels[key as SourceCategory] || id
 }
 
 export function sourceCategoryColor(id: string) {
-  return sourceCategoryColors[id as SourceCategory] || sourceCategoryColors.official
+  const key = LEGACY_CATEGORY_ALIASES[id] || id
+  return sourceCategoryColors[key as SourceCategory] || sourceCategoryColors.official
 }
 
 export function collectBrandKnownHosts(brand?: {
@@ -265,7 +336,8 @@ export function sourceCategory(
   source: { title?: string; url?: string; site?: string | null; category?: string | null },
   options?: { brandOfficialHost?: string | null; brandKnownHosts?: string[] },
 ): SourceCategory {
-  const preset = String(source.category || '').trim()
+  const presetRaw = String(source.category || '').trim()
+  const preset = LEGACY_CATEGORY_ALIASES[presetRaw] || presetRaw
   if (preset && preset in sourceCategoryLabels) {
     return preset as SourceCategory
   }
@@ -298,27 +370,28 @@ export function sourceCategory(
 
 export const sourceCategoryIds = SOURCE_CATEGORY_RULES.map(rule => rule.id) as SourceCategory[]
 
-// ponytail: self-check — import 时校验规则表与分类入口
 if (!import.meta.env.PROD) {
   const checks: Array<[Parameters<typeof sourceCategory>[0], SourceCategory]> = [
     [{ url: 'https://baike.baidu.com/item/foo' }, 'encyclopedia'],
     [{ url: 'https://www.tianyancha.com/company/1' }, 'enterprise'],
     [{ url: 'https://www.gov.cn/zhengce/' }, 'government'],
     [{ url: 'https://www.zhihu.com/question/1' }, 'qa'],
+    [{ url: 'https://m.zhipin.com/job/1' }, 'recruitment'],
+    [{ url: 'https://www.maigoo.com/brand/' }, 'ranking'],
+    [{ url: 'https://www.dianhua.cn/x', site: '电话邦' }, 'b2b'],
+    [{ url: 'https://map.baidu.com/' }, 'local'],
     [{ url: 'https://mp.weixin.qq.com/s/abc' }, 'social'],
-    [{ url: 'https://tieba.baidu.com/f?kw=1' }, 'forum'],
-    [{ url: 'https://www.bilibili.com/video/1' }, 'video'],
+    [{ url: 'https://www.bilibili.com/video/1' }, 'social'],
     [{ url: 'https://www.sohu.com/a/1' }, 'media'],
+    [{ url: 'https://www.smzdm.com/p/1' }, 'forum'],
     [{ url: 'https://item.taobao.com/1' }, 'ecommerce'],
     [{ title: '品牌官方网站介绍' }, 'official'],
     [{ title: '某行业观察', url: 'https://news.pchouse.com.cn/post' }, 'media'],
     [{ title: '某行业观察', url: 'https://example.org/post' }, 'other'],
-    [{ title: '大王椰板材店', url: 'https://www.dianhua.cn/x', site: '电话邦' }, 'enterprise'],
     [{
       title: '公司简介_海南装饰材料,海口装饰材料,海南旺顺祥业贸易有限公司',
       url: 'https://www.hkwsxy.com/about.html',
     }, 'official'],
-    [{ title: '大王椰官方网站-饰面美学大师', url: 'https://m.dwywood.com/news/info/73.html' }, 'official'],
     [{ title: '百科精选帖', url: 'https://m.pchouse.com.cn/post' }, 'media'],
     [{ title: '旗舰店报道', url: 'https://news.bjd.com.cn/a/1', site: '北京日报网' }, 'media'],
     [{ title: '会员商城系统', url: 'https://m.fkw.com/a/1' }, 'other'],

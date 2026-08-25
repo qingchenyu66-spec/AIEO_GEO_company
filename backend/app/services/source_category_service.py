@@ -13,104 +13,204 @@ logger = logging.getLogger(__name__)
 
 _CACHE_PATH = Path(__file__).resolve().parents[2] / ".cache" / "source_category_cache.json"
 
-# (id, 中文标签, keywords, domains, host_suffixes)
+# (id, 中文标签, keywords, domains, host_suffixes) — 先命中先返回；official 单独后置
 _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = [
-    ("encyclopedia", "百科", (), ("baike.baidu.com", "baike.com", "wikipedia.org", "wiki"), ()),
-    ("government", "政府/事业", ("人民政府", "政务", "gov.cn"), (), (".gov.cn", ".gov")),
+    (
+        "encyclopedia",
+        "百科/知识库",
+        (),
+        (
+            "baike.baidu.com",
+            "baike.com",
+            "baike.sogou.com",
+            "wikipedia.org",
+            "wiki",
+        ),
+        (),
+    ),
+    (
+        "government",
+        "政府/公共事业",
+        ("人民政府", "政务", "公共资源交易"),
+        (),
+        (".gov.cn", ".gov"),
+    ),
     (
         "enterprise",
-        "企业库/工商",
-        (
-            "企查查",
-            "天眼查",
-            "爱企查",
-            "工商信息",
-            "企业信用",
-            "电话邦",
-            "黄页",
-            "查号",
-            "名录",
-        ),
+        "企业库/工商信息",
+        ("企查查", "天眼查", "爱企查", "启信宝", "工商信息", "企业信用", "水滴信用"),
         (
             "tianyancha.com",
             "qcc.com",
             "qichacha.com",
             "aiqicha.baidu.com",
             "gsxt.gov.cn",
-            # 2026-08-25 - 黄页/商户名录站归企业库，勿落「其他」
+            "qixin.com",
+            "shuidiqiye.com",
+            "qimingpian.com",
+        ),
+        (),
+    ),
+    (
+        "recruitment",
+        "招聘/职场",
+        ("招聘", "直聘", "猎聘", "人才网", "求职", "看准网", "职友集"),
+        (
+            "zhipin.com",
+            "liepin.com",
+            "51job.com",
+            "zhaopin.com",
+            "kanzhun.com",
+            "jobui.com",
+            "chinahr.com",
+            "lagou.com",
+            "maimai.cn",
+        ),
+        (),
+    ),
+    (
+        "qa",
+        "问答社区",
+        ("问答", "知乎"),
+        ("zhihu.com", "zhidao.baidu.com", "wukong.com", "stackoverflow.com"),
+        (),
+    ),
+    (
+        "ranking",
+        "行业榜单/测评",
+        (
+            "十大品牌",
+            "排行榜",
+            "品牌排行",
+            "选购指南",
+            "横评",
+            "品牌推荐",
+            "口碑排行",
+            "十大品牌网",
+        ),
+        (
+            "maigoo.com",
+            "cnpp.cn",
+            "cnpp100.com",
+            "chinapp.com",
+            "top10.cn",
+        ),
+        (),
+    ),
+    (
+        "b2b",
+        "B2B/黄页/渠道站",
+        ("黄页", "电话邦", "查号", "名录", "招商加盟", "供应商", "顺企", "马可波罗"),
+        (
             "dianhua.cn",
             "mapbar.com",
             "58.com",
             "ganji.com",
-            "chinahr.com",
-            "jobui.com",
             "11467.com",
+            "huicong.com",
+            "makepolo.com",
+            "chinabidding.com.cn",
+            "b2b168.com",
+            "51sole.com",
+            "gys.cn",
+            "hc360.com",
         ),
         (),
     ),
-    ("qa", "问答社区", ("问答", "知乎"), ("zhihu.com", "zhidao.baidu.com", "stackoverflow.com"), ()),
+    (
+        "local",
+        "地图/本地生活",
+        ("地图", "大众点评", "美团", "高德地图", "百度地图"),
+        (
+            "amap.com",
+            "gaode.com",
+            "dianping.com",
+            "meituan.com",
+            "map.baidu.com",
+            "map.qq.com",
+        ),
+        (),
+    ),
+    (
+        "ecommerce",
+        "电商平台",
+        (),
+        (
+            "taobao.com",
+            "tmall.com",
+            "jd.com",
+            "1688.com",
+            "pinduoduo.com",
+            "yangkeduo.com",
+            "dangdang.com",
+            "amazon.cn",
+            "amazon.com",
+            "youzan.com",
+        ),
+        (),
+    ),
     (
         "social",
-        "社交媒体",
-        ("微博", "小红书"),
+        "社交/内容平台",
+        ("微博", "小红书", "公众号", "百家号", "头条号"),
         (
             "weibo.com",
+            "weibo.cn",
             "weixin.qq.com",
             "mp.weixin.qq.com",
             "douyin.com",
+            "iesdouyin.com",
             "xiaohongshu.com",
             "xhslink.com",
+            "bilibili.com",
+            "b23.tv",
+            "youku.com",
+            "iqiyi.com",
+            "v.qq.com",
+            "toutiao.com",
+            "m.toutiao.com",
+            "ixigua.com",
+            "baijiahao.baidu.com",
         ),
-        (),
-    ),
-    ("forum", "论坛社区", ("论坛", "贴吧"), ("tieba.baidu.com", "v2ex.com", "douban.com", "bbs."), ()),
-    (
-        "video",
-        "视频平台",
-        ("视频", "bilibili", "b站"),
-        ("bilibili.com", "b23.tv", "youku.com", "iqiyi.com", "v.qq.com"),
         (),
     ),
     (
         "media",
-        "行业媒体",
+        "行业媒体/新闻",
         (
             "媒体",
             "新闻",
             "资讯",
             "报道",
             "家居网",
-            "汽车之家",
+            "新闻网",
+            "日报",
+            "晚报",
         ),
         (
             "sohu.com",
             "163.com",
             "sina.com.cn",
+            "sina.cn",
             "ifeng.com",
             "thepaper.cn",
             "36kr.com",
             "huxiu.com",
-            # 2026-08-25 - 垂直行业媒体补规则，避免 pchouse 等落默认「其他」
             "pchouse.com.cn",
             "yiche.com",
             "autohome.com.cn",
-            "maigoo.com",
-            "smzdm.com",
             "jiemian.com",
             "to8to.com",
             "shangyexinzhi.com",
             "cnblogs.com",
             "jianshu.com",
             "csdn.net",
-            "toutiao.com",
-            "ixigua.com",
             "zgswcn.com",
             "dzwww.com",
             "lieju.com",
             "liebiao.com",
             "docin.com",
             "doc88.com",
-            # 2026-08-25 - 党媒/财经门户补规则，减少落「其他」
             "bjd.com.cn",
             "bjnews.com.cn",
             "eastmoney.com",
@@ -120,21 +220,28 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
             "ce.cn",
             "stcn.com",
             "cnstock.com",
-            "baijiahao.baidu.com",
             "pedaily.cn",
         ),
         (),
     ),
     (
-        "ecommerce",
-        "电商/交易",
-        (),
-        ("taobao.com", "tmall.com", "jd.com", "1688.com", "pinduoduo.com", "yangkeduo.com"),
+        "forum",
+        "论坛/经验分享",
+        ("论坛", "贴吧", "值得买", "经验"),
+        (
+            "tieba.baidu.com",
+            "v2ex.com",
+            "douban.com",
+            "smzdm.com",
+            "chiphell.com",
+            "club.autohome.com.cn",
+            "bbs.",
+        ),
         (),
     ),
     (
         "official",
-        "官网/企业站点",
+        "官网/自有阵地",
         (
             "官网",
             "官方网站",
@@ -155,6 +262,9 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
 CATEGORY_LABEL_BY_ID = {row[0]: row[1] for row in _CATEGORY_RULES}
 CATEGORY_LABEL_BY_ID["other"] = "其他"
 VALID_CATEGORY_IDS = frozenset(CATEGORY_LABEL_BY_ID)
+
+# 2026-08-25 - 旧缓存 video 并入社交/内容
+CATEGORY_LEGACY_ALIASES: dict[str, str] = {"video": "social"}
 
 # 2026-08-25 - 经销商 heuristic 勿误伤大平台子域（投资界/百度地图等）
 _CORPORATE_HEURISTIC_DENY_SUFFIXES: tuple[str, ...] = (
@@ -201,8 +311,13 @@ def registrable_domain(host: str) -> str:
     return host
 
 
+def normalize_category_id(category_id: str | None) -> str:
+    cid = str(category_id or "").strip()
+    return CATEGORY_LEGACY_ALIASES.get(cid, cid)
+
+
 def category_label(category_id: str | None) -> str:
-    key = str(category_id or "").strip()
+    key = normalize_category_id(category_id)
     return CATEGORY_LABEL_BY_ID.get(key, CATEGORY_LABEL_BY_ID["other"])
 
 
@@ -376,7 +491,7 @@ def _load_category_cache() -> dict[str, str]:
         out: dict[str, str] = {}
         for key, value in payload.items():
             host = normalize_host(key)
-            cid = str(value or "").strip()
+            cid = normalize_category_id(str(value or "").strip())
             if host and cid in VALID_CATEGORY_IDS:
                 out[host] = cid
         pruned = _prune_cache_entries(out)
@@ -412,9 +527,9 @@ def _save_category_cache(cache: dict[str, str]) -> None:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         normalized = {
-            normalize_host(k): str(v).strip()
+            normalize_host(k): normalize_category_id(str(v).strip())
             for k, v in cache.items()
-            if normalize_host(k) and str(v).strip() in VALID_CATEGORY_IDS
+            if normalize_host(k) and normalize_category_id(str(v).strip()) in VALID_CATEGORY_IDS
         }
         _CACHE_PATH.write_text(
             json.dumps(normalized, ensure_ascii=False, indent=2, sort_keys=True),
@@ -438,7 +553,7 @@ def merge_category_cache(updates: dict[str, str]) -> None:
     changed = False
     for raw_host, raw_cid in updates.items():
         host = normalize_host(raw_host)
-        cid = str(raw_cid or "").strip()
+        cid = normalize_category_id(str(raw_cid or "").strip())
         if not host or cid not in VALID_CATEGORY_IDS:
             continue
         rule_id = _rule_category_for_host(host)
@@ -543,7 +658,7 @@ def resolve_source_categories_with_llm(items: list[dict[str, Any]]) -> dict[str,
     out: dict[str, str] = {}
     for host, cid in (payload or {}).items():
         key = normalize_host(host)
-        category_id = str(cid or "").strip()
+        category_id = normalize_category_id(str(cid or "").strip())
         if key and category_id in VALID_CATEGORY_IDS and category_id != "other":
             out[key] = category_id
     if out:

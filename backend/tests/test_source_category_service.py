@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 
 from app.services.source_category_service import (
+    CATEGORY_LEGACY_ALIASES,
     classify_source_category_id,
     classify_source_category_label,
     collect_domains_for_llm_labeling,
     enrich_source_stat_row,
     merge_category_cache,
+    normalize_category_id,
     resolve_source_categories_with_llm,
 )
 
@@ -44,25 +46,43 @@ def test_rule_table_beats_stale_llm_cache(tmp_path, monkeypatch) -> None:
         tmp_path / "cache.json",
     )
     merge_category_cache({"dianhua.cn": "other"})
-    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
+    assert classify_source_category_id(domain="dianhua.cn") == "b2b"
 
 
-def test_dianhua_directory_is_enterprise() -> None:
-    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
-    assert classify_source_category_label(domain="dianhua.cn") == "企业库/工商"
+def test_dianhua_directory_is_b2b() -> None:
+    assert classify_source_category_id(domain="dianhua.cn") == "b2b"
+    assert classify_source_category_label(domain="dianhua.cn") == "B2B/黄页/渠道站"
     assert (
         classify_source_category_id(
             title="大王椰板材(宣城店)-电话邦",
             url="https://www.dianhua.cn/shop/1",
             site="电话邦",
         )
-        == "enterprise"
+        == "b2b"
     )
+
+
+def test_recruitment_and_ranking_categories() -> None:
+    assert classify_source_category_id(domain="m.zhipin.com") == "recruitment"
+    assert classify_source_category_id(domain="m.maigoo.com") == "ranking"
+    assert classify_source_category_id(domain="m.cnpp.cn") == "ranking"
+    assert classify_source_category_label(domain="m.zhipin.com") == "招聘/职场"
+
+
+def test_social_includes_video_platforms() -> None:
+    assert classify_source_category_id(domain="www.bilibili.com") == "social"
+    assert classify_source_category_id(domain="m.toutiao.com") == "social"
+    assert normalize_category_id("video") == "social"
+    assert CATEGORY_LEGACY_ALIASES["video"] == "social"
+
+
+def test_smzdm_is_forum_not_media() -> None:
+    assert classify_source_category_id(domain="www.smzdm.com") == "forum"
 
 
 def test_pchouse_is_media_not_official() -> None:
     assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
-    assert classify_source_category_label(domain="m.pchouse.com.cn") == "行业媒体"
+    assert classify_source_category_label(domain="m.pchouse.com.cn") == "行业媒体/新闻"
     assert (
         classify_source_category_id(
             title="有安全可靠的板材吗?哪个品牌好?_百科精选_太平洋家居",
@@ -119,16 +139,17 @@ def test_cache_prunes_rule_conflicts(tmp_path, monkeypatch) -> None:
     cache_path = tmp_path / "cache.json"
     monkeypatch.setattr("app.services.source_category_service._CACHE_PATH", cache_path)
     cache_path.write_text(
-        '{"dianhua.cn":"qa","news.bjd.com.cn":"ecommerce","cold-vertical.example":"media"}',
+        '{"dianhua.cn":"qa","news.bjd.com.cn":"ecommerce","cold-vertical.example":"media","old.video":"video"}',
         encoding="utf-8",
     )
-    from app.services.source_category_service import _load_category_cache, sanitize_category_cache
+    from app.services.source_category_service import _load_category_cache
 
     loaded = _load_category_cache()
     assert "dianhua.cn" not in loaded
     assert "news.bjd.com.cn" not in loaded
     assert loaded.get("cold-vertical.example") == "media"
-    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
+    assert loaded.get("old.video") == "social"
+    assert classify_source_category_id(domain="dianhua.cn") == "b2b"
     assert classify_source_category_id(domain="news.bjd.com.cn") == "media"
 
 
