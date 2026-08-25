@@ -12,6 +12,19 @@ from app.services.source_category_service import (
 )
 
 
+def test_dianhua_directory_is_enterprise() -> None:
+    assert classify_source_category_id(domain="dianhua.cn") == "enterprise"
+    assert classify_source_category_label(domain="dianhua.cn") == "企业库/工商"
+    assert (
+        classify_source_category_id(
+            title="大王椰板材(宣城店)-电话邦",
+            url="https://www.dianhua.cn/shop/1",
+            site="电话邦",
+        )
+        == "enterprise"
+    )
+
+
 def test_pchouse_is_media_not_official() -> None:
     assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
     assert classify_source_category_label(domain="m.pchouse.com.cn") == "行业媒体"

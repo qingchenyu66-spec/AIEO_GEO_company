@@ -27,13 +27,20 @@ export const SOURCE_CATEGORY_RULES: SourceCategoryRule[] = [
     id: 'enterprise',
     label: '企业库/工商',
     color: '#6366f1',
-    keywords: ['企查查', '天眼查', '爱企查', '工商信息', '企业信用'],
+    keywords: ['企查查', '天眼查', '爱企查', '工商信息', '企业信用', '电话邦', '黄页', '查号', '名录'],
     domains: [
       'tianyancha.com',
       'qcc.com',
       'qichacha.com',
       'aiqicha.baidu.com',
       'gsxt.gov.cn',
+      'dianhua.cn',
+      'mapbar.com',
+      '58.com',
+      'ganji.com',
+      'chinahr.com',
+      'jobui.com',
+      '11467.com',
     ],
   },
   {
@@ -210,14 +217,14 @@ function matchRule(rule: SourceCategoryRule, text: string, host: string) {
 }
 
 export function sourceCategory(
-  source: { title?: string; url?: string; category?: string | null },
+  source: { title?: string; url?: string; site?: string | null; category?: string | null },
   options?: { brandOfficialHost?: string | null; brandKnownHosts?: string[] },
 ): SourceCategory {
   const preset = String(source.category || '').trim()
   if (preset && preset in sourceCategoryLabels) {
     return preset as SourceCategory
   }
-  const text = `${source.title || ''} ${source.url || ''}`.toLowerCase()
+  const text = `${source.title || ''} ${source.site || ''} ${source.url || ''}`.toLowerCase()
   const host = normalizeHost(source.url || '')
 
   const knownHosts = [
@@ -258,6 +265,7 @@ if (!import.meta.env.PROD) {
     [{ title: '品牌官方网站介绍' }, 'official'],
     [{ title: '某行业观察', url: 'https://news.pchouse.com.cn/post' }, 'media'],
     [{ title: '某行业观察', url: 'https://example.org/post' }, 'other'],
+    [{ title: '大王椰板材店', url: 'https://www.dianhua.cn/x', site: '电话邦' }, 'enterprise'],
   ]
   for (const [input, expected] of checks) {
     const actual = sourceCategory(input)

@@ -19,8 +19,32 @@ _CATEGORY_RULES: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[st
     (
         "enterprise",
         "企业库/工商",
-        ("企查查", "天眼查", "爱企查", "工商信息", "企业信用"),
-        ("tianyancha.com", "qcc.com", "qichacha.com", "aiqicha.baidu.com", "gsxt.gov.cn"),
+        (
+            "企查查",
+            "天眼查",
+            "爱企查",
+            "工商信息",
+            "企业信用",
+            "电话邦",
+            "黄页",
+            "查号",
+            "名录",
+        ),
+        (
+            "tianyancha.com",
+            "qcc.com",
+            "qichacha.com",
+            "aiqicha.baidu.com",
+            "gsxt.gov.cn",
+            # 2026-08-25 - 黄页/商户名录站归企业库，勿落「其他」
+            "dianhua.cn",
+            "mapbar.com",
+            "58.com",
+            "ganji.com",
+            "chinahr.com",
+            "jobui.com",
+            "11467.com",
+        ),
         (),
     ),
     ("qa", "问答社区", ("问答", "知乎"), ("zhihu.com", "zhidao.baidu.com", "stackoverflow.com"), ()),
@@ -162,6 +186,7 @@ def classify_source_category_id(
     domain: str | None = None,
     url: str | None = None,
     title: str | None = None,
+    site: str | None = None,
     official_site_labels: dict[str, str] | None = None,
     use_cache: bool = True,
 ) -> str:
@@ -176,7 +201,7 @@ def classify_source_category_id(
         if cached:
             return cached
 
-    text = f"{title or ''} {url or ''} {host}".lower()
+    text = f"{title or ''} {site or ''} {url or ''} {host}".lower()
     for rule in _CATEGORY_RULES:
         if rule[0] == "official":
             continue
@@ -196,6 +221,7 @@ def classify_source_category_label(
     domain: str | None = None,
     url: str | None = None,
     title: str | None = None,
+    site: str | None = None,
     official_site_labels: dict[str, str] | None = None,
     use_cache: bool = True,
 ) -> str:
@@ -204,6 +230,7 @@ def classify_source_category_label(
             domain=domain,
             url=url,
             title=title,
+            site=site,
             official_site_labels=official_site_labels,
             use_cache=use_cache,
         )
@@ -277,6 +304,7 @@ def enrich_source_stat_row(
         domain=host,
         url=url,
         title=str(row.get("title") or ""),
+        site=str(row.get("site") or ""),
         official_site_labels=official_site_labels,
         use_cache=True,
     )
@@ -317,6 +345,7 @@ def collect_domains_for_llm_labeling(
             domain=host,
             url=url,
             title=str(row.get("title") or ""),
+            site=str(row.get("site") or ""),
             official_site_labels=official_site_labels,
             use_cache=False,
         )
@@ -402,6 +431,11 @@ def enqueue_source_category_labeling(items: list[dict[str, Any]]) -> bool:
 # ponytail: self-check
 assert classify_source_category_id(domain="zhihu.com") == "qa"
 assert classify_source_category_id(domain="news.pchouse.com.cn") == "media"
+assert classify_source_category_id(domain="dianhua.cn", site="电话邦") == "enterprise"
+assert classify_source_category_id(
+    title="大王椰板材(宣城店)-电话邦",
+    url="https://www.dianhua.cn/xxx",
+) == "enterprise"
 assert classify_source_category_id(domain="unknown-vertical.example") == "other"
 assert classify_source_category_id(
     domain="imtcmkj.com",

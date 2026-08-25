@@ -82,6 +82,8 @@ const KNOWN_SITE_LABELS: Record<string, string> = {
   'dzwww.com': '大众网',
   'zgswcn.com': '中国商报网',
   'pchouse.com.cn': 'PChouse太平洋家居网',
+  'dianhua.cn': '电话邦',
+  'mapbar.com': '图吧',
   'tianyancha.com': '天眼查',
   'qcc.com': '企查查',
 }

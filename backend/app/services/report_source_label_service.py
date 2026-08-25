@@ -357,6 +357,7 @@ def classify_source_category(
     domain: str | None = None,
     url: str | None = None,
     title: str | None = None,
+    site: str | None = None,
     official_site_labels: dict[str, str] | None = None,
 ) -> str:
     """返回网站类别中文标签。"""
@@ -366,6 +367,7 @@ def classify_source_category(
         domain=domain,
         url=url,
         title=title,
+        site=site,
         official_site_labels=official_site_labels,
     )
 
@@ -398,6 +400,7 @@ def enrich_source_row(
         domain=domain,
         url=url or domain,
         title=title,
+        site=site,
         official_site_labels=official_site_labels,
     )
     return {
