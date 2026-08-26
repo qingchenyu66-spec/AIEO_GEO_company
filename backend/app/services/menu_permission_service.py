@@ -84,7 +84,7 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.audit.purge": frozenset({"can_delete"}),
     "platform.audit.schedule": frozenset({"can_export", "can_update"}),
     "platform.audit.competitors": frozenset({"can_export", "can_update"}),
-    "platform.audit.files": frozenset({"can_export"}),
+    "platform.audit.files": frozenset({"can_export", "can_create", "can_update"}),
     "platform.competitor": frozenset({"can_export"}),
     "platform.sources": frozenset({"can_export"}),
     "platform.diagnosis": frozenset({"can_export"}),
@@ -681,7 +681,11 @@ def require_knowledge_permission(db: Session, current, action: str) -> None:
         if not has_identity_menu_permission(db, session.identity.id, "platform.audit.files", "can_export"):
             raise PermissionError("无权查看企业知识库")
         return
-    if not has_identity_menu_permission(db, session.identity.id, "platform.audit.profile", "can_update"):
+    if action == "can_create":
+        if not has_identity_menu_permission(db, session.identity.id, "platform.audit.files", "can_create"):
+            raise PermissionError("无权上传企业知识库")
+        return
+    if not has_identity_menu_permission(db, session.identity.id, "platform.audit.files", "can_update"):
         raise PermissionError("无权维护企业知识库")
 
 

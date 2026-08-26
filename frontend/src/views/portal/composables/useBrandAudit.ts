@@ -13,7 +13,7 @@ import {
   normalizePlatformSelection, normalizePlatformSelections, platformSelectionCodes,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
-import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
+import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
 import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
 import { getPlatformsForBrandConfig } from '../../../services/platforms'
@@ -26,6 +26,18 @@ import {
 } from './useEnterprisePin'
 import { PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey } from '../injectionKeys'
 import { TENANT_LOGO_ACCEPT, TENANT_LOGO_MAX_BYTES } from '../../../constants/tenantLogo'
+
+const KNOWLEDGE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024
+const KNOWLEDGE_UPLOAD_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'md', 'txt'])
+
+function validateKnowledgeUploadFile(file: File) {
+  const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase() : ''
+  if (!KNOWLEDGE_UPLOAD_EXTENSIONS.has(ext)) {
+    throw new Error('仅支持 PDF、Word、Markdown 和 TXT 文件')
+  }
+  if (file.size === 0) throw new Error('不能上传空文件')
+  if (file.size > KNOWLEDGE_UPLOAD_MAX_BYTES) throw new Error('单个文件不能超过 30MB')
+}
 
 export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files'
 
@@ -100,6 +112,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return Boolean(grant?.can_update)
   }
 
+  function canCreateEnterpriseTab(tab: EnterpriseTab) {
+    const grant = menuGrant(enterprisePermissionCodeMap[tab])
+    return Boolean(grant?.can_create)
+  }
+
   // 2026-07-30 - 地区仍看菜单编辑权；平台以职位白名单为准（非空即可勾对应端）
   const canEditRegions = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.regions)?.can_update))
   const allowedMonitorPlatforms = computed(() => {
@@ -131,7 +148,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     { code: 'brand_words', name: '品牌词配置' },
     { code: 'schedule', name: '监控计划' },
     { code: 'competitors', name: '竞品监控' },
-    { code: 'files', name: '上传文件' },
+    { code: 'files', name: '企业知识库' },
   ] as Array<{ code: EnterpriseTab; name: string }>).filter(tab => {
     if (creatingDraftTenant.value && tab.code === 'files') {
       return false
@@ -199,7 +216,17 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const knowledgePreviewText = ref('')
   const knowledgePreviewLoading = ref(false)
   const knowledgePreviewError = ref('')
-  const canDeleteKnowledgeFiles = computed(() => isPlatform.value && canViewEnterpriseTab('files'))
+  const canUploadKnowledgeFiles = computed(() => (
+    isPlatform.value
+    && Boolean(menuGrant(enterprisePermissionCodeMap.files)?.can_create)
+  ))
+  const canDeleteKnowledgeFiles = computed(() => (
+    isPlatform.value
+    && Boolean(menuGrant(enterprisePermissionCodeMap.files)?.can_update)
+  ))
+  const uploadingKnowledgeFile = ref(false)
+  const knowledgeUploadDialogVisible = ref(false)
+  const knowledgeUploadTenant = ref<TenantInfo | null>(null)
   const brandAsset = ref<BrandAsset | null>(null)
   const brandCompetitors = ref<BrandCompetitor[]>([])
   const competitorRows = ref<Array<{
@@ -802,6 +829,60 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
   }
 
+  async function uploadKnowledgeFileToTenant(tenantId: number, file: File) {
+    validateKnowledgeUploadFile(file)
+    uploadingKnowledgeFile.value = true
+    try {
+      const record = await uploadKnowledgeFile(file, tenantId)
+      if (enterpriseDetailMode.value && brandForm.tenant_id === tenantId) {
+        knowledgeFiles.value = [record, ...knowledgeFiles.value.filter(item => item.id !== record.id)]
+      }
+      ElMessage.success(`已上传：${record.original_name}`)
+      return record
+    } catch (error: unknown) {
+      notifyError(error, '资料上传失败')
+      throw error
+    } finally {
+      uploadingKnowledgeFile.value = false
+    }
+  }
+
+  function openKnowledgeUploadDialog(tenant: TenantInfo) {
+    if (!canUploadKnowledgeFiles.value) {
+      ElMessage.warning('当前账号无权上传资料')
+      return
+    }
+    knowledgeUploadTenant.value = tenant
+    knowledgeUploadDialogVisible.value = true
+  }
+
+  async function openEnterpriseDetailFiles(tenant: TenantInfo) {
+    if (!canViewEnterpriseTab('files')) {
+      ElMessage.warning('当前账号无权查看企业知识库')
+      return
+    }
+    knowledgeUploadDialogVisible.value = false
+    clearPendingTenantLogo()
+    enterpriseDetailMode.value = true
+    enterpriseDetailTab.value = 'files'
+    brandForm.tenant_id = tenant.id
+    brandForm.company_full_name = tenant.name
+    await loadBrandAssetData()
+    await loadKnowledgeFiles()
+  }
+
+  async function handleKnowledgeUploadInput(event: Event, tenantId: number) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    await uploadKnowledgeFileToTenant(tenantId, file)
+    if (knowledgeUploadDialogVisible.value && knowledgeUploadTenant.value?.id === tenantId) {
+      knowledgeUploadDialogVisible.value = false
+      knowledgeUploadTenant.value = null
+    }
+  }
+
   async function previewKnowledgeFile(file: KnowledgeFileRecord) {
     knowledgePreviewFile.value = file
     knowledgePreviewVisible.value = true
@@ -837,7 +918,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   async function removeKnowledgeFile(file: KnowledgeFileRecord) {
     if (!canDeleteKnowledgeFiles.value) return
     try {
-      await ElMessageBox.confirm(`确定删除「${file.original_name}」？删除后不可恢复。`, '删除客户上传文件', {
+      await ElMessageBox.confirm(`确定删除「${file.original_name}」？删除后不可恢复。`, '删除知识库文件', {
         type: 'warning',
         confirmButtonText: '删除',
         cancelButtonText: '取消',
@@ -1587,6 +1668,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     knowledgePreviewLoading,
     knowledgePreviewError,
     canDeleteKnowledgeFiles,
+    canUploadKnowledgeFiles,
+    uploadingKnowledgeFile,
+    knowledgeUploadDialogVisible,
+    knowledgeUploadTenant,
+    uploadKnowledgeFileToTenant,
+    openKnowledgeUploadDialog,
+    openEnterpriseDetailFiles,
+    handleKnowledgeUploadInput,
     previewKnowledgeFile,
     closeKnowledgePreview,
     downloadKnowledgeFileItem,
@@ -1614,6 +1703,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     visibleEnterpriseTabs,
     canViewEnterpriseTab,
     canEditEnterpriseTab,
+    canCreateEnterpriseTab,
     canEditRegions,
     canEditModels,
     editableCatalogPlatforms,

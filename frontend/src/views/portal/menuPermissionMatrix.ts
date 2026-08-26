@@ -37,7 +37,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'platform.audit.purge': ['can_delete'],
   'platform.audit.schedule': ['can_export', 'can_update'],
   'platform.audit.competitors': ['can_export', 'can_update'],
-  'platform.audit.files': ['can_export'],
+  'platform.audit.files': ['can_export', 'can_create', 'can_update'],
 
   'platform.competitor': ['can_export'],
   'platform.sources': ['can_export'],
@@ -81,6 +81,7 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   'platform.audit.purge': { can_delete: '彻底删除' },
   'platform.audit.schedule': { can_export: '查看', can_update: '编辑监控计划' },
   'platform.audit.competitors': { can_export: '查看', can_update: '编辑竞品' },
+  'platform.audit.files': { can_export: '查看', can_create: '上传', can_update: '删除' },
   'platform.lead_diagnosis': { can_export: '查看/导出 HTML', can_create: '新建诊断' },
   'platform.snapshot_backfill': { can_export: '查看待补录', can_update: '提交补录' },
   'platform.reports': { can_export: '查看/导出', can_create: '生成诊断' },
@@ -263,6 +264,21 @@ export function actionsForMenu(menuCode: string, type: IdentityType): Permission
   return ['can_export']
 }
 
+/** 2026-08-26 - 职位 UI 未展示的动作（如旧 seed 残留的 can_create）加载/保存时剔除 */
+export function sanitizeGrantForMenu(
+  menuCode: string,
+  type: IdentityType,
+  grant: Partial<MenuGrantFlags>,
+): MenuGrantFlags {
+  const allowed = new Set(actionsForMenu(menuCode, type))
+  return {
+    can_export: allowed.has('can_export') ? Boolean(grant.can_export) : false,
+    can_create: allowed.has('can_create') ? Boolean(grant.can_create) : false,
+    can_update: allowed.has('can_update') ? Boolean(grant.can_update) : false,
+    can_delete: allowed.has('can_delete') ? Boolean(grant.can_delete) : false,
+  }
+}
+
 export function actionLabelForMenu(menuCode: string, action: PermissionAction): string {
   return MENU_ACTION_LABELS[menuCode]?.[action] || PERMISSION_ACTION_LABELS[action]
 }
@@ -280,12 +296,16 @@ export function grantsFromPosition(
     state[menu.id] = emptyGrant()
   }
   for (const grant of menuGrants) {
-    state[grant.menu_id] = {
-      can_create: Boolean(grant.can_create),
-      can_update: Boolean(grant.can_update),
-      can_delete: Boolean(grant.can_delete),
-      can_export: Boolean(grant.can_export),
-    }
+    const menu = menus.find(item => item.id === grant.menu_id)
+    const flags = menu
+      ? sanitizeGrantForMenu(menu.menu_code, menu.identity_type as IdentityType, grant)
+      : {
+          can_create: Boolean(grant.can_create),
+          can_update: Boolean(grant.can_update),
+          can_delete: Boolean(grant.can_delete),
+          can_export: Boolean(grant.can_export),
+        }
+    state[grant.menu_id] = flags
   }
   return state
 }
@@ -295,7 +315,7 @@ export function grantsToPayload(state: MenuGrantState, menus: MenuInfo[]) {
     .map(menu => ({
       menu_id: menu.id,
       menu_code: menu.menu_code,
-      ...state[menu.id],
+      ...sanitizeGrantForMenu(menu.menu_code, menu.identity_type as IdentityType, state[menu.id] || emptyGrant()),
     }))
     .filter(item => grantHasAccess(item))
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { MoreHorizontal } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
@@ -117,6 +117,7 @@ const {
   canSubmitBrandAssetProfile,
   enterpriseFormServiceLabel,
   visibleEnterpriseTabs,
+  canViewEnterpriseTab,
   canEditEnterpriseTab,
   canEditRegions,
   canEditModels,
@@ -177,6 +178,13 @@ const {
   knowledgePreviewLoading,
   knowledgePreviewError,
   canDeleteKnowledgeFiles,
+  canUploadKnowledgeFiles,
+  uploadingKnowledgeFile,
+  knowledgeUploadDialogVisible,
+  knowledgeUploadTenant,
+  openKnowledgeUploadDialog,
+  openEnterpriseDetailFiles,
+  handleKnowledgeUploadInput,
   previewKnowledgeFile,
   closeKnowledgePreview,
   downloadKnowledgeFileItem,
@@ -195,6 +203,28 @@ const {
   onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
   navigateToReportCenter,
 })
+
+const knowledgeUploadInputRef = ref<HTMLInputElement | null>(null)
+const knowledgeUploadTargetId = ref<number | null>(null)
+
+function pickKnowledgeUpload(tenantId: number) {
+  knowledgeUploadTargetId.value = tenantId
+  knowledgeUploadInputRef.value?.click()
+}
+
+async function onKnowledgeUploadInput(event: Event) {
+  const tenantId = knowledgeUploadTargetId.value
+  if (!tenantId) return
+  try {
+    await handleKnowledgeUploadInput(event, tenantId)
+  } finally {
+    knowledgeUploadTargetId.value = null
+  }
+}
+
+function onKnowledgeUploadDialogClosed() {
+  knowledgeUploadTenant.value = null
+}
 
 /** 详情弹窗只展示词组里的监测词/露出词，不展示资产级强制并入的企业全称 */
 const enterpriseInfoMonitorKeywords = computed(() => {
@@ -313,6 +343,10 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   >取消置顶</el-dropdown-item>
                   <el-dropdown-item v-if="canTransferTenantOwner" @click="openTenantTransferDialog(tenant)">转移</el-dropdown-item>
                   <el-dropdown-item v-if="canGenerateEnterpriseReport" @click="openReportDialog(tenant)">报告</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canUploadKnowledgeFiles"
+                    @click="openKnowledgeUploadDialog(tenant)"
+                  >上传资料</el-dropdown-item>
                   <el-dropdown-item
                     v-if="canStopTenantService(tenant)"
                     :divided="true"
@@ -726,8 +760,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </article>
       <article v-if="enterpriseDetailTab === 'files'" class="panel competitor-panel">
         <div class="panel-head">
-          <div><h2>客户上传文件</h2><p>查看、预览、下载或删除当前企业从客户端上传的资料文件。</p></div>
-          <span>{{ knowledgeFiles.length }} 个文件</span>
+          <div><h2>企业知识库</h2><p>与客户端同一资料库；可上传、预览、下载或删除资料文件。</p></div>
+          <div class="knowledge-panel-actions">
+            <span>{{ knowledgeFiles.length }} 个文件</span>
+            <button
+              v-if="canUploadKnowledgeFiles"
+              type="button"
+              class="filter-search-btn tiny-btn"
+              :disabled="uploadingKnowledgeFile || loadingKnowledgeFiles"
+              @click="brandForm.tenant_id && pickKnowledgeUpload(brandForm.tenant_id)"
+            >
+              {{ uploadingKnowledgeFile ? '上传中…' : '上传' }}
+            </button>
+          </div>
         </div>
         <div class="knowledge-files">
           <div v-if="loadingKnowledgeFiles" class="mini-empty">文件列表加载中...</div>
@@ -750,10 +795,48 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
               </button>
             </div>
           </div>
-          <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">该企业暂未上传文件。</div>
+          <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">该企业暂未上传资料。</div>
         </div>
       </article>
     </section>
+
+    <input
+      ref="knowledgeUploadInputRef"
+      type="file"
+      class="knowledge-hidden-file-input"
+      accept=".pdf,.doc,.docx,.md,.txt"
+      :disabled="uploadingKnowledgeFile"
+      @change="onKnowledgeUploadInput"
+    />
+
+    <el-dialog
+      v-model="knowledgeUploadDialogVisible"
+      width="480px"
+      :title="knowledgeUploadTenant ? `上传资料 · ${knowledgeUploadTenant.name}` : '上传资料'"
+      destroy-on-close
+      @closed="onKnowledgeUploadDialogClosed"
+    >
+      <p class="knowledge-upload-tip">支持 PDF、Word、Markdown、TXT；单文件不超过 30MB。上传后客户在企业知识库可见。</p>
+      <button
+        type="button"
+        class="primary-btn"
+        :disabled="uploadingKnowledgeFile || !knowledgeUploadTenant"
+        @click="knowledgeUploadTenant && pickKnowledgeUpload(knowledgeUploadTenant.id)"
+      >
+        {{ uploadingKnowledgeFile ? '上传中…' : '选择文件并上传' }}
+      </button>
+      <template #footer>
+        <button type="button" class="plain-btn" @click="knowledgeUploadDialogVisible = false">关闭</button>
+        <button
+          v-if="knowledgeUploadTenant && canViewEnterpriseTab('files')"
+          type="button"
+          class="filter-reset-btn"
+          @click="knowledgeUploadTenant && openEnterpriseDetailFiles(knowledgeUploadTenant)"
+        >
+          查看文件列表
+        </button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="enterpriseInfoDialog" width="720px" title="企业详情">
       <div v-if="enterpriseInfoLoading" class="mini-empty">企业详情加载中...</div>

@@ -6,6 +6,7 @@ import type { MenuInfo } from '../../services/auth'
 import {
   assignablePermissionMenus,
   preserveHiddenAssignableGrants,
+  sanitizeGrantForMenu,
 } from './menuPermissionMatrix'
 
 function menu(partial: Partial<MenuInfo> & Pick<MenuInfo, 'id' | 'menu_code'>): MenuInfo {
@@ -47,6 +48,16 @@ if (preserved.length !== 2) {
 }
 if (!preserved.every(item => ['platform.competitor', 'platform.sources'].includes(item.menu_code))) {
   throw new Error(`unexpected preserved codes: ${preserved.map(item => item.menu_code).join(',')}`)
+}
+
+const filesGrant = sanitizeGrantForMenu('platform.audit.files', 'PLATFORM', {
+  can_export: true,
+  can_create: true,
+  can_update: false,
+  can_delete: true,
+})
+if (!filesGrant.can_export || !filesGrant.can_create || filesGrant.can_update || filesGrant.can_delete) {
+  throw new Error(`audit.files sanitize mismatch: ${JSON.stringify(filesGrant)}`)
 }
 
 console.log('menuPermissionMatrix.selfcheck ok')

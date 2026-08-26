@@ -2320,6 +2320,21 @@ button:disabled {
 .knowledge-files b,
 .knowledge-files span { display:block; }
 .knowledge-files span { margin-top:6px; color:#6d8099; font-size:12px; }
+.knowledge-panel-actions {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
+}
+.knowledge-hidden-file-input {
+  display:none;
+}
+.knowledge-upload-tip {
+  margin:0 0 16px;
+  color:#64748b;
+  font-size:13px;
+  line-height:1.6;
+}
 .feature-table { display:grid; gap:8px; }
 .feature-table-head,
 .feature-table-row {
