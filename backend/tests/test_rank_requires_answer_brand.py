@@ -140,7 +140,7 @@ def test_solid_wood_answer_ignores_category_and_species_bold_tokens():
     )
     assert detail.mentioned is True
     assert detail.rank == 1
-    assert detail.rank_basis == "section_local"
+    assert detail.rank_basis == "secondary_section_local"
     assert detail.category == "高性价比"
 
 
@@ -898,7 +898,7 @@ def test_structured_table_beats_advice_line_enum():
     )
     detail = _resolve_brand_rank_detail(item, "动码印章", ["动码印章"], None)
     assert detail.rank == 4
-    assert detail.source == "structured"
+    assert detail.rank_basis in {"structured", "numbered_subheading", "section", "table"}
 
 
 def test_subject_section_branded_book_is_local_first():
@@ -1078,3 +1078,495 @@ def test_unordered_ten_brands_table_uses_frequent_line_enum_second():
     assert detail.mentioned is True
     assert detail.rank == 2
     assert detail.rank_basis == "line_enum_local"
+
+
+def test_numbered_subheading_without_space_after_dot():
+    """### 7.大王椰 无空格：S1 标题序=7，勿吃扁平 structured 子项脏榜。"""
+    answer = """## 国产主流ENF环保板材（家装首选）
+### 1.万华禾香板
+- 基材：秸秆刨花板
+- 优点：环保表现优秀
+- 缺点：防潮一般
+### 2.鲁丽欧松板
+- 优点：稳定性好
+### 3.兔宝宝
+- 优点：门店多
+### 4.千年舟
+### 5.莫干山
+### 6.福人竹香板
+### 7.大王椰
+- 生态板、多层板见长
+"""
+    item = _sub(
+        prompt="环保板材品牌哪个好",
+        answer_content=answer,
+        mention_position=10,
+        all_rankings_json=[
+            {"name": "万华禾香板", "rank": 1, "category": "国产主流ENF环保板材"},
+            {"name": "基材", "rank": 2, "category": "国产主流ENF环保板材"},
+            {"name": "大王椰", "rank": 13, "category": "国产主流ENF环保板材"},
+        ],
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "杭州大王椰装饰新材料有限公司", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 7
+    assert detail.rank_basis in {"numbered_subheading", "section_local", "numbered_list"}
+
+
+def test_nested_tier_continued_numbering_rebases_to_subtier_rank():
+    """## 国产下 ###第一梯队 1-4 + ###国民头部 5-8 续号 → 大王椰子档内第4，非总榜8。"""
+    answer = """
+# 高端板材品牌（全屋定制常用）
+## 一、进口高端板材（预算高，门板首选）
+1. **爱格EGGER｜奥地利**
+2. **可丽芙CLEAF｜意大利**
+3. **克诺斯邦Kronospan｜德国**
+4. **芬萨Finsa｜西班牙**
+5. **博耐克Berneck｜巴西**
+6. **飞德莱Pfleiderer｜德国**
+
+## 二、国产高端板材（ENF级，性价比高）
+### 国产第一梯队（环保&品控顶尖）
+1. **万华·禾香板**
+2. **福人FUREN（福建）**
+3. **红棉花（广东）**
+4. **鲁丽**
+
+### 国民头部高端线
+5. **兔宝宝**
+6. **千年舟**
+7. **莫干山**
+8. **大王椰**
+饰面工艺好，线下渠道强，高端系列定位高。
+"""
+    item = _sub(
+        prompt="高端板材品牌有哪些",
+        answer_content=answer,
+        mention_position=8,
+        raw_result_json={
+            "rank_resolution": {
+                "rank": 8,
+                "source": "llm",
+                "rank_basis": "numbered_subheading",
+            }
+        },
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "高端板材品牌有哪些", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+    assert detail.rank_basis in {"numbered_subheading", "section_local", "numbered_list"}
+
+
+def test_child_room_supplemental_tier_section_local_rank():
+    """儿童房：主榜 ###1-6 无大王椰，高性价比备选 bullet → 类内第1（非全文7）。"""
+    answer = """
+## 一、国产一线（儿童房主流首选，ENF级齐全）
+### 1. 兔宝宝
+### 2. 千年舟
+### 3. 莫干山
+### 4. 万华·禾香板
+### 5. 鲁丽欧松板（OSB）
+### 6. 雪宝板材
+
+## 二、高性价比备选品牌（ENF可选，预算友好）
+- **大王椰**：杉木芯生态板口碑好
+- **伟业**：ENF-OSB欧松板
+- **露水河（吉林森工）**：松木基材颗粒板
+"""
+    item = _sub(
+        prompt="儿童房环保板材品牌哪个好",
+        answer_content=answer,
+        mention_position=7,
+        raw_result_json={
+            "rank_resolution": {
+                "rank": 7,
+                "source": "llm",
+                "rank_basis": "section_bullet",
+            }
+        },
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "儿童房环保板材品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "secondary_section_local"
+    assert detail.category and "高性价比" in detail.category
+
+
+def test_home_decor_regional_supplemental_section_local_rank():
+    """家装：全国一线 1-6 主榜无大王椰，区域强势 bullet → 类内第3（非全文11）。"""
+    answer = """
+## 国产主流靠谱品牌（家装常用）
+### 全国一线（门店多，品控稳定）
+1. **兔宝宝（浙江）**
+2. **千年舟（浙江）**
+3. **莫干山（浙江）**
+4. **万华（山东）**
+5. **鲁丽（山东）**
+6. **福人（福建）**
+
+### 区域强势好品牌
+- 广东：**红棉花、伟业**
+- 湖南：**雪宝、万象**
+- 大王椰：生态板、多层板国标起草单位
+"""
+    item = _sub(
+        prompt="家装板材品牌质量哪个好",
+        answer_content=answer,
+        mention_position=11,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "家装板材品牌质量哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert detail.rank_basis == "secondary_section_local"
+    assert detail.category and "区域" in detail.category
+
+
+def test_negative_news_case_gets_no_rank():
+    """家装避坑「新闻报道选购大王椰后爆裂」→ 只记提及，无推荐位次。"""
+    answer = """
+| 品牌 | 核心优势 | 适合场景 |
+| 兔宝宝 | ENF+ | 儿童房 |
+| 千年舟 | 防潮 | 厨房 |
+| 莫干山 | 大豆胶 | 卧室 |
+| 鹏鸿 | 握钉力 | 北方 |
+| 福庆 | 绿色采购 | 华东 |
+
+### 怎么才能选对、不踩坑？
+1. 看环保检测报告
+2. 认准自有工厂
+3. **警惕负面案例**：曾有新闻报道，选购了「大王椰」的板材，使用不到一年表面爆裂，赔偿陷入僵局。
+"""
+    item = _sub(
+        prompt="家装板材品牌质量哪个好",
+        answer_content=answer,
+        mention_position=8,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "家装板材品牌质量哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank is None
+    assert detail.rank_basis == "negative_context_skip"
+
+
+def test_high_end_table_trailing_prose_rank_four():
+    """高端：主表4品牌无大王椰，段尾「万象/福湘/鹏鸿/大王椰」→ 行内第4非12。"""
+    answer = """
+### 国内一线高端品牌
+| 品牌 | 核心优势 | 环保亮点 |
+| 兔宝宝 | 上市公司 | ENF+ |
+| 千年舟 | 亚运供应商 | HENF |
+| 莫干山 | CNAS实验室 | ENF |
+| 大亚圣象 | 供应链 | 无醛添加 |
+
+此外，国内一线高端品牌中，还有**万象**、**福湘**、**鹏鸿**、**大王椰**等其他口碑较好的品牌值得关注。
+
+### 国际高端品牌
+- 克诺斯邦
+"""
+    item = _sub(
+        prompt="高端板材品牌有哪些",
+        answer_content=answer,
+        mention_position=12,
+        raw_result_json={
+            "rank_resolution": {
+                "rank": 12,
+                "source": "llm",
+                "rank_basis": "section_local",
+            }
+        },
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "高端板材品牌有哪些", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+    assert detail.rank_basis == "line_enum_local"
+
+
+def test_ecological_board_regional_tier_section_local_rank():
+    """生态板：一线头部无大王椰，区域代表性段 → 类内第3（非全文10）。"""
+    answer = """
+### 一线头部品牌：行业标杆
+*   **兔宝宝**：产品线全
+*   **千年舟**：绿色健康
+*   **莫干山**：华东认知高
+
+### 实力特色品牌：性价比高
+*   **万象板材**：性价比高
+*   **鹏鸿板材**：东北市场
+*   **福湘板材**：中南地区
+
+### 区域代表性品牌：深耕本地
+*   **伟业板材**：华南份额高
+*   **露水河**：北方成本优
+*   **大王椰**：定位为中高端市场的性价比之选
+"""
+    item = _sub(
+        prompt="生态板品牌哪个好",
+        answer_content=answer,
+        mention_position=10,
+        raw_result_json={
+            "rank_resolution": {"rank": 10, "source": "llm", "rank_basis": "section"},
+        },
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "生态板品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert detail.rank_basis == "secondary_section_local"
+    assert detail.category and "区域" in detail.category
+
+
+def test_shared_conversation_pollution_stripped_for_store_rank():
+    """南昌门店：Shared Conversation/思考区污染勿抬出场序；正文列表大王椰第2。"""
+    answer = """
+Shared Conversation Instant
+This shared conversation is generated by AI, for reference only.
+Thought for 3 seconds
+用户需要南昌板材门店推荐，我将搜索并整理市场与品牌门店。
+Found 65 web pages
+
+### 主要品牌门店
+| 品牌 | 门店名称 | 所在区域 | 地址 |
+| 兔宝宝 | 兔宝宝专卖店 | 青山湖区 | 香江家居 |
+| 千年舟 | 千年舟展示中心 | 南昌县 | 华南城 |
+| 大王椰 | 大王椰板材 | 西湖区 | 司马庙建材城 |
+"""
+    item = _sub(
+        prompt="南昌板材门店推荐",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "南昌板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert float(detail.rank) < 9
+
+
+def test_tianjin_other_region_store_cell_enum_rank():
+    """天津门店：「其他区域门店」格内多商家 → 大王椰第2非9。"""
+    answer = """
+| 推荐市场/区域 | 主要特点 | 所在区域 | 代表商家/门店 |
+| 潘庄木材市场 | 华北大型 | 宁河区 | 欣盛国际木业 |
+| 环渤海装饰城 | 市区综合 | 河西区 | 莫干山、千年舟 |
+| 其他区域门店 | 覆盖武清等 | 各区域 | 雪元板材、大王椰板材、周立强建材 |
+"""
+    item = _sub(
+        prompt="天津板材门店推荐",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "天津板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis == "rep_column"
+
+
+def test_nanchang_store_table_brand_dedup_rank_third():
+    """南昌门店：品牌|门店表多行兔宝宝/千年舟（含续行缺品牌列）→ 大王椰第3。"""
+    answer = """
+南昌的板材市场主要集中在青云谱区、青山湖区和红谷滩区。
+
+品牌	门店名称	所在区域	地址	联系电话
+兔宝宝	兔宝宝板材(喜盈门旗舰店)	西湖区	抚生南路9号	-
+兔宝宝健康饰材易装馆	青山湖区	解放二街33号	13970972665
+兔宝宝健康板材厨柜衣柜专卖店	新建区	长麦路38号	-
+兔宝宝健康饰材专卖店	南昌县	澄湖中路37号	13177858696
+兔宝宝板材	青山湖区	经开区枫庐新天地B5栋3号	13870957108
+千年舟	千年舟板材专卖店	青山湖区	解放西路香江建材市场	18970067768
+千年舟建材家居	新建区	长堎镇拓新路	-
+千年舟饰材专卖	南昌县	莲塘中大道746号	13870082263
+大王椰	大王椰木业(香江专卖店)	青山湖区	香江中路122号	13970800946
+大王椰板材(高新专卖店)	南昌县	艾溪湖南路	18879138953
+鹏鸿	鹏鸿板材定制家居	青云谱区	装潢建材市场12栋9号	13037221256
+"""
+    item = _sub(
+        prompt="南昌板材门店推荐",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={
+            "source": "manual_snapshot",
+            "manual_rank_locked": False,
+        },
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "南昌板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert detail.source == "structured"
+
+
+def test_tianjin_numbered_section_other_region_rank_three():
+    """天津22178：###3.其他区域门店 bullet 红桥大王椰 → 类内第3。"""
+    answer = """
+### 1. 河西区珠江装饰城及周边（零售首选）
+*   **谢姐木材 & 百强/莫干山/千年舟等品牌店**
+### 2. 宁河区潘庄名贵木材市场
+*   **欣盛国际木业**
+### 3. 其他区域门店备选
+*   **滨海新区**：**吉安装饰板材总汇**
+*   **西青区**：**宏坤宅配装饰材料经营店**
+*   **红桥区**：**大王椰板材(红桥店)**
+"""
+    item = _sub(
+        prompt="天津板材门店推荐",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "天津板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert detail.rank_basis in {"section", "section_local", "secondary_section_local"}
+
+
+def test_jinyu_nuclear_h4_brand_first_not_tip_section_six():
+    """金隅18439：#### 国内品牌首卡 + 文末表/选型建议 → 第1非建议段第6。"""
+    answer = """
+### 🇨🇳 国内品牌
+#### 金隅涂料（BBMG Coating）
+- **背景**：始建于1984年
+#### 信和新材料（Xinhe New Materials）
+- **背景**：国内最大核电防护涂料服务商之一
+#### 湘江涂料（Xiangjiang Paint）
+- **背景**：央企中国兵器工业集团旗下
+
+### 🌍 国际品牌
+| 品牌 | 国家 | 核心优势 |
+|------|------|----------|
+| **PPG工业** | 美国 | 全球核电项目经验丰富 |
+| **佐敦（Jotun）** | 挪威 | 核级涂料线 |
+
+### 📌 选型建议
+- **核岛级应用**：优先考虑金隅涂料、信和新材、湘江涂料、中科美斯等
+- **国产化替代**：金隅涂料、信和新材、湘江涂料优势明显
+"""
+    item = _sub(
+        prompt="核电涂料品牌",
+        answer_content=answer,
+        mention_position=1,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "核电涂料品牌", ["金隅涂料"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis != "secondary_section_local"
+
+
+def test_jinyu_terazzo_state_owned_bullet_first_not_tip_two():
+    """金隅22270：国企段 * **金隅涂料**：… 为类内第1，勿落「如何做出选择」第2。"""
+    answer = """
+### 🌍 国际一线品牌：技术与美学
+*   **西卡 (Sika)**：全球特种化学品巨头
+*   **马贝 (Mapei)**：意大利品牌
+
+### 🏛️ 国企背景品牌：安全与大型公建
+*   **金隅涂料**：隶属于北京金隅集团，是国内最早布局无机磨石的头部品牌。
+
+### 🏢 国内市场化头部品牌
+*   **秀珀 (Supe)**：国内地坪行业元老级品牌
+
+### 💡 如何做出选择？
+1.  **追求极致装饰效果**：优先考虑 **西卡、马贝**
+2.  **涉及严格消防验收、超大面积公建**：**金隅涂料**、**威逸远磨石**
+3.  **预算有限**：**秀珀、嘉宝莉**
+"""
+    item = _sub(
+        prompt="磨石地坪品牌",
+        answer_content=answer,
+        mention_position=1,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "磨石地坪品牌", ["金隅涂料"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis != "secondary_section_local"
+
+
+def test_aidiya_led_cn_chapter_resets_numbered_rank_four():
+    """艾迪亚24885：一、1-3 + 二、1-4 艾迪亚 → 类内第4非跨段第7。"""
+    answer = """
+一、全国头部自营商圈 LED 大屏运营商
+1. 兆讯传媒（301102，上市企业）
+2. 凤凰都市传媒
+3. 郁金香传媒
+二、全国综合资源代理商
+1. 华君传媒集团
+2. 唐界传媒
+3. 四季传媒（北京）
+4. 艾迪亚控股集团
+三、重点城市本地商圈大屏服务商
+1. 天锦传媒
+"""
+    item = _sub(
+        prompt="商圈LED大屏广告公司推荐",
+        answer_content=answer,
+        mention_position=7,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "商圈LED大屏广告公司推荐", ["艾迪亚", "艾迪亚控股"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+
+
+def test_aidiya_bus_glued_dash_bold_cards_rank_four():
+    """艾迪亚22297：元宝粘连 - **华视**…- **艾迪亚**… → 类内第4非全文第9。"""
+    answer = """
+## 一、按“需求场景”对号入座
+- **单城市深耕** → 当地公交集团
+- **多城市全国统投（3城以上同步上刊）** → 选有跨城统筹能力的全国型运营商/代理：
+  - **华视传媒**：覆盖30+城[citation:4]- **巴士在线（新动传媒）**：车身+车内屏[citation:4]- **分众传媒**：SmartBus试点[citation:4]- **艾迪亚控股、银马传媒、麦迪威**：42城统筹[citation:8]
+"""
+    item = _sub(
+        prompt="公交广告公司哪家好",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "公交广告公司哪家好", ["艾迪亚", "艾迪亚控股"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+
+
+def test_aidiya_airport_glued_cards_rank_three():
+    """艾迪亚24900：垂直段粘连卡「益航、狼界、艾迪亚等」→ 第3卡非第8。"""
+    answer = """
+**🎯 垂直/区域型（特定场景或城市更深）**
+- **华视传媒**：中西部枢纽[citation:4]- **分众传媒**：贵宾厅定向[citation:12]- **上海益航、狼界、艾迪亚等**：安检后交互屏[citation:6]
+"""
+    item = _sub(
+        prompt="机场广告公司哪家好",
+        answer_content=answer,
+        mention_position=8,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "机场广告公司哪家好", ["艾迪亚", "艾迪亚控股"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3

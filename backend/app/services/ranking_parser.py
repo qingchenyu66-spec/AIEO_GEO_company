@@ -585,6 +585,64 @@ def _resolve_table_columns(header_cells: list[str]) -> tuple[int | None, int | N
     return company_col, rank_col
 
 
+_STORE_TABLE_COL_HINTS = (
+    "门店名称", "门店", "专卖店", "经销商", "店铺", "商户", "店名",
+)
+
+
+def _store_brand_dedup_key(name: str) -> str:
+    """门店表品牌列去重键：兔宝宝/兔宝宝板材 → 同一品牌。"""
+    key = _clean_item_name(str(name or ""))
+    key = re.sub(r"(?:板材|木业|饰材)(?:专卖|直营)?$", "", key)
+    return key.strip().casefold()
+
+
+def _is_new_store_brand_row(cell: str, prev_brand: str | None) -> bool:
+    """分享页缺列行首格仍是短品牌名（千年舟/大王椰）→ 新品牌行，不是续行。"""
+    text = _clean_item_name(str(cell or ""))
+    if not text or len(text) > 12:
+        return False
+    if any(h in text for h in ("专卖店", "易装馆", "经营部", "总店", "旗舰店", "定制家居", "木业")):
+        return False
+    if prev_brand:
+        prev_key = _store_brand_dedup_key(prev_brand)
+        cur_key = _store_brand_dedup_key(text)
+        if prev_key and (cur_key == prev_key or prev_key in cur_key):
+            return False
+    if not _looks_like_company_list_name(text):
+        return False
+    return True
+
+
+def _looks_like_store_continuation_cell(cell: str, prev_brand: str | None) -> bool:
+    """分享页门店表续行：首格是店名不是新品牌（缺品牌列）。"""
+    text = str(cell or "").strip()
+    if not text or not prev_brand:
+        return False
+    prev_key = _store_brand_dedup_key(prev_brand)
+    cur_key = _store_brand_dedup_key(text)
+    if cur_key == prev_key:
+        return True
+    if prev_key and prev_key in cur_key:
+        return True
+    if text.startswith(str(prev_brand).replace("板材", "")):
+        return True
+    if any(h in text for h in ("专卖店", "易装馆", "经营部", "总店", "旗舰店", "定制家居")):
+        return len(text) > max(len(prev_brand) + 2, 8)
+    return False
+
+
+def _is_store_list_table_header(header_cells: list[str]) -> bool:
+    """「品牌|门店名称」类表：同一品牌多门店行只计品牌首次出现序。"""
+    if not header_cells:
+        return False
+    has_brand_col = any(_header_matches_company(c) for c in header_cells)
+    if not has_brand_col:
+        return False
+    norms = [_normalize_table_header(c) for c in header_cells]
+    return any(any(h in n for h in _STORE_TABLE_COL_HINTS) for n in norms)
+
+
 def _looks_like_table_category_label(name: str) -> bool:
     text = str(name or "").strip()
     if not text:
@@ -666,6 +724,9 @@ def _parse_markdown_table_block(
     # 2026-08-12 - 「排名不分先后」多源名单勿摊成结构化名次（派雅被抬到10/25）
     if _table_headers_mark_unordered(header_cells):
         return True
+    # 2026-08-26 - 门店题「品牌|门店名称」多行同品牌勿按门店行累加（南昌大王椰第9→第3）
+    store_mode = _is_store_list_table_header(header_cells)
+    brand_seen: dict[str, int] = {}
     row_rank = 0
     parsed_any = False
     for row in parsed_lines[1:]:
@@ -678,6 +739,19 @@ def _parse_markdown_table_block(
         explicit_rank = None
         if rank_col is not None and rank_col < len(cells):
             explicit_rank = _parse_rank_token(cells[rank_col])
+        if store_mode:
+            for name in names:
+                key = _store_brand_dedup_key(name)
+                if not key or key in brand_seen:
+                    continue
+                brand_seen[key] = len(brand_seen) + 1
+                append_item(
+                    name,
+                    explicit_rank if explicit_rank is not None else brand_seen[key],
+                    category=category,
+                )
+                parsed_any = True
+            continue
         if len(names) == 1:
             row_rank += 1
             append_item(
@@ -708,6 +782,10 @@ def _is_tsv_table_header_line(line: str) -> bool:
         return False
     cells = _split_tsv_cells(line)
     if len(cells) < 2:
+        return False
+    first = _clean_item_name(cells[0])
+    # 2026-08-26 - 分享页表内「-\t品牌门店/特点」续行脚注勿当新表头，否则截断大王椰
+    if not first or first in {"-", "—", "–", "·"}:
         return False
     company_col, _rank_col = _resolve_table_columns(cells)
     if company_col is None:
@@ -1100,6 +1178,10 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     # 2026-08-12 - DeepSeek 分享页制表符品牌表（非 markdown |）也要进结构化榜
     tsv_mode = False
     tsv_company_col = 0
+    tsv_store_mode = False
+    tsv_brand_seen: dict[str, int] = {}
+    tsv_prev_brand: str | None = None
+    tsv_header_cols = 0
 
     def flush_table_buffer() -> None:
         nonlocal table_buffer
@@ -1113,9 +1195,13 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         table_buffer = []
 
     def end_tsv_mode() -> None:
-        nonlocal tsv_mode, tsv_company_col
+        nonlocal tsv_mode, tsv_company_col, tsv_store_mode, tsv_brand_seen, tsv_prev_brand, tsv_header_cols
         tsv_mode = False
         tsv_company_col = 0
+        tsv_store_mode = False
+        tsv_brand_seen = {}
+        tsv_prev_brand = None
+        tsv_header_cols = 0
 
     for raw_line in normalized.splitlines():
         line = raw_line.strip()
@@ -1133,8 +1219,37 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
         if tsv_mode and "\t" in line:
             names = _tsv_row_company_names(line, tsv_company_col)
             if names:
-                for name in names:
-                    append_item(name, None, category=current_section or current_category)
+                if tsv_store_mode:
+                    raw_name = names[0]
+                    cells = _split_tsv_cells(line)
+                    is_new_brand = _is_new_store_brand_row(raw_name, tsv_prev_brand)
+                    if (
+                        tsv_prev_brand
+                        and not is_new_brand
+                        and (
+                            _looks_like_store_continuation_cell(raw_name, tsv_prev_brand)
+                            or (tsv_header_cols and len(cells) < tsv_header_cols - 1)
+                        )
+                    ):
+                        brand_name = tsv_prev_brand
+                    else:
+                        brand_name = raw_name
+                        tsv_prev_brand = brand_name
+                    key = _store_brand_dedup_key(brand_name)
+                    if not key or key in tsv_brand_seen:
+                        continue
+                    tsv_brand_seen[key] = len(tsv_brand_seen) + 1
+                    append_item(
+                        brand_name,
+                        tsv_brand_seen[key],
+                        category=current_section or current_category,
+                    )
+                else:
+                    for name in names:
+                        append_item(name, None, category=current_section or current_category)
+                continue
+            # 2026-08-26 - 「-\t品牌门店」等脚注行有 tab 但无公司名，勿落出 tsv_mode
+            if _is_tsv_table_noise_line(line) or re.match(r"^-\s*\t", line):
                 continue
 
         if _is_tsv_table_header_line(line):
@@ -1143,6 +1258,10 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             if company_col is not None:
                 tsv_mode = True
                 tsv_company_col = company_col
+                tsv_store_mode = _is_store_list_table_header(cells)
+                tsv_brand_seen = {}
+                tsv_prev_brand = None
+                tsv_header_cols = len(cells)
             continue
 
         if tsv_mode:

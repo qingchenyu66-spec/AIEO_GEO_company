@@ -535,6 +535,9 @@ def save_brand_word_groups(
     if asset is None:
         raise ValueError("请先保存企业资料，再配置品牌词")
 
+    body_dump = payload.model_dump(mode="json")
+    _log_brand_word_group_save(db, current, tenant_id, body_dump)
+
     # 2026-07-30 - 平台编辑权=职位白名单；有权则仅改授权端
     allowed_set = set(identity_allowed_monitor_platforms(db, current.identity))
     can_models = bool(allowed_set)
@@ -640,6 +643,187 @@ def active_brand_word_groups(
     return rows
 
 
+def _format_brand_config_change_description(rows: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for row in rows:
+        if row.get("kind") == "info" and row.get("field") == "变更说明":
+            continue
+        field = str(row.get("field") or "").strip()
+        if not field:
+            continue
+        before = row.get("before")
+        after = row.get("after")
+        if before is not None and after is not None:
+            parts.append(f"{field}：{before} → {after}")
+        elif after is not None:
+            parts.append(f"{field}：{after}")
+        elif before is not None:
+            parts.append(f"{field}：{before} → （空）")
+    return "；".join(parts)
+
+
+def _filter_change_rows(rows: list[dict[str, str]], markers: tuple[str, ...]) -> list[dict[str, str]]:
+    if not markers:
+        return rows
+    return [
+        row
+        for row in rows
+        if any(marker in str(row.get("field") or "") for marker in markers)
+    ]
+
+
+def _write_config_audit_log(
+    db: Session,
+    current: CurrentSession,
+    *,
+    tenant_id: int,
+    action_type: str,
+    target_module: str,
+    description_prefix: str,
+    rows: list[dict[str, str]],
+) -> None:
+    from app.services.operation_log_service import write_operation_log
+
+    meaningful = [
+        row
+        for row in rows
+        if not (row.get("kind") == "info" and row.get("field") in {"变更说明", "操作类型"})
+    ]
+    if not meaningful:
+        return
+    detail = _format_brand_config_change_description(meaningful)
+    if not detail:
+        return
+    tenant = db.get(Tenant, tenant_id)
+    name = str(tenant.name if tenant else tenant_id)
+    write_operation_log(
+        db,
+        current,
+        action_type,
+        f"{description_prefix}「{name}」：{detail}",
+        target_module=target_module,
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        risk_level="关注" if any(row.get("kind") == "delete" for row in meaningful) else "正常",
+    )
+
+
+def _brand_audit_markers(
+    *,
+    profile: bool = False,
+    keywords: bool = False,
+    regions: bool = False,
+    schedule: bool = False,
+    platforms: bool = False,
+) -> tuple[str, ...]:
+    markers: list[str] = []
+    if profile:
+        markers.extend(("企业全称", "品牌名", "品牌简称", "官网", "品牌说明", "Logo", "企业资料"))
+    if keywords:
+        markers.extend(("词组", "监测词", "露出词", "别名"))
+    if regions:
+        markers.append("监测地区")
+    if schedule:
+        markers.extend(("调度", "执行", "监测时段", "每周", "每月"))
+    if platforms:
+        markers.append("监测平台")
+    return tuple(markers)
+
+
+def _log_brand_asset_config_changes(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int,
+    body: dict[str, Any],
+    *,
+    scopes: dict[str, bool] | None = None,
+) -> None:
+    """保存前对比库内配置与提交体，写入企业配置变更审计。"""
+    from app.services.approval_preview_service import _brand_changes
+
+    rows = _brand_changes(db, tenant_id, body)
+    scopes = scopes or {}
+    markers = _brand_audit_markers(
+        profile=scopes.get("profile"),
+        keywords=scopes.get("keywords"),
+        regions=scopes.get("regions"),
+        schedule=scopes.get("schedule"),
+        platforms=scopes.get("platforms"),
+    )
+    if markers:
+        rows = _filter_change_rows(rows, markers)
+    _write_config_audit_log(
+        db,
+        current,
+        tenant_id=tenant_id,
+        action_type="企业配置",
+        target_module="企业配置",
+        description_prefix="保存企业配置",
+        rows=rows,
+    )
+
+
+def _log_brand_word_group_save(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int,
+    body: dict[str, Any],
+) -> None:
+    from app.services.approval_preview_service import _brand_word_group_changes, _change
+
+    old_count = len(list_brand_word_groups(db, tenant_id))
+    rows = _brand_word_group_changes(body)
+    new_count = len([item for item in (body.get("groups") or []) if isinstance(item, dict)])
+    if old_count != new_count:
+        rows.insert(1, _change("词组数量", before=str(old_count), after=str(new_count)))
+    _write_config_audit_log(
+        db,
+        current,
+        tenant_id=tenant_id,
+        action_type="品牌词配置",
+        target_module="品牌词配置",
+        description_prefix="保存品牌词",
+        rows=rows,
+    )
+
+
+def _log_competitor_change(
+    db: Session,
+    current: CurrentSession,
+    tenant_id: int,
+    *,
+    action: str,
+    name: str,
+    before_name: str | None = None,
+) -> None:
+    from app.services.operation_log_service import write_operation_log
+
+    tenant = db.get(Tenant, tenant_id)
+    tenant_name = str(tenant.name if tenant else tenant_id)
+    if action == "delete":
+        detail = f"删除竞品「{name}」"
+        risk = "关注"
+    elif action == "update" and before_name and before_name != name:
+        detail = f"修改竞品：{before_name} → {name}"
+        risk = "正常"
+    elif action == "create":
+        detail = f"新增竞品「{name}」"
+        risk = "正常"
+    else:
+        detail = f"更新竞品「{name}」"
+        risk = "正常"
+    write_operation_log(
+        db,
+        current,
+        "竞品配置",
+        f"保存竞品配置「{tenant_name}」：{detail}",
+        target_module="竞品配置",
+        target_id=tenant_id,
+        tenant_id=tenant_id,
+        risk_level=risk,
+    )
+
+
 def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: CurrentSession) -> BrandAsset:
     """新增或更新企业品牌资产。"""
     from app.services.menu_permission_service import (
@@ -659,6 +843,25 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     can_schedule = has_identity_menu_permission(db, identity_id, "platform.audit.schedule", "can_update")
     if not can_models:
         allowed_platform_codes = None
+
+    body_dump = payload.model_dump(mode="json")
+    # 2026-08-26 - 企业配置保存缺 diff 审计 - 按编辑权限范围对比库内配置后落日志
+    if tenant_id is not None and any(
+        (can_profile, can_keywords, can_regions, can_schedule, can_models)
+    ):
+        _log_brand_asset_config_changes(
+            db,
+            current,
+            tenant_id,
+            body_dump,
+            scopes={
+                "profile": can_profile,
+                "keywords": can_keywords,
+                "regions": can_regions,
+                "schedule": can_schedule,
+                "platforms": can_models,
+            },
+        )
 
     asset = get_brand_asset(db, tenant_id)
     if asset is None:
@@ -746,6 +949,9 @@ def save_competitor(db: Session, payload: CompetitorSaveRequest, current: Curren
         )
         if competitor is None:
             raise ValueError("竞品不存在")
+        before_name = competitor.name
+    else:
+        before_name = None
     if competitor is None:
         competitor = BrandCompetitor(tenant_id=tenant_id, name=payload.name, aliases_json=[])
         db.add(competitor)
@@ -756,6 +962,14 @@ def save_competitor(db: Session, payload: CompetitorSaveRequest, current: Curren
     competitor.category = payload.category
     competitor.status = True
     competitor.deleted = False
+    _log_competitor_change(
+        db,
+        current,
+        tenant_id,
+        action="create" if competitor_id is None else "update",
+        name=payload.name,
+        before_name=before_name,
+    )
     db.commit()
     db.refresh(competitor)
     from app.services.monitor_service import invalidate_monitor_summary_cache
@@ -777,6 +991,13 @@ def delete_competitor(db: Session, current: CurrentSession, competitor_id: int, 
     )
     if competitor is None:
         raise ValueError("竞品不存在")
+    _log_competitor_change(
+        db,
+        current,
+        resolved_tenant_id,
+        action="delete",
+        name=str(competitor.name or ""),
+    )
     competitor.deleted = True
     db.commit()
     from app.services.monitor_service import invalidate_monitor_summary_cache

@@ -26,9 +26,14 @@ _SKIP_PREFIXES = (
     "/openapi.json",
 )
 # management 仍有显式 write_operation_log；knowledge/reports 此前整段跳过导致缺口。
-# 仅跳过 management，避免与显式日志双写；knowledge/reports 走中间件兜底。
+# brand 企业配置/竞品/品牌词在 service 层写带 diff 的审计，避免与中间件双写且描述过粗。
 _SKIP_EXPLICIT_AUDIT_PREFIXES = (
     "/api/v1/management/",
+    "/api/v1/brand/asset",
+    "/api/v1/brand/brand-word-groups",
+    "/api/v1/brand/competitors",
+    "/api/v1/monitor/snapshot-backfill",
+    "/api/v1/monitor/subtasks/",
 )
 _SKIP_PATHS = frozenset({
     "/",
