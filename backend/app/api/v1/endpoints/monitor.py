@@ -329,12 +329,13 @@ def monitor_ranking_matrix(
 def monitor_ranking_matrix_job(
     job_id: str,
     current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """轮询矩阵异步任务状态；ready 时带回完整矩阵。"""
-    from app.services.ranking_matrix_job_service import get_matrix_job_status
+    from app.services.ranking_matrix_job_service import refresh_matrix_job
 
     _ = current  # 需登录；结果本身按原请求身份写入的 cache_key 隔离
-    return ApiResponse(data=get_matrix_job_status(job_id))
+    return ApiResponse(data=refresh_matrix_job(db, job_id))
 
 
 @router.get("/workspace-brief", response_model=ApiResponse[dict])

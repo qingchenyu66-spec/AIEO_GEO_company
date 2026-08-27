@@ -2834,7 +2834,7 @@ def _resolve_subtask_schedule_context(
 
 
 def _matrix_day_label(day_key: str, schedule_round_count: int = 0) -> str:
-    """Format matrix row date; schedule_round_count = max runs averaged in any cell (not prompt count)."""
+    """Format matrix row date; schedule_round_count = 当日监测场次数（非快照条数）。"""
     text = str(day_key or "").strip()
     if not text:
         return "-"
@@ -2847,20 +2847,50 @@ def _matrix_day_label(day_key: str, schedule_round_count: int = 0) -> str:
     return label
 
 
+def _matrix_sample_dedupe_key(sample: dict[str, Any]) -> str:
+    """2026-08-27 - 同场次多地区各保留一条，勿按 schedule_window_key 互相覆盖。"""
+    base = str(
+        sample.get("schedule_window_key")
+        or sample.get("task_id")
+        or sample.get("subtask_id")
+        or ""
+    ).strip()
+    if not base:
+        return ""
+    region = str(sample.get("region_code") or "").strip()
+    return f"{base}|rg:{region}" if region else base
+
+
+def _matrix_samples_by_schedule_round(samples: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """按 schedule_window_key 分组（不含地区后缀）。"""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for sample in samples:
+        round_key = str(sample.get("schedule_window_key") or "").strip()
+        if not round_key:
+            continue
+        grouped.setdefault(round_key, []).append(sample)
+    return grouped
+
+
+def _drop_legacy_no_region_when_regional(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """2026-08-27 - 同场次已有分省快照时，去掉旧「全部区域」重复条，避免 6+3 条。"""
+    kept: list[dict[str, Any]] = []
+    for _round_key, group in _matrix_samples_by_schedule_round(samples).items():
+        if any(str(item.get("region_code") or "").strip() for item in group):
+            group = [item for item in group if str(item.get("region_code") or "").strip()]
+        kept.extend(group)
+    return kept
+
+
 def _dedupe_matrix_cell_samples(
     samples: list[dict[str, Any]],
     *,
     max_samples: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Keep one sample per schedule window (latest), optionally capped by daily frequency."""
+    """Keep one sample per schedule window × region; cap by daily round count, not flat row count."""
     by_window: dict[str, dict[str, Any]] = {}
     for sample in samples:
-        window_key = str(
-            sample.get("schedule_window_key")
-            or sample.get("task_id")
-            or sample.get("subtask_id")
-            or ""
-        ).strip()
+        window_key = _matrix_sample_dedupe_key(sample)
         if not window_key:
             continue
         existing = by_window.get(window_key)
@@ -2875,22 +2905,40 @@ def _dedupe_matrix_cell_samples(
     )
     scheduled = [item for item in ordered if item.get("schedule_source") != "lead_diagnosis"]
     lead_samples = [item for item in ordered if item.get("schedule_source") == "lead_diagnosis"]
-    if max_samples and max_samples > 0 and len(scheduled) > max_samples:
-        scheduled = scheduled[:max_samples]
+    scheduled = _drop_legacy_no_region_when_regional(scheduled)
+    # 2026-08-27 - schedule_frequency=3 指 3 场次/日，多地区应 3×N 条，勿按总条数截成 3
+    if max_samples and max_samples > 0:
+        by_round = _matrix_samples_by_schedule_round(scheduled)
+        round_keys = sorted(by_round.keys(), key=schedule_window_sort_key, reverse=True)
+        scheduled = [
+            sample
+            for round_key in round_keys[:max_samples]
+            for sample in by_round[round_key]
+        ]
     return sorted(
         scheduled + lead_samples,
-        key=lambda item: item.get("_updated_at") or datetime.min,
-        reverse=True,
+        key=lambda item: schedule_window_sort_key(item.get("schedule_window_key")),
     )
 
 
+def _matrix_cell_schedule_round_count(cell: dict[str, Any]) -> int:
+    """2026-08-27 - 文案按监测场次计数，多地区勿乘进「N次均值」。"""
+    snapshots = cell.get("snapshots")
+    if isinstance(snapshots, list) and snapshots:
+        rounds = {
+            str(item.get("schedule_window_key") or "").strip()
+            for item in snapshots
+            if str(item.get("schedule_window_key") or "").strip()
+        }
+        if rounds:
+            return len(rounds)
+    sample_n = int(cell.get("rank_sample_count") or cell.get("sample_count") or 0)
+    return sample_n if sample_n > 0 else 0
+
+
 def _matrix_row_schedule_round_count(cells: dict[str, dict[str, Any]]) -> int:
-    """Max schedule rounds represented in a row (per prompt-platform daily average)."""
-    counts = [
-        int(cell.get("rank_sample_count") or cell.get("sample_count") or 0)
-        for cell in cells.values()
-        if cell
-    ]
+    """Row 标签：取各 prompt 格内 distinct schedule_window_key 的最大值。"""
+    counts = [_matrix_cell_schedule_round_count(cell) for cell in cells.values() if cell]
     return max(counts) if counts else 0
 
 
@@ -2913,6 +2961,8 @@ def _matrix_cell_snapshot(sample: dict[str, Any]) -> dict[str, Any]:
         "schedule_window_key": sample.get("schedule_window_key"),
         "schedule_label": sample.get("schedule_label"),
         "schedule_source": sample.get("schedule_source"),
+        "region_code": sample.get("region_code"),
+        "region_label": sample.get("region_label"),
         "updated_at": sample.get("updated_at"),
         "status": sample.get("status"),
         "page_screenshot": sample.get("page_screenshot"),
@@ -7143,6 +7193,8 @@ def ranking_matrix(
             "schedule_window_key": schedule_ctx.get("schedule_window_key"),
             "schedule_label": schedule_ctx.get("schedule_label"),
             "schedule_source": schedule_ctx.get("schedule_source"),
+            "region_code": schedule_ctx.get("region_code"),
+            "region_label": schedule_ctx.get("region_label"),
             "status": item.status,
             "page_screenshot": None,
             "sentiment": item.sentiment,

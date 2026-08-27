@@ -10,7 +10,8 @@ import json
 import logging
 import uuid
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, TypeVar
+from urllib.parse import urlparse, urlunparse
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -20,11 +21,52 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _client: Redis | None = None
+T = TypeVar("T")
 
 
 def redis_enabled() -> bool:
     """判断当前环境是否启用 Redis。"""
     return bool(settings.redis_enabled and settings.redis_url)
+
+
+def _is_auth_redis_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "auth" in msg or "no password is set" in msg
+
+
+def bare_redis_url(url: str) -> str:
+    """去掉空密码 userinfo，避免 redis-py 对无 requirepass 实例发 AUTH。"""
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return url
+    if parsed.username is None and parsed.password is None:
+        return url
+    if parsed.password:
+        return url
+    host = parsed.hostname or "127.0.0.1"
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{host}{port}"
+    return urlunparse((parsed.scheme, netloc, parsed.path or "", "", parsed.query, parsed.fragment))
+
+
+def _new_redis_client(url: str) -> Redis:
+    return Redis.from_url(
+        bare_redis_url(url),
+        decode_responses=True,
+        socket_timeout=settings.redis_socket_timeout_seconds,
+        socket_connect_timeout=settings.redis_socket_timeout_seconds,
+        health_check_interval=30,
+    )
+
+
+def reset_redis_client() -> None:
+    global _client
+    if _client is not None:
+        try:
+            _client.close()
+        except Exception:
+            pass
+    _client = None
 
 
 def get_redis_client() -> Redis | None:
@@ -33,40 +75,40 @@ def get_redis_client() -> Redis | None:
     if not redis_enabled():
         return None
     if _client is None:
-        _client = Redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            socket_timeout=settings.redis_socket_timeout_seconds,
-            socket_connect_timeout=settings.redis_socket_timeout_seconds,
-            health_check_interval=30,
-        )
-        # ponytail: 配置了密码但本地 Redis 未设 requirepass → 每条命令 AUTH 失败；降级无密码重连
+        _client = _new_redis_client(settings.redis_url)
         try:
             _client.ping()
         except RedisError as exc:
-            msg = str(exc).lower()
-            if "auth" in msg or "password" in msg:
-                logger.warning("Redis AUTH rejected, retry without password: %s", exc)
+            if _is_auth_redis_error(exc):
+                # 2026-08-27 - 本地无密码 Redis 勿发 AUTH；与生产同代码，仅规范化 URL
+                logger.warning("Redis AUTH rejected, retry with bare URL: %s", exc)
+                reset_redis_client()
+                _client = _new_redis_client(bare_redis_url(settings.redis_url))
                 try:
-                    _client.close()
-                except Exception:
-                    pass
-                bare = settings.redis_url
-                if "@" in bare.split("://", 1)[-1]:
-                    # redis://:pass@host:6379/0 → redis://host:6379/0
-                    scheme, rest = bare.split("://", 1)
-                    rest = rest.split("@", 1)[-1]
-                    bare = f"{scheme}://{rest}"
-                _client = Redis.from_url(
-                    bare,
-                    decode_responses=True,
-                    socket_timeout=settings.redis_socket_timeout_seconds,
-                    socket_connect_timeout=settings.redis_socket_timeout_seconds,
-                    health_check_interval=30,
-                )
+                    _client.ping()
+                except RedisError as retry_exc:
+                    logger.warning("Redis ping failed after bare URL: %s", retry_exc)
             else:
                 logger.warning("Redis ping failed: %s", exc)
     return _client
+
+
+def _redis_command(action: Callable[[Redis], T], *, op: str, key: str = "") -> T | None:
+    """AUTH 失败时重置连接并重试一次。"""
+    client = get_redis_client()
+    if client is None:
+        return None
+    try:
+        return action(client)
+    except RedisError as exc:
+        if not _is_auth_redis_error(exc):
+            raise
+        logger.warning("Redis %s AUTH failed, retry once key=%s error=%s", op, key, exc)
+        reset_redis_client()
+        client = get_redis_client()
+        if client is None:
+            return None
+        return action(client)
 
 
 def prefixed_key(key: str) -> str:
@@ -92,11 +134,8 @@ def redis_health() -> dict[str, Any]:
 
 def get_json_cache(key: str) -> Any | None:
     """读取 JSON 缓存；异常时直接返回 None，由调用方回源数据库。"""
-    client = get_redis_client()
-    if client is None:
-        return None
     try:
-        raw = client.get(prefixed_key(key))
+        raw = _redis_command(lambda client: client.get(prefixed_key(key)), op="get", key=key)
         return json.loads(raw) if raw else None
     except (RedisError, json.JSONDecodeError, TypeError) as exc:
         logger.warning("Read Redis cache failed, key=%s, error=%s", key, exc)
@@ -105,23 +144,22 @@ def get_json_cache(key: str) -> Any | None:
 
 def set_json_cache(key: str, value: Any, ttl_seconds: int | None = None) -> None:
     """写入 JSON 缓存；失败只记录日志，不影响主业务写库。"""
-    client = get_redis_client()
-    if client is None:
-        return
     ttl = ttl_seconds or settings.redis_default_ttl_seconds
+    payload = json.dumps(value, ensure_ascii=False, default=str)
     try:
-        client.setex(prefixed_key(key), ttl, json.dumps(value, ensure_ascii=False, default=str))
+        _redis_command(
+            lambda client: client.setex(prefixed_key(key), ttl, payload),
+            op="setex",
+            key=key,
+        )
     except (RedisError, TypeError) as exc:
         logger.warning("Write Redis cache failed, key=%s, error=%s", key, exc)
 
 
 def delete_cache(key: str) -> None:
     """删除单个缓存 key。"""
-    client = get_redis_client()
-    if client is None:
-        return
     try:
-        client.delete(prefixed_key(key))
+        _redis_command(lambda client: client.delete(prefixed_key(key)), op="delete", key=key)
     except RedisError as exc:
         logger.warning("Delete Redis cache failed, key=%s, error=%s", key, exc)
 
@@ -159,10 +197,20 @@ def redis_lock(key: str, ttl_seconds: int | None = None) -> Iterator[bool]:
     ttl = ttl_seconds or settings.redis_scheduler_lock_ttl_seconds
     acquired = False
     try:
-        acquired = bool(client.set(lock_key, token, ex=ttl, nx=True))
+        acquired = bool(
+            _redis_command(
+                lambda c: c.set(lock_key, token, ex=ttl, nx=True),
+                op="lock",
+                key=key,
+            )
+        )
         yield acquired
     except RedisError as exc:
-        # ponytail: 以前 fail-open 会在 Redis 抖动时双投模力；升级为进程内互斥可再收紧
+        if _is_auth_redis_error(exc):
+            logger.warning("Redis lock AUTH failed (fail-open), key=%s, error=%s", key, exc)
+            yield True
+            return
+        # ponytail: 非 AUTH 的 Redis 抖动仍 fail-closed，避免多 Worker 重叠扫任务
         logger.warning("Redis lock failed (fail-closed), key=%s, error=%s", key, exc)
         yield False
     finally:

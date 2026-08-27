@@ -9,7 +9,7 @@ import type { RankingMatrixCellSnapshot, MonitorSubtask } from '../../../service
 import type { WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
 import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { externalLink } from '../portalUtils'
-import { useMonitorRealtime } from '../composables/useMonitorRealtime'
+import { useMonitorRealtime, type MatrixDrawerRoundGroup } from '../composables/useMonitorRealtime'
 
 function sourceTracks(subtask: MonitorSubtask | null | undefined) {
   return buildSourceTrackRows(subtask, { limit: 8, linkOf: externalLink })
@@ -51,7 +51,9 @@ const {
   switchViewMode,
   openMatrixChartCell,
   toggleMatrixSnapshot,
-  matrixDrawerSnapshots,
+  toggleMatrixRound,
+  isMatrixRoundExpanded,
+  matrixDrawerRoundGroups,
   isMatrixDrawerMode,
   expandedSnapshotId,
   loadingSnapshotId,
@@ -152,6 +154,32 @@ function snapshotListRank(snapshot: RankingMatrixCellSnapshot) {
     return formatRank(subtask.mention_position)
   }
   return formatRank(snapshot.mention_position)
+}
+
+function snapshotRegionLabel(snapshot: RankingMatrixCellSnapshot) {
+  const label = String(snapshot.region_label || '').trim()
+  if (!label || label === '全部区域') return ''
+  return label
+}
+
+function matrixRoundHeaderSummary(group: MatrixDrawerRoundGroup) {
+  if (group.snapshots.length === 1) {
+    const snapshot = group.snapshots[0]
+    const parts = [
+      `排名 ${snapshotListRank(snapshot)}`,
+      sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感',
+    ]
+    const region = snapshotRegionLabel(snapshot)
+    if (region) parts.push(region)
+    if (snapshot.page_screenshot) parts.push('含快照')
+    return parts.join(' · ')
+  }
+  return group.snapshots
+    .map((snapshot) => {
+      const region = snapshotRegionLabel(snapshot) || '全部区域'
+      return `${region} 排名${snapshotListRank(snapshot)}`
+    })
+    .join(' · ')
 }
 </script>
 
@@ -593,85 +621,108 @@ function snapshotListRank(snapshot: RankingMatrixCellSnapshot) {
         <div class="realtime-drawer-snapshots-head">
           <b>当日监测快照</b>
           <span>
-            {{ matrixDrawerSnapshots.length }} 轮
+            {{ matrixDrawerRoundGroups.length }} 轮
             <template v-if="drawerAvgRank"> · 均值 {{ drawerAvgRank }}</template>
           </span>
         </div>
         <p class="realtime-drawer-list-hint">点击某一轮展开查看回答与快照，再次点击可收起。</p>
         <div class="realtime-drawer-accordion">
           <article
-            v-for="(snapshot, index) in matrixDrawerSnapshots"
-            :key="snapshot.subtask_id"
+            v-for="group in matrixDrawerRoundGroups"
+            :key="group.scheduleWindowKey"
             class="realtime-drawer-accordion-item"
-            :class="{ 'is-expanded': expandedSnapshotId === snapshot.subtask_id }"
+            :class="{ 'is-expanded': isMatrixRoundExpanded(group) }"
           >
             <button
               type="button"
               class="realtime-drawer-accordion-trigger"
-              @click="toggleMatrixSnapshot(snapshot)"
+              @click="toggleMatrixRound(group)"
             >
-              <span class="realtime-drawer-snapshot-round">第 {{ index + 1 }} 轮</span>
+              <span class="realtime-drawer-snapshot-round">第 {{ group.roundIndex }} 轮</span>
               <span class="realtime-drawer-accordion-main">
-                <strong>{{ snapshot.schedule_label || formatDateTime(snapshot.updated_at) || '—' }}{{ scheduleSourceLabel(snapshot.schedule_source) }}</strong>
-                <small>
-                  排名 {{ snapshotListRank(snapshot) }}
-                  · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
-                  <template v-if="snapshot.page_screenshot"> · 含快照</template>
-                </small>
+                <strong>{{ group.scheduleLabel || formatDateTime(group.snapshots[0]?.updated_at) || '—' }}{{ scheduleSourceLabel(group.snapshots[0]?.schedule_source) }}</strong>
+                <small>{{ matrixRoundHeaderSummary(group) }}</small>
               </span>
               <ChevronDown class="realtime-drawer-accordion-chevron" />
             </button>
             <div
-              v-if="expandedSnapshotId === snapshot.subtask_id"
-              class="realtime-drawer-accordion-body"
+              v-if="isMatrixRoundExpanded(group) && group.snapshots.length > 1"
+              class="realtime-drawer-round-body"
             >
-              <div v-if="loadingSnapshotId === snapshot.subtask_id" class="mini-empty compact-empty">加载中…</div>
-              <template v-else-if="detailSubtask?.subtask_id === snapshot.subtask_id">
-                <div class="realtime-drawer-metrics compact">
-                  <span>排名 {{ formatRank(detailSubtask.mention_position) }}</span>
-                  <span>情感 {{ sentimentLabelMap[detailSubtask.sentiment || ''] || '暂无' }}</span>
-                  <span>状态 {{ monitorStatusLabelMap[detailSubtask.status || ''] || '—' }}</span>
-                  <a
-                    v-if="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)"
-                    :href="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)!"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >打开快照</a>
-                </div>
-                <p v-if="snapshotRankNote(snapshot, detailSubtask)" class="realtime-drawer-note">
-                  回答正文中未出现品牌露出词，矩阵展示「-」；原始检测排名仅供参考，已按正文重新计算。
-                </p>
-                <pre v-if="detailSubtask.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
-                <p v-else-if="detailSubtask.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
-                <div v-if="sourceTracks(detailSubtask).citations.length" class="realtime-drawer-sources">
-                  <b>正文引用</b>
-                  <a
-                    v-for="row in sourceTracks(detailSubtask).citations"
-                    :key="row.key"
-                    :href="row.href || undefined"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <span>{{ row.title }}</span>
-                    <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
-                  </a>
-                </div>
-                <div v-if="sourceTracks(detailSubtask).references.length" class="realtime-drawer-sources">
-                  <b>参考来源</b>
-                  <a
-                    v-for="row in sourceTracks(detailSubtask).references"
-                    :key="row.key"
-                    :href="row.href || undefined"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <span>{{ row.title }}</span>
-                    <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
-                  </a>
-                </div>
-                <p v-if="detailSubtask.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
-              </template>
+              <article
+                v-for="snapshot in group.snapshots"
+                :key="snapshot.subtask_id"
+                class="realtime-drawer-region-item"
+                :class="{ 'is-expanded': expandedSnapshotId === snapshot.subtask_id }"
+              >
+                <button
+                  type="button"
+                  class="realtime-drawer-region-trigger"
+                  @click.stop="toggleMatrixSnapshot(snapshot)"
+                >
+                  <strong>{{ snapshotRegionLabel(snapshot) || '全部区域' }}</strong>
+                  <small>
+                    排名 {{ snapshotListRank(snapshot) }}
+                    · {{ sentimentLabelMap[snapshot.sentiment || ''] || '暂无情感' }}
+                    <template v-if="snapshot.page_screenshot"> · 含快照</template>
+                  </small>
+                </button>
+              </article>
             </div>
+            <template v-for="snapshot in group.snapshots" :key="`body-${snapshot.subtask_id}`">
+              <div
+                v-if="expandedSnapshotId === snapshot.subtask_id && isMatrixRoundExpanded(group)"
+                class="realtime-drawer-accordion-body"
+              >
+                <div v-if="loadingSnapshotId === snapshot.subtask_id" class="mini-empty compact-empty">加载中…</div>
+                <template v-else-if="detailSubtask?.subtask_id === snapshot.subtask_id">
+                  <div class="realtime-drawer-metrics compact">
+                    <span>排名 {{ formatRank(detailSubtask.mention_position) }}</span>
+                    <span>情感 {{ sentimentLabelMap[detailSubtask.sentiment || ''] || '暂无' }}</span>
+                    <span v-if="snapshotRegionLabel(snapshot)">地区 {{ snapshotRegionLabel(snapshot) }}</span>
+                    <span>状态 {{ monitorStatusLabelMap[detailSubtask.status || ''] || '—' }}</span>
+                    <a
+                      v-if="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)"
+                      :href="externalLink(detailSubtask.page_screenshot || snapshot.page_screenshot)!"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >打开快照</a>
+                  </div>
+                  <p v-if="snapshotRankNote(snapshot, detailSubtask)" class="realtime-drawer-note">
+                    回答正文中未出现品牌露出词，矩阵展示「-」；原始检测排名仅供参考，已按正文重新计算。
+                  </p>
+                  <pre v-if="detailSubtask.answer_content" class="realtime-drawer-answer">{{ detailSubtask.answer_content }}</pre>
+                  <p v-else-if="detailSubtask.mention_context" class="realtime-drawer-note">{{ detailSubtask.mention_context }}</p>
+                  <div v-if="sourceTracks(detailSubtask).citations.length" class="realtime-drawer-sources">
+                    <b>正文引用</b>
+                    <a
+                      v-for="row in sourceTracks(detailSubtask).citations"
+                      :key="row.key"
+                      :href="row.href || undefined"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span>{{ row.title }}</span>
+                      <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+                    </a>
+                  </div>
+                  <div v-if="sourceTracks(detailSubtask).references.length" class="realtime-drawer-sources">
+                    <b>参考来源</b>
+                    <a
+                      v-for="row in sourceTracks(detailSubtask).references"
+                      :key="row.key"
+                      :href="row.href || undefined"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span>{{ row.title }}</span>
+                      <span v-if="row.site" class="realtime-drawer-source-site"> · {{ row.site }}</span>
+                    </a>
+                  </div>
+                  <p v-if="detailSubtask.error_message" class="danger-copy">{{ detailSubtask.error_message }}</p>
+                </template>
+              </div>
+            </template>
           </article>
         </div>
       </template>

@@ -29,6 +29,49 @@ logger = logging.getLogger(__name__)
 
 MATRIX_JOB_TTL_SECONDS = 900
 MATRIX_JOB_LOCK_TTL = 120
+# 2026-08-27 - pending 25s 无 worker 接管；processing 拉长避免与大矩阵 worker 双算
+MATRIX_JOB_PENDING_STALE_SECONDS = 25
+MATRIX_JOB_PROCESSING_STALE_SECONDS = 150
+
+
+def _matrix_job_is_stale(meta: dict[str, Any]) -> bool:
+    updated = int(meta.get("updated_at") or 0)
+    if updated <= 0:
+        return True
+    status = str(meta.get("status") or "pending")
+    threshold = (
+        MATRIX_JOB_PROCESSING_STALE_SECONDS
+        if status == "processing"
+        else MATRIX_JOB_PENDING_STALE_SECONDS
+    )
+    return (time.time() - updated) > threshold
+
+
+def _sync_build_matrix_response(cache_key: str, builder) -> dict[str, Any]:
+    data = get_or_build_json_cache(
+        cache_key,
+        builder,
+        ttl_seconds=RANKING_MATRIX_CACHE_TTL,
+        lock_ttl_seconds=60,
+        wait_seconds=2.0,
+    )
+    out = dict(data) if isinstance(data, dict) else {"data": data}
+    out["matrix_status"] = "ready"
+    return out
+
+
+def _matrix_job_public_status(job_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    status = str(meta.get("status") or "pending")
+    if status == "ready":
+        return get_matrix_job_status(job_id)
+    out = {
+        "matrix_status": status if status in {"pending", "processing", "failed"} else "processing",
+        "job_id": job_id,
+        "status": status,
+    }
+    if meta.get("error"):
+        out["error"] = meta["error"]
+    return out
 
 
 def matrix_job_redis_key(job_id: str) -> str:
@@ -89,11 +132,13 @@ def enqueue_or_reuse_matrix_job(cache_key: str, build_params: dict[str, Any]) ->
     job_id = matrix_job_id_for_cache_key(cache_key)
     existing = read_matrix_job(job_id)
     if existing and existing.get("status") in {"pending", "processing"}:
-        return {
-            "matrix_status": "processing",
-            "job_id": job_id,
-            "status": existing.get("status") or "processing",
-        }
+        if not _matrix_job_is_stale(existing):
+            return {
+                "matrix_status": "processing",
+                "job_id": job_id,
+                "status": existing.get("status") or "processing",
+            }
+        logger.warning("stale matrix job re-enqueue job_id=%s status=%s", job_id, existing.get("status"))
     if existing and existing.get("status") == "ready":
         cached = get_json_cache(cache_key)
         if isinstance(cached, dict):
@@ -127,6 +172,37 @@ def enqueue_or_reuse_matrix_job(cache_key: str, build_params: dict[str, Any]) ->
         "matrix_status": "processing",
         "job_id": job_id,
         "status": "pending",
+    }
+
+
+def refresh_matrix_job(db: Session, job_id: str) -> dict[str, Any]:
+    """轮询态失败/超时/卡 pending 时在 API 线程同步重建（与生产同逻辑，降级不丢页面）。"""
+    meta = read_matrix_job(job_id)
+    if meta is None:
+        return {"matrix_status": "missing", "job_id": job_id, "status": "missing"}
+    status = str(meta.get("status") or "pending")
+    if status == "ready":
+        return get_matrix_job_status(job_id)
+    if status in {"pending", "processing"} and not _matrix_job_is_stale(meta):
+        return _matrix_job_public_status(job_id, meta)
+    cached_key = str(meta.get("cache_key") or "")
+    cached = get_json_cache(cached_key) if cached_key else None
+    if isinstance(cached, dict):
+        mark_matrix_job(job_id, status="ready", cache_key=cached_key, result=cached)
+        out = dict(cached)
+        out["matrix_status"] = "ready"
+        out["job_id"] = job_id
+        return out
+    logger.warning("matrix job sync refresh job_id=%s prev_status=%s", job_id, status)
+    result = run_matrix_job(db, job_id)
+    if str(result.get("status")) == "ready":
+        return get_matrix_job_status(job_id)
+    err = str(result.get("error") or meta.get("error") or "排名矩阵计算失败")
+    return {
+        "matrix_status": "failed",
+        "job_id": job_id,
+        "status": "failed",
+        "error": err[:240],
     }
 
 
@@ -190,13 +266,14 @@ def run_matrix_job(db: Session, job_id: str) -> dict[str, Any]:
     mark_matrix_job(job_id, status="processing", cache_key=cache_key, build_params=params)
     lock_key = f"matrix-job-build:{job_id}"
     with redis_lock(lock_key, ttl_seconds=MATRIX_JOB_LOCK_TTL) as acquired:
-        if not acquired:
-            return {"status": "locked", "job_id": job_id}
         cached = get_json_cache(cache_key)
         if isinstance(cached, dict):
             mark_matrix_job(job_id, status="ready", cache_key=cache_key, result=cached)
             _record_matrix_elapsed(job_id, started, "ready")
             return {"status": "ready", "job_id": job_id, "cache_hit": True}
+        if not acquired:
+            # 2026-08-27 - 拿不到锁仍构建，避免 Redis 抖动留 processing 永动机
+            logger.warning("matrix job lock busy job_id=%s, continue build", job_id)
 
         from app.services.monitor_service import ranking_matrix
 
@@ -263,18 +340,16 @@ def resolve_ranking_matrix_response(
         and cache_key
         and build_params
     ):
-        return enqueue_or_reuse_matrix_job(cache_key, build_params)
+        async_out = enqueue_or_reuse_matrix_job(cache_key, build_params)
+        if async_out.get("matrix_status") == "failed":
+            # 2026-08-27 - 入队失败（本地 Celery/Redis）降级同步，与生产同代码路径
+            logger.warning("matrix async enqueue failed, sync fallback cache_key=%s", cache_key)
+            return _sync_build_matrix_response(cache_key, builder)
+        return async_out
 
     if cache_key:
-        data = get_or_build_json_cache(
-            cache_key,
-            builder,
-            ttl_seconds=RANKING_MATRIX_CACHE_TTL,
-            lock_ttl_seconds=60,
-            wait_seconds=2.0,
-        )
-    else:
-        data = builder()
+        return _sync_build_matrix_response(cache_key, builder)
+    data = builder()
     out = dict(data) if isinstance(data, dict) else {"data": data}
     out["matrix_status"] = "ready"
     return out

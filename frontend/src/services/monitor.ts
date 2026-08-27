@@ -216,6 +216,8 @@ export interface RankingMatrixCellSnapshot {
   schedule_window_key?: string | null
   schedule_label?: string | null
   schedule_source?: 'run' | 'inferred' | 'created_at' | 'lead_diagnosis' | null
+  region_code?: string | null
+  region_label?: string | null
   updated_at: string | null
   status: string
   page_screenshot: string | null

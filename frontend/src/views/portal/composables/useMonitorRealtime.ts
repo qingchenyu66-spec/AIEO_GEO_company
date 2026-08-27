@@ -106,6 +106,48 @@ function matrixCellSnapshots(cell: RankingMatrixCell): RankingMatrixCellSnapshot
   }]
 }
 
+export interface MatrixDrawerRoundGroup {
+  roundIndex: number
+  scheduleWindowKey: string
+  scheduleLabel: string | null
+  snapshots: RankingMatrixCellSnapshot[]
+}
+
+function snapshotScheduleRoundKey(snapshot: RankingMatrixCellSnapshot): string {
+  return (
+    snapshot.schedule_window_key?.trim()
+    || snapshot.schedule_label?.trim()
+    || snapshot.updated_at?.trim()
+    || snapshot.subtask_id
+  )
+}
+
+function groupMatrixDrawerSnapshots(snapshots: RankingMatrixCellSnapshot[]): MatrixDrawerRoundGroup[] {
+  const grouped = new Map<string, RankingMatrixCellSnapshot[]>()
+  for (const snapshot of snapshots) {
+    const key = snapshotScheduleRoundKey(snapshot)
+    const bucket = grouped.get(key) || []
+    bucket.push(snapshot)
+    grouped.set(key, bucket)
+  }
+  return [...grouped.keys()]
+    .sort()
+    .map((scheduleWindowKey, index) => {
+      const items = grouped.get(scheduleWindowKey) || []
+      const sorted = [...items].sort((a, b) => {
+        const left = (a.region_label || '').trim()
+        const right = (b.region_label || '').trim()
+        return left.localeCompare(right, 'zh-CN')
+      })
+      return {
+        roundIndex: index + 1,
+        scheduleWindowKey,
+        scheduleLabel: sorted[0]?.schedule_label ?? null,
+        snapshots: sorted,
+      }
+    })
+}
+
 function matrixCellTitle(cell: RankingMatrixCell | undefined) {
   if (!cell) return ''
   if ((cell.rank_sample_count || cell.sample_count || 0) > 1) {
@@ -318,6 +360,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const detailVisible = ref(false)
   const loadingDetail = ref(false)
   const expandedSnapshotId = ref<string | null>(null)
+  const expandedRoundKey = ref<string | null>(null)
   const loadingSnapshotId = ref<string | null>(null)
   const detailSubtask = ref<MonitorSubtask | null>(null)
   const detailContext = ref<{
@@ -1101,6 +1144,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       cell,
     }
     expandedSnapshotId.value = null
+    expandedRoundKey.value = null
     detailSubtask.value = null
     loadingSnapshotId.value = null
     detailVisible.value = true
@@ -1108,6 +1152,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   async function toggleMatrixSnapshot(snapshot: RankingMatrixCellSnapshot) {
     if (!snapshot.subtask_id) return
+    expandedRoundKey.value = snapshotScheduleRoundKey(snapshot)
     if (expandedSnapshotId.value === snapshot.subtask_id) {
       expandedSnapshotId.value = null
       detailSubtask.value = null
@@ -1165,6 +1210,35 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     } finally {
       if (seq === snapshotDetailSeq) loadingSnapshotId.value = null
     }
+  }
+
+  function toggleMatrixRound(group: MatrixDrawerRoundGroup) {
+    if (group.snapshots.length === 1) {
+      void toggleMatrixSnapshot(group.snapshots[0])
+      return
+    }
+    if (expandedRoundKey.value === group.scheduleWindowKey) {
+      expandedRoundKey.value = null
+      expandedSnapshotId.value = null
+      detailSubtask.value = null
+      return
+    }
+    expandedRoundKey.value = group.scheduleWindowKey
+    expandedSnapshotId.value = null
+    detailSubtask.value = null
+  }
+
+  function isMatrixRoundExpanded(group: MatrixDrawerRoundGroup) {
+    if (group.snapshots.length === 1) {
+      return expandedSnapshotId.value === group.snapshots[0]?.subtask_id
+    }
+    return expandedRoundKey.value === group.scheduleWindowKey
+  }
+
+  function activeSnapshotInRound(group: MatrixDrawerRoundGroup): RankingMatrixCellSnapshot | null {
+    const activeId = expandedSnapshotId.value
+    if (!activeId) return null
+    return group.snapshots.find(item => item.subtask_id === activeId) ?? null
   }
 
   async function openListSubtask(subtask: MonitorSubtask) {
@@ -1359,6 +1433,8 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     return cell ? matrixCellSnapshots(cell) : []
   })
 
+  const matrixDrawerRoundGroups = computed(() => groupMatrixDrawerSnapshots(matrixDrawerSnapshots.value))
+
   const isMatrixDrawerMode = computed(() => matrixDrawerSnapshots.value.length > 0)
 
   onMounted(async () => {
@@ -1453,7 +1529,11 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     selectMatrixCell,
     openMatrixChartCell,
     toggleMatrixSnapshot,
+    toggleMatrixRound,
+    isMatrixRoundExpanded,
+    activeSnapshotInRound,
     matrixDrawerSnapshots,
+    matrixDrawerRoundGroups,
     isMatrixDrawerMode,
     expandedSnapshotId,
     loadingSnapshotId,
