@@ -37,10 +37,7 @@ const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props
 
 const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
 
-const screenshotPending = computed(() => {
-  if (snapshotLink.value) return false
-  return Boolean(props.subtask?.screenshot_pending)
-})
+const screenshotPending = computed(() => Boolean(props.subtask?.screenshot_pending))
 
 const screenshotFailed = computed(() => {
   if (snapshotLink.value || screenshotPending.value) return false
@@ -82,6 +79,7 @@ async function refreshSubtaskOnce() {
 function startShotPoll() {
   stopShotPoll()
   if (!props.visible || !screenshotPending.value) return
+  void refreshSubtaskOnce()
   pollTimer.value = setInterval(() => {
     void refreshSubtaskOnce()
   }, 3000)
@@ -209,7 +207,7 @@ const answerPreview = computed(() => {
         </div>
         <div class="is-wide">
           <dt>快照链接</dt>
-          <dd v-if="snapshotLink">
+          <dd v-if="snapshotLink && !screenshotPending">
             <a :href="snapshotLink" target="_blank" rel="noopener noreferrer" class="snapshot-detail-link">
               查看快照
               <ExternalLink :size="14" />

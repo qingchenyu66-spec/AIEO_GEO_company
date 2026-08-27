@@ -767,14 +767,17 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
   const activeId = updatedSubtask?.subtask_id || detailItem.value?.subtask_id || backfillTarget.value?.subtask_id
   let patched = false
   if (updatedSubtask?.subtask_id) {
-    patched = patchSlotLocally(updatedSubtask.subtask_id, {
+    const patch: Partial<SnapshotBackfillMatrixSlot> = {
       mention_position: updatedSubtask.mention_position ?? null,
-      needs_backfill: updatedSubtask.needs_backfill ?? false,
       has_answer: Boolean(updatedSubtask.answer_content),
       status: updatedSubtask.status ?? null,
       error_message: updatedSubtask.error_message ?? null,
       is_gap: false,
-    })
+    }
+    if (updatedSubtask.needs_backfill !== undefined) {
+      patch.needs_backfill = updatedSubtask.needs_backfill
+    }
+    patched = patchSlotLocally(updatedSubtask.subtask_id, patch)
   }
   // 2026-08-03 - 缺口格补录后矩阵仍显示漏跑 - 本地 patch 找不到 is_gap 槽位，须重拉
   if (!patched) {

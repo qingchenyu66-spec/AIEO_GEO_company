@@ -535,6 +535,80 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert log.operator_name == "运营测试"
 
 
+def test_apply_snapshot_backfill_clears_cdn_screenshot_for_share_url(db_session, monkeypatch) -> None:
+    """贴链补录须清旧 CDN 图并标记 screenshot_pending，避免界面仍显示旧快照。"""
+    from types import SimpleNamespace
+
+    from app.services.share_page_fetch_service import SharePageFetchResult
+    from app.services.snapshot_backfill_service import apply_snapshot_backfill
+
+    shot = "https://img.molizhishu.com/screenshots/2026/08/21/demo_doubao.png"
+    task = GeoMonitorTask(
+        task_id="task-backfill-cdn",
+        monitor_keywords="品牌A",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["问题A"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-backfill-cdn",
+        task_id="task-backfill-cdn",
+        platform="doubao",
+        mode="standard",
+        prompt="问题A",
+        status="completed",
+        answer_content="旧回答",
+        page_screenshot=shot,
+        raw_result_json={"source": "remote", "screenshot_ok": True},
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    current = SimpleNamespace(
+        identity=SimpleNamespace(
+            identity_type="PLATFORM",
+            tenant_id=None,
+            id=1,
+            identity_name="运营测试",
+            position_id=None,
+        ),
+        user=SimpleNamespace(id=1, display_name="运营测试", username="ops_test"),
+    )
+
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.fetch_share_page",
+        lambda url, **kwargs: SharePageFetchResult(
+            answer_content="1. 新正文",
+            references=[],
+            title="fake",
+            source_host="doubao.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.snapshot_backfill_service.enqueue_backfill_screenshot",
+        lambda **kwargs: "queued",
+    )
+    result = apply_snapshot_backfill(
+        db_session,
+        subtask_id="st-backfill-cdn",
+        snapshot_url="https://www.doubao.com/thread/new1234567890",
+        mention_position=2,
+        current=current,
+    )
+    assert subtask.page_screenshot is None
+    assert subtask.raw_result_json.get("screenshot_pending") is True
+    assert subtask.raw_result_json.get("replaced_previous_screenshot") == shot
+    assert "screenshot_ok" not in subtask.raw_result_json
+    assert result["subtask"].get("needs_backfill") is False
+    assert result["subtask"].get("screenshot_pending") is True
+
+
 def test_apply_snapshot_backfill_screenshot_fail_does_not_store_share_link(db_session, monkeypatch) -> None:
     from types import SimpleNamespace
 

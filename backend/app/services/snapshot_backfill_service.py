@@ -297,6 +297,30 @@ def matrix_cell_has_todo(*, ranks: list[float], sample_count: int, gap_count: in
     return float(avg) > float(backfill_weak_rank_threshold())
 
 
+def enrich_subtask_display_backfill_flags(
+    display: dict[str, Any],
+    subtask: GeoMonitorSubtask,
+) -> dict[str, Any]:
+    """补录 API 响应带上与矩阵一致的 needs_backfill，避免前端 patch 误消红点。"""
+    display_rank = display.get("mention_position")
+    try:
+        effective = int(display_rank) if display_rank is not None else None
+    except (TypeError, ValueError):
+        effective = None
+    needs = subtask_needs_snapshot_backfill(
+        subtask,
+        effective_rank=effective,
+        use_effective_rank=True,
+        brand_mentioned=display.get("brand_mentioned"),
+    )
+    dismissed = subtask_backfill_dismissed(subtask)
+    display["backfill_dismissed"] = dismissed
+    display["needs_backfill"] = bool(needs) and not dismissed
+    display["needs_backfill_raw"] = bool(needs)
+    display["has_answer"] = bool((subtask.answer_content or "").strip())
+    return display
+
+
 def build_snapshot_backfill_matrix_sample(
     subtask: GeoMonitorSubtask,
     task: GeoMonitorTask,
@@ -627,11 +651,14 @@ def apply_snapshot_backfill(
             if task.tenant_id
             else []
         )
-        display = serialize_subtask_for_display(
+        display = enrich_subtask_display_backfill_flags(
+            serialize_subtask_for_display(
+                subtask,
+                monitor_keywords=task.monitor_keywords,
+                asset=asset,
+                keyword_groups=groups,
+            ),
             subtask,
-            monitor_keywords=task.monitor_keywords,
-            asset=asset,
-            keyword_groups=groups,
         )
         return {
             "subtask": display,
@@ -673,12 +700,11 @@ def apply_snapshot_backfill(
     previous_shot = (subtask.page_screenshot or "").strip() or None
 
     clear_subtask_backfill_dismiss(subtask)
-    # 2026-08-07 - 补录同步截图提交卡十几秒 - 提交只写正文，截图 Celery 异步；勿把分享链写入 page_screenshot
-    if previous_shot and is_image_screenshot_url(previous_shot):
-        subtask.page_screenshot = previous_shot
-    else:
-        subtask.page_screenshot = None
+    # 2026-08-27 - 贴链补录留旧 CDN 图运营以为未生效 - 清空待异步新截图；rank_only/误填图链分支不动
+    subtask.page_screenshot = None
     fetch_meta["screenshot_pending"] = True
+    if previous_shot:
+        fetch_meta["replaced_previous_screenshot"] = previous_shot
     subtask.answer_content = content
     subtask.error_message = None
     subtask.status = "completed"
@@ -731,6 +757,8 @@ def apply_snapshot_backfill(
     # 在重算后的 raw 上合并补录元数据，避免冲掉 rank_resolution
     raw = dict(subtask.raw_result_json or previous_raw or {})
     raw.update(manual_meta)
+    raw.pop("screenshot_ok", None)
+    raw.pop("screenshot_error", None)
     subtask.raw_result_json = raw
 
     _reconcile_task_progress(task)
@@ -805,11 +833,14 @@ def apply_snapshot_backfill(
         if task.tenant_id
         else []
     )
-    display = serialize_subtask_for_display(
+    display = enrich_subtask_display_backfill_flags(
+        serialize_subtask_for_display(
+            subtask,
+            monitor_keywords=task.monitor_keywords,
+            asset=asset,
+            keyword_groups=groups,
+        ),
         subtask,
-        monitor_keywords=task.monitor_keywords,
-        asset=asset,
-        keyword_groups=groups,
     )
     return {
         "subtask": display,
