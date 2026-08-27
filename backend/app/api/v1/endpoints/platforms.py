@@ -287,10 +287,11 @@ def alerts_celery_monitor(
     """中文版 Celery 队列与 Worker 监控。"""
     require_platform(current)
     try:
+        # 2026-08-27 - 监控嵌在预警阈值页，勿误用 platform.settings 挡有 alerts 查看权账号
         require_platform_menu_permission(
             db,
             current,
-            "platform.settings",
+            "platform.alerts",
             "can_export",
             detail="当前账号无权查看队列监控",
         )
