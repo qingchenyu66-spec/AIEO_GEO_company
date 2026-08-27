@@ -392,6 +392,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     endDate: initialDates.endDate,
     scheduleWindowKey: '',
     status: 'all',
+    includeRetiredKeywords: false,
   })
 
   const monitorGroupOptions = computed(() => {
@@ -460,7 +461,11 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     for (const group of scopedGroups) {
       for (const keyword of keywordGroupMonitorKeywords(group)) add(keyword)
     }
-    for (const column of rankingMatrix.value?.columns || []) add(column.prompt)
+    if (filters.includeRetiredKeywords) {
+      for (const column of rankingMatrix.value?.columns || []) {
+        if (column.retired) add(column.prompt)
+      }
+    }
     return keywords.sort((left, right) => left.localeCompare(right, 'zh-CN'))
   })
 
@@ -1071,6 +1076,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
         // 默认 120 在「月×多平台×多词组」会被砍行，KPI 假成跟近 7 日一样
         limit_rows: Math.min(8000, Math.max(500, spanDays * 40)),
         tenant_id: tenantId.value ?? undefined,
+        include_retired_keywords: filters.includeRetiredKeywords || undefined,
       }, { signal }))
       if (seq !== matrixSeq) return
       rankingMatrix.value = data
@@ -1334,6 +1340,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     filters.exactPrompt = ''
     filters.scheduleWindowKey = ''
     filters.status = 'all'
+    filters.includeRetiredKeywords = false
     filters.startDate = range.startDate
     filters.endDate = range.endDate
     datePreset.value = isCustomerView.value ? '7d' : '7d'
@@ -1393,6 +1400,21 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       }
       if (filters.exposureTerm && !exposureTermOptions.value.includes(filters.exposureTerm)) {
         filters.exposureTerm = ''
+      }
+    },
+  )
+
+  watch(
+    () => filters.includeRetiredKeywords,
+    (on) => {
+      if (!on && filters.monitorKeyword.trim()) {
+        const activeOnly = monitorGroupOptions.value.some(group => (
+          keywordGroupMonitorKeywords(group).some(keyword => keyword.trim() === filters.monitorKeyword.trim())
+        ))
+        if (!activeOnly) filters.monitorKeyword = ''
+      }
+      if (viewMode.value === 'matrix') {
+        void loadRankingMatrix()
       }
     },
   )

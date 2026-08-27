@@ -267,6 +267,10 @@ function matrixRoundHeaderSummary(group: MatrixDrawerRoundGroup) {
               {{ term }}
             </option>
           </select>
+          <label v-if="viewMode === 'matrix'" class="realtime-retired-toggle">
+            <input v-model="filters.includeRetiredKeywords" type="checkbox">
+            含已下线词
+          </label>
           <select v-if="viewMode === 'list'" v-model="filters.scheduleWindowKey">
             <option value="">全部轮次</option>
             <option

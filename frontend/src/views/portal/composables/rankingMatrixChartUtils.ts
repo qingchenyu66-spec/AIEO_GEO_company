@@ -41,11 +41,15 @@ export type MatrixKeywordDetailRow = {
 
 export function labelMatrixPrompt(column: RankingMatrixColumn) {
   const monitorKeyword = (column.monitor_keyword || '').trim()
-  if (monitorKeyword) return monitorKeyword
+  const retiredSuffix = column.retired ? '（已下线）' : ''
+  if (monitorKeyword) return `${monitorKeyword}${retiredSuffix}`
   const group = (column.group_name || '').trim()
-  if (group) return group
+  if (group) return `${group}${retiredSuffix}`
   const prompt = (column.prompt || '').trim()
-  if (prompt) return prompt.length > 12 ? `${prompt.slice(0, 12)}…` : prompt
+  if (prompt) {
+    const base = prompt.length > 12 ? `${prompt.slice(0, 12)}…` : prompt
+    return `${base}${retiredSuffix}`
+  }
   return '—'
 }
 

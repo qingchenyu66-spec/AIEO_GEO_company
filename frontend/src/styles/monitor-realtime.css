@@ -164,6 +164,26 @@
   max-width: min(220px, 36vw);
 }
 
+.realtime-sticky-filters .realtime-retired-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #fff;
+  color: #17406a;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.realtime-sticky-filters .realtime-retired-toggle input {
+  margin: 0;
+}
+
 .realtime-view-toggle {
   display: inline-flex;
   padding: 3px;

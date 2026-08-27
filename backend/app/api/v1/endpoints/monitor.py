@@ -220,6 +220,10 @@ def monitor_ranking_matrix(
     monitor_keyword: str | None = None,
     exposure_term: str | None = None,
     limit_rows: int = 120,
+    include_retired_keywords: bool = Query(
+        default=False,
+        description="为 true 时在矩阵末尾追加所选日期内仍有数据、但已从监测配置删除的监测词列",
+    ),
     async_miss: bool = Query(
         default=True,
         description="缓存未命中时入队异步构建（桌面稳定性③）；false 则同步构建",
@@ -267,6 +271,7 @@ def monitor_ranking_matrix(
                 exposure_term=exposure_term,
                 limit_rows=limit_rows,
                 tenant_id=scoped_tenant_id,
+                include_retired_keywords=include_retired_keywords,
             )
             if isinstance(data, dict):
                 data = {**data, "matrix_status": "ready"}
@@ -283,6 +288,7 @@ def monitor_ranking_matrix(
                 monitor_keyword=monitor_keyword,
                 exposure_term=exposure_term,
                 limit_rows=limit_rows,
+                include_retired_keywords=include_retired_keywords,
             ) + observer_cache_suffix(current)
 
             def _build() -> dict:
@@ -299,6 +305,7 @@ def monitor_ranking_matrix(
                     exposure_term=exposure_term,
                     limit_rows=limit_rows,
                     tenant_id=scoped_tenant_id,
+                    include_retired_keywords=include_retired_keywords,
                 )
 
             # 2026-08-21 - 稳定性③：租户矩阵 miss 默认异步，避免拖死 API worker
@@ -317,6 +324,7 @@ def monitor_ranking_matrix(
                     "monitor_keyword": monitor_keyword,
                     "exposure_term": exposure_term,
                     "limit_rows": int(limit_rows),
+                    "include_retired_keywords": bool(include_retired_keywords),
                 },
                 prefer_async=bool(async_miss),
             )

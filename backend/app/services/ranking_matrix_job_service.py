@@ -296,6 +296,7 @@ def run_matrix_job(db: Session, job_id: str) -> dict[str, Any]:
                 exposure_term=params.get("exposure_term"),
                 limit_rows=int(params.get("limit_rows") or 120),
                 tenant_id=params.get("tenant_id"),
+                include_retired_keywords=bool(params.get("include_retired_keywords")),
             )
             set_json_cache(cache_key, data, ttl_seconds=RANKING_MATRIX_CACHE_TTL)
             mark_matrix_job(job_id, status="ready", cache_key=cache_key, result=data)

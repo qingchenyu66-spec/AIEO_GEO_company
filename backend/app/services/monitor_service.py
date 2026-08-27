@@ -2632,6 +2632,34 @@ def _filter_matrix_columns_for_scope(
     return [col for col in columns if col.get("prompt") in allowed]
 
 
+def _append_retired_matrix_columns(
+    columns: list[dict[str, Any]],
+    prompt_set: dict[str, str | None],
+    keyword_groups: list[BrandKeywordGroup],
+    *,
+    asset: BrandAsset | None = None,
+) -> list[dict[str, Any]]:
+    """2026-08-27 - 排名矩阵含已下线词 - 窗内有数据但不在当前监测配置里的 prompt 追加列"""
+    active_prompts = {col["prompt"] for col in columns}
+    retired: list[dict[str, Any]] = []
+    for prompt in sorted(prompt_set.keys(), key=lambda text: (prompt_set[text] or "zzz", text)):
+        if prompt in active_prompts:
+            continue
+        matched = _resolve_prompt_keyword_group(prompt, keyword_groups)
+        group_label = prompt_set.get(prompt) or (
+            keyword_group_display_label(matched) if matched else None
+        )
+        retired.append({
+            "prompt": prompt,
+            "group_name": group_label or "已下线监测词",
+            "monitor_keyword": prompt,
+            "group_id": matched.id if matched else None,
+            "platforms": keyword_group_platforms(matched, asset) if matched else [],
+            "retired": True,
+        })
+    return columns + retired
+
+
 def _build_matrix_columns(
     keyword_groups: list[BrandKeywordGroup],
     prompt_set: dict[str, str | None],
@@ -2639,6 +2667,7 @@ def _build_matrix_columns(
     *,
     platform: str | None = None,
     asset: BrandAsset | None = None,
+    include_retired: bool = False,
 ) -> list[dict[str, Any]]:
     """按监测词建列：每个词组的每个 monitor keyword 各占一列。
 
@@ -2687,6 +2716,8 @@ def _build_matrix_columns(
             })
 
     if columns:
+        if include_retired:
+            return _append_retired_matrix_columns(columns, prompt_set, keyword_groups, asset=asset)
         return columns
 
     visible_prompts = sorted(
@@ -7003,6 +7034,7 @@ def ranking_matrix(
     exposure_term: str | None = None,
     limit_rows: int = 120,
     tenant_id: int | None = None,
+    include_retired_keywords: bool = False,
 ) -> dict[str, Any]:
     """Build prompt × daily-average ranking matrix for realtime monitor view."""
     resolved_tenant_id = _resolve_matrix_tenant_id(current, tenant_id)
@@ -7279,6 +7311,7 @@ def ranking_matrix(
         rows,
         platform=selected_platform,
         asset=asset,
+        include_retired=bool(include_retired_keywords),
     )
     columns = _filter_matrix_columns_for_scope(
         columns,

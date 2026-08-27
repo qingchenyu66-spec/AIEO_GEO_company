@@ -199,6 +199,8 @@ export interface RankingMatrixColumn {
   group_id?: number | null
   /** 词组配置的监测平台；切平台 Tab 时据此隐藏未配置词 */
   platforms?: string[]
+  /** 已从监测配置删除，但所选日期内仍有历史数据 */
+  retired?: boolean
 }
 
 export interface RankingMatrixCellSnapshot {
@@ -299,6 +301,7 @@ export interface RankingMatrixQuery {
   exposure_term?: string
   limit_rows?: number
   tenant_id?: number
+  include_retired_keywords?: boolean
 }
 
 export interface WorkspaceBriefSchedule {
