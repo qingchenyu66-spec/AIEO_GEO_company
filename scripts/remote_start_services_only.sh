@@ -93,7 +93,7 @@ User=root
 WorkingDirectory=/opt/geo/AIEO_GEO/backend
 Environment=PYTHONPATH=/opt/geo/AIEO_GEO/backend
 EnvironmentFile=/opt/geo/AIEO_GEO/backend/.env
-ExecStart=/opt/geo/AIEO_GEO/backend/.venv/bin/celery -A app.celery_app worker -Q default -n default@%%h -c 2 --loglevel=info
+ExecStart=/opt/geo/AIEO_GEO/backend/.venv/bin/celery -A app.celery_app worker -Q default -n default@%%h -c 4 --loglevel=info
 Restart=always
 RestartSec=5
 

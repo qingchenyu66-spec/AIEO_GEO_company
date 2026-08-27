@@ -15,7 +15,8 @@ from app.core.redis_client import get_json_cache, get_redis_client, prefixed_key
 
 logger = logging.getLogger(__name__)
 
-QUEUE_NAMES = ("submit", "sync")
+# 2026-08-27 - 纳入 default（矩阵异步构建等），便于运营看积压
+QUEUE_NAMES = ("submit", "sync", "default")
 ALERT_LOG = "celery-alerts"
 BEAT_HISTORY_KEY = "celery:beat:history"
 BEAT_HISTORY_MAX = 15
@@ -27,6 +28,7 @@ TASK_LABELS: dict[str, str] = {
     "app.tasks.monitor.scan_pending_syncs": "扫描待同步任务",
     "app.tasks.monitor.sync_one_monitor_task": "同步监测结果",
     "app.tasks.monitoring.check_queue_backlog": "检查队列积压",
+    "app.tasks.monitor.build_ranking_matrix_job_task": "排名矩阵异步构建",
 }
 
 BEAT_TASK_KEYS = frozenset(TASK_LABELS.keys())
@@ -41,9 +43,14 @@ BUSINESS_METRIC_LABELS: dict[str, str] = {
 TECHNICAL_METRIC_LABELS: dict[str, str] = {
     "celery_queue_submit": "提交队列积压",
     "celery_queue_sync": "同步队列积压",
+    "celery_queue_default": "默认队列积压",
 }
 
-QUEUE_METRIC_BY_NAME = {"submit": "celery_queue_submit", "sync": "celery_queue_sync"}
+QUEUE_METRIC_BY_NAME = {
+    "submit": "celery_queue_submit",
+    "sync": "celery_queue_sync",
+    "default": "celery_queue_default",
+}
 
 _THRESHOLD_CACHE: dict[str, int] = {}
 _THRESHOLD_CACHE_EXPIRES_AT = 0.0
@@ -650,6 +657,8 @@ def _threshold(queue_name: str, level: str) -> int:
             return cached
     if queue_name == "submit":
         return settings.celery_queue_submit_warning if level == "warning" else settings.celery_queue_submit_critical
+    if queue_name == "default":
+        return settings.celery_queue_default_warning if level == "warning" else settings.celery_queue_default_critical
     return settings.celery_queue_sync_warning if level == "warning" else settings.celery_queue_sync_critical
 
 
@@ -779,6 +788,7 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
     queue_labels = {
         "submit": "提交队列",
         "sync": "同步队列",
+        "default": "默认队列（矩阵/知识库）",
     }
     status_labels = {
         "normal": "正常",
@@ -865,6 +875,8 @@ def _worker_role_label(worker_name: str) -> str:
         return "提交进程"
     if role == "sync":
         return "同步进程"
+    if role == "default":
+        return "默认进程（矩阵等）"
     return "调度进程"
 
 

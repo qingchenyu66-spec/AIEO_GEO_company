@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     celery_queue_submit_critical: int = 150
     celery_queue_sync_warning: int = 100
     celery_queue_sync_critical: int = 300
+    # 2026-08-27 - default 含矩阵/知识库/预热，阈值低于 sync
+    celery_queue_default_warning: int = 30
+    celery_queue_default_critical: int = 80
     celery_pending_sync_task_warning: int = 80
     celery_pending_sync_task_critical: int = 200
 

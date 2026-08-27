@@ -526,7 +526,8 @@ export async function getRankingMatrix(
       if (config?.signal?.aborted) {
         throw new DOMException('Aborted', 'AbortError')
       }
-      await new Promise(r => setTimeout(r, 2500))
+      // 2026-08-27 - 矩阵 job 轮询 1s，减轻 cache miss 时 2.5s 地板延迟
+      await new Promise(r => setTimeout(r, 1000))
       if (config?.signal?.aborted) {
         throw new DOMException('Aborted', 'AbortError')
       }

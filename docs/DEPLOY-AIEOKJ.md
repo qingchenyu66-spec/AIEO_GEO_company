@@ -259,7 +259,7 @@ export PYTHONPATH=/opt/geo/AIEO_GEO/backend
 celery -A app.celery_app beat --loglevel=info
 celery -A app.celery_app worker -Q submit -n submit@%h -c 4 --loglevel=info
 celery -A app.celery_app worker -Q sync -n sync@%h -c 4 --loglevel=info
-celery -A app.celery_app worker -Q default -n default@%h -c 2 --loglevel=info
+celery -A app.celery_app worker -Q default -n default@%h -c 4 --loglevel=info
 ```
 
 ---
