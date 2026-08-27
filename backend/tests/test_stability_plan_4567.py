@@ -25,14 +25,14 @@ def test_match_workspace_window_days_uses_cutoff(monkeypatch):
     assert match_workspace_window_days(date(2026, 8, 1), date(2026, 8, 20)) is None
 
 
-def test_evaluate_stability_alerts_fast_p95():
+def test_evaluate_stability_alerts_skips_fast_p95():
     metrics = {
         "latency": {"lanes": {"fast": {"p95_ms": 6000, "count": 20}, "heavy": {"p95_ms": 100}, "callback": {}}},
         "callback": {"hours": 24, "total": 0, "failed": 0, "failure_rate": 0},
         "matrix_jobs": {"max_ms": None},
     }
     alerts = evaluate_stability_alerts(metrics)
-    assert any(a["queue"] == "api_fast_p95" and a["level"] == "critical" for a in alerts)
+    assert not any(a["queue"] == "api_fast_p95" for a in alerts)
 
 
 def test_evaluate_stability_alerts_skips_heavy_p95():
