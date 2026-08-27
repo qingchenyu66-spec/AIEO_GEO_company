@@ -404,6 +404,8 @@ def list_pending_monitor_task_ids(
                 ),
             )
         )
+    # 2026-08-27 - 漏跑占位主任务无模力同步需求 - SQL 层先剔除，避免待同步明细刷屏
+    stmt = _exclude_gap_backfill_tasks(stmt)
     # Oldest-first so backlog cannot starve early pending tasks (CWE-400).
     stmt = stmt.order_by(GeoMonitorTask.updated_at.asc(), GeoMonitorTask.id.asc()).limit(limit)
     return list(db.scalars(stmt))
@@ -423,6 +425,28 @@ def _short_task_id(task_id: str) -> str:
     if len(text) <= 16:
         return text
     return f"{text[:8]}…{text[-4:]}"
+
+
+GAP_BACKFILL_SOURCE = "gap_backfill"
+
+
+def _is_gap_backfill_subtask(subtask: GeoMonitorSubtask) -> bool:
+    # 2026-08-27 - 漏跑占位子任务进待同步明细误报豆包失败 - 非模力真实提交，运营看板排除
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    return raw.get("source") == GAP_BACKFILL_SOURCE
+
+
+def _is_gap_backfill_task(task: GeoMonitorTask) -> bool:
+    raw = task.raw_request_json if isinstance(task.raw_request_json, dict) else {}
+    if raw.get("source") == GAP_BACKFILL_SOURCE:
+        return True
+    subs = list(task.subtasks or [])
+    return bool(subs) and all(_is_gap_backfill_subtask(item) for item in subs)
+
+
+def _exclude_gap_backfill_tasks(stmt):
+    gap_source = func.json_unquote(func.json_extract(GeoMonitorTask.raw_request_json, "$.source"))
+    return stmt.where(or_(gap_source.is_(None), gap_source != GAP_BACKFILL_SOURCE))
 
 
 def _subtask_effective_status(subtask: GeoMonitorSubtask) -> str:
@@ -475,6 +499,8 @@ def summarize_monitor_task_for_ops(
         for code in configured_platforms
     }
     for subtask in task.subtasks or []:
+        if _is_gap_backfill_subtask(subtask):
+            continue
         code = str(subtask.platform or "").strip()
         if not code:
             continue
@@ -578,6 +604,7 @@ def summarize_monitor_tasks_for_ops(
             platform_names=platform_names,
         )
         for task in ordered_tasks
+        if not _is_gap_backfill_task(task)
     ]
 
 
