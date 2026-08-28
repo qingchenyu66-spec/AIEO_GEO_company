@@ -87,6 +87,21 @@ class SnapshotBackfillGapSubtaskRequest(BaseModel):
     schedule_window_key: str = Field(..., min_length=13, max_length=32)
 
 
+class SnapshotBackfillBatchDismissSlot(BaseModel):
+    """前端矩阵已加载的待忽略场次，避免后端重扫矩阵。"""
+
+    tenant_id: int | None = Field(default=None, ge=1)
+    platform: str = Field(..., min_length=1, max_length=50)
+    prompt: str = Field(..., min_length=1, max_length=500)
+    schedule_window_key: str | None = Field(default=None, max_length=32)
+    subtask_id: str | None = Field(default=None, max_length=64)
+    is_gap: bool = False
+
+
+class SnapshotBackfillBatchDismissRequest(BaseModel):
+    slots: list[SnapshotBackfillBatchDismissSlot] = Field(default_factory=list, max_length=500)
+
+
 class SnapshotBackfillListSummary(BaseModel):
     total: int = 0
     pending: int = 0

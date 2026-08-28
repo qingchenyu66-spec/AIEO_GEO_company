@@ -244,6 +244,40 @@ export async function dismissSnapshotBackfill(subtaskId: string): Promise<{
   return response.data.data
 }
 
+export interface SnapshotBackfillBatchDismissSlot {
+  tenant_id?: number | null
+  platform: string
+  prompt: string
+  schedule_window_key?: string | null
+  subtask_id?: string | null
+  is_gap?: boolean
+}
+
+export async function dismissSnapshotBackfillBatch(
+  query: SnapshotBackfillQuery & { todo_only?: boolean; slots?: SnapshotBackfillBatchDismissSlot[] } = {},
+): Promise<{ dismissed: number; skipped: number; truncated: boolean; todo_only: boolean }> {
+  const response = await http.post(
+    '/v1/monitor/snapshot-backfill/dismiss-batch',
+    query.slots?.length ? { slots: query.slots } : null,
+    {
+      params: {
+        tenant_id: query.tenant_id || undefined,
+        all_tenants: query.tenant_id ? undefined : (query.all_tenants ?? true),
+        date_from: query.date_from || undefined,
+        date_to: query.date_to || undefined,
+        source: query.source || undefined,
+        platform: query.platform || undefined,
+        keyword: query.keyword || undefined,
+        keyword_group: query.keyword_group || undefined,
+        todo_only: query.todo_only ?? true,
+      },
+      timeout: 120000,
+    },
+  )
+  invalidateCache('/v1/monitor')
+  return response.data.data
+}
+
 export async function undismissSnapshotBackfill(subtaskId: string): Promise<{
   subtask_id: string
   backfill_dismissed: boolean

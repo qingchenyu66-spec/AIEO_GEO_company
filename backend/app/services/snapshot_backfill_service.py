@@ -8,15 +8,16 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from sqlalchemy import and_, false, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, false, func, or_, select, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
 from app.core.config import settings
 from app.core.region_catalog import region_submission_targets
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
-from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask, GeoSnapshotBackfillGapDismiss
 from app.models.tenant import Tenant
 from app.services.brand_service import (
     active_keyword_groups,
@@ -30,7 +31,7 @@ from app.services.brand_service import (
     list_keyword_groups,
     tenant_purchased_platforms,
 )
-from app.schemas.monitor import FAST_MONITOR_MODE
+from app.schemas.monitor import FAST_MONITOR_MODE, SnapshotBackfillBatchDismissSlot
 from app.services.operation_log_service import write_operation_log
 from app.services.media_proxy_service import public_screenshot_url
 from app.services.monitor_service import (
@@ -203,6 +204,20 @@ def _schedule_context_for_task(
 def subtask_backfill_dismissed(subtask: GeoMonitorSubtask) -> bool:
     """运营已忽略该子任务的待补录提醒。"""
     return getattr(subtask, "backfill_dismissed_at", None) is not None
+
+
+def _mark_subtask_dismissed(subtask: GeoMonitorSubtask, user_id: int, now: datetime) -> bool:
+    if subtask_backfill_dismissed(subtask):
+        return False
+    subtask.backfill_dismissed_at = now
+    subtask.backfill_dismissed_by = user_id
+    return True
+
+
+def _slot_is_batch_dismissable(slot: dict[str, Any]) -> bool:
+    if slot.get("backfill_dismissed"):
+        return False
+    return bool(slot.get("is_gap") or slot.get("subtask_id"))
 
 
 def clear_subtask_backfill_dismiss(subtask: GeoMonitorSubtask) -> None:
@@ -983,8 +998,11 @@ def dismiss_snapshot_backfill(
         return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
 
     # 2026-07-28 - 点开即可忽略消红点 - 不要求仍是待补状态
-    subtask.backfill_dismissed_at = datetime.now(UTC).replace(tzinfo=None)
-    subtask.backfill_dismissed_by = current.user.id
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if not _mark_subtask_dismissed(subtask, current.user.id, now):
+        item = build_snapshot_backfill_item(db, subtask, task)
+        return {"subtask_id": subtask.subtask_id, "backfill_dismissed": True, "item": item}
+
     dismiss_desc = _snapshot_backfill_log_description(db, subtask, task, action_type="忽略补录")
     write_operation_log(
         db,
@@ -1037,6 +1055,336 @@ def undismiss_snapshot_backfill(
     if item.get("needs_backfill"):
         _notify_subtask_backfill(db, subtask, task, ctx=item)
     return {"subtask_id": subtask.subtask_id, "backfill_dismissed": False, "item": item}
+
+
+BATCH_DISMISS_CHUNK = 200
+BATCH_DISMISS_MAX = 3000
+BATCH_DISMISS_SLOTS_MAX = 5000
+
+
+def _gap_dismiss_matrix_key(
+    *,
+    platform: str,
+    prompt: str,
+    day_text: str,
+    schedule_window_key: str,
+) -> tuple[str, str, str, str]:
+    return (platform, prompt, day_text, schedule_window_key)
+
+
+def _load_dismissed_gap_matrix_keys(
+    db: Session,
+    *,
+    tenant_id: int,
+    d0: date,
+    d1: date,
+) -> set[tuple[str, str, str, str]]:
+    """批量忽略登记的漏跑缺口，矩阵合并时跳过。"""
+    start_key = f"{d0.strftime('%Y%m%d')}-0000"
+    end_key = f"{d1.strftime('%Y%m%d')}-9999"
+    rows = db.execute(
+        select(
+            GeoSnapshotBackfillGapDismiss.platform,
+            GeoSnapshotBackfillGapDismiss.prompt,
+            GeoSnapshotBackfillGapDismiss.schedule_window_key,
+        ).where(
+            GeoSnapshotBackfillGapDismiss.tenant_id == int(tenant_id),
+            GeoSnapshotBackfillGapDismiss.schedule_window_key >= start_key,
+            GeoSnapshotBackfillGapDismiss.schedule_window_key <= end_key,
+        )
+    ).all()
+    keys: set[tuple[str, str, str, str]] = set()
+    for plat, prompt, window_key in rows:
+        text = str(window_key or "").strip()
+        if len(text) < 8 or not text[:8].isdigit():
+            continue
+        day_text = f"{text[0:4]}-{text[4:6]}-{text[6:8]}"
+        keys.add(
+            _gap_dismiss_matrix_key(
+                platform=str(plat or "").strip(),
+                prompt=str(prompt or "").strip(),
+                day_text=day_text,
+                schedule_window_key=text,
+            )
+        )
+    return keys
+
+
+def _bulk_insert_gap_dismissals(
+    db: Session,
+    *,
+    rows: list[dict[str, Any]],
+) -> int:
+    if not rows:
+        return 0
+    stmt = mysql_insert(GeoSnapshotBackfillGapDismiss).values(rows)
+    stmt = stmt.prefix_with("IGNORE")
+    result = db.execute(stmt)
+    return int(result.rowcount or 0)
+
+
+def dismiss_snapshot_backfill_slots(
+    db: Session,
+    *,
+    current: CurrentSession,
+    slots: list[SnapshotBackfillBatchDismissSlot],
+) -> dict[str, Any]:
+    """按前端已加载矩阵场次批量忽略，跳过重扫矩阵。"""
+    # 2026-08-28 - 一键忽略要即时 - bulk UPDATE + 缺口登记表，不再逐条 ensure_gap
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可忽略快照补录")
+    if not slots:
+        return {"dismissed": 0, "skipped": 0, "truncated": False, "todo_only": True}
+
+    from app.services.monitor_service import ensure_sales_tenant_access
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    user_id = current.user.id
+    gap_rows: list[dict[str, Any]] = []
+    subtask_ids: list[str] = []
+    seen_subtask: set[str] = set()
+    seen_gap: set[tuple[int, str, str, str]] = set()
+    checked_tenants: set[int] = set()
+
+    for slot in slots[:BATCH_DISMISS_SLOTS_MAX]:
+        sid = str(slot.subtask_id or "").strip()
+        if slot.is_gap or not sid:
+            tenant_slot = slot.tenant_id
+            window_key = str(slot.schedule_window_key or "").strip()
+            prompt = str(slot.prompt or "").strip()
+            plat = str(slot.platform or "").strip()
+            if tenant_slot is None or not window_key or not prompt or not plat:
+                continue
+            gap_key = (int(tenant_slot), plat, prompt, window_key)
+            if gap_key in seen_gap:
+                continue
+            seen_gap.add(gap_key)
+            if int(tenant_slot) not in checked_tenants:
+                ensure_sales_tenant_access(db, current, int(tenant_slot))
+                checked_tenants.add(int(tenant_slot))
+            gap_rows.append(
+                {
+                    "tenant_id": int(tenant_slot),
+                    "platform": plat,
+                    "prompt": prompt,
+                    "schedule_window_key": window_key,
+                    "dismissed_at": now,
+                    "dismissed_by": user_id,
+                }
+            )
+            continue
+        if sid in seen_subtask:
+            continue
+        seen_subtask.add(sid)
+        subtask_ids.append(sid)
+
+    dismissed = 0
+    skipped = 0
+
+    if subtask_ids:
+        allowed_ids = list(
+            db.scalars(
+                select(GeoMonitorSubtask.subtask_id)
+                .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+                .where(
+                    GeoMonitorSubtask.subtask_id.in_(subtask_ids),
+                    GeoMonitorSubtask.backfill_dismissed_at.is_(None),
+                    GeoMonitorTask.deleted.is_(False),
+                )
+            )
+        )
+        skipped += max(0, len(subtask_ids) - len(allowed_ids))
+        tenant_ids = list(
+            db.scalars(
+                select(GeoMonitorTask.tenant_id)
+                .join(GeoMonitorSubtask, GeoMonitorSubtask.task_id == GeoMonitorTask.task_id)
+                .where(
+                    GeoMonitorSubtask.subtask_id.in_(allowed_ids),
+                    GeoMonitorTask.tenant_id.isnot(None),
+                )
+                .distinct()
+            )
+        )
+        for tenant_slot in tenant_ids:
+            if tenant_slot is None or int(tenant_slot) in checked_tenants:
+                continue
+            ensure_sales_tenant_access(db, current, int(tenant_slot))
+            checked_tenants.add(int(tenant_slot))
+        if allowed_ids:
+            result = db.execute(
+                update(GeoMonitorSubtask)
+                .where(
+                    GeoMonitorSubtask.subtask_id.in_(allowed_ids),
+                    GeoMonitorSubtask.backfill_dismissed_at.is_(None),
+                )
+                .values(backfill_dismissed_at=now, backfill_dismissed_by=user_id)
+            )
+            dismissed += int(result.rowcount or 0)
+
+    if gap_rows:
+        _bulk_insert_gap_dismissals(db, rows=gap_rows)
+        dismissed += len(gap_rows)
+
+    truncated = len(slots) > BATCH_DISMISS_SLOTS_MAX
+    if dismissed:
+        write_operation_log(
+            db,
+            current,
+            "批量忽略补录",
+            f"按矩阵场次批量忽略 {dismissed} 条待补场次"
+            + (f"（另有 {skipped} 条跳过）" if skipped else "")
+            + (f"；截断上限 {BATCH_DISMISS_SLOTS_MAX}" if truncated else ""),
+            target_module="快照补录",
+            tenant_id=next(iter(checked_tenants), None),
+            risk_level="关注",
+        )
+        db.commit()
+        _bust_snapshot_backfill_matrix_cache()
+
+    return {
+        "dismissed": dismissed,
+        "skipped": skipped,
+        "truncated": truncated,
+        "todo_only": True,
+    }
+
+
+def _collect_batch_dismiss_targets(
+    cells: list[dict[str, Any]],
+    *,
+    todo_only: bool,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """从矩阵格收集待忽略场次；todo_only 时红点格内全部未忽略场次都纳入。"""
+    targets: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for cell in cells:
+        if todo_only and not cell.get("has_todo"):
+            continue
+        for slot in cell.get("slots") or []:
+            if slot.get("backfill_dismissed"):
+                continue
+            if todo_only:
+                if slot.get("is_gap") or slot.get("subtask_id"):
+                    targets.append((cell, slot))
+            elif _slot_is_batch_dismissable(slot):
+                targets.append((cell, slot))
+    return targets
+
+
+def dismiss_snapshot_backfill_batch(
+    db: Session,
+    *,
+    current: CurrentSession,
+    tenant_id: int | None = None,
+    tenant_ids: list[int] | None = None,
+    allowed_lead_task_ids: list[str] | None = None,
+    detect_date_from: date | None = None,
+    detect_date_to: date | None = None,
+    source: str | None = None,
+    platform: str | None = None,
+    keyword: str | None = None,
+    keyword_group: str | None = None,
+    todo_only: bool = False,
+) -> dict[str, Any]:
+    """按矩阵筛选批量忽略待补录，减少逐条点忽略。"""
+    # 2026-08-28 - 补录页红点过多 - 按当前筛选一键忽略，默认仅 has_todo 格子
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可忽略快照补录")
+
+    matrix = list_snapshot_backfill_matrix(
+        db,
+        tenant_id=tenant_id,
+        tenant_ids=tenant_ids,
+        allowed_lead_task_ids=allowed_lead_task_ids,
+        detect_date_from=detect_date_from,
+        detect_date_to=detect_date_to,
+        source=source,
+        platform=platform,
+        keyword=keyword,
+        keyword_group=keyword_group,
+    )
+    targets = _collect_batch_dismiss_targets(matrix.get("cells") or [], todo_only=todo_only)
+
+    truncated = len(targets) > BATCH_DISMISS_MAX
+    if truncated:
+        targets = targets[:BATCH_DISMISS_MAX]
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    dismissed = 0
+    skipped = 0
+    resolved_ids: list[str] = []
+
+    # 2026-08-28 - 批量忽略慢/漏清 - 矩阵只扫一次，缺口占位 defer commit，按块提交
+    for chunk_start in range(0, len(targets), BATCH_DISMISS_CHUNK):
+        chunk = targets[chunk_start : chunk_start + BATCH_DISMISS_CHUNK]
+        chunk_resolved: list[str] = []
+        for cell, slot in chunk:
+            subtask: GeoMonitorSubtask | None = None
+            subtask_id = str(slot.get("subtask_id") or "").strip()
+            if slot.get("is_gap") or not subtask_id:
+                tenant_slot = slot.get("tenant_id") or tenant_id
+                window_key = str(slot.get("schedule_window_key") or "").strip()
+                prompt = str(slot.get("prompt") or cell.get("word") or "").strip()
+                plat = str(slot.get("platform") or cell.get("platform") or "").strip()
+                if tenant_slot is None or not window_key or not prompt or not plat:
+                    skipped += 1
+                    continue
+                try:
+                    subtask = ensure_gap_backfill_subtask(
+                        db,
+                        tenant_id=int(tenant_slot),
+                        platform=plat,
+                        prompt=prompt,
+                        schedule_window_key=window_key,
+                        current=current,
+                        auto_commit=False,
+                    )
+                    subtask_id = subtask.subtask_id
+                except Exception:
+                    skipped += 1
+                    continue
+            else:
+                try:
+                    subtask = get_monitor_subtask(db, subtask_id, current)
+                except (ValueError, PermissionError):
+                    skipped += 1
+                    continue
+
+            if subtask is None:
+                skipped += 1
+                continue
+            if _mark_subtask_dismissed(subtask, current.user.id, now):
+                dismissed += 1
+                chunk_resolved.append(subtask_id)
+                resolved_ids.append(subtask_id)
+            else:
+                skipped += 1
+
+        if chunk_resolved:
+            db.commit()
+            for sid in chunk_resolved:
+                resolve_subtask_backfill_notification(db, sid)
+
+    if dismissed:
+        write_operation_log(
+            db,
+            current,
+            "批量忽略补录",
+            f"当前筛选下批量忽略 {dismissed} 条待补场次"
+            + (f"（另有 {skipped} 条跳过）" if skipped else "")
+            + (f"；截断上限 {BATCH_DISMISS_MAX}" if truncated else ""),
+            target_module="快照补录",
+            tenant_id=tenant_id,
+            risk_level="关注",
+        )
+        db.commit()
+        _bust_snapshot_backfill_matrix_cache()
+
+    return {
+        "dismissed": dismissed,
+        "skipped": skipped,
+        "truncated": truncated,
+        "todo_only": todo_only,
+    }
 
 
 def build_snapshot_backfill_item(
@@ -1958,6 +2306,8 @@ def _merge_gap_cells_into_matrix(
     if not expectations:
         return
 
+    dismissed_gap_keys = _load_dismissed_gap_matrix_keys(db, tenant_id=int(tenant_id), d0=d0, d1=d1)
+
     cell_index: dict[tuple[str, str, str], dict[str, Any]] = {
         (str(cell.get("platform") or ""), str(cell.get("word") or ""), str(cell.get("date") or "")): cell
         for cell in cells
@@ -1997,6 +2347,8 @@ def _merge_gap_cells_into_matrix(
                 window_key, _label = _gap_slot_window_key(cursor, slot_time)
                 if (plat, prompt, day_text, window_key) in occupied_slots:
                     continue
+                if (plat, prompt, day_text, window_key) in dismissed_gap_keys:
+                    continue
                 gap_slots.append(
                     _build_gap_slot_payload(
                         tenant_id=tenant_id,
@@ -2034,7 +2386,9 @@ def _merge_gap_cells_into_matrix(
                 cell_index[cell_key] = existing
             else:
                 merged_slots = list(existing.get("slots") or []) + gap_slots
-                gap_count = sum(1 for slot in merged_slots if slot.get("is_gap"))
+                gap_count = sum(
+                    1 for slot in merged_slots if slot.get("is_gap") and not slot.get("backfill_dismissed")
+                )
                 active_samples = [slot for slot in merged_slots if not slot.get("backfill_dismissed") and not slot.get("is_gap")]
                 active_ranks: list[float] = []
                 for sample in active_samples:
@@ -2099,6 +2453,7 @@ def ensure_gap_backfill_subtask(
     prompt: str,
     schedule_window_key: str,
     current: CurrentSession,
+    auto_commit: bool = True,
 ) -> GeoMonitorSubtask:
     """到期/漏跑日无子任务时，落本地占位 task+subtask+schedule_run 供快照补录。"""
     if current.identity.identity_type != "PLATFORM":
@@ -2226,9 +2581,10 @@ def ensure_gap_backfill_subtask(
             existing_run.platform_count = max(int(existing_run.platform_count or 0), plat_n or 1)
             existing_run.updated_at = slot_dt
             db.flush()
-            db.commit()
-            db.refresh(subtask)
-            _bust_snapshot_backfill_matrix_cache()
+            if auto_commit:
+                db.commit()
+                db.refresh(subtask)
+                _bust_snapshot_backfill_matrix_cache()
             return subtask
 
     task_id = _new_gap_backfill_id("bft")
@@ -2278,9 +2634,10 @@ def ensure_gap_backfill_subtask(
         existing_run.updated_at = slot_dt
 
     db.flush()
-    db.commit()
-    db.refresh(subtask)
-    _bust_snapshot_backfill_matrix_cache()
+    if auto_commit:
+        db.commit()
+        db.refresh(subtask)
+        _bust_snapshot_backfill_matrix_cache()
     return subtask
 
 

@@ -21,6 +21,7 @@ from app.core.read_cache import (
 from app.schemas.common import ApiResponse
 from app.schemas.monitor import (
     MonitorTaskCreateRequest,
+    SnapshotBackfillBatchDismissRequest,
     SnapshotBackfillListResponse,
     SnapshotBackfillGapSubtaskRequest,
     SnapshotBackfillRequest,
@@ -45,6 +46,8 @@ from app.services.snapshot_backfill_service import (
     apply_snapshot_backfill,
     build_snapshot_backfill_item,
     dismiss_snapshot_backfill,
+    dismiss_snapshot_backfill_batch,
+    dismiss_snapshot_backfill_slots,
     ensure_gap_backfill_subtask,
     list_snapshot_backfill_matrix,
     list_snapshot_backfill_page,
@@ -813,6 +816,82 @@ def monitor_subtask_snapshot_backfill_dismiss(
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="monitor.snapshot_backfill_dismiss")
+    return ApiResponse(data=data)
+
+
+@router.post("/snapshot-backfill/dismiss-batch", response_model=ApiResponse[dict])
+def monitor_snapshot_backfill_dismiss_batch(
+    body: SnapshotBackfillBatchDismissRequest | None = None,
+    tenant_id: int | None = None,
+    all_tenants: bool = Query(default=False),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    source: str | None = Query(default=None, pattern="^(tenant_monitor|lead_diagnosis)$"),
+    platform: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    keyword_group: str | None = Query(default=None),
+    todo_only: bool = Query(default=True),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """批量忽略待补录：传 slots 时走快路径（不重扫矩阵）。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    if body and body.slots:
+        try:
+            require_snapshot_backfill_permission(db, current, "can_update")
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        try:
+            data = dismiss_snapshot_backfill_slots(db, current=current, slots=body.slots)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        return ApiResponse(data=data)
+    if tenant_id is None and not all_tenants:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请指定 tenant_id，或显式传入 all_tenants=true",
+        )
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    owned = sales_owned_tenant_ids(db, current)
+    scoped_tenant_ids: list[int] | None = None
+    allowed_lead_task_ids: list[str] | None = None
+    if owned is not None:
+        allowed_lead_task_ids = sales_owned_lead_diagnosis_task_ids(db, current.user.id)
+        if tenant_id is not None:
+            try:
+                ensure_sales_tenant_access(db, current, tenant_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        elif all_tenants:
+            if not owned and not allowed_lead_task_ids:
+                return ApiResponse(data={"dismissed": 0, "skipped": 0, "truncated": False, "todo_only": todo_only})
+            scoped_tenant_ids = owned
+            tenant_id = None
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定 tenant_id")
+    try:
+        data = dismiss_snapshot_backfill_batch(
+            db,
+            current=current,
+            tenant_id=tenant_id,
+            tenant_ids=scoped_tenant_ids,
+            allowed_lead_task_ids=allowed_lead_task_ids,
+            detect_date_from=date_from,
+            detect_date_to=date_to,
+            source=source,
+            platform=platform,
+            keyword=keyword,
+            keyword_group=keyword_group,
+            todo_only=todo_only,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="monitor.snapshot_backfill_dismiss_batch")
     return ApiResponse(data=data)
 
 

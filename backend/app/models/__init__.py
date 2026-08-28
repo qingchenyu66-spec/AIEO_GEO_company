@@ -14,6 +14,7 @@ from app.models.monitor import (
     GeoMonitorSubtask,
     GeoMonitorTask,
     GeoMonitorWindowSnapshot,
+    GeoSnapshotBackfillGapDismiss,
 )
 from app.models.knowledge import KnowledgeFile
 from app.models.ops import OperationLog, SystemConfig, OpsOverviewRollup
@@ -32,6 +33,7 @@ __all__ = [
     "GeoMonitorSourceDaily",
     "GeoMonitorSubtask",
     "GeoMonitorTask",
+    "GeoSnapshotBackfillGapDismiss",
     "KnowledgeFile",
     "BrandAsset",
     "BrandCompetitor",

@@ -238,3 +238,26 @@ class GeoMonitorScheduleRun(Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("sys_user.id"), index=True, nullable=True, comment="触发调度的用户ID")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="调度创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="调度更新时间")
+
+
+class GeoSnapshotBackfillGapDismiss(Base):
+    """漏跑缺口批量忽略登记：免逐条落占位子任务。"""
+
+    __tablename__ = "geo_snapshot_backfill_gap_dismiss"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "platform",
+            "prompt",
+            "schedule_window_key",
+            name="uk_geo_snapshot_backfill_gap_dismiss",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True, comment="主键")
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=False, comment="企业ID")
+    platform: Mapped[str] = mapped_column(String(50), nullable=False, comment="平台编码")
+    prompt: Mapped[str] = mapped_column(String(500), nullable=False, comment="监测词")
+    schedule_window_key: Mapped[str] = mapped_column(String(32), index=True, nullable=False, comment="场次键")
+    dismissed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment="忽略时间")
+    dismissed_by: Mapped[int | None] = mapped_column(ForeignKey("sys_user.id"), nullable=True, comment="操作人")

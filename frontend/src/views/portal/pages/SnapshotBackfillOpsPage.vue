@@ -8,6 +8,8 @@ import SnapshotBackfillDialog from '../components/SnapshotBackfillDialog.vue'
 import SnapshotBackfillDetailDrawer from '../components/SnapshotBackfillDetailDrawer.vue'
 import {
   dismissSnapshotBackfill,
+  dismissSnapshotBackfillBatch,
+  type SnapshotBackfillBatchDismissSlot,
   ensureGapBackfillSubtask,
   getSnapshotBackfillMatrix,
   undismissSnapshotBackfill,
@@ -45,6 +47,7 @@ const canSubmitBackfill = computed(() => Boolean(backfillMenu.value?.can_update)
 const FILTER_DEBOUNCE_MS = 350
 
 const loading = ref(false)
+const batchDismissLoading = ref(false)
 const tenants = ref<TenantInfo[]>([])
 const backfillVisible = ref(false)
 const backfillTarget = ref<MonitorSubtask | null>(null)
@@ -684,6 +687,144 @@ function isFailurePending(slot: SnapshotBackfillMatrixSlot) {
   return Boolean(slot.needs_backfill) && !slot.has_answer
 }
 
+function slotBatchDismissable(slot: SnapshotBackfillMatrixSlot, inTodoCell: boolean) {
+  if (slot.backfill_dismissed) return false
+  // 2026-08-28 - 一键忽略计数与后端对齐 - 红点格内全部未忽略场次
+  if (todoOnly.value && inTodoCell) return Boolean(slot.is_gap || slot.subtask_id)
+  return Boolean(slot.is_gap || slot.subtask_id)
+}
+
+const batchDismissableCount = computed(() => {
+  let count = 0
+  for (const cell of cells.value) {
+    const inTodoCell = Boolean(cell.has_todo)
+    if (todoOnly.value && !inTodoCell) continue
+    for (const slot of cell.slots) {
+      if (slotBatchDismissable(slot, inTodoCell)) count += 1
+    }
+  }
+  return count
+})
+
+function collectBatchDismissSlots(): SnapshotBackfillBatchDismissSlot[] {
+  const out: SnapshotBackfillBatchDismissSlot[] = []
+  const defaultTenant = tenantFilter.value === '' ? null : Number(tenantFilter.value)
+  for (const cell of cells.value) {
+    const inTodoCell = Boolean(cell.has_todo)
+    if (todoOnly.value && !inTodoCell) continue
+    for (const slot of cell.slots) {
+      if (!slotBatchDismissable(slot, inTodoCell)) continue
+      out.push({
+        tenant_id: slot.tenant_id ?? defaultTenant,
+        platform: String(slot.platform || cell.platform),
+        prompt: String(slot.prompt || cell.word),
+        schedule_window_key: slot.schedule_window_key,
+        subtask_id: slot.subtask_id,
+        is_gap: Boolean(slot.is_gap),
+      })
+    }
+  }
+  return out
+}
+
+/** 2026-08-28 - 一键忽略要瞬间消失 - 确认后先本地消红点，后台再落库 */
+function buildBatchDismissLocalKeys(slots: SnapshotBackfillBatchDismissSlot[]) {
+  const defaultTenant = tenantFilter.value === '' ? null : Number(tenantFilter.value)
+  const keys = new Set<string>()
+  for (const slot of slots) {
+    if (slot.subtask_id) {
+      keys.add(`id:${slot.subtask_id}`)
+      continue
+    }
+    const tenantId = slot.tenant_id ?? defaultTenant
+    keys.add(`gap:${tenantId}:${slot.platform}:${slot.prompt}:${slot.schedule_window_key || ''}`)
+  }
+  return { keys, defaultTenant }
+}
+
+function patchAllBatchDismissedLocally(slots: SnapshotBackfillBatchDismissSlot[]) {
+  const { keys, defaultTenant } = buildBatchDismissLocalKeys(slots)
+  const touchedPlatforms = new Set<string>()
+  cells.value = cells.value.map((cell) => {
+    let touched = false
+    const nextSlots = cell.slots.map((slot) => {
+      if (slot.backfill_dismissed) return slot
+      const slotKey = slot.subtask_id
+        ? `id:${slot.subtask_id}`
+        : `gap:${slot.tenant_id ?? defaultTenant}:${slot.platform || cell.platform}:${slot.prompt || cell.word}:${slot.schedule_window_key || ''}`
+      if (!keys.has(slotKey)) return slot
+      touched = true
+      return {
+        ...slot,
+        backfill_dismissed: true,
+        needs_backfill: false,
+        is_gap: false,
+      }
+    })
+    if (!touched) return cell
+    touchedPlatforms.add(cell.platform)
+    return recomputeCell({ ...cell, slots: nextSlots })
+  })
+  for (const plat of touchedPlatforms) refreshPlatformStats(plat)
+  if (cellDrawer.value) {
+    const refreshed = getCell(cellDrawer.value.word, cellDrawer.value.date, cellDrawer.value.platform)
+    if (refreshed) cellDrawer.value = refreshed
+    maybeCloseCellDrawerAfterTodoClear(refreshed)
+  }
+}
+
+const BATCH_DISMISS_CHUNK = 500
+
+async function dismissAllInFilter() {
+  if (!canSubmitBackfill.value || batchDismissLoading.value) return
+  const count = batchDismissableCount.value
+  if (!count) {
+    ElMessage.info('当前筛选下没有可忽略的待办场次')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将忽略当前筛选下 ${count} 条待办场次（${todoOnly.value ? '仅红点格子' : '含全部未忽略场次'}）。`
+        + '无有效回答的场次忽略后不再提醒补录，客户侧仍按未抓取/失败统计。确认继续？',
+      '一键忽略',
+      { type: 'warning', confirmButtonText: '确认忽略', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  batchDismissLoading.value = true
+  const slots = collectBatchDismissSlots()
+  if (!slots.length) {
+    batchDismissLoading.value = false
+    ElMessage.info('当前筛选下没有可忽略的待办场次')
+    return
+  }
+  patchAllBatchDismissedLocally(slots)
+  closeCellDrawer()
+  batchDismissLoading.value = false
+  ElMessage.success(`已忽略 ${slots.length} 条待办场次`)
+
+  void (async () => {
+    try {
+      let totalDismissed = 0
+      let truncated = false
+      for (let i = 0; i < slots.length; i += BATCH_DISMISS_CHUNK) {
+        const chunk = slots.slice(i, i + BATCH_DISMISS_CHUNK)
+        const result = await dismissSnapshotBackfillBatch({ slots: chunk, todo_only: todoOnly.value })
+        totalDismissed += result.dismissed
+        truncated = truncated || Boolean(result.truncated)
+      }
+      emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+      if (truncated || totalDismissed < slots.length) {
+        await loadMatrix({ quiet: true, skipCache: true })
+      }
+    } catch (error: unknown) {
+      notifyOperationError(error, '后台同步失败，正在刷新')
+      await loadMatrix({ quiet: true, skipCache: true })
+    }
+  })()
+}
+
 async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
   // 2026-08-04 - 到期/漏跑缺口格不能忽略 - 先落占位子任务再走同一套 dismiss
   if (!canSubmitBackfill.value || slot.backfill_dismissed) return
@@ -1002,6 +1143,16 @@ watch(
         </label>
         <div class="snapshot-backfill-toolbar-actions">
           <span v-if="loading" class="snapshot-backfill-loading-dot">加载中…</span>
+          <button
+            v-if="canSubmitBackfill"
+            type="button"
+            class="filter-reset-btn tiny-btn"
+            :disabled="loading || batchDismissLoading || !batchDismissableCount"
+            @click="dismissAllInFilter"
+          >
+            <EyeOff :size="14" />
+            一键忽略{{ batchDismissableCount ? `（${batchDismissableCount}）` : '' }}
+          </button>
           <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
           <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="() => loadMatrix()">
             <RefreshCw :size="14" />

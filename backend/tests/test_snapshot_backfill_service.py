@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.brand import BrandAsset, BrandKeywordGroup
 from app.models.lead_diagnosis import LeadDiagnosis, LeadDiagnosisRun
-from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask, GeoSnapshotBackfillGapDismiss
 from app.models.notification import SystemNotification, SystemNotificationRead
 from app.models.ops import OperationLog
 from app.models.tenant import Tenant
@@ -38,6 +38,7 @@ def db_session():
             GeoMonitorTask.__table__,
             GeoMonitorSubtask.__table__,
             GeoMonitorScheduleRun.__table__,
+            GeoSnapshotBackfillGapDismiss.__table__,
             BrandAsset.__table__,
             BrandKeywordGroup.__table__,
             SystemNotification.__table__,
