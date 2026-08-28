@@ -954,17 +954,13 @@ def build_brand_analysis_dashboard(
         or (asset.brand_name if asset else None)
         or "监测品牌"
     )
-    # 筛选仍以监测词组已购为准；展示用口径可回退品牌词组，避免「已购 0」
-    asset_for_geo = get_brand_asset(db, resolved)
-    geo_purchased = tenant_purchased_platforms(db, resolved, asset_for_geo) if asset_for_geo else []
+    # 2026-08-28 - 已购/筛选同口径：监测词组 → 品牌词组勾选，勿用历史样本端冒充当前配置
     purchased = _purchased_platforms_for_brand_words(db, resolved)
     # 2026-08-07 - 观察号品牌分析仅 kimi/元宝
     from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
 
-    observer = observer_platforms_for_session(current)
-    geo_purchased = narrow_platform_codes(geo_purchased, observer)
-    purchased = narrow_platform_codes(purchased, observer)
-    geo_purchased_set = set(geo_purchased)
+    purchased = narrow_platform_codes(purchased, observer_platforms_for_session(current))
+    purchased_set = set(purchased)
     names = _platform_name_map()
 
     # 品牌分析实时口径：含今日，不套客户侧「截至昨日」
@@ -978,8 +974,8 @@ def build_brand_analysis_dashboard(
         lookback_start=lookback_start,
         range_end=range_end,
     )
-    if geo_purchased_set:
-        subtasks = [item for item in subtasks if item.platform in geo_purchased_set]
+    if purchased_set:
+        subtasks = [item for item in subtasks if item.platform in purchased_set]
 
     parse_meta: dict[str, Any] = {
         "parsed": 0,
@@ -1007,8 +1003,8 @@ def build_brand_analysis_dashboard(
             lookback_start=lookback_start,
             range_end=range_end,
         )
-        if geo_purchased_set:
-            subtasks = [item for item in subtasks if item.platform in geo_purchased_set]
+        if purchased_set:
+            subtasks = [item for item in subtasks if item.platform in purchased_set]
         try:
             desc_meta = parse_brand_word_descriptions_with_deepseek(
                 db,
@@ -1034,8 +1030,8 @@ def build_brand_analysis_dashboard(
             lookback_start=lookback_start,
             range_end=range_end,
         )
-        if geo_purchased_set:
-            subtasks = [item for item in subtasks if item.platform in geo_purchased_set]
+        if purchased_set:
+            subtasks = [item for item in subtasks if item.platform in purchased_set]
     elif subtasks:
         # 读路径默认不调 LLM，仍回报待解析量供前端决定是否二次请求
         parse_meta["pending_left"] = sum(1 for item in subtasks if not _has_deepseek_sentiment(item))
@@ -1052,7 +1048,7 @@ def build_brand_analysis_dashboard(
 
     for item in subtasks:
         code = str(item.platform or "").strip()
-        if geo_purchased_set and code not in geo_purchased_set:
+        if purchased_set and code not in purchased_set:
             continue
         if code not in buckets:
             buckets[code] = {"positive": [], "neutral": [], "negative": [], "unknown": []}
@@ -1081,15 +1077,12 @@ def build_brand_analysis_dashboard(
             [code for code, count in platform_counts.items() if count > 0]
         )
 
-    # 有监测词组已购：列表跟已购；仅品牌词/无已购：露出有样本的端（历史端可多于当前勾选）
-    list_codes = (
-        [code for code in purchased if platform_counts.get(code, 0) > 0]
-        if geo_purchased_set
-        else sort_platform_codes([code for code, count in platform_counts.items() if count > 0])
-    )
+    # 列表只含有样本的已购/配置平台；已购全集在 purchased_platforms
     platform_rows: list[dict[str, Any]] = []
-    for code in list_codes:
+    for code in purchased or sorted(buckets.keys()):
         count = platform_counts.get(code, 0)
+        if count <= 0:
+            continue
         platform_rows.append({
             "code": code,
             "name": names.get(code) or code,
@@ -1114,7 +1107,8 @@ def build_brand_analysis_dashboard(
             "code": code,
             "value": platform_counts.get(code, 0),
         }
-        for code in list_codes
+        for code in (purchased or list(platform_counts.keys()))
+        if platform_counts.get(code, 0) > 0
     ]
 
     aliases = _brand_aliases(
