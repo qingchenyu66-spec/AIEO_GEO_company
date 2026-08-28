@@ -347,7 +347,7 @@ def resolve_analytics_date_range(
 
 
 def _configured_prompt_options(db: Session, tenant_id: int) -> list[str]:
-    """竞品页问题筛选：与当前启用的监测词组配置同步，而非历史子任务残留。"""
+    """竞品页问题筛选：当前启用的监测词组配置。"""
     seen: set[str] = set()
     options: list[str] = []
     for group in active_keyword_groups(db, tenant_id):
@@ -356,6 +356,15 @@ def _configured_prompt_options(db: Session, tenant_id: int) -> list[str]:
             if text and text not in seen:
                 seen.add(text)
                 options.append(text)
+    return options
+
+
+def _build_compare_prompt_options(active: list[str], in_window: set[str]) -> list[dict[str, Any]]:
+    """2026-08-28 - 竞品问题下拉含历史词 - 时间窗内有样本但已不在当前配置的 prompt"""
+    active_set = set(active)
+    options = [{"prompt": prompt, "retired": False} for prompt in active]
+    for prompt in sorted(in_window - active_set):
+        options.append({"prompt": prompt, "retired": True})
     return options
 
 
@@ -407,7 +416,11 @@ def build_competitor_compare_summary(
         subtask_limit=subtask_limit,
         parse_sentiments=True,
     )
-    payload["prompt_options"] = _configured_prompt_options(db, resolved_tenant_id)
+    in_window_prompts = set(payload.pop("in_window_prompts", []))
+    payload["prompt_options"] = _build_compare_prompt_options(
+        _configured_prompt_options(db, resolved_tenant_id),
+        in_window_prompts,
+    )
     return payload
 
 
@@ -563,11 +576,15 @@ def _aggregate_competitor_stats(
     # 2026-07-30 - 点选平台后 Tab 其它端变 0 - Tab 计数独立于 platform_filters
     platform_tab_count_map: dict[str, int] = {}
     in_range: list[GeoMonitorSubtask] = []
+    in_window_prompts: set[str] = set()
     for item in hist_rows:
         biz = hist_days.get(item.id)
         if biz is None or biz < range_start_day or biz > range_end_day:
             continue
-        if prompt_filter and str(item.prompt or "") != prompt_filter:
+        prompt_text = str(item.prompt or "").strip()
+        if prompt_text:
+            in_window_prompts.add(prompt_text)
+        if prompt_filter and prompt_text != prompt_filter:
             continue
         in_range.append(item)
         subtask_day_keys[id(item)] = biz.isoformat()
@@ -871,6 +888,7 @@ def _aggregate_competitor_stats(
         "sentiment_rows": sentiment_rows,
         "sentiment_parse": sentiment_parse,
         "brand_kpi_basis": "live_subtask",
+        "in_window_prompts": sorted(in_window_prompts),
     }
     return _overlay_brand_kpi_from_daily_stats(
         db,

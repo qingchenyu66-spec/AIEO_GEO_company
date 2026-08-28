@@ -172,7 +172,9 @@ const snapshotSourceTracks = computed(() =>
         <div class="competitor-sticky-filters">
           <select v-model="promptFilter">
             <option value="">全部问题</option>
-            <option v-for="prompt in promptOptions" :key="prompt" :value="prompt">{{ prompt }}</option>
+            <option v-for="item in promptOptions" :key="item.prompt" :value="item.prompt">
+              {{ item.prompt }}{{ item.retired ? '（已下线）' : '' }}
+            </option>
           </select>
         </div>
         <div class="competitor-sticky-actions">

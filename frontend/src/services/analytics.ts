@@ -58,6 +58,11 @@ export interface CompetitorPlatformCompareRow {
   sentiment_rows?: SentimentLeaderboardRow[]
 }
 
+export interface CompetitorPromptOption {
+  prompt: string
+  retired?: boolean
+}
+
 export interface CompetitorCompareSummary {
   brand_name: string | null
   competitor_count: number
@@ -70,7 +75,7 @@ export interface CompetitorCompareSummary {
   tab_sample_total?: number
   start_at?: string
   end_at?: string
-  prompt_options?: string[]
+  prompt_options?: CompetitorPromptOption[]
   trend_day_keys?: string[]
   rows: CompetitorCompareRow[]
   platform_rows: CompetitorPlatformCompareRow[]

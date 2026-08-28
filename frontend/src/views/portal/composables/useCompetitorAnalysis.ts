@@ -524,7 +524,7 @@ export function useBrandInsights(options?: {
     void nextTick(() => refreshTrendCharts())
   })
   watch(promptOptions, (options) => {
-    if (promptFilter.value && !options.includes(promptFilter.value)) {
+    if (promptFilter.value && !options.some(item => item.prompt === promptFilter.value)) {
       promptFilter.value = ''
     }
   })
