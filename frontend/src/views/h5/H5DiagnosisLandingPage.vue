@@ -2,16 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchH5DiagnosisConfig, type H5DiagnosisConfig } from '../../services/h5Diagnosis'
-import { getPlatformMeta } from '../portal/platformMeta'
+import { supportedPlatforms } from '../portal/platformMeta'
 
 const router = useRouter()
 const loading = ref(true)
 const config = ref<H5DiagnosisConfig | null>(null)
 
-const platformItems = computed(() => {
-  const codes = config.value?.platforms || []
-  return codes.map(code => getPlatformMeta(code))
-})
+// 2026-08-31 - 落地页平台条展示全量非手机端，不跟 H5 体验勾选（体验平台仍后台配置）
+const platformItems = supportedPlatforms.filter(item => !item.code.endsWith('_mobile'))
 
 const priceText = computed(() => `¥${config.value?.price_yuan ?? '9.9'}`)
 
@@ -136,10 +134,6 @@ function goApply() {
             <img v-if="item.icon" :src="item.icon" :alt="item.name" loading="lazy">
             {{ item.name }}
           </span>
-          <template v-if="!platformItems.length">
-            <span class="platform-pill">豆包</span>
-            <span class="platform-pill">DeepSeek</span>
-          </template>
         </div>
       </div>
     </section>
