@@ -74,9 +74,24 @@ async function bootstrap() {
   }
 }
 
+function validateForm(): string {
+  if (!form.value.brand_name.trim()) return '请填写品牌名称'
+  if (!form.value.wechat_id.trim()) return '请填写微信号'
+  const phone = form.value.contact_phone.trim()
+  if (!/^1\d{10}$/.test(phone)) return '请填写正确的11位手机号'
+  const prompts = form.value.prompts.map(v => v.trim()).filter(Boolean)
+  if (!prompts.length) return '请至少填写 1 条检测问题'
+  return ''
+}
+
 async function submitOrder() {
   if (!config.value?.enabled) {
     errorText.value = '活动暂未开放'
+    return
+  }
+  const formError = validateForm()
+  if (formError) {
+    errorText.value = formError
     return
   }
   submitting.value = true
@@ -154,7 +169,7 @@ onMounted(bootstrap)
       </label>
       <label>
         手机号
-        <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" placeholder="11 位手机号" />
+        <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" pattern="1[0-9]{10}" placeholder="11 位手机号，以 1 开头" />
       </label>
 
       <div class="prompt-block">

@@ -1,10 +1,17 @@
 import axios from 'axios'
+import { extractErrorDetail } from '../utils/requestError'
 
 const http = axios.create({
   baseURL: '/api',
   timeout: 60000,
   withCredentials: true,
 })
+
+// 2026-08-31 - H5 400 只显示英文 axios 文案 - 拦截器转成后端 detail 中文
+http.interceptors.response.use(
+  response => response,
+  error => Promise.reject(new Error(extractErrorDetail(error, '请求失败，请稍后重试'))),
+)
 
 export interface H5DiagnosisConfig {
   enabled: boolean
