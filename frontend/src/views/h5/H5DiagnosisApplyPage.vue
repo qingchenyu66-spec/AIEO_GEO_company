@@ -215,154 +215,360 @@ onUnmounted(stopPolling)
 </script>
 
 <template>
+  <!-- 2026-08-31 - 申请页对齐落地页蓝系；单卡片分区，避免灰底散表单 -->
   <div class="h5-page">
-    <header class="hero">
-      <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
-      <p class="eyebrow">填写诊断信息</p>
-      <h1>{{ config?.price_yuan ?? '—' }} 元 AI 可见度诊断</h1>
-    </header>
+    <div class="orb orb-a" aria-hidden="true" />
+    <div class="orb orb-b" aria-hidden="true" />
 
-    <p v-if="payEnv === 'mobile_other' && !loading" class="warn">
-      请使用微信打开本页面完成支付。可复制链接到微信，或扫描落地页二维码进入。
-    </p>
-
-    <p v-if="loading" class="hint">加载中…</p>
-    <p v-else-if="errorText" class="error">{{ errorText }}</p>
-    <p v-else-if="successText" class="success">{{ successText }}</p>
-
-    <div v-if="nativeCodeUrl && !successText" class="native-pay">
-      <p class="native-title">请使用微信扫码支付</p>
-      <img class="native-qr" :src="nativeQrSrc" alt="微信支付二维码">
-      <p class="native-hint">{{ polling ? '等待支付结果…' : '扫码后请勿关闭本页' }}</p>
-      <p class="native-no">单号 {{ nativeOutTradeNo }}</p>
-    </div>
-
-    <!-- 2026-08-31 - H5 对齐 PC 品牌字段；不展示地区/平台/天数/销售备注 -->
-    <form v-if="!loading && !successText && !nativeCodeUrl && config?.enabled" class="form" @submit.prevent="submitOrder">
-      <label>
-        品牌名称 *
-        <input v-model="form.brand_name" required maxlength="100" placeholder="例如：客户品牌全称" />
-      </label>
-      <label>
-        品牌别名 / 露出词（可选）
-        <input v-model="form.brand_aliases" maxlength="500" placeholder="多个用逗号分隔，例如：品牌简称, 品牌别称" />
-      </label>
-      <label>
-        官网 URL（强烈建议）
-        <input v-model="form.website_url" maxlength="500" placeholder="https://www.example.com" />
-      </label>
-      <label>
-        所属行业
-        <input v-model="form.industry" maxlength="200" placeholder="例如：户外广告、蛋白粉、智能体平台" />
-      </label>
-      <label>
-        主要竞品
-        <input v-model="form.competitors" maxlength="500" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
-      </label>
-      <label>
-        手机号 *
-        <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" pattern="1[0-9]{10}" placeholder="请填写手机号码" />
-      </label>
-
-      <div class="prompt-block">
-        <div class="prompt-head">
-          <strong>检测问题（{{ filledPromptCount }}/5）</strong>
-          <button type="button" class="link" @click="applyRecommendedSet">一键推荐</button>
+    <div class="shell">
+      <header class="hero">
+        <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
+        <div class="hero-main">
+          <span class="price-pill">¥{{ config?.price_yuan ?? '—' }}</span>
+          <h1>AI 可见度诊断</h1>
         </div>
-        <label v-for="(_, index) in form.prompts" :key="index">
-          问题 {{ index + 1 }}
-          <input v-model="form.prompts[index]" maxlength="200" :placeholder="index === 0 ? '至少填 1 条' : '可选'" />
-        </label>
+      </header>
+
+      <p v-if="payEnv === 'mobile_other' && !loading" class="banner warn">
+        请使用微信打开本页面完成支付
+      </p>
+      <p v-if="loading" class="banner hint">加载中…</p>
+      <p v-else-if="errorText" class="banner error">{{ errorText }}</p>
+      <p v-else-if="successText" class="banner success">{{ successText }}</p>
+
+      <div v-if="nativeCodeUrl && !successText" class="native-pay">
+        <p class="native-title">请使用微信扫码支付</p>
+        <img class="native-qr" :src="nativeQrSrc" alt="微信支付二维码">
+        <p class="native-hint">{{ polling ? '等待支付结果…' : '扫码后请勿关闭本页' }}</p>
+        <p class="native-no">单号 {{ nativeOutTradeNo }}</p>
       </div>
 
-      <button class="submit" type="submit" :disabled="!canSubmit">
-        {{ submitting ? '提交中…' : (payEnv === 'pc' ? `扫码支付 ¥${config.price_yuan}` : `支付 ¥${config.price_yuan}`) }}
-      </button>
-    </form>
+      <!-- 2026-08-31 - H5 对齐 PC 品牌字段；不展示地区/平台/天数/销售备注 -->
+      <form
+        v-if="!loading && !successText && !nativeCodeUrl && config?.enabled"
+        class="card"
+        @submit.prevent="submitOrder"
+      >
+        <section class="section">
+          <h2 class="section-title">品牌信息</h2>
+          <div class="fields">
+            <label class="field">
+              <span class="field-label">品牌名称 <em>*</em></span>
+              <input v-model="form.brand_name" required maxlength="100" placeholder="例如：客户品牌全称">
+            </label>
+            <label class="field">
+              <span class="field-label">品牌别名 / 露出词</span>
+              <input v-model="form.brand_aliases" maxlength="500" placeholder="多个用逗号分隔">
+            </label>
+            <label class="field">
+              <span class="field-label">官网 URL</span>
+              <input v-model="form.website_url" maxlength="500" placeholder="https://www.example.com">
+            </label>
+            <label class="field">
+              <span class="field-label">所属行业</span>
+              <input v-model="form.industry" maxlength="200" placeholder="例如：户外广告、蛋白粉">
+            </label>
+            <label class="field">
+              <span class="field-label">主要竞品</span>
+              <input v-model="form.competitors" maxlength="500" placeholder="多个竞品用逗号分隔">
+            </label>
+            <label class="field">
+              <span class="field-label">手机号 <em>*</em></span>
+              <input
+                v-model="form.contact_phone"
+                required
+                maxlength="11"
+                inputmode="numeric"
+                pattern="1[0-9]{10}"
+                placeholder="11 位手机号"
+              >
+            </label>
+          </div>
+        </section>
+
+        <section class="section prompts">
+          <div class="section-head">
+            <h2 class="section-title">
+              检测问题
+              <span class="count">{{ filledPromptCount }}/5</span>
+            </h2>
+            <button type="button" class="recommend" @click="applyRecommendedSet">一键推荐</button>
+          </div>
+          <div class="prompt-list">
+            <label v-for="(_, index) in form.prompts" :key="index" class="prompt-row">
+              <span class="prompt-no">{{ index + 1 }}</span>
+              <input
+                v-model="form.prompts[index]"
+                maxlength="200"
+                :placeholder="index === 0 ? '至少填 1 条，如：XX 哪家好' : '可选'"
+              >
+            </label>
+          </div>
+        </section>
+
+        <div class="submit-bar">
+          <button class="submit" type="submit" :disabled="!canSubmit">
+            {{ submitting ? '提交中…' : (payEnv === 'pc' ? `微信扫码支付 ¥${config.price_yuan}` : `微信支付 ¥${config.price_yuan}`) }}
+          </button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .h5-page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 20px 16px 48px;
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color: #1f2937;
-  background: #f8fafc;
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
+  padding: 20px 16px 40px;
+  color: #0f172a;
+  background: #f8fbff;
+  font-family: system-ui, -apple-system, 'PingFang SC', 'Segoe UI', sans-serif;
+  overflow-x: hidden;
 }
-.hero { margin-bottom: 20px; }
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(48px);
+  pointer-events: none;
+  z-index: 0;
+}
+.orb-a {
+  top: -80px;
+  right: -40px;
+  width: 220px;
+  height: 220px;
+  background: rgba(37, 99, 235, 0.16);
+}
+.orb-b {
+  top: 40%;
+  left: -80px;
+  width: 180px;
+  height: 180px;
+  background: rgba(59, 130, 246, 0.10);
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  width: min(640px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+.hero {
+  display: grid;
+  gap: 12px;
+}
 .back {
+  justify-self: start;
   border: none;
   background: transparent;
   color: #64748b;
-  padding: 0 0 8px;
-  font-size: 14px;
-}
-.eyebrow { color: #64748b; font-size: 13px; margin: 0 0 4px; }
-h1 { margin: 0; font-size: 24px; }
-.form { display: grid; gap: 12px; }
-label { display: grid; gap: 6px; font-size: 14px; }
-input {
-  border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 16px;
-  background: #fff;
-}
-.prompt-block { display: grid; gap: 8px; padding: 12px; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; }
-.prompt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.link {
-  border: none;
-  color: #0f766e;
-  background: transparent;
   padding: 0;
-  font-size: 12px;
+  font-size: 14px;
+  cursor: pointer;
 }
-.submit {
-  margin-top: 8px;
-  border: none;
+.back:hover { color: #2563eb; }
+.hero-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.price-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 700;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(22px, 5vw, 28px);
+  font-weight: 780;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.banner {
+  margin: 0;
+  padding: 12px 14px;
   border-radius: 12px;
-  padding: 14px;
-  font-size: 17px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #0f766e, #0891b2);
+  font-size: 14px;
+  line-height: 1.45;
 }
-.submit:disabled { opacity: 0.6; }
-.hint, .error, .success, .warn { padding: 12px; border-radius: 10px; }
 .error { background: #fef2f2; color: #b91c1c; }
 .success { background: #ecfdf5; color: #047857; }
-.warn { background: #fff7ed; color: #c2410c; margin-bottom: 12px; }
-.native-pay {
-  margin: 12px 0 20px;
-  padding: 20px 16px;
-  border-radius: 16px;
-  background: #fff;
+.warn { background: #fff7ed; color: #c2410c; }
+.hint { background: #fff; color: #64748b; border: 1px solid #e2e8f0; }
+
+.card {
+  display: grid;
+  gap: 22px;
+  padding: 18px 16px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
   border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+}
+
+.section { display: grid; gap: 12px; }
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.section-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.count {
+  min-width: 36px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
   text-align: center;
 }
-.native-title { margin: 0 0 12px; font-size: 16px; font-weight: 700; }
+.recommend {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.recommend:hover { background: #dbeafe; }
+
+.fields {
+  display: grid;
+  gap: 12px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+.field-label em {
+  color: #ef4444;
+  font-style: normal;
+  margin-left: 2px;
+}
+input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 16px;
+  color: #0f172a;
+  background: #f8fafc;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+input::placeholder { color: #94a3b8; }
+input:focus {
+  border-color: #93c5fd;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.prompts {
+  padding-top: 4px;
+  border-top: 1px solid #f1f5f9;
+}
+.prompt-list {
+  display: grid;
+  gap: 8px;
+}
+.prompt-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.prompt-no {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.submit-bar { padding-top: 2px; }
+.submit {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  min-height: 50px;
+  padding: 14px 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: #2563eb;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.22);
+  cursor: pointer;
+}
+.submit:hover:not(:disabled) { filter: brightness(1.04); }
+.submit:active:not(:disabled) { transform: translateY(1px); }
+.submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.native-pay {
+  padding: 24px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+  text-align: center;
+}
+.native-title { margin: 0 0 14px; font-size: 16px; font-weight: 700; }
 .native-qr {
   width: 220px;
   height: 220px;
-  border-radius: 12px;
+  border-radius: 14px;
   background: #fff;
+  border: 1px solid #e2e8f0;
 }
-.native-hint { margin: 12px 0 4px; font-size: 13px; color: #64748b; }
+.native-hint { margin: 14px 0 4px; font-size: 13px; color: #64748b; }
 .native-no { margin: 0; font-size: 12px; color: #94a3b8; }
 
-@media (min-width: 768px) {
-  .h5-page { padding: 32px 24px 64px; }
-  h1 { font-size: 30px; }
-  .form {
+@media (min-width: 720px) {
+  .h5-page { padding: 36px 24px 56px; }
+  .card { padding: 24px 24px 20px; gap: 24px; }
+  .fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px 16px;
-  }
-  .prompt-block,
-  .submit {
-    grid-column: 1 / -1;
   }
 }
 </style>
