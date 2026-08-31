@@ -129,6 +129,11 @@ def build_audit_description(request: Request) -> str:
     )
 
 
+def _skip_anonymous_probe(operator_user_id: int | None, status_code: int) -> bool:
+    # 2026-08-31 - 公网扫描器匿名 POST 乱撞路径 404/405 - 不是真实业务，勿记「匿名请求/提交」
+    return operator_user_id is None and status_code in {401, 404, 405}
+
+
 class OperationAuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not _should_audit(request.method, request.url.path):
@@ -146,6 +151,12 @@ class OperationAuditMiddleware(BaseHTTPMiddleware):
         tenant_query = request.query_params.get("tenant_id")
         if tenant_query and tenant_query.isdigit():
             tenant_id = int(tenant_query)
+
+        # 2026-08-27 - 403 多为权限探测/预览只读误点 - 不写审计，避免运营总览刷屏
+        if response.status_code == 403:
+            return response
+        if _skip_anonymous_probe(operator_user_id, response.status_code):
+            return response
 
         failed = response.status_code >= 400
         description = build_audit_description(request)

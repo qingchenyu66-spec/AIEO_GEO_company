@@ -406,15 +406,35 @@ def _submit_schedule_group_locked(
             "message": missing_message,
         }
 
-    payload = build_scheduled_payload(
-        db,
-        asset,
-        competitors,
-        max_prompts=item.max_prompts,
-        keyword_group=keyword_group,
-        region_code=item.region_code,
-        purpose="brand_word" if is_brand_word_schedule_key(item.group_key) else "geo",
-    )
+    try:
+        payload = build_scheduled_payload(
+            db,
+            asset,
+            competitors,
+            max_prompts=item.max_prompts,
+            keyword_group=keyword_group,
+            region_code=item.region_code,
+            purpose="brand_word" if is_brand_word_schedule_key(item.group_key) else "geo",
+        )
+    except ValueError as exc:
+        # 2026-08-31 - 空词组/无平台：落 failed 并返回，避免 Celery 未捕获 Traceback 刷屏
+        message = str(exc)
+        persist_schedule_group_failure(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+            error_message=message,
+            prompt_count=0,
+            platform_count=0,
+            created_by=current.user.id,
+        )
+        return {
+            "tenant_id": item.tenant_id,
+            "schedule_key": item.group_key,
+            "status": "failed",
+            "keyword": item.keyword,
+            "message": message,
+        }
     existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
     if existing_run is not None and existing_run.task_id:
         linked_task = db.scalar(
@@ -643,6 +663,9 @@ def build_scheduled_payload(
     from app.services.platform_catalog_lifecycle_service import submittable_platform_codes
 
     prompts = build_scheduled_prompts(asset, competitors, max_prompts=max_prompts, keyword_group=keyword_group)
+    # 2026-08-31 - 空词组/无平台时 pydantic 直接 ValidationError 刷 Celery Traceback - 先转成可吞掉的 ValueError
+    if not prompts:
+        raise ValueError("企业未配置可生成检测问题的监测词或竞品")
     configs = keyword_group_platform_configs(keyword_group, asset)
     allowed = set(submittable_platform_codes(db, [item["code"] for item in configs]))
     purpose_norm = normalize_task_purpose(purpose)
@@ -655,6 +678,8 @@ def build_scheduled_payload(
         for item in configs
         if item["code"] in allowed
     ]
+    if not platforms:
+        raise ValueError("企业未配置已购买或允许监测的模型平台")
     monitor_keyword, aliases = molizhishu_monitor_terms(db, asset.tenant_id, keyword_group=keyword_group)
     return MonitorTaskCreateRequest(
         tenant_id=asset.tenant_id,

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from app.middleware.operation_audit import (
     _should_audit,
+    _skip_anonymous_probe,
     build_audit_description,
     resolve_audit_operator,
 )
@@ -29,3 +30,12 @@ def test_molizhishu_callback_skipped_from_audit() -> None:
     assert _should_audit("POST", "/api/v1/monitor/molizhishu/callback") is False
     assert _should_audit("POST", "/api/v1/monitor/molizhishu/callback/") is False
     assert _should_audit("POST", "/api/v1/monitor/tasks") is True
+
+
+def test_anonymous_scanner_404_not_audited() -> None:
+    """公网扫描器匿名写接口打到 404/405 不应落审计。"""
+    assert _skip_anonymous_probe(None, 404) is True
+    assert _skip_anonymous_probe(None, 405) is True
+    assert _skip_anonymous_probe(None, 401) is True
+    assert _skip_anonymous_probe(None, 500) is False
+    assert _skip_anonymous_probe(12, 404) is False

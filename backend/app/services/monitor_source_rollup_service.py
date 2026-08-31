@@ -7,6 +7,7 @@ from datetime import date, datetime, time
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -138,6 +139,19 @@ def rebuild_source_daily_for_day(
             daily_by_platform_json={},
         )
         db.add(row)
+        try:
+            # 2026-08-31 - 同企业同日多任务并发回调会双插撞 uk - 用 savepoint 收回再读已有行
+            with db.begin_nested():
+                db.flush()
+        except IntegrityError:
+            row = db.scalar(
+                select(GeoMonitorSourceDaily).where(
+                    GeoMonitorSourceDaily.tenant_id == tenant_id,
+                    GeoMonitorSourceDaily.stat_date == stat_date,
+                )
+            )
+            if row is None:
+                raise
     row.config_fp = config_fp
     row.branded_json = branded_map
     row.all_json = all_map
