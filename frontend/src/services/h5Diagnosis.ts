@@ -10,7 +10,7 @@ const http = axios.create({
 // 2026-08-31 - H5 400 只显示英文 axios 文案 - 拦截器转成后端 detail 中文
 http.interceptors.response.use(
   response => response,
-  error => Promise.reject(new Error(extractErrorDetail(error, '请求失败，请稍后重试'))),
+  error => Promise.reject(new Error(extractErrorDetail(error) || '请求失败，请稍后重试')),
 )
 
 export interface H5DiagnosisConfig {
