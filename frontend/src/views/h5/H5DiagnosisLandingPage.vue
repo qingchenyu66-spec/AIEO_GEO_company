@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import AppBrandLogo from '../../components/AppBrandLogo.vue'
 import { fetchH5DiagnosisConfig, type H5DiagnosisConfig } from '../../services/h5Diagnosis'
 import { supportedPlatforms } from '../portal/platformMeta'
 
@@ -99,9 +98,8 @@ function goApply() {
     <div class="orb orb-b" aria-hidden="true" />
 
     <header class="topbar">
-      <!-- 2026-08-31 - H5 顶栏去掉艾迪亚企业标，改用产品亦智方标 -->
+      <!-- 2026-08-31 - H5 顶栏只留 GEO Monitor 文案，不要方标 -->
       <div class="logo">
-        <AppBrandLogo variant="icon" alt="亦智广告" class="logo-img" />
         <span class="logo-text">GEO Monitor</span>
       </div>
       <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
@@ -251,15 +249,6 @@ function goApply() {
 .logo {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-.logo :deep(.app-brand-logo),
-.logo-img {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  object-fit: contain;
-  display: block;
 }
 .logo-text {
   font-size: 15px;
@@ -575,12 +564,6 @@ function goApply() {
   }
   .topbar {
     padding: 22px 32px 0;
-  }
-  .logo :deep(.app-brand-logo),
-  .logo-img {
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
   }
   .logo-text {
     font-size: 17px;
