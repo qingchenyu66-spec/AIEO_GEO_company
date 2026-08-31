@@ -123,7 +123,7 @@ onMounted(bootstrap)
     <header class="hero">
       <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
       <p class="eyebrow">填写诊断信息</p>
-      <h1>9.9 元 AI 可见度诊断</h1>
+      <h1>{{ config?.price_yuan ?? '—' }} 元 AI 可见度诊断</h1>
     </header>
 
     <p v-if="loading" class="hint">加载中…</p>

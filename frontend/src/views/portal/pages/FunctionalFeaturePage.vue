@@ -96,7 +96,7 @@ const settingsCategory = ref<SettingsCategory>('secrets')
 const settingsTabs = computed(() => {
   const all: Array<{ key: SettingsCategory; title: string; desc: string }> = [
     { key: 'secrets', title: '接口密钥', desc: '监测服务、DeepSeek 等敏感配置，保存后立即生效' },
-    { key: 'h5_diagnosis', title: 'H5 付费诊断', desc: '微信 9.9 体验价、监测平台、抓取天数' },
+    { key: 'h5_diagnosis', title: 'H5 付费诊断', desc: '微信体验价、监测平台、监测次数' },
     { key: 'schedule', title: '调度策略', desc: '监测容差、接口限速、Celery 扫描与同步参数' },
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
     { key: 'notification', title: '通知规则', desc: '补录谁收、客户即将到期天数/职位、弱排名阈值' },

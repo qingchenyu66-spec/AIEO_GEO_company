@@ -111,7 +111,7 @@ onMounted(loadRows)
   <section class="h5-config-panel">
     <div class="head">
       <div>
-        <h3>H5 付费诊断（9.9）</h3>
+        <h3>H5 付费诊断</h3>
         <p>按监测次数配置（每天最多 {{ SLOTS_PER_DAY }} 档）。当前 {{ form.schedule_runs }} 次 ≈ {{ derivedDays }} 天。</p>
       </div>
       <button v-if="canEdit" type="button" class="primary-btn small-btn" :disabled="saving || loading" @click="saveAll">
