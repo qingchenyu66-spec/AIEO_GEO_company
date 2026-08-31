@@ -53,6 +53,71 @@ def is_brand_word_schedule_key(group_key: str) -> bool:
     return str(group_key or "").startswith("bw")
 
 
+def resolve_schedule_keyword_group(db: Session, item: DueScheduleGroup) -> dict[str, Any] | None:
+    """从 group_key 解析词组，与 _submit_schedule_group_locked 一致。"""
+    if is_brand_word_schedule_key(item.group_key):
+        keyword_groups = active_brand_word_groups(db, item.tenant_id)
+    else:
+        keyword_groups = active_keyword_groups(db, item.tenant_id)
+    group_part = item.group_key.split("-kw", 1)[-1]
+    group_suffix = group_part.split("-rg", 1)[0]
+    return next(
+        (group for group in keyword_groups if _keyword_group_suffix(group) == group_suffix),
+        None,
+    )
+
+
+def is_schedule_group_submittable(
+    db: Session,
+    asset: BrandAsset,
+    item: DueScheduleGroup,
+) -> bool:
+    """监测词/平台未配齐时不入队、不落 failed（与服务闸门 skipped 一致）。"""
+    keyword_group = resolve_schedule_keyword_group(db, item)
+    if keyword_group is None:
+        return False
+    try:
+        from app.core.monitor_purpose import PURPOSE_BRAND_WORD
+
+        build_scheduled_payload(
+            db,
+            asset,
+            [],
+            max_prompts=item.max_prompts,
+            keyword_group=keyword_group,
+            region_code=item.region_code,
+            purpose=PURPOSE_BRAND_WORD if is_brand_word_schedule_key(item.group_key) else "geo",
+        )
+        return True
+    except ValueError:
+        return False
+
+
+def _downgrade_config_failed_schedule_run(
+    db: Session,
+    *,
+    tenant_id: int,
+    group_key: str,
+) -> None:
+    """历史误记 failed 的配置缺口还原 skipped，看板不再报调度失败。"""
+    existing = get_schedule_run(db, tenant_id, group_key)
+    if existing is None or existing.status != "failed":
+        return
+    existing.status = "skipped"
+    existing.error_message = None
+    db.commit()
+
+
+def _schedule_config_skip_result(item: DueScheduleGroup) -> dict[str, Any]:
+    return {
+        "tenant_id": item.tenant_id,
+        "schedule_key": item.group_key,
+        "status": "skipped",
+        "keyword": item.keyword,
+        "message": "监测未配置完整",
+    }
+
+
 def brand_word_weekly_schedule_key(now: datetime | None = None) -> str:
     """每周一固定窗口 key（约 09:00）。"""
     now = now or datetime.now()
@@ -211,7 +276,7 @@ def enumerate_due_schedule_groups(
                 group_key = f"{schedule_key}-kw{_keyword_group_suffix(group)}{region_suffix}"
                 if schedule_run_blocks_due(get_schedule_run(db, asset.tenant_id, group_key), now=now):
                     continue
-                yield DueScheduleGroup(
+                due_item = DueScheduleGroup(
                     tenant_id=asset.tenant_id,
                     schedule_key=schedule_key,
                     group_key=group_key,
@@ -219,6 +284,15 @@ def enumerate_due_schedule_groups(
                     keyword=group.get("monitor_keyword"),
                     region_code=region_code,
                 )
+                # 2026-08-31 - 仅品牌词/无监测词/无平台时不跑，避免 failed 吓人
+                if not is_schedule_group_submittable(db, asset, due_item):
+                    _downgrade_config_failed_schedule_run(
+                        db,
+                        tenant_id=asset.tenant_id,
+                        group_key=group_key,
+                    )
+                    continue
+                yield due_item
 
 
 def enumerate_due_brand_word_weekly_groups(
@@ -342,6 +416,13 @@ def submit_schedule_group(
             "keyword": item.keyword,
             "message": skip_message,
         }
+    if not is_schedule_group_submittable(db, asset, item):
+        _downgrade_config_failed_schedule_run(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+        )
+        return _schedule_config_skip_result(item)
     if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
         return {
             "tenant_id": item.tenant_id,
@@ -401,7 +482,7 @@ def _submit_schedule_group_locked(
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
-            "status": "failed",
+            "status": "skipped",
             "keyword": item.keyword,
             "message": missing_message,
         }
@@ -417,23 +498,18 @@ def _submit_schedule_group_locked(
             purpose="brand_word" if is_brand_word_schedule_key(item.group_key) else "geo",
         )
     except ValueError as exc:
-        # 2026-08-31 - 空词组/无平台：落 failed 并返回，避免 Celery 未捕获 Traceback 刷屏
-        message = str(exc)
-        persist_schedule_group_failure(
+        # 2026-08-31 - 空词组/无平台：skipped 不落 failed，与 enumerate 前置过滤一致
+        _downgrade_config_failed_schedule_run(
             db,
             tenant_id=item.tenant_id,
             group_key=item.group_key,
-            error_message=message,
-            prompt_count=0,
-            platform_count=0,
-            created_by=current.user.id,
         )
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
-            "status": "failed",
+            "status": "skipped",
             "keyword": item.keyword,
-            "message": message,
+            "message": str(exc),
         }
     existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
     if existing_run is not None and existing_run.task_id:
