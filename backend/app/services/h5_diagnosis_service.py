@@ -14,7 +14,7 @@ from app.core.lead_diagnosis_config import clamp_lead_schedule_days
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 from app.core.masking import mask_phone
 from app.models.h5_diagnosis_order import H5DiagnosisOrder
-from app.schemas.lead_diagnosis import normalize_lead_context
+from app.schemas.lead_diagnosis import normalize_brand_aliases
 from app.services.lead_diagnosis_service import create_lead_diagnosis_from_h5_order
 from app.services.molizhishu_catalog_service import filter_submittable_platforms
 from app.services.system_config_service import get_runtime_config
@@ -22,6 +22,10 @@ from app.services.wechat_pay_service import WechatPayError, build_jsapi_pay_para
 
 _H5_OPENID_COOKIE = "geo_h5_wx_openid"
 _DEFAULT_PLATFORMS = ["doubao", "deepseek"]
+
+
+def _split_csv_terms(raw: str, *, max_items: int = 10) -> list[str]:
+    return normalize_brand_aliases(raw, max_items=max_items)
 
 
 def parse_platform_list(raw: Any) -> list[str]:
@@ -77,9 +81,11 @@ def create_h5_diagnosis_order(
     contact_phone: str,
     brand_name: str,
     prompts: list[str],
+    brand_aliases: str = "",
     industry: str = "",
     product_focus: str = "",
     website_url: str = "",
+    competitors: str = "",
 ) -> dict[str, Any]:
     cfg = get_h5_diagnosis_public_config(db)
     if not cfg["enabled"]:
@@ -100,6 +106,9 @@ def create_h5_diagnosis_order(
     if not re.fullmatch(r"1\d{10}", phone):
         raise ValueError("请填写正确的手机号")
 
+    alias_list = _split_csv_terms(brand_aliases, max_items=20)
+    competitor_list = _split_csv_terms(competitors, max_items=10)
+
     out_trade_no = _gen_out_trade_no()
     order = H5DiagnosisOrder(
         out_trade_no=out_trade_no,
@@ -108,9 +117,12 @@ def create_h5_diagnosis_order(
         contact_phone=phone,
         brand_name=brand,
         form_json={
+            # 2026-08-31 - H5 对齐 PC 品牌字段：别名/竞品写入 form_json，履约时落 lead
             "industry": industry.strip(),
             "product_focus": product_focus.strip(),
             "website_url": website_url.strip(),
+            "brand_aliases": alias_list,
+            "competitors": competitor_list,
         },
         prompts_json=normalized_prompts,
         platforms_json=list(cfg["platforms"]),

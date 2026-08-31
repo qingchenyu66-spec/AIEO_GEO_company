@@ -16,7 +16,6 @@ import {
   startH5OAuth,
   type H5DiagnosisConfig,
 } from '../../services/h5Diagnosis'
-import { platformLabelMap } from '../portal/portalMaps'
 
 const router = useRouter()
 const loading = ref(true)
@@ -28,9 +27,11 @@ const sessionReady = ref(false)
 
 const form = ref({
   brand_name: '',
+  brand_aliases: '',
   industry: '',
   product_focus: '',
   website_url: '',
+  competitors: '',
   wechat_id: '',
   contact_phone: '',
   prompts: ['', '', '', '', ''],
@@ -38,7 +39,6 @@ const form = ref({
 
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
 const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, form.value.product_focus))
-const platformLabels = computed(() => (config.value?.platforms || []).map(code => platformLabelMap[code] || code))
 
 function applyTemplate(value: string) {
   const emptyIndex = form.value.prompts.findIndex(item => !item.trim())
@@ -104,9 +104,11 @@ async function submitOrder() {
       contact_phone: form.value.contact_phone.trim(),
       brand_name: form.value.brand_name.trim(),
       prompts,
+      brand_aliases: form.value.brand_aliases.trim(),
       industry: form.value.industry.trim(),
       product_focus: form.value.product_focus.trim(),
       website_url: form.value.website_url.trim(),
+      competitors: form.value.competitors.trim(),
     })
     if (result.pay_params.devAutoPaid) {
       await markH5OrderDevPaid(result.out_trade_no)
@@ -137,38 +139,44 @@ onMounted(bootstrap)
       <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
       <p class="eyebrow">填写诊断信息</p>
       <h1>9.9 元 AI 可见度诊断</h1>
-      <p v-if="config" class="price">
-        ¥{{ config.price_yuan }} · {{ config.schedule_days }} 天 · 共 {{ config.schedule_total }} 次监测
-      </p>
     </header>
 
     <p v-if="loading" class="hint">加载中…</p>
     <p v-else-if="errorText" class="error">{{ errorText }}</p>
     <p v-else-if="successText" class="success">{{ successText }}</p>
 
+    <!-- 2026-08-31 - H5 对齐 PC 品牌字段；不展示地区/平台/天数/销售备注 -->
     <form v-if="!loading && !successText && config?.enabled" class="form" @submit.prevent="submitOrder">
       <label>
-        品牌名称
-        <input v-model="form.brand_name" required maxlength="100" placeholder="公司或品牌全称" />
+        品牌名称 *
+        <input v-model="form.brand_name" required maxlength="100" placeholder="例如：客户品牌全称" />
       </label>
       <label>
-        行业
-        <input v-model="form.industry" maxlength="200" placeholder="如：蛋白粉、电梯广告" />
+        品牌别名 / 露出词（可选）
+        <input v-model="form.brand_aliases" maxlength="500" placeholder="多个用逗号分隔，例如：品牌简称, 品牌别称" />
       </label>
       <label>
-        产品焦点
-        <input v-model="form.product_focus" maxlength="200" placeholder="可选" />
+        官网 URL（强烈建议）
+        <input v-model="form.website_url" maxlength="500" placeholder="https://www.example.com" />
       </label>
       <label>
-        官网
-        <input v-model="form.website_url" maxlength="500" placeholder="https://" />
+        所属行业 / 业务类型
+        <input v-model="form.industry" maxlength="200" placeholder="例如：服饰辅料 / RPA / 户外广告" />
       </label>
       <label>
-        微信号
+        主要产品 / 采购场景
+        <input v-model="form.product_focus" maxlength="200" placeholder="例如：拉链 / 智能体平台" />
+      </label>
+      <label>
+        主要竞品
+        <input v-model="form.competitors" maxlength="500" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
+      </label>
+      <label>
+        微信号 *
         <input v-model="form.wechat_id" required maxlength="64" placeholder="方便顾问联系您" />
       </label>
       <label>
-        手机号
+        手机号 *
         <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" pattern="1[0-9]{10}" placeholder="11 位手机号，以 1 开头" />
       </label>
 
@@ -194,8 +202,6 @@ onMounted(bootstrap)
           <input v-model="form.prompts[index]" maxlength="200" :placeholder="index === 0 ? '至少填 1 条' : '可选'" />
         </label>
       </div>
-
-      <p v-if="platformLabels.length" class="platforms">监测平台：{{ platformLabels.join('、') }}</p>
 
       <button class="submit" type="submit" :disabled="submitting || !sessionReady">
         {{ submitting ? '提交中…' : `支付 ¥${config.price_yuan}` }}
@@ -223,8 +229,7 @@ onMounted(bootstrap)
   font-size: 14px;
 }
 .eyebrow { color: #64748b; font-size: 13px; margin: 0 0 4px; }
-h1 { margin: 0 0 8px; font-size: 24px; }
-.price { margin: 0; color: #0f766e; font-weight: 600; }
+h1 { margin: 0; font-size: 24px; }
 .form { display: grid; gap: 12px; }
 label { display: grid; gap: 6px; font-size: 14px; }
 input {
@@ -245,7 +250,6 @@ input {
   font-size: 12px;
 }
 .link { border: none; color: #0f766e; background: transparent; padding: 0; }
-.platforms { font-size: 13px; color: #64748b; }
 .submit {
   margin-top: 8px;
   border: none;

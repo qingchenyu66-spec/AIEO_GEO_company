@@ -86,9 +86,11 @@ export async function createH5DiagnosisOrder(payload: {
   contact_phone: string
   brand_name: string
   prompts: string[]
+  brand_aliases?: string
   industry?: string
   product_focus?: string
   website_url?: string
+  competitors?: string
 }): Promise<H5OrderCreateResult> {
   const resp = await http.post('/v1/h5/diagnosis/orders', payload)
   return unwrap(resp)

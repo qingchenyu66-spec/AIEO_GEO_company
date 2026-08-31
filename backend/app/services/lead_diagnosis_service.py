@@ -31,6 +31,7 @@ from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import (
     LeadDiagnosisCreateRequest,
     LeadDiagnosisUpdateRequest,
+    normalize_brand_aliases,
     normalize_lead_context,
 )
 from app.schemas.monitor import FAST_MONITOR_MODE, CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
@@ -797,15 +798,17 @@ def create_lead_diagnosis_from_h5_order(db: Session, order) -> int:
             "source": "h5_paid_diagnosis",
         }
     )
+    brand_aliases = normalize_brand_aliases(form.get("brand_aliases") or [])
+    competitors = normalize_brand_aliases(form.get("competitors") or [], max_items=10)
     diagnosis_date = date.today()
     lead = LeadDiagnosis(
         brand_name=str(order.brand_name or "").strip(),
         contact_phone=str(order.contact_phone or "").strip() or None,
         contact_note="；".join(note_parts)[:500],
         lead_context_json=lead_context,
-        brand_aliases_json=[],
+        brand_aliases_json=brand_aliases,
         prompts_json=list(order.prompts_json or []),
-        competitors_json=[],
+        competitors_json=competitors,
         platforms_json=list(order.platforms_json or []),
         region_codes_json=[],
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),

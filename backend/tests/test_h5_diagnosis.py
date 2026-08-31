@@ -52,6 +52,8 @@ def test_h5_diagnosis_order_dev_paid_flow(monkeypatch) -> None:
             "brand_name": "H5测试品牌",
             "prompts": ["蛋白粉推荐", "蛋白粉哪家好"],
             "industry": "蛋白粉",
+            "brand_aliases": "简称A, 简称B",
+            "competitors": "竞品甲",
         },
     )
     assert create_resp.status_code == 200, create_resp.text
@@ -65,3 +67,15 @@ def test_h5_diagnosis_order_dev_paid_flow(monkeypatch) -> None:
     paid_body = paid_resp.json()
     assert paid_body["data"]["status"] == "paid"
     assert paid_body["data"]["lead_diagnosis_id"]
+
+    from app.core.database import SessionLocal
+    from app.models.lead_diagnosis import LeadDiagnosis
+
+    db = SessionLocal()
+    try:
+        lead = db.get(LeadDiagnosis, paid_body["data"]["lead_diagnosis_id"])
+        assert lead is not None
+        assert list(lead.brand_aliases_json or []) == ["简称A", "简称B"]
+        assert list(lead.competitors_json or []) == ["竞品甲"]
+    finally:
+        db.close()
