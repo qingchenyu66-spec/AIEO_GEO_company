@@ -58,7 +58,13 @@ const nativeQrSrc = computed(() => {
 function detectPayEnv(): PayEnv {
   const ua = navigator.userAgent || ''
   const isWechat = /MicroMessenger/i.test(ua)
-  if (isWechat) return 'wechat'
+  if (isWechat) {
+    // 2026-08-31 - 电脑微信内置页调 JSAPI 常报 system:access_denied，改走 Native 扫码
+    const isMobilePhone = /Android|iPhone|iPod|iPad|Mobile/i.test(ua)
+    const isWechatDesktop = /WindowsWechat|MacWechat/i.test(ua) || (!isMobilePhone && /Windows NT|Macintosh/i.test(ua))
+    if (isWechatDesktop) return 'pc'
+    return 'wechat'
+  }
   const isMobile = /Android|iPhone|iPod|iPad|Mobile/i.test(ua)
   return isMobile ? 'mobile_other' : 'pc'
 }
@@ -192,7 +198,13 @@ async function submitOrder() {
       successText.value = '支付处理中，请稍后在微信通知中查看或联系顾问'
     }
   } catch (error: unknown) {
-    errorText.value = error instanceof Error ? error.message : '提交失败'
+    const raw = error instanceof Error ? error.message : '提交失败'
+    // 2026-08-31 - 电脑微信 JSAPI 失败文案难懂，改成人话并引导扫码
+    if (/access_denied/i.test(raw)) {
+      errorText.value = '当前环境不支持微信内直接付款，请用手机微信扫码，或在电脑浏览器打开本页'
+    } else {
+      errorText.value = raw
+    }
   } finally {
     submitting.value = false
   }

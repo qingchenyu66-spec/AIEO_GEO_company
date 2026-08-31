@@ -139,6 +139,7 @@ export function invokeWechatPay(params: H5PayParams): Promise<void> {
         (res) => {
           const msg = String(res?.err_msg || '')
           if (msg.includes(':ok')) resolve()
+          // 2026-08-31 - 透传微信 err_msg，前端可识别 access_denied
           else reject(new Error(msg || '支付未完成'))
         },
       )
