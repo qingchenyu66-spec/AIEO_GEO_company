@@ -559,4 +559,186 @@ function goApply() {
   line-height: 1;
   color: #2563eb;
 }
+
+/* 2026-08-31 - 落地页 PC 自适应：居中限宽 + 多列，避免手机稿在宽屏被拉稀 */
+@media (min-width: 768px) {
+  .landing {
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+  .topbar,
+  .hero,
+  .stats,
+  .section,
+  .bottom-cta {
+    max-width: 1080px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .topbar {
+    padding: 22px 32px 0;
+  }
+  .logo-mark {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+  .logo-text {
+    font-size: 17px;
+  }
+  .top-cta {
+    font-size: 14px;
+  }
+  .hero {
+    padding: 40px 32px 12px;
+  }
+  .badge {
+    font-size: 13px;
+    padding: 7px 14px;
+  }
+  .hero h1 {
+    font-size: 48px;
+    line-height: 1.2;
+    max-width: 14em;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .sub {
+    font-size: 16px;
+    max-width: 40em;
+  }
+  .hero-actions {
+    margin-top: 24px;
+  }
+  .btn-primary {
+    padding: 14px 28px;
+    font-size: 16px;
+    border-radius: 14px;
+  }
+  .btn-primary.wide {
+    max-width: 360px;
+  }
+  .platform-block {
+    margin-top: 28px;
+  }
+  .platform-block > p {
+    font-size: 13px;
+  }
+  .platform-row {
+    max-width: 820px;
+    margin: 0 auto;
+    gap: 10px;
+  }
+  .platform-pill {
+    font-size: 13px;
+    padding: 8px 14px 8px 10px;
+  }
+  .platform-pill img {
+    width: 20px;
+    height: 20px;
+  }
+  .stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    padding: 28px 32px 8px;
+  }
+  .stat-card {
+    padding: 22px 16px;
+    border-radius: 18px;
+  }
+  .stat-card b {
+    font-size: 28px;
+  }
+  .stat-card span {
+    font-size: 13px;
+  }
+  .section {
+    padding: 40px 32px 12px;
+  }
+  .section.soft {
+    margin: 28px auto 0;
+    padding: 32px 28px 24px;
+    border-radius: 24px;
+  }
+  .section h2 {
+    font-size: 32px;
+  }
+  .section-sub {
+    font-size: 15px;
+    max-width: 36em;
+    margin-bottom: 22px;
+  }
+  .reason-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .outcome-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .step-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .step-card {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .reason-card,
+  .outcome-card,
+  .step-card {
+    padding: 20px;
+    border-radius: 18px;
+  }
+  .reason-card h3,
+  .outcome-card h3,
+  .step-card h3 {
+    font-size: 18px;
+  }
+  .reason-card p,
+  .outcome-card p,
+  .step-card p {
+    font-size: 14px;
+  }
+  .bottom-cta {
+    margin: 36px auto 16px;
+    padding: 36px 32px;
+    border-radius: 24px;
+  }
+  .bottom-cta h2 {
+    font-size: 28px;
+  }
+  .bottom-cta p {
+    font-size: 15px;
+    max-width: 36em;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .cta-bar {
+    padding: 14px 24px calc(14px + env(safe-area-inset-bottom));
+  }
+  .cta-inner {
+    max-width: 720px;
+    gap: 16px;
+  }
+  .cta-price strong {
+    font-size: 28px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .hero h1 {
+    font-size: 56px;
+  }
+  .orb-a {
+    width: 420px;
+    height: 420px;
+    right: 8%;
+  }
+  .orb-b {
+    width: 360px;
+    height: 360px;
+    left: 6%;
+  }
+}
 </style>
