@@ -53,7 +53,7 @@ from app.services.monitor_service import (
 )
 from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import rankings_for_storage
-from app.services.schedule_service import schedule_times_for_asset
+from app.services.schedule_history import schedule_times_for_asset_on_day
 from app.services.share_page_fetch_service import fetch_share_page
 from app.services.share_page_screenshot_service import (
     enqueue_backfill_screenshot,
@@ -2291,9 +2291,7 @@ def _merge_gap_cells_into_matrix(
     today = date.today()
     now = datetime.now()
     service_start = tenant.service_start_date if tenant else None
-    schedule_times = schedule_times_for_asset(asset)
-    if not schedule_times:
-        return
+    # 2026-08-31 - 改时段后历史日仍用当前配置造缺口 - 按日回放旧计划，勿一律 schedule_times_for_asset
 
     expectations = _tenant_matrix_word_platforms(
         db,
@@ -2335,6 +2333,10 @@ def _merge_gap_cells_into_matrix(
             cursor += timedelta(days=1)
             continue
         if not _schedule_day_eligible(asset, cursor):
+            cursor += timedelta(days=1)
+            continue
+        schedule_times = schedule_times_for_asset_on_day(asset, cursor)
+        if not schedule_times:
             cursor += timedelta(days=1)
             continue
         day_text = cursor.isoformat()

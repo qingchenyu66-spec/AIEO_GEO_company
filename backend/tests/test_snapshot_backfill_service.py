@@ -1367,6 +1367,64 @@ def test_matrix_includes_gap_cells_for_missed_schedule_day(db_session) -> None:
     assert matrix["summary"]["gap_cells"] >= 1
 
 
+def test_matrix_pre_cutover_day_uses_old_schedule_not_current(db_session, monkeypatch) -> None:
+    """改时段后看历史日：缺口应按旧计划造，不能把新三点标成漏跑。"""
+    from datetime import date
+
+    from app.services import schedule_history
+
+    tenant = Tenant(
+        name="切表企业",
+        code="tenant-cutover-gap",
+        deleted=False,
+        service_start_date=date(2026, 1, 1),
+        service_end_date=date(2026, 12, 31),
+    )
+    db_session.add(tenant)
+    db_session.flush()
+    monkeypatch.setitem(
+        schedule_history.TENANT_SCHEDULE_HISTORY,
+        int(tenant.id),
+        {"old": ["09:00", "14:00", "20:30"], "new": ["02:23", "08:08", "15:18"]},
+    )
+    asset = BrandAsset(
+        tenant_id=tenant.id,
+        company_full_name="切表企业有限公司",
+        brand_name="切表品牌",
+        brand_short_name="切表",
+        monitor_keywords_json=["luxreal类似的平台工具"],
+        aliases_json=[],
+        product_keywords_json=[],
+        monitored_platforms_json=["doubao"],
+        region_codes_json=[],
+        schedule_times_json=["02:23", "08:08", "15:18"],
+        schedule_type="daily_times",
+        schedule_weekdays_json=[],
+        schedule_month_days_json=[],
+        status=True,
+        deleted=False,
+    )
+    db_session.add(asset)
+    db_session.commit()
+
+    matrix = list_snapshot_backfill_matrix(
+        db_session,
+        tenant_id=tenant.id,
+        detect_date_from=date(2026, 8, 27),
+        detect_date_to=date(2026, 8, 27),
+    )
+    gap_cells = [cell for cell in matrix["cells"] if int(cell.get("gap_count") or 0) > 0]
+    assert gap_cells
+    windows = {
+        str(slot.get("schedule_window_key") or "")
+        for cell in gap_cells
+        for slot in (cell.get("slots") or [])
+        if slot.get("is_gap")
+    }
+    assert windows == {"20260827-0900", "20260827-1400", "20260827-2030"}
+    assert not any(key.endswith(("-0223", "-0808", "-1518")) for key in windows)
+
+
 def test_schedule_slot_eligible_for_gap_skips_future_today_slots() -> None:
     from datetime import date, datetime, timedelta, time
 
