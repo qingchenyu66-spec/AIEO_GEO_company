@@ -49,9 +49,22 @@ def _resolve_openid(request: Request) -> str:
     return str(openid or "").strip()
 
 
-def _h5_frontend_url(*, query: str = "") -> str:
+def _h5_landing_url(*, query: str = "") -> str:
     base = settings.wechat_h5_base_url.rstrip("/") + "/"
     return f"{base}{('?' + query.lstrip('?')) if query else ''}"
+
+
+def _h5_apply_url(*, query: str = "") -> str:
+    parsed = urlparse(settings.wechat_h5_base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    base = f"{origin}/h5/diagnosis/apply"
+    return f"{base}{('?' + query.lstrip('?')) if query else ''}"
+
+
+def _oauth_return_url(target: str | None) -> str:
+    if str(target or "").strip().lower() == "landing":
+        return _h5_landing_url()
+    return _h5_apply_url()
 
 
 @router.get("/config", response_model=ApiResponse[dict])
@@ -73,9 +86,13 @@ def public_session(request: Request) -> ApiResponse[dict]:
 
 
 @router.get("/oauth/start")
-def oauth_start(request: Request) -> RedirectResponse:
+def oauth_start(
+    request: Request,
+    target: str | None = Query(default="apply", description="apply | landing"),
+) -> RedirectResponse:
+    return_url = _oauth_return_url(target)
     if settings.wechat_pay_dev_mode:
-        response = RedirectResponse(url=_h5_frontend_url(), status_code=302)
+        response = RedirectResponse(url=return_url, status_code=302)
         response.set_cookie(
             _H5_OPENID_COOKIE,
             settings.wechat_pay_dev_openid,
@@ -113,7 +130,7 @@ def oauth_callback(
         openid = exchange_code_for_openid(code)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    response = RedirectResponse(url=_h5_frontend_url(), status_code=302)
+    response = RedirectResponse(url=_h5_apply_url(), status_code=302)
     response.delete_cookie(_OAUTH_STATE_COOKIE)
     response.set_cookie(
         _H5_OPENID_COOKIE,

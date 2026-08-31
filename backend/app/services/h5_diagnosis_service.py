@@ -55,6 +55,8 @@ def get_h5_diagnosis_public_config(db: Session) -> dict[str, Any]:
         "price_fen": price_fen,
         "price_yuan": round(price_fen / 100, 2),
         "schedule_days": schedule_days,
+        "schedule_slots_per_day": 3,
+        "schedule_total": schedule_days * 3,
         "platforms": platforms,
         "max_prompts": 5,
         "min_prompts": 1,

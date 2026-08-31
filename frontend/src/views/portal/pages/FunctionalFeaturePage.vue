@@ -32,6 +32,8 @@ import {
   SETTINGS_SECRETS_MENU,
 } from '../constants'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
+import CreditBillingConfigPanel from '../components/CreditBillingConfigPanel.vue'
+import H5DiagnosisConfigPanel from '../components/H5DiagnosisConfigPanel.vue'
 import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
@@ -60,7 +62,7 @@ const {
   recentSubtasks,
 } = analytics
 
-type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
+type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu' | 'credit_billing'
 
 const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
   secrets: SETTINGS_SECRETS_MENU,
@@ -68,6 +70,7 @@ const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
   cache_queue: SETTINGS_CACHE_QUEUE_MENU,
   notification: SETTINGS_NOTIFICATION_MENU,
   menu: SETTINGS_MENU_PERM,
+  credit_billing: 'platform.credit_ops_board',
 }
 
 function menuHasAccess(menuCode: string) {
@@ -78,6 +81,11 @@ function menuHasAccess(menuCode: string) {
 
 function canAccessSettingsCategory(key: SettingsCategory) {
   const childCode = SETTINGS_MENU_BY_CATEGORY[key]
+  if (key === 'credit_billing') {
+    return auth.allowedMenus.some(menu => (
+      menu.menu_code === 'platform.credit_ops_board' && Boolean(menu.can_export || menu.can_update)
+    ))
+  }
   if (menuHasAccess(childCode)) return true
   // 有任意配置子权限时，仅按子项授权；无子项时兼容旧的父菜单整页授权
   const hasAnyChild = SETTINGS_CHILD_MENUS.some(code => menuHasAccess(code))
@@ -85,15 +93,20 @@ function canAccessSettingsCategory(key: SettingsCategory) {
   return menuHasAccess(SETTINGS_MENU)
 }
 
+const canEditCreditBilling = computed(() => auth.allowedMenus.some(menu => (
+  menu.menu_code === 'platform.credit_ops_board' && menu.can_update
+)))
+
 const settingsCategory = ref<SettingsCategory>('secrets')
 
 const settingsTabs = computed(() => {
   const all: Array<{ key: SettingsCategory; title: string; desc: string }> = [
     { key: 'secrets', title: '接口密钥', desc: '监测服务、DeepSeek 等敏感配置，保存后立即生效' },
-    { key: 'schedule', title: '调度策略', desc: '监测容差、接口限速、Celery 扫描与同步参数' },
+    { key: 'schedule', title: '调度策略', desc: 'H5 付费诊断、监测容差、接口限速与 Celery 参数' },
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
     { key: 'notification', title: '通知规则', desc: '补录谁收、客户即将到期天数/职位、弱排名阈值' },
     { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
+    { key: 'credit_billing', title: '算力计费', desc: '全局单价与算力规则声明发布' },
   ]
   return all.filter(tab => canAccessSettingsCategory(tab.key))
 })
@@ -107,8 +120,14 @@ watch(settingsTabs, (tabs) => {
 
 const filteredConfigRows = computed(() => {
   if (settingsCategory.value === 'menu') return []
-  return systemConfigRows.value.filter(row => (row.category || row.scope) === settingsCategory.value)
+  const rows = systemConfigRows.value.filter(row => (row.category || row.scope) === settingsCategory.value)
+  if (settingsCategory.value === 'schedule') {
+    return rows.filter(row => !String(row.config_key || '').startsWith('h5_diagnosis_'))
+  }
+  return rows
 })
+
+const canEditScheduleSettings = computed(() => canAccessSettingsCategory('schedule'))
 
 function switchSettingsCategory(key: SettingsCategory) {
   if (!canAccessSettingsCategory(key)) return
@@ -759,7 +778,14 @@ onUnmounted(() => {
             <button class="primary-btn small-btn" @click="emit('open-menu-config')">打开菜单配置管理</button>
           </div>
 
-          <div v-else-if="settingsCategory === 'schedule'" class="schedule-ops-panel">
+          <CreditBillingConfigPanel
+            v-else-if="settingsCategory === 'credit_billing'"
+            :can-edit="canEditCreditBilling"
+          />
+
+          <div v-else-if="settingsCategory === 'schedule'" class="schedule-settings-wrap">
+            <H5DiagnosisConfigPanel :can-edit="canEditScheduleSettings" />
+            <div class="schedule-ops-panel">
             <p>预览各企业定时监测将提交的问题与平台；「立即执行到期调度」会发起真实抓取，请谨慎操作。</p>
             <div class="schedule-ops-toolbar">
               <select v-model="scheduleTenantId" title="企业">
@@ -778,6 +804,63 @@ onUnmounted(() => {
                 <em>{{ item.schedule_times?.length ? `每日 ${item.schedule_times.join('、')}` : item.schedule_type }}</em>
               </div>
             </div>
+            </div>
+
+            <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
+            <div v-for="row in filteredConfigRows" :key="row.id" class="ops-row settings-config-row">
+              <b>{{ row.config_name || row.config_key }}</b>
+              <span v-if="editingConfigId !== row.id">{{ formatConfigDisplay(row) }}</span>
+              <select
+                v-else-if="row.value_type === 'bool'"
+                v-model="editingConfigValue"
+                class="settings-config-input"
+              >
+                <option value="true">是</option>
+                <option value="false">否</option>
+              </select>
+              <ElSelect
+                v-else-if="isPositionNotifyConfig(row)"
+                v-model="editingPositionIds"
+                class="settings-config-select"
+                multiple
+                filterable
+                clearable
+                collapse-tags
+                collapse-tags-tooltip
+                :placeholder="isTenantExpiryPositionConfig(row) ? '不选则不推送' : '不选则默认销售+运营+管理员'"
+              >
+                <ElOption
+                  v-for="position in platformPositions"
+                  :key="position.id"
+                  :label="position.position_name"
+                  :value="position.id"
+                />
+              </ElSelect>
+              <input
+                v-else
+                v-model="editingConfigValue"
+                class="settings-config-input"
+                :type="isSecretConfigRow(row) ? 'password' : 'text'"
+                :placeholder="configValuePlaceholder(row)"
+              >
+              <em>{{ row.remark || '平台运行配置' }}</em>
+              <i>{{ row.status || '启用' }}</i>
+              <span class="settings-config-actions">
+                <button
+                  v-if="editingConfigId !== row.id"
+                  type="button"
+                  class="filter-reset-btn tiny-btn"
+                  @click="startEditConfig(row)"
+                >
+                  编辑
+                </button>
+                <template v-else>
+                  <button type="button" class="primary-btn small-btn" :disabled="savingConfig" @click="saveConfigRow(row)">保存</button>
+                  <button type="button" class="filter-reset-btn tiny-btn" @click="cancelEditConfig">取消</button>
+                </template>
+              </span>
+            </div>
+            <div v-if="!filteredConfigRows.length" class="mini-empty">该分类暂无其它配置项。</div>
           </div>
 
           <template v-else>

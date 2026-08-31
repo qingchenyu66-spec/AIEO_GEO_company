@@ -11,6 +11,8 @@ export interface H5DiagnosisConfig {
   price_fen: number
   price_yuan: number
   schedule_days: number
+  schedule_slots_per_day: number
+  schedule_total: number
   platforms: string[]
   max_prompts: number
   min_prompts: number
@@ -68,8 +70,8 @@ export async function fetchH5DiagnosisSession(): Promise<H5DiagnosisSession> {
   return unwrap(resp)
 }
 
-export function startH5OAuth() {
-  window.location.href = '/api/v1/h5/diagnosis/oauth/start'
+export function startH5OAuth(target: 'apply' | 'landing' = 'apply') {
+  window.location.href = `/api/v1/h5/diagnosis/oauth/start?target=${encodeURIComponent(target)}`
 }
 
 export async function createH5DiagnosisOrder(payload: {

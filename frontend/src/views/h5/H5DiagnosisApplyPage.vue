@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   PROMPT_TEMPLATES,
   buildNonbrandPromptSet,
@@ -15,7 +16,9 @@ import {
   startH5OAuth,
   type H5DiagnosisConfig,
 } from '../../services/h5Diagnosis'
+import { platformLabelMap } from '../portal/portalMaps'
 
+const router = useRouter()
 const loading = ref(true)
 const submitting = ref(false)
 const errorText = ref('')
@@ -34,8 +37,8 @@ const form = ref({
 })
 
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
-
 const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, form.value.product_focus))
+const platformLabels = computed(() => (config.value?.platforms || []).map(code => platformLabelMap[code] || code))
 
 function applyTemplate(value: string) {
   const emptyIndex = form.value.prompts.findIndex(item => !item.trim())
@@ -61,7 +64,7 @@ async function bootstrap() {
     const session = await fetchH5DiagnosisSession()
     sessionReady.value = session.ready
     if (!session.ready && config.value.oauth_required) {
-      startH5OAuth()
+      startH5OAuth('apply')
       return
     }
   } catch (error: unknown) {
@@ -116,9 +119,12 @@ onMounted(bootstrap)
 <template>
   <div class="h5-page">
     <header class="hero">
-      <p class="eyebrow">艾迪亚 GEO</p>
+      <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
+      <p class="eyebrow">填写诊断信息</p>
       <h1>9.9 元 AI 可见度诊断</h1>
-      <p v-if="config" class="price">¥{{ config.price_yuan }} · {{ config.schedule_days }} 天监测</p>
+      <p v-if="config" class="price">
+        ¥{{ config.price_yuan }} · {{ config.schedule_days }} 天 · 共 {{ config.schedule_total }} 次监测
+      </p>
     </header>
 
     <p v-if="loading" class="hint">加载中…</p>
@@ -174,7 +180,7 @@ onMounted(bootstrap)
         </label>
       </div>
 
-      <p v-if="config.platforms.length" class="platforms">监测平台：{{ config.platforms.join('、') }}</p>
+      <p v-if="platformLabels.length" class="platforms">监测平台：{{ platformLabels.join('、') }}</p>
 
       <button class="submit" type="submit" :disabled="submitting || !sessionReady">
         {{ submitting ? '提交中…' : `支付 ¥${config.price_yuan}` }}
@@ -194,6 +200,13 @@ onMounted(bootstrap)
   min-height: 100vh;
 }
 .hero { margin-bottom: 20px; }
+.back {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  padding: 0 0 8px;
+  font-size: 14px;
+}
 .eyebrow { color: #64748b; font-size: 13px; margin: 0 0 4px; }
 h1 { margin: 0 0 8px; font-size: 24px; }
 .price { margin: 0; color: #0f766e; font-weight: 600; }
