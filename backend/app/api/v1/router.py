@@ -3,8 +3,6 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import auth, brand, health, knowledge, management, media, monitor, notifications
 from app.api.v1.endpoints import announcements as announcements_endpoints
 from app.api.v1.endpoints import approvals as approvals_endpoints
-from app.api.v1.endpoints import credit_management as credit_management_endpoints
-from app.api.v1.endpoints import customer_enterprise as customer_enterprise_endpoints
 from app.api.v1.endpoints import h5_diagnosis as h5_diagnosis_endpoints
 from app.api.v1.endpoints import ops as ops_endpoints
 from app.api.v1.endpoints import diagnosis as diagnosis_endpoints
@@ -17,8 +15,6 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["System"])
 api_router.include_router(auth.router, tags=["Authentication"])
 api_router.include_router(management.router, tags=["Management"])
-api_router.include_router(credit_management_endpoints.router, tags=["Credit Management"])
-api_router.include_router(customer_enterprise_endpoints.router, tags=["Customer Enterprise"])
 api_router.include_router(approvals_endpoints.router, tags=["Approvals"])
 api_router.include_router(monitor.router, tags=["GEO Monitor"])
 api_router.include_router(media.router, tags=["Media"])
