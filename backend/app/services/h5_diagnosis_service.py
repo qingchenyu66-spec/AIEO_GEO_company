@@ -77,7 +77,7 @@ def create_h5_diagnosis_order(
     db: Session,
     *,
     openid: str,
-    wechat_id: str,
+    wechat_id: str = "",
     contact_phone: str,
     brand_name: str,
     prompts: list[str],
@@ -97,12 +97,11 @@ def create_h5_diagnosis_order(
         raise ValueError("请至少填写 1 条检测问题")
 
     brand = brand_name.strip()
-    wx_id = wechat_id.strip()
     phone = contact_phone.strip()
+    # 2026-08-31 - H5 不再收集微信号，库字段仍非空，落空串
+    wx_id = (wechat_id or "").strip()
     if not brand:
         raise ValueError("请填写品牌名称")
-    if not wx_id:
-        raise ValueError("请填写微信号")
     if not re.fullmatch(r"1\d{10}", phone):
         raise ValueError("请填写正确的手机号")
 

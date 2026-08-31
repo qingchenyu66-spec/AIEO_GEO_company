@@ -82,7 +82,6 @@ export function startH5OAuth(target: 'apply' | 'landing' = 'apply') {
 }
 
 export async function createH5DiagnosisOrder(payload: {
-  wechat_id: string
   contact_phone: string
   brand_name: string
   prompts: string[]

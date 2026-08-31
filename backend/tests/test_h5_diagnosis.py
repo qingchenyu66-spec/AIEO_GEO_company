@@ -36,6 +36,25 @@ def test_h5_diagnosis_order_rejects_invalid_phone() -> None:
     assert resp.json()["detail"] == "请填写正确的手机号"
 
 
+def test_h5_diagnosis_order_accepts_without_wechat(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    monkeypatch.setattr(
+        "app.services.lead_diagnosis_service.submit_due_lead_run",
+        lambda *args, **kwargs: None,
+    )
+    client.cookies.set("geo_h5_wx_openid", "pytest-openid-h5-nowx")
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138001",
+            "brand_name": "无微信号品牌",
+            "prompts": ["蛋白粉推荐"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["code"] == 0
+
+
 def test_h5_diagnosis_order_dev_paid_flow(monkeypatch) -> None:
     monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
     monkeypatch.setattr(

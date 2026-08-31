@@ -75,7 +75,7 @@ const steps = computed(() => [
   {
     no: '03',
     title: '再谈优化与增长',
-    desc: '顾问按微信号跟进，给出可执行的 GEO 优化方向。',
+    desc: '顾问按手机号跟进，给出可执行的 GEO 优化方向。',
   },
 ])
 
@@ -188,7 +188,7 @@ function goApply() {
 
     <section class="bottom-cta">
       <h2>准备好让品牌被 AI 看见了吗？</h2>
-      <p>体验价 {{ priceText }} 做一次真实抓取诊断，顾问按微信号解读结果与优化方向。</p>
+      <p>体验价 {{ priceText }} 做一次真实抓取诊断，顾问按手机号解读结果与优化方向。</p>
       <button type="button" class="btn-primary wide" :disabled="loading || !config?.enabled" @click="goApply">
         {{ config?.enabled ? '立即开始品牌可见度体检' : '活动暂未开放' }}
       </button>

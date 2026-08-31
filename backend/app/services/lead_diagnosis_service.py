@@ -785,9 +785,10 @@ def create_lead_diagnosis_from_h5_order(db: Session, order) -> int:
     form = order.form_json if isinstance(order.form_json, dict) else {}
     note_parts = [
         f"H5付费订单 {order.out_trade_no}",
-        f"微信号 {order.wechat_id}",
         f"手机 {order.contact_phone}",
     ]
+    if str(order.wechat_id or "").strip():
+        note_parts.insert(1, f"微信号 {order.wechat_id}")
     if order.wx_transaction_id:
         note_parts.append(f"微信单号 {order.wx_transaction_id}")
     lead_context = normalize_lead_context(

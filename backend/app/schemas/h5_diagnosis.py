@@ -4,10 +4,10 @@ from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 
 
 class H5DiagnosisOrderCreateRequest(BaseModel):
-    wechat_id: str = Field(min_length=1, max_length=64)
     contact_phone: str = Field(min_length=11, max_length=30)
     brand_name: str = Field(min_length=1, max_length=100)
     prompts: list[str] = Field(min_length=1, max_length=5)
+    wechat_id: str = Field(default="", max_length=64)
     brand_aliases: str = Field(default="", max_length=500)
     industry: str = Field(default="", max_length=200)
     product_focus: str = Field(default="", max_length=200)

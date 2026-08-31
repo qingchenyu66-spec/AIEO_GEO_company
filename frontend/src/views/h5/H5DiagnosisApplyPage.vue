@@ -32,7 +32,6 @@ const form = ref({
   product_focus: '',
   website_url: '',
   competitors: '',
-  wechat_id: '',
   contact_phone: '',
   prompts: ['', '', '', '', ''],
 })
@@ -76,9 +75,8 @@ async function bootstrap() {
 
 function validateForm(): string {
   if (!form.value.brand_name.trim()) return '请填写品牌名称'
-  if (!form.value.wechat_id.trim()) return '请填写微信号'
   const phone = form.value.contact_phone.trim()
-  if (!/^1\d{10}$/.test(phone)) return '请填写正确的11位手机号'
+  if (!/^1\d{10}$/.test(phone)) return '请填写正确的手机号'
   const prompts = form.value.prompts.map(v => v.trim()).filter(Boolean)
   if (!prompts.length) return '请至少填写 1 条检测问题'
   return ''
@@ -100,7 +98,6 @@ async function submitOrder() {
   try {
     const prompts = form.value.prompts.map(v => v.trim()).filter(Boolean)
     const result = await createH5DiagnosisOrder({
-      wechat_id: form.value.wechat_id.trim(),
       contact_phone: form.value.contact_phone.trim(),
       brand_name: form.value.brand_name.trim(),
       prompts,
@@ -172,12 +169,8 @@ onMounted(bootstrap)
         <input v-model="form.competitors" maxlength="500" placeholder="多个竞品用逗号分隔，例如：竞品A, 竞品B" />
       </label>
       <label>
-        微信号 *
-        <input v-model="form.wechat_id" required maxlength="64" placeholder="方便顾问联系您" />
-      </label>
-      <label>
         手机号 *
-        <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" pattern="1[0-9]{10}" placeholder="11 位手机号，以 1 开头" />
+        <input v-model="form.contact_phone" required maxlength="11" inputmode="numeric" pattern="1[0-9]{10}" placeholder="请填写手机号码" />
       </label>
 
       <div class="prompt-block">
