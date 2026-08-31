@@ -28,7 +28,6 @@ const form = ref({
   brand_name: '',
   brand_aliases: '',
   industry: '',
-  product_focus: '',
   website_url: '',
   competitors: '',
   contact_phone: '',
@@ -36,7 +35,7 @@ const form = ref({
 })
 
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
-const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, form.value.product_focus))
+const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, ''))
 
 function applyRecommendedSet() {
   // 2026-08-31 - 一键推荐一次写满 5 条：3 非品牌 + 2 品牌问法
@@ -93,7 +92,6 @@ async function submitOrder() {
       prompts,
       brand_aliases: form.value.brand_aliases.trim(),
       industry: form.value.industry.trim(),
-      product_focus: form.value.product_focus.trim(),
       website_url: form.value.website_url.trim(),
       competitors: form.value.competitors.trim(),
     })
@@ -147,12 +145,8 @@ onMounted(bootstrap)
         <input v-model="form.website_url" maxlength="500" placeholder="https://www.example.com" />
       </label>
       <label>
-        所属行业 / 业务类型
-        <input v-model="form.industry" maxlength="200" placeholder="例如：服饰辅料 / RPA / 户外广告" />
-      </label>
-      <label>
-        主要产品 / 采购场景
-        <input v-model="form.product_focus" maxlength="200" placeholder="例如：拉链 / 智能体平台" />
+        所属行业 / 主要产品
+        <input v-model="form.industry" maxlength="200" placeholder="例如：户外广告、蛋白粉、智能体平台" />
       </label>
       <label>
         主要竞品
