@@ -36,7 +36,7 @@ async function loadOrders() {
     items.value = data.items || []
     total.value = Number(data.total || 0)
   } catch (error) {
-    ElMessage.error(extractErrorDetail(error, '加载 H5 订单失败'))
+    ElMessage.error(extractErrorDetail(error) || '加载 H5 订单失败')
   } finally {
     loading.value = false
   }

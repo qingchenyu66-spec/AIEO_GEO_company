@@ -31,10 +31,6 @@ ROUTE_PARENT_BY_CHILD: dict[str, str] = {
     "platform.settings.cache_queue": "platform.settings",
     "platform.settings.notification": "platform.settings",
     "platform.settings.menu": "platform.settings",
-    "customer.enterprise_monitor": "customer.enterprise_config",
-    "customer.enterprise_members": "customer.enterprise_config",
-    "customer.enterprise_credit": "customer.enterprise_config",
-    "customer.enterprise_audit": "customer.enterprise_config",
 }
 
 # 职位权限配置里不单独勾选的路由父菜单（只配置子项动作，父菜单自动推导）
@@ -43,7 +39,6 @@ ROUTE_ONLY_MENU_CODES = frozenset({
     "platform.users",
     "platform.users.create",
     "platform.settings",
-    "customer.enterprise_config",
 })
 
 SETTINGS_CHILD_MENU_CODES = (
@@ -115,18 +110,12 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "customer.workspace": frozenset({"can_export"}),
     "customer.brand_analysis": frozenset({"can_export"}),
     "customer.realtime": frozenset({"can_export"}),
+    "customer.links": frozenset({"can_export"}),
+    "customer.diagnosis": frozenset({"can_export"}),
     "customer.competitor": frozenset({"can_export"}),
     "customer.sources": frozenset({"can_export"}),
     "customer.reports": frozenset({"can_export"}),
     "customer.knowledge": frozenset({"can_export", "can_create", "can_update"}),
-    "customer.enterprise_config": frozenset({"can_export"}),
-    "customer.enterprise_monitor": frozenset({"can_export", "can_update"}),
-    "customer.enterprise_members": frozenset({"can_export", "can_create", "can_update", "can_delete"}),
-    "customer.enterprise_credit": frozenset({"can_export", "can_update"}),
-    "customer.enterprise_audit": frozenset({"can_export"}),
-    "platform.tenant_credit": frozenset({"can_export", "can_update"}),
-    "platform.tenant_credit_blocks": frozenset({"can_export"}),
-    "platform.credit_ops_board": frozenset({"can_export", "can_update"}),
 }
 
 
@@ -262,17 +251,6 @@ def identity_allowed_monitor_platforms(db: Session, identity: UserIdentity) -> l
     if forced is not None:
         return normalize_allowed_monitor_platforms(list(forced))
 
-    # 2026-08-27 - credit 客户走企业 platform_whitelist；CustomerPosition 无 allowed_monitor_platforms 字段
-    if identity.identity_type == "CUSTOMER" and identity.tenant_id:
-        from app.models.tenant import Tenant
-        from app.services.credit_service import is_credit_tenant
-
-        tenant = db.get(Tenant, identity.tenant_id)
-        if is_credit_tenant(tenant):
-            whitelist = list(tenant.platform_whitelist_json or [])
-            if whitelist:
-                return normalize_allowed_monitor_platforms(whitelist)
-
     # 2026-07-30 - 不再用 models.can_update 当大门；白名单即权限
     if not identity.position_id:
         return []
@@ -377,13 +355,6 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
     if observer_platforms_for_user_id(db, identity.user_id) is not None:
         items = [item for item in items if item.menu_code not in OBSERVER_HIDDEN_MENU_CODES]
-    # 2026-08-27 - hosted 企业不展示 enterprise_* 菜单（即使误授权也过滤）
-    if identity.identity_type == "CUSTOMER" and identity.tenant_id:
-        from app.models.tenant import Tenant
-
-        tenant = db.get(Tenant, identity.tenant_id)
-        if tenant is not None and (tenant.billing_mode or "hosted") != "credit":
-            items = [item for item in items if not item.menu_code.startswith("customer.enterprise")]
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
 
@@ -759,158 +730,3 @@ def require_report_access(db: Session, current) -> None:
         ("can_export", "can_create", "can_update"),
     ):
         raise ValueError("无权查看")
-
-
-_CUSTOMER_PORTAL_MENU_CODES = (
-    "customer.workspace",
-    "customer.brand_analysis",
-    "customer.realtime",
-    "customer.competitor",
-    "customer.sources",
-    "customer.reports",
-    "customer.knowledge",
-    "customer.enterprise_config",
-)
-
-
-def _derive_route_parent_menus(db: Session, by_code: dict[str, MenuInfo], identity_type: str) -> None:
-    while True:
-        missing_parents = {
-            parent_code
-            for code in by_code
-            if (parent_code := ROUTE_PARENT_BY_CHILD.get(code)) and parent_code not in by_code
-        }
-        if not missing_parents:
-            break
-        parent_rows = db.execute(
-            select(Menu, MenuConfig)
-            .outerjoin(
-                MenuConfig,
-                (MenuConfig.menu_code == Menu.menu_code)
-                & (MenuConfig.identity_type == Menu.identity_type)
-                & (MenuConfig.deleted.is_(False)),
-            )
-            .where(
-                Menu.menu_code.in_(missing_parents),
-                Menu.identity_type == identity_type,
-                Menu.status.is_(True),
-                Menu.deleted.is_(False),
-            )
-        ).all()
-        parent_lookup = {menu.menu_code: _menu_display(menu, config) for menu, config in parent_rows}
-        for code, item in list(by_code.items()):
-            parent_code = ROUTE_PARENT_BY_CHILD.get(code)
-            if not parent_code or parent_code in by_code:
-                continue
-            parent_base = parent_lookup.get(parent_code)
-            if parent_base is None:
-                continue
-            synthesized = _menu_with_grant(parent_base, can_create=False, can_update=False, can_delete=False, can_export=False)
-            synthesized = merge_grant_flags(synthesized, item)
-            by_code[parent_code] = merge_grant_flags(by_code.get(parent_code), synthesized)
-
-
-def _filter_customer_menus_for_tenant(items: list[MenuInfo], tenant) -> list[MenuInfo]:
-    rows = [item for item in items if not is_retired_menu_code(item.menu_code)]
-    if (tenant.billing_mode or "hosted") != "credit":
-        rows = [item for item in rows if not item.menu_code.startswith("customer.enterprise")]
-    rows.sort(key=lambda item: (item.sort_order, item.id))
-    return rows
-
-
-def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
-    """无客户账号时，用 enterprise_admin 职位模板推导可见菜单。"""
-    from app.models.permission import CustomerPosition, CustomerPositionMenu
-
-    position = db.scalar(
-        select(CustomerPosition).where(
-            CustomerPosition.tenant_id.is_(None),
-            CustomerPosition.position_code == "enterprise_admin",
-            CustomerPosition.deleted.is_(False),
-        )
-    )
-    if position is None:
-        return []
-    granted_menu_ids: set[int] = set()
-    by_code: dict[str, MenuInfo] = {}
-    rows = db.execute(
-        select(CustomerPositionMenu, Menu, MenuConfig)
-        .join(Menu, Menu.id == CustomerPositionMenu.menu_id)
-        .outerjoin(
-            MenuConfig,
-            (MenuConfig.menu_code == Menu.menu_code)
-            & (MenuConfig.identity_type == Menu.identity_type)
-            & (MenuConfig.deleted.is_(False)),
-        )
-        .where(
-            CustomerPositionMenu.position_id == position.id,
-            Menu.identity_type == "CUSTOMER",
-            Menu.deleted.is_(False),
-            Menu.status.is_(True),
-        )
-    ).all()
-    for grant, menu, config in rows:
-        granted_menu_ids.add(menu.id)
-        if not grant_has_access(
-            can_create=bool(grant.can_create),
-            can_update=bool(grant.can_update),
-            can_delete=bool(grant.can_delete),
-            can_export=bool(grant.can_export),
-        ):
-            continue
-        base = _menu_display(menu, config)
-        item = _menu_with_grant(
-            base,
-            can_create=bool(grant.can_create),
-            can_update=bool(grant.can_update),
-            can_delete=bool(grant.can_delete),
-            can_export=bool(grant.can_export),
-        )
-        by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
-    for menu in db.scalars(
-        select(Menu).where(
-            Menu.identity_type == "CUSTOMER",
-            Menu.menu_code.in_(_CUSTOMER_PORTAL_MENU_CODES),
-            Menu.deleted.is_(False),
-            Menu.status.is_(True),
-        )
-    ):
-        if menu.id in granted_menu_ids or menu.menu_code in by_code:
-            continue
-        base = _menu_display(menu, None)
-        if menu.menu_code == "customer.knowledge":
-            flags = {"can_create": True, "can_update": True, "can_delete": False, "can_export": True}
-        elif menu.menu_code == "customer.enterprise_config":
-            flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}
-        else:
-            flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}
-        item = _menu_with_grant(base, **flags)
-        by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
-    _derive_route_parent_menus(db, by_code, "CUSTOMER")
-    return _filter_customer_menus_for_tenant(list(by_code.values()), tenant)
-
-
-def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuInfo]:
-    # 2026-08-27 - 客户门户预览跟真实客户权限走，合并企业下全部客户身份可见菜单
-    from app.models.tenant import Tenant
-
-    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
-    if tenant is None:
-        raise ValueError("企业不存在")
-    identities = list(
-        db.scalars(
-            select(UserIdentity).where(
-                UserIdentity.tenant_id == tenant_id,
-                UserIdentity.identity_type == "CUSTOMER",
-                UserIdentity.deleted.is_(False),
-                UserIdentity.status.is_(True),
-            )
-        )
-    )
-    merged: dict[str, MenuInfo] = {}
-    if identities:
-        for identity in identities:
-            for item in get_identity_menus(db, identity):
-                merged[item.menu_code] = merge_grant_flags(merged.get(item.menu_code), item)
-        return _filter_customer_menus_for_tenant(list(merged.values()), tenant)
-    return _customer_menus_from_admin_position(db, tenant)
