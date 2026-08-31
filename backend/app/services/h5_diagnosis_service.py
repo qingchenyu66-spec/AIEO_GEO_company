@@ -10,7 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.lead_diagnosis_config import clamp_lead_schedule_days
+from app.core.lead_diagnosis_config import (
+    H5_SCHEDULE_SLOTS_PER_DAY,
+    clamp_h5_schedule_runs,
+    h5_runs_to_schedule_days,
+)
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 from app.core.masking import mask_phone
 from app.models.h5_diagnosis_order import H5DiagnosisOrder
@@ -46,9 +50,25 @@ def parse_platform_list(raw: Any) -> list[str]:
     return filter_submittable_platforms([item for item in text_items if item])
 
 
+def _resolve_h5_schedule_runs(db: Session) -> int:
+    # 2026-08-31 - 优先读监测次数；旧库仅有天数时回落 days×3
+    raw_runs = get_runtime_config("h5_diagnosis_schedule_runs", db)
+    if raw_runs not in (None, ""):
+        try:
+            return clamp_h5_schedule_runs(int(raw_runs))
+        except (TypeError, ValueError):
+            pass
+    try:
+        days = int(get_runtime_config("h5_diagnosis_schedule_days", db))
+    except (TypeError, ValueError):
+        days = 3
+    return clamp_h5_schedule_runs(max(1, days) * H5_SCHEDULE_SLOTS_PER_DAY)
+
+
 def get_h5_diagnosis_public_config(db: Session) -> dict[str, Any]:
     price_fen = int(get_runtime_config("h5_diagnosis_price_fen", db))
-    schedule_days = clamp_lead_schedule_days(int(get_runtime_config("h5_diagnosis_schedule_days", db)))
+    schedule_runs = _resolve_h5_schedule_runs(db)
+    schedule_days = h5_runs_to_schedule_days(schedule_runs)
     platforms = parse_platform_list(get_runtime_config("h5_diagnosis_platforms", db))
     if not platforms:
         platforms = list(_DEFAULT_PLATFORMS)
@@ -59,8 +79,9 @@ def get_h5_diagnosis_public_config(db: Session) -> dict[str, Any]:
         "price_fen": price_fen,
         "price_yuan": round(price_fen / 100, 2),
         "schedule_days": schedule_days,
-        "schedule_slots_per_day": 3,
-        "schedule_total": schedule_days * 3,
+        "schedule_runs": schedule_runs,
+        "schedule_slots_per_day": H5_SCHEDULE_SLOTS_PER_DAY,
+        "schedule_total": schedule_runs,
         "platforms": platforms,
         "max_prompts": 5,
         "min_prompts": 1,
@@ -122,6 +143,7 @@ def create_h5_diagnosis_order(
             "website_url": website_url.strip(),
             "brand_aliases": alias_list,
             "competitors": competitor_list,
+            "schedule_runs": int(cfg["schedule_runs"]),
         },
         prompts_json=normalized_prompts,
         platforms_json=list(cfg["platforms"]),

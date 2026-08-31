@@ -23,7 +23,9 @@ from app.models.tenant import Tenant
 from app.core.lead_diagnosis_config import (
     DEFAULT_LEAD_SCHEDULE_TIMES,
     LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
+    clamp_h5_schedule_runs,
     clamp_lead_schedule_days,
+    h5_runs_to_schedule_days,
 )
 from app.core.masking import mask_phone
 from app.core.region_catalog import normalize_region_codes, region_display_name, region_submission_targets
@@ -359,6 +361,14 @@ def _schedule_total_count(lead: LeadDiagnosis) -> int:
 
 
 def _schedule_rounds_per_region(lead: LeadDiagnosis) -> int:
+    # 2026-08-31 - H5 可配任意次数 - lead_context.schedule_runs 优先于「天×档」
+    ctx = lead.lead_context_json if isinstance(lead.lead_context_json, dict) else {}
+    raw_runs = ctx.get("schedule_runs")
+    if raw_runs not in (None, ""):
+        try:
+            return clamp_h5_schedule_runs(int(raw_runs))
+        except (TypeError, ValueError):
+            pass
     return _schedule_days(lead) * len(_schedule_slots(lead))
 
 
@@ -791,12 +801,20 @@ def create_lead_diagnosis_from_h5_order(db: Session, order) -> int:
         note_parts.insert(1, f"微信号 {order.wechat_id}")
     if order.wx_transaction_id:
         note_parts.append(f"微信单号 {order.wx_transaction_id}")
+    # 2026-08-31 - H5 按监测次数履约：form_json.schedule_runs 优先，旧单回落 days×3
+    raw_runs = form.get("schedule_runs")
+    if raw_runs in (None, ""):
+        schedule_runs = clamp_h5_schedule_runs(int(order.schedule_days or 1) * len(DEFAULT_LEAD_SCHEDULE_TIMES))
+    else:
+        schedule_runs = clamp_h5_schedule_runs(raw_runs)
+    schedule_days = h5_runs_to_schedule_days(schedule_runs)
     lead_context = normalize_lead_context(
         {
             "website_url": form.get("website_url"),
             "industry": form.get("industry"),
             "product_focus": form.get("product_focus"),
             "source": "h5_paid_diagnosis",
+            "schedule_runs": schedule_runs,
         }
     )
     brand_aliases = normalize_brand_aliases(form.get("brand_aliases") or [])
@@ -813,7 +831,7 @@ def create_lead_diagnosis_from_h5_order(db: Session, order) -> int:
         platforms_json=list(order.platforms_json or []),
         region_codes_json=[],
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
-        schedule_days=clamp_lead_schedule_days(order.schedule_days),
+        schedule_days=schedule_days,
         diagnosis_date=diagnosis_date,
         status="collecting",
         created_by_user_id=current.user.id,

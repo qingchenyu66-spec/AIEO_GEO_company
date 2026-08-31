@@ -116,6 +116,8 @@ class Settings(BaseSettings):
     h5_diagnosis_enabled: bool = True
     h5_diagnosis_price_fen: int = 990
     h5_diagnosis_schedule_days: int = 3
+    # 2026-08-31 - H5 监测次数（优先于 days×3）
+    h5_diagnosis_schedule_runs: int = 9
     h5_diagnosis_platforms: str = '["doubao","deepseek"]'
 
     # 补录自截图目录（空=backend/storage/backfill_screenshots；生产经软链落 /data/geo/storage）

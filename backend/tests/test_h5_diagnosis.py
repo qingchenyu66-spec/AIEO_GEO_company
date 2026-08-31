@@ -98,3 +98,49 @@ def test_h5_diagnosis_order_dev_paid_flow(monkeypatch) -> None:
         assert list(lead.competitors_json or []) == ["竞品甲"]
     finally:
         db.close()
+
+
+def test_h5_schedule_runs_clamp_and_days() -> None:
+    from app.core.lead_diagnosis_config import clamp_h5_schedule_runs, h5_runs_to_schedule_days
+
+    assert clamp_h5_schedule_runs(1) == 1
+    assert clamp_h5_schedule_runs(0) == 1
+    assert clamp_h5_schedule_runs(99) == 90
+    assert h5_runs_to_schedule_days(1) == 1
+    assert h5_runs_to_schedule_days(3) == 1
+    assert h5_runs_to_schedule_days(4) == 2
+
+
+def test_lead_schedule_rounds_honors_h5_schedule_runs() -> None:
+    from datetime import date, datetime
+    from types import SimpleNamespace
+
+    from app.services.lead_diagnosis_service import _iter_schedule_slot_rounds, _schedule_rounds_per_region
+
+    lead = SimpleNamespace(
+        lead_context_json={"schedule_runs": "1", "source": "h5_paid_diagnosis"},
+        schedule_days=3,
+        schedule_times_json=["09:30", "14:30", "20:30"],
+        diagnosis_date=date.today(),
+        created_at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
+        region_codes_json=[],
+    )
+    assert _schedule_rounds_per_region(lead) == 1
+    assert len(list(_iter_schedule_slot_rounds(lead))) == 1
+
+
+def test_normalize_lead_context_keeps_schedule_runs() -> None:
+    from app.schemas.lead_diagnosis import normalize_lead_context
+
+    ctx = normalize_lead_context({"source": "h5_paid_diagnosis", "schedule_runs": 1})
+    assert ctx["schedule_runs"] == "1"
+    ctx2 = normalize_lead_context({"source": "lead_diagnosis_create"})
+    assert "schedule_runs" not in ctx2
+
+
+def test_h5_public_config_exposes_schedule_runs() -> None:
+    resp = client.get("/api/v1/h5/diagnosis/config")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert int(data["schedule_runs"]) >= 1
+    assert int(data["schedule_total"]) == int(data["schedule_runs"])

@@ -8,6 +8,7 @@ from app.core.lead_diagnosis_config import (
     LEAD_SCHEDULE_DAYS,
     LEAD_SCHEDULE_DAYS_MAX,
     LEAD_SCHEDULE_DAYS_MIN,
+    clamp_h5_schedule_runs,
     clamp_lead_schedule_days,
 )
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
@@ -48,13 +49,20 @@ def normalize_lead_context(value: Any) -> dict[str, str]:
     product_focus = _clip_text(raw.get("product_focus"), max_len=_LEAD_CONTEXT_TEXT_MAX)
     purchase_scenario = _clip_text(raw.get("purchase_scenario"), max_len=_LEAD_CONTEXT_TEXT_MAX)
     source = _clip_text(raw.get("source"), max_len=64) or _LEAD_CONTEXT_SOURCE_DEFAULT
-    return {
+    out: dict[str, str] = {
         "website_url": website_url,
         "industry": industry,
         "product_focus": product_focus,
         "purchase_scenario": purchase_scenario,
         "source": source,
     }
+    # 2026-08-31 - H5 任意监测次数 - 保留 schedule_runs 供调度裁剪轮次（门户建单无此字段）
+    if "schedule_runs" in raw and raw.get("schedule_runs") not in (None, ""):
+        try:
+            out["schedule_runs"] = str(clamp_h5_schedule_runs(int(raw.get("schedule_runs"))))
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 def normalize_brand_aliases(value: Any, *, max_items: int = 20, max_len: int = 100) -> list[str]:

@@ -268,7 +268,14 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         field="h5_diagnosis_schedule_days",
         category="schedule",
         label="H5 诊断天数（由次数换算）",
-        description="后台按监测次数配置，每天最多 3 档；天数=次数÷3，如 6 次=2 天、9 次=3 天",
+        description="兼容字段：由监测次数向上取整换算，如 1 次=1 天、4 次=2 天",
+        value_type="int",
+    ),
+    "h5_diagnosis_schedule_runs": ConfigMeta(
+        field="h5_diagnosis_schedule_runs",
+        category="schedule",
+        label="H5 诊断监测次数",
+        description="真实抓取轮次 1–90；每天最多 3 档，不必是 3 的倍数",
         value_type="int",
     ),
     "h5_diagnosis_platforms": ConfigMeta(
