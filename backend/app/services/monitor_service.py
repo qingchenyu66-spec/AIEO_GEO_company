@@ -9649,17 +9649,8 @@ def recompute_subtask_rank_from_answer(
         )
         return
 
-    # 2026-08-19 - 规则计位先停用；函数仍保留，settings.rank_engine=rules 可恢复
-    # resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
-    if str(getattr(settings, "rank_engine", "llm") or "llm").strip().lower() == "llm":
-        resolution = BrandRankResolution(
-            rank=None,
-            mentioned=True,
-            source="none",
-            confidence=0.3,
-        )
-    else:
-        resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
+    # 2026-08-19 - 曾停规则只信 LLM；2026-08-31 方案A - llm 引擎也先跑规则，供与 LLM 取更优
+    resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
     from app.services.rank_llm_service import persist_rank_resolution, resolve_rank_with_optional_llm
 
     resolution = resolve_rank_with_optional_llm(

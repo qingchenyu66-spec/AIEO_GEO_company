@@ -1558,6 +1558,15 @@ def _scene_alignment_bonus(category: str, scope: str) -> int:
         bonus += 280
     if bpo_scope and any(token in category_text for token in ("云呼叫", "技术驱动", "saas")):
         bonus -= 80
+    # 2026-08-31 - 方案C：进口/国产标题互斥，避免跨段被当成同一 scope 累加
+    import_cat = "进口" in category_text
+    domestic_cat = "国产" in category_text or "国内" in category_text
+    import_scope = "进口" in scope_text
+    domestic_scope = "国产" in scope_text or "国内" in scope_text
+    if import_scope and domestic_cat:
+        bonus -= 400
+    if domestic_scope and import_cat:
+        bonus -= 400
     return bonus
 
 

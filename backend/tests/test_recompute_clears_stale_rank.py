@@ -55,8 +55,8 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     assert subtask.raw_result_json.get("rank_resolution", {}).get("rank") == 1
 
 
-def test_recompute_llm_engine_skips_rule_resolver(monkeypatch) -> None:
-    """2026-08-19 - rank_engine=llm 时不再跑规则计位。"""
+def test_recompute_llm_engine_merges_better_rule(monkeypatch) -> None:
+    """2026-08-31 - 方案A：rank_engine=llm 仍跑规则，更靠前时压过 LLM。"""
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "rank_engine", "llm")
@@ -66,16 +66,28 @@ def test_recompute_llm_engine_skips_rule_resolver(monkeypatch) -> None:
         answer_content="1. 竞品A\n2. 鸿联九五",
         all_rankings_json=[],
         prompt="BPO公司推荐",
+        mention_context=None,
     )
     task = SimpleNamespace(tenant_id=None, monitor_keywords="鸿联九五", raw_request_json={})
 
-    def boom(*_args, **_kwargs):
-        raise AssertionError("rule resolver should stay off")
+    def fake_rules(*_args, **_kwargs):
+        return BrandRankResolution(rank=2, mentioned=True, source="appearance", confidence=0.7)
 
     def fake_llm(*, subtask, task, resolution, brand_terms, asset):
-        assert resolution.rank is None
-        return BrandRankResolution(
-            rank=2, mentioned=True, source="llm", confidence=0.9, category="中国市场"
+        assert resolution.rank == 2
+        # 模拟 LLM 虚高；合并后应保留规则
+        from app.services.rank_llm_service import apply_llm_rank_fallback, LlmBrandRankResult
+
+        return apply_llm_rank_fallback(
+            resolution,
+            LlmBrandRankResult(
+                rank=9,
+                mentioned=True,
+                category="中国市场",
+                rank_basis="section_list",
+                confidence=0.9,
+                evidence=None,
+            ),
         )
 
     def fake_persist(st, resolution) -> None:
@@ -84,12 +96,12 @@ def test_recompute_llm_engine_skips_rule_resolver(monkeypatch) -> None:
         st.raw_result_json = raw
 
     monkeypatch.setattr("app.services.monitor_service._normalize_subtask_rankings_on_write", lambda st: None)
-    monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", boom)
+    monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", fake_rules)
     monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_llm)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
     recompute_subtask_rank_from_answer(MagicMock(), subtask, task, force=True)
     assert subtask.mention_position == 2
-    assert subtask.raw_result_json["rank_resolution"]["source"] == "llm"
+    assert subtask.raw_result_json["rank_resolution"]["source"] == "appearance"
 
 
 def test_recompute_skips_manual_snapshot_unless_forced() -> None:

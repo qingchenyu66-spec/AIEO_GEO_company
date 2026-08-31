@@ -223,6 +223,7 @@ def apply_parser_cross_check(
     """LLM 与 parser 档内位次不一致且 parser 更靠前 → 采 parser。
 
     2026-08-24 - 放宽：rank=3、parser=2 也校正；LLM 过乐观且 parser 明显靠后时也采 parser
+    2026-08-31 - 方案C：禁止 gap≥2 用更差 parser 抬高（进口/国产长榜常虚高，如类内4被抬成9）
     """
     if not result.mentioned or result.rank is None:
         return result
@@ -243,17 +244,9 @@ def apply_parser_cross_check(
         return result
     if parser_f > llm_rank + 1e-9:
         gap = parser_f - llm_rank
-        # LLM 过乐观：差 1 位且 LLM≤2（如门店榜把目标当 rank1、parser 为 2）
+        # LLM 过乐观：仅差 1 且 LLM≤2（门店榜把目标当 rank1、parser 为 2）
+        # 不再采纳 gap≥2 的更差 parser，避免跨段/长榜虚高回写
         if llm_rank <= 2.0 and abs(gap - 1.0) < 1e-9:
-            return replace(
-                result,
-                rank=parser_rank,
-                category=parser_category or result.category,
-                rank_basis="parser_cross_check",
-                confidence=max(result.confidence, 0.88),
-            )
-        # 差 ≥2 且 parser≥阈值：结构榜明显更靠后
-        if gap >= 2.0 and parser_f >= float(rank_threshold):
             return replace(
                 result,
                 rank=parser_rank,
@@ -573,10 +566,12 @@ def resolve_rank_with_optional_llm(
         )
         return _keep_llm_result_if_evidence_off(result, answer_text)
 
-    # 2026-08-19 - 规则计位先停：矩阵只用 LLM 分类排，不再和规则取 min
+    # 2026-08-19 - 曾停规则只信 LLM；2026-08-31 方案A - 仍抽 LLM，但与规则取更靠前（压虚高）
     if rank_engine_is_llm():
         llm_result = _run_llm()
         if llm_result is None or not llm_result.mentioned or llm_result.rank is None:
+            if resolution.rank is not None:
+                return resolution
             return BrandRankResolution(
                 rank=None,
                 mentioned=True,
@@ -585,6 +580,8 @@ def resolve_rank_with_optional_llm(
                 rank_basis="llm_miss",
             )
         if llm_result.confidence < 0.65:
+            if resolution.rank is not None:
+                return resolution
             return BrandRankResolution(
                 rank=None,
                 mentioned=True,
@@ -596,6 +593,8 @@ def resolve_rank_with_optional_llm(
                 overall_rank=llm_result.overall_rank,
                 category_ranks=llm_result.category_ranks,
             )
+        if resolution.rank is not None:
+            return apply_llm_rank_fallback(resolution, llm_result)
         return _llm_resolution_from_result(llm_result)
 
     is_industry_task = ranking_task_is_industry_scoped(monitor_keyword, subtask.prompt, asset)

@@ -169,6 +169,44 @@ Read 9 web pages
     assert "为了帮你快速决策" in cleaned
 
 
+def test_parser_cross_check_does_not_raise_llm_when_parser_worse() -> None:
+    """2026-08-31 - 方案C：LLM 类内第4、parser 长榜第9 → 禁止抬高。"""
+    answer = """
+## 🌍 进口高端板材
+1. **爱格EGGER（奥地利）**
+2. **可丽芙CLEAF（意大利）**
+3. **克诺斯邦Kronospan（欧洲）**
+4. **芬萨Finsa（西班牙）**
+5. **住友（日本）**
+## 全国一线高端
+1. **万华禾香板**
+2. **兔宝宝**
+3. **千年舟**
+4. **莫干山**
+5. **福人**
+6. **红棉花**
+7. **鲁丽**
+8. **鹏鸿**
+9. **大王椰**
+"""
+    llm = LlmBrandRankResult(
+        rank=4,
+        mentioned=True,
+        category="全国一线高端",
+        rank_basis="section_list",
+        confidence=0.9,
+        evidence=None,
+    )
+    fixed = apply_parser_cross_check(
+        llm,
+        answer_text=answer,
+        brand_terms=["大王椰", "大王椰板材"],
+        monitor_keyword="高端板材品牌有哪些",
+    )
+    assert fixed.rank == 4
+    assert fixed.rank_basis == "section_list"
+
+
 def test_parser_cross_check_fixes_metro_cumulative_rank() -> None:
     """2026-08-24 - LLM 报 12，parser 档内第 4 → 校正。"""
     answer = """
