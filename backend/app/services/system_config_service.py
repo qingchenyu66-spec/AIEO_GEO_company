@@ -250,6 +250,34 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         description="勾选的平台职位可见到期铃铛；销售仅收名下企业。不选则不推送",
         value_type="str",
     ),
+    "h5_diagnosis_enabled": ConfigMeta(
+        field="h5_diagnosis_enabled",
+        category="schedule",
+        label="H5 付费诊断开关",
+        description="关闭后 H5 下单接口返回未开放",
+        value_type="bool",
+    ),
+    "h5_diagnosis_price_fen": ConfigMeta(
+        field="h5_diagnosis_price_fen",
+        category="schedule",
+        label="H5 诊断价格（分）",
+        description="默认 990 即 9.9 元",
+        value_type="int",
+    ),
+    "h5_diagnosis_schedule_days": ConfigMeta(
+        field="h5_diagnosis_schedule_days",
+        category="schedule",
+        label="H5 诊断天数",
+        description="与售前诊断 schedule_days 同口径，默认 3",
+        value_type="int",
+    ),
+    "h5_diagnosis_platforms": ConfigMeta(
+        field="h5_diagnosis_platforms",
+        category="schedule",
+        label="H5 诊断平台",
+        description='JSON 数组，如 ["doubao","deepseek"]；须在可提交平台目录内',
+        value_type="str",
+    ),
 }
 
 
@@ -301,7 +329,7 @@ def get_runtime_config(config_key: str, db: Session | None = None) -> Any:
                 SystemConfig.status.is_(True),
             )
         )
-        if row is not None and str(row.config_value or "").strip() != "":
+        if row is not None and str(getattr(row, "config_value", None) or "").strip() != "":
             try:
                 value = coerce_config_value(row.config_value, meta.value_type)
             except ValueError:

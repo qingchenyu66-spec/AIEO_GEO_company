@@ -775,6 +775,52 @@ def create_lead_diagnosis(
     return get_lead_diagnosis(db, lead.id, current=current)
 
 
+def create_lead_diagnosis_from_h5_order(db: Session, order) -> int:
+    """H5 付费回调建单：走平台身份、跳过销售冷却与菜单权限。"""
+    # 2026-08-31 - 9.9 H5 付完即跑诊断 - 与门户售前诊断同链路，来源标记 h5_paid_diagnosis
+    from app.services.platform_session import load_platform_session
+
+    current = load_platform_session(db)
+    form = order.form_json if isinstance(order.form_json, dict) else {}
+    note_parts = [
+        f"H5付费订单 {order.out_trade_no}",
+        f"微信号 {order.wechat_id}",
+        f"手机 {order.contact_phone}",
+    ]
+    if order.wx_transaction_id:
+        note_parts.append(f"微信单号 {order.wx_transaction_id}")
+    lead_context = normalize_lead_context(
+        {
+            "website_url": form.get("website_url"),
+            "industry": form.get("industry"),
+            "product_focus": form.get("product_focus"),
+            "source": "h5_paid_diagnosis",
+        }
+    )
+    diagnosis_date = date.today()
+    lead = LeadDiagnosis(
+        brand_name=str(order.brand_name or "").strip(),
+        contact_phone=str(order.contact_phone or "").strip() or None,
+        contact_note="；".join(note_parts)[:500],
+        lead_context_json=lead_context,
+        brand_aliases_json=[],
+        prompts_json=list(order.prompts_json or []),
+        competitors_json=[],
+        platforms_json=list(order.platforms_json or []),
+        region_codes_json=[],
+        schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
+        schedule_days=clamp_lead_schedule_days(order.schedule_days),
+        diagnosis_date=diagnosis_date,
+        status="collecting",
+        created_by_user_id=current.user.id,
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    submit_due_lead_run(db, current, lead.id, force=False)
+    return int(lead.id)
+
+
 def update_lead_diagnosis(
     db: Session,
     current: CurrentSession,

@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     # 回调鉴权：优先用本字段；为空则解析 molizhishu_callback_url 的 ?token=
     molizhishu_callback_token: str = ""
     molizhishu_timeout_seconds: float = 30.0
+    # 2026-08-27 - 本地/试点：非空时仅列出的企业 code 或 id 可向模力提交；其它企业跳过
+    molizhishu_submit_tenant_allowlist: str = ""
 
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -97,6 +99,24 @@ class Settings(BaseSettings):
     rank_engine: str = "llm"
     # Stuck "parsing" rows older than this are marked failed by beat sweeper.
     knowledge_parse_timeout_minutes: int = 10
+
+    # 2026-08-31 - 9.9 H5 微信支付（艾迪亚服务号）
+    wechat_pay_mch_id: str = ""
+    wechat_pay_app_id: str = ""
+    wechat_pay_api_v3_key: str = ""
+    wechat_pay_cert_key_path: str = ""
+    wechat_pay_cert_path: str = ""
+    wechat_pay_notify_url: str = ""
+    wechat_app_secret: str = ""
+    wechat_h5_base_url: str = "https://www.aieokj.com/h5/diagnosis/"
+    # 本地联调：跳过微信下单，直接 mock 支付成功
+    wechat_pay_dev_mode: bool = False
+    wechat_pay_dev_openid: str = "dev-openid-h5-diagnosis"
+
+    h5_diagnosis_enabled: bool = True
+    h5_diagnosis_price_fen: int = 990
+    h5_diagnosis_schedule_days: int = 3
+    h5_diagnosis_platforms: str = '["doubao","deepseek"]'
 
     # 补录自截图目录（空=backend/storage/backfill_screenshots；生产经软链落 /data/geo/storage）
     backfill_screenshot_dir: str = ""

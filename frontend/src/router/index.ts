@@ -4,12 +4,14 @@ import { useAuthStore } from '../stores/auth'
 const LoginView = () => import('../views/LoginView.vue')
 const ChangePasswordView = () => import('../views/ChangePasswordView.vue')
 const PortalView = () => import('../views/PortalView.vue')
+const H5DiagnosisPage = () => import('../views/h5/H5DiagnosisPage.vue')
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/login' },
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
+    { path: '/h5/diagnosis', name: 'h5-diagnosis', component: H5DiagnosisPage, meta: { public: true } },
     { path: '/change-password', name: 'change-password', component: ChangePasswordView },
     { path: '/platform', name: 'platform', component: PortalView, meta: { identity: 'PLATFORM' } },
     { path: '/customer', name: 'customer', component: PortalView, meta: { identity: 'CUSTOMER' } },

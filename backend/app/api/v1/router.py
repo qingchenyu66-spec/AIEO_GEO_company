@@ -3,6 +3,9 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import auth, brand, health, knowledge, management, media, monitor, notifications
 from app.api.v1.endpoints import announcements as announcements_endpoints
 from app.api.v1.endpoints import approvals as approvals_endpoints
+from app.api.v1.endpoints import credit_management as credit_management_endpoints
+from app.api.v1.endpoints import customer_enterprise as customer_enterprise_endpoints
+from app.api.v1.endpoints import h5_diagnosis as h5_diagnosis_endpoints
 from app.api.v1.endpoints import ops as ops_endpoints
 from app.api.v1.endpoints import diagnosis as diagnosis_endpoints
 from app.api.v1.endpoints import analytics as analytics_endpoints
@@ -14,6 +17,8 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["System"])
 api_router.include_router(auth.router, tags=["Authentication"])
 api_router.include_router(management.router, tags=["Management"])
+api_router.include_router(credit_management_endpoints.router, tags=["Credit Management"])
+api_router.include_router(customer_enterprise_endpoints.router, tags=["Customer Enterprise"])
 api_router.include_router(approvals_endpoints.router, tags=["Approvals"])
 api_router.include_router(monitor.router, tags=["GEO Monitor"])
 api_router.include_router(media.router, tags=["Media"])
@@ -24,6 +29,8 @@ api_router.include_router(diagnosis_endpoints.router, tags=["Brand Diagnosis"])
 api_router.include_router(analytics_endpoints.router, tags=["Analytics"])
 api_router.include_router(reports_endpoints.router, tags=["Reports"])
 api_router.include_router(lead_diagnosis_endpoints.router, tags=["Lead Diagnosis"])
+api_router.include_router(h5_diagnosis_endpoints.router, tags=["H5 Diagnosis"])
+api_router.include_router(h5_diagnosis_endpoints.wechat_pay_router, tags=["WeChat Pay"])
 api_router.include_router(notifications.router, tags=["Notifications"])
 api_router.include_router(announcements_endpoints.router, tags=["Announcements"])
 api_router.include_router(platforms_router, tags=["Platforms"])
