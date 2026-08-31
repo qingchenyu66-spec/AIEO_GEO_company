@@ -144,3 +144,39 @@ def test_h5_public_config_exposes_schedule_runs() -> None:
     data = resp.json()["data"]
     assert int(data["schedule_runs"]) >= 1
     assert int(data["schedule_total"]) == int(data["schedule_runs"])
+
+
+def test_h5_native_order_dev_mode(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    client.cookies.clear()
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138002",
+            "brand_name": "扫码测试品牌",
+            "prompts": ["蛋白粉推荐"],
+            "pay_trade_type": "native",
+            "pay_channel": "wechat",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["pay_trade_type"] == "native"
+    assert data["code_url"]
+    assert data.get("dev_auto_paid") is True
+
+
+def test_h5_jsapi_order_requires_openid(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", False)
+    client.cookies.clear()
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138003",
+            "brand_name": "无授权品牌",
+            "prompts": ["蛋白粉推荐"],
+            "pay_trade_type": "jsapi",
+        },
+    )
+    assert resp.status_code == 400
+    assert "授权" in resp.json()["detail"]

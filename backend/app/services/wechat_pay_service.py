@@ -1,4 +1,4 @@
-"""微信支付 APIv3（JSAPI）最小封装。"""
+"""微信支付 APIv3（JSAPI / Native）最小封装。"""
 
 from __future__ import annotations
 
@@ -93,6 +93,13 @@ def build_jsapi_pay_params(prepay_id: str) -> dict[str, str]:
     }
 
 
+def _notify_url(notify_url: str | None = None) -> str:
+    notify = (notify_url or settings.wechat_pay_notify_url or "").strip()
+    if not notify:
+        raise WechatPayError("未配置 WECHAT_PAY_NOTIFY_URL")
+    return notify
+
+
 def create_jsapi_prepay(
     *,
     out_trade_no: str,
@@ -107,16 +114,12 @@ def create_jsapi_prepay(
     if not wechat_pay_configured():
         raise WechatPayError("微信支付尚未配置完整")
 
-    notify = (notify_url or settings.wechat_pay_notify_url or "").strip()
-    if not notify:
-        raise WechatPayError("未配置 WECHAT_PAY_NOTIFY_URL")
-
     payload = {
         "appid": settings.wechat_pay_app_id,
         "mchid": settings.wechat_pay_mch_id,
         "description": description[:127],
         "out_trade_no": out_trade_no,
-        "notify_url": notify,
+        "notify_url": _notify_url(notify_url),
         "amount": {"total": int(amount_fen), "currency": "CNY"},
         "payer": {"openid": openid},
     }
@@ -132,6 +135,43 @@ def create_jsapi_prepay(
     if not prepay_id:
         raise WechatPayError("微信下单未返回 prepay_id")
     return prepay_id
+
+
+def create_native_code_url(
+    *,
+    out_trade_no: str,
+    amount_fen: int,
+    description: str,
+    notify_url: str | None = None,
+) -> str:
+    """Native 扫码：返回 code_url，前端生成二维码供手机微信扫。"""
+    # 2026-08-31 - B3 PC 扫码付：与 JSAPI 共用回调，不依赖 openid
+    if settings.wechat_pay_dev_mode:
+        return f"weixin://wxpay/bizpayurl?pr=DEV{out_trade_no[-8:]}"
+
+    if not wechat_pay_configured():
+        raise WechatPayError("微信支付尚未配置完整")
+
+    payload = {
+        "appid": settings.wechat_pay_app_id,
+        "mchid": settings.wechat_pay_mch_id,
+        "description": description[:127],
+        "out_trade_no": out_trade_no,
+        "notify_url": _notify_url(notify_url),
+        "amount": {"total": int(amount_fen), "currency": "CNY"},
+    }
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    path = "/v3/pay/transactions/native"
+    headers = _auth_headers("POST", path, body)
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(f"{_WECHAT_PAY_HOST}{path}", content=body.encode("utf-8"), headers=headers)
+    if resp.status_code >= 400:
+        raise WechatPayError(f"微信扫码下单失败: {resp.status_code} {resp.text}")
+    data = resp.json()
+    code_url = str(data.get("code_url") or "").strip()
+    if not code_url:
+        raise WechatPayError("微信扫码下单未返回 code_url")
+    return code_url
 
 
 def decrypt_notify_resource(resource: dict[str, Any]) -> dict[str, Any]:

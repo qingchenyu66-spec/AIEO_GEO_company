@@ -46,7 +46,11 @@ export interface H5PayParams {
 export interface H5OrderCreateResult {
   out_trade_no: string
   amount_fen: number
-  pay_params: H5PayParams
+  pay_channel?: string
+  pay_trade_type?: 'jsapi' | 'native' | string
+  code_url?: string | null
+  pay_params: H5PayParams | null
+  dev_auto_paid?: boolean
 }
 
 export interface H5OrderStatus {
@@ -90,6 +94,8 @@ export async function createH5DiagnosisOrder(payload: {
   product_focus?: string
   website_url?: string
   competitors?: string
+  pay_trade_type?: 'jsapi' | 'native'
+  pay_channel?: 'wechat' | string
 }): Promise<H5OrderCreateResult> {
   const resp = await http.post('/v1/h5/diagnosis/orders', payload)
   return unwrap(resp)

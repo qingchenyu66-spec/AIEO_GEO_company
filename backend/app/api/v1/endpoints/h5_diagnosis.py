@@ -163,6 +163,8 @@ def create_order(
             product_focus=payload.product_focus,
             website_url=payload.website_url,
             competitors=payload.competitors,
+            pay_trade_type=payload.pay_trade_type,
+            pay_channel=payload.pay_channel,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   buildNonbrandPromptSet,
@@ -16,6 +16,8 @@ import {
   type H5DiagnosisConfig,
 } from '../../services/h5Diagnosis'
 
+type PayEnv = 'wechat' | 'pc' | 'mobile_other'
+
 const router = useRouter()
 const loading = ref(true)
 const submitting = ref(false)
@@ -23,6 +25,11 @@ const errorText = ref('')
 const successText = ref('')
 const config = ref<H5DiagnosisConfig | null>(null)
 const sessionReady = ref(false)
+const payEnv = ref<PayEnv>('pc')
+const nativeCodeUrl = ref('')
+const nativeOutTradeNo = ref('')
+const polling = ref(false)
+let pollTimer: number | null = null
 
 const form = ref({
   brand_name: '',
@@ -36,6 +43,25 @@ const form = ref({
 
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
 const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, ''))
+const canSubmit = computed(() => {
+  if (!config.value?.enabled || submitting.value) return false
+  if (payEnv.value === 'wechat') return sessionReady.value
+  if (payEnv.value === 'mobile_other') return false
+  return true
+})
+const nativeQrSrc = computed(() => {
+  if (!nativeCodeUrl.value) return ''
+  // ponytail: 第三方出码服务；若不可用再换本地 qrcode 库
+  return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(nativeCodeUrl.value)}`
+})
+
+function detectPayEnv(): PayEnv {
+  const ua = navigator.userAgent || ''
+  const isWechat = /MicroMessenger/i.test(ua)
+  if (isWechat) return 'wechat'
+  const isMobile = /Android|iPhone|iPod|iPad|Mobile/i.test(ua)
+  return isMobile ? 'mobile_other' : 'pc'
+}
 
 function applyRecommendedSet() {
   // 2026-08-31 - 一键推荐一次写满 5 条：3 非品牌 + 2 品牌问法
@@ -44,14 +70,44 @@ function applyRecommendedSet() {
   form.value.prompts = [a, b, c, `${brand}公司介绍`, `${brand}公司怎么样`]
 }
 
+function stopPolling() {
+  if (pollTimer != null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+  polling.value = false
+}
+
+async function pollNativePaid(outTradeNo: string) {
+  if (pollTimer != null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+  polling.value = true
+  pollTimer = window.setInterval(async () => {
+    try {
+      const status = await fetchH5OrderStatus(outTradeNo)
+      if (status.status === 'paid') {
+        stopPolling()
+        nativeCodeUrl.value = ''
+        successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+      }
+    } catch {
+      /* 轮询失败忽略，继续等 */
+    }
+  }, 2500)
+}
+
 async function bootstrap() {
   loading.value = true
   errorText.value = ''
+  payEnv.value = detectPayEnv()
   try {
     config.value = await fetchH5DiagnosisConfig()
     const session = await fetchH5DiagnosisSession()
     sessionReady.value = session.ready
-    if (!session.ready && config.value.oauth_required) {
+    // 2026-08-31 - B3：仅微信内强制 OAuth；PC/手机浏览器可先看表单
+    if (payEnv.value === 'wechat' && !session.ready && config.value.oauth_required) {
       startH5OAuth('apply')
       return
     }
@@ -76,6 +132,10 @@ async function submitOrder() {
     errorText.value = '活动暂未开放'
     return
   }
+  if (payEnv.value === 'mobile_other') {
+    errorText.value = '请使用微信打开本页面完成支付'
+    return
+  }
   const formError = validateForm()
   if (formError) {
     errorText.value = formError
@@ -86,6 +146,7 @@ async function submitOrder() {
   successText.value = ''
   try {
     const prompts = form.value.prompts.map(v => v.trim()).filter(Boolean)
+    const tradeType = payEnv.value === 'pc' ? 'native' : 'jsapi'
     const result = await createH5DiagnosisOrder({
       contact_phone: form.value.contact_phone.trim(),
       brand_name: form.value.brand_name.trim(),
@@ -94,12 +155,34 @@ async function submitOrder() {
       industry: form.value.industry.trim(),
       website_url: form.value.website_url.trim(),
       competitors: form.value.competitors.trim(),
+      pay_trade_type: tradeType,
+      pay_channel: 'wechat',
     })
-    if (result.pay_params.devAutoPaid) {
+
+    if (tradeType === 'native') {
+      if (result.dev_auto_paid || result.pay_params?.devAutoPaid) {
+        await markH5OrderDevPaid(result.out_trade_no)
+        const status = await fetchH5OrderStatus(result.out_trade_no)
+        successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+        return
+      }
+      nativeOutTradeNo.value = result.out_trade_no
+      nativeCodeUrl.value = String(result.code_url || '')
+      if (!nativeCodeUrl.value) {
+        throw new Error('未拿到支付二维码，请稍后重试')
+      }
+      await pollNativePaid(result.out_trade_no)
+      return
+    }
+
+    if (result.pay_params?.devAutoPaid) {
       await markH5OrderDevPaid(result.out_trade_no)
       const status = await fetchH5OrderStatus(result.out_trade_no)
       successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
       return
+    }
+    if (!result.pay_params) {
+      throw new Error('支付参数缺失')
     }
     await invokeWechatPay(result.pay_params)
     const status = await fetchH5OrderStatus(result.out_trade_no)
@@ -116,6 +199,7 @@ async function submitOrder() {
 }
 
 onMounted(bootstrap)
+onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -126,12 +210,23 @@ onMounted(bootstrap)
       <h1>{{ config?.price_yuan ?? '—' }} 元 AI 可见度诊断</h1>
     </header>
 
+    <p v-if="payEnv === 'mobile_other' && !loading" class="warn">
+      请使用微信打开本页面完成支付。可复制链接到微信，或扫描落地页二维码进入。
+    </p>
+
     <p v-if="loading" class="hint">加载中…</p>
     <p v-else-if="errorText" class="error">{{ errorText }}</p>
     <p v-else-if="successText" class="success">{{ successText }}</p>
 
+    <div v-if="nativeCodeUrl && !successText" class="native-pay">
+      <p class="native-title">请使用微信扫码支付</p>
+      <img class="native-qr" :src="nativeQrSrc" alt="微信支付二维码">
+      <p class="native-hint">{{ polling ? '等待支付结果…' : '扫码后请勿关闭本页' }}</p>
+      <p class="native-no">单号 {{ nativeOutTradeNo }}</p>
+    </div>
+
     <!-- 2026-08-31 - H5 对齐 PC 品牌字段；不展示地区/平台/天数/销售备注 -->
-    <form v-if="!loading && !successText && config?.enabled" class="form" @submit.prevent="submitOrder">
+    <form v-if="!loading && !successText && !nativeCodeUrl && config?.enabled" class="form" @submit.prevent="submitOrder">
       <label>
         品牌名称 *
         <input v-model="form.brand_name" required maxlength="100" placeholder="例如：客户品牌全称" />
@@ -168,8 +263,8 @@ onMounted(bootstrap)
         </label>
       </div>
 
-      <button class="submit" type="submit" :disabled="submitting || !sessionReady">
-        {{ submitting ? '提交中…' : `支付 ¥${config.price_yuan}` }}
+      <button class="submit" type="submit" :disabled="!canSubmit">
+        {{ submitting ? '提交中…' : (payEnv === 'pc' ? `扫码支付 ¥${config.price_yuan}` : `支付 ¥${config.price_yuan}`) }}
       </button>
     </form>
   </div>
@@ -177,7 +272,7 @@ onMounted(bootstrap)
 
 <style scoped>
 .h5-page {
-  max-width: 640px;
+  max-width: 720px;
   margin: 0 auto;
   padding: 20px 16px 48px;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -224,7 +319,38 @@ input {
   background: linear-gradient(135deg, #0f766e, #0891b2);
 }
 .submit:disabled { opacity: 0.6; }
-.hint, .error, .success { padding: 12px; border-radius: 10px; }
+.hint, .error, .success, .warn { padding: 12px; border-radius: 10px; }
 .error { background: #fef2f2; color: #b91c1c; }
 .success { background: #ecfdf5; color: #047857; }
+.warn { background: #fff7ed; color: #c2410c; margin-bottom: 12px; }
+.native-pay {
+  margin: 12px 0 20px;
+  padding: 20px 16px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+}
+.native-title { margin: 0 0 12px; font-size: 16px; font-weight: 700; }
+.native-qr {
+  width: 220px;
+  height: 220px;
+  border-radius: 12px;
+  background: #fff;
+}
+.native-hint { margin: 12px 0 4px; font-size: 13px; color: #64748b; }
+.native-no { margin: 0; font-size: 12px; color: #94a3b8; }
+
+@media (min-width: 768px) {
+  .h5-page { padding: 32px 24px 64px; }
+  h1 { font-size: 30px; }
+  .form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 16px;
+  }
+  .prompt-block,
+  .submit {
+    grid-column: 1 / -1;
+  }
+}
 </style>

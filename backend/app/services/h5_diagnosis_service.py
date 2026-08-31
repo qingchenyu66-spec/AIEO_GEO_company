@@ -22,7 +22,7 @@ from app.schemas.lead_diagnosis import normalize_brand_aliases
 from app.services.lead_diagnosis_service import create_lead_diagnosis_from_h5_order
 from app.services.molizhishu_catalog_service import filter_submittable_platforms
 from app.services.system_config_service import get_runtime_config
-from app.services.wechat_pay_service import WechatPayError, build_jsapi_pay_params, create_jsapi_prepay
+from app.services.wechat_pay_service import WechatPayError, build_jsapi_pay_params, create_jsapi_prepay, create_native_code_url
 
 _H5_OPENID_COOKIE = "geo_h5_wx_openid"
 _DEFAULT_PLATFORMS = ["doubao", "deepseek"]
@@ -107,11 +107,20 @@ def create_h5_diagnosis_order(
     product_focus: str = "",
     website_url: str = "",
     competitors: str = "",
+    pay_trade_type: str = "jsapi",
+    pay_channel: str = "wechat",
 ) -> dict[str, Any]:
     cfg = get_h5_diagnosis_public_config(db)
     if not cfg["enabled"]:
         raise ValueError("H5 付费诊断暂未开放")
-    if not openid:
+    trade_type = str(pay_trade_type or "jsapi").strip().lower() or "jsapi"
+    channel = str(pay_channel or "wechat").strip().lower() or "wechat"
+    if channel != "wechat":
+        raise ValueError("暂仅支持微信支付")
+    if trade_type not in {"jsapi", "native"}:
+        raise ValueError("不支持的支付方式")
+    # 2026-08-31 - B3：Native 扫码无需 openid；JSAPI 仍必须微信授权
+    if trade_type == "jsapi" and not openid:
         raise ValueError("请在微信内打开并完成授权")
     normalized_prompts = normalize_lead_prompts(prompts)
     if not normalized_prompts:
@@ -130,9 +139,10 @@ def create_h5_diagnosis_order(
     competitor_list = _split_csv_terms(competitors, max_items=10)
 
     out_trade_no = _gen_out_trade_no()
+    order_openid = openid if trade_type == "jsapi" else (openid or "native_pc")
     order = H5DiagnosisOrder(
         out_trade_no=out_trade_no,
-        openid=openid,
+        openid=order_openid,
         wechat_id=wx_id,
         contact_phone=phone,
         brand_name=brand,
@@ -144,6 +154,8 @@ def create_h5_diagnosis_order(
             "brand_aliases": alias_list,
             "competitors": competitor_list,
             "schedule_runs": int(cfg["schedule_runs"]),
+            "pay_channel": channel,
+            "pay_trade_type": trade_type,
         },
         prompts_json=normalized_prompts,
         platforms_json=list(cfg["platforms"]),
@@ -155,12 +167,33 @@ def create_h5_diagnosis_order(
     db.commit()
     db.refresh(order)
 
+    description = "GEO售前诊断"
     try:
+        if trade_type == "native":
+            code_url = create_native_code_url(
+                out_trade_no=out_trade_no,
+                amount_fen=order.amount_fen,
+                description=description,
+            )
+            order.prepay_id = code_url[:64]
+            db.commit()
+            result: dict[str, Any] = {
+                "out_trade_no": out_trade_no,
+                "amount_fen": order.amount_fen,
+                "pay_channel": channel,
+                "pay_trade_type": trade_type,
+                "code_url": code_url,
+                "pay_params": None,
+            }
+            if settings.wechat_pay_dev_mode:
+                result["dev_auto_paid"] = True
+            return result
+
         prepay_id = create_jsapi_prepay(
             out_trade_no=out_trade_no,
             openid=openid,
             amount_fen=order.amount_fen,
-            description="艾迪亚GEO售前诊断",
+            description=description,
         )
     except WechatPayError as exc:
         order.status = "failed"
@@ -177,6 +210,9 @@ def create_h5_diagnosis_order(
     return {
         "out_trade_no": out_trade_no,
         "amount_fen": order.amount_fen,
+        "pay_channel": channel,
+        "pay_trade_type": trade_type,
+        "code_url": None,
         "pay_params": pay_params,
     }
 

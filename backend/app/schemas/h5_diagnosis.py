@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 
+_H5_PAY_TRADE_TYPES = {"jsapi", "native"}
+
 
 class H5DiagnosisOrderCreateRequest(BaseModel):
     contact_phone: str = Field(min_length=11, max_length=30)
@@ -13,6 +15,9 @@ class H5DiagnosisOrderCreateRequest(BaseModel):
     product_focus: str = Field(default="", max_length=200)
     website_url: str = Field(default="", max_length=500)
     competitors: str = Field(default="", max_length=500)
+    # 2026-08-31 - B3：jsapi=微信内；native=PC 扫码；pay_channel 预留支付宝
+    pay_trade_type: str = Field(default="jsapi", max_length=20)
+    pay_channel: str = Field(default="wechat", max_length=20)
 
     @field_validator("prompts")
     @classmethod
@@ -23,3 +28,20 @@ class H5DiagnosisOrderCreateRequest(BaseModel):
     @classmethod
     def keep_text(cls, value: object) -> str:
         return str(value or "").strip()
+
+    @field_validator("pay_trade_type")
+    @classmethod
+    def normalize_trade_type(cls, value: object) -> str:
+        text = str(value or "jsapi").strip().lower()
+        if text not in _H5_PAY_TRADE_TYPES:
+            raise ValueError("不支持的支付方式")
+        return text
+
+    @field_validator("pay_channel")
+    @classmethod
+    def normalize_channel(cls, value: object) -> str:
+        text = str(value or "wechat").strip().lower() or "wechat"
+        # 一期只接微信；支付宝二期再开
+        if text != "wechat":
+            raise ValueError("暂仅支持微信支付")
+        return text
