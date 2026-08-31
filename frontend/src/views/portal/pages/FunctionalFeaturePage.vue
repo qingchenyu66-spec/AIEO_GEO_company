@@ -32,7 +32,6 @@ import {
   SETTINGS_SECRETS_MENU,
 } from '../constants'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
-import CreditBillingConfigPanel from '../components/CreditBillingConfigPanel.vue'
 import H5DiagnosisConfigPanel from '../components/H5DiagnosisConfigPanel.vue'
 import '../../../styles/platform-matrix.css'
 
@@ -62,7 +61,7 @@ const {
   recentSubtasks,
 } = analytics
 
-type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu' | 'credit_billing'
+type SettingsCategory = 'secrets' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
 
 const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
   secrets: SETTINGS_SECRETS_MENU,
@@ -70,7 +69,6 @@ const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
   cache_queue: SETTINGS_CACHE_QUEUE_MENU,
   notification: SETTINGS_NOTIFICATION_MENU,
   menu: SETTINGS_MENU_PERM,
-  credit_billing: 'platform.credit_ops_board',
 }
 
 function menuHasAccess(menuCode: string) {
@@ -81,21 +79,12 @@ function menuHasAccess(menuCode: string) {
 
 function canAccessSettingsCategory(key: SettingsCategory) {
   const childCode = SETTINGS_MENU_BY_CATEGORY[key]
-  if (key === 'credit_billing') {
-    return auth.allowedMenus.some(menu => (
-      menu.menu_code === 'platform.credit_ops_board' && Boolean(menu.can_export || menu.can_update)
-    ))
-  }
   if (menuHasAccess(childCode)) return true
   // 有任意配置子权限时，仅按子项授权；无子项时兼容旧的父菜单整页授权
   const hasAnyChild = SETTINGS_CHILD_MENUS.some(code => menuHasAccess(code))
   if (hasAnyChild) return false
   return menuHasAccess(SETTINGS_MENU)
 }
-
-const canEditCreditBilling = computed(() => auth.allowedMenus.some(menu => (
-  menu.menu_code === 'platform.credit_ops_board' && menu.can_update
-)))
 
 const settingsCategory = ref<SettingsCategory>('secrets')
 
@@ -106,7 +95,6 @@ const settingsTabs = computed(() => {
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
     { key: 'notification', title: '通知规则', desc: '补录谁收、客户即将到期天数/职位、弱排名阈值' },
     { key: 'menu', title: '菜单权限', desc: '平台端与客户端菜单可见性配置' },
-    { key: 'credit_billing', title: '算力计费', desc: '全局单价与算力规则声明发布' },
   ]
   return all.filter(tab => canAccessSettingsCategory(tab.key))
 })
@@ -777,11 +765,6 @@ onUnmounted(() => {
             <p>菜单权限通过「菜单配置管理」维护，调整后立即作用于平台运营端与客户企业端导航。</p>
             <button class="primary-btn small-btn" @click="emit('open-menu-config')">打开菜单配置管理</button>
           </div>
-
-          <CreditBillingConfigPanel
-            v-else-if="settingsCategory === 'credit_billing'"
-            :can-edit="canEditCreditBilling"
-          />
 
           <div v-else-if="settingsCategory === 'schedule'" class="schedule-settings-wrap">
             <H5DiagnosisConfigPanel :can-edit="canEditScheduleSettings" />

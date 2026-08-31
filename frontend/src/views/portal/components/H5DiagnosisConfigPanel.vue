@@ -81,7 +81,7 @@ async function saveAll() {
     ElMessage.success('H5 付费诊断配置已保存')
     await loadRows()
   } catch (error: unknown) {
-    ElMessage.error(extractErrorDetail(error, '保存失败'))
+    ElMessage.error(extractErrorDetail(error) || '保存失败')
   } finally {
     saving.value = false
   }
