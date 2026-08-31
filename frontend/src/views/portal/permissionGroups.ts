@@ -11,6 +11,7 @@ export function permissionGroupTitle(type: IdentityType, key: string) {
     diagnosis: '品牌诊断',
     backfill: '快照补录',
     system: '系统管理',
+    credit: '算力运营',
     other: '其他权限',
   }
   const customerTitles: Record<string, string> = {
@@ -32,27 +33,29 @@ export function permissionGroupNote(type: IdentityType, key: string) {
   if (key === 'audit') return '企业列表可单独控制新增/编辑、停止服务；彻底删除仅平台管理员；资料、服务地区、监测词、平台范围（可多选具体平台）、监控计划、竞品和上传文件可拆分授权。'
   if (key === 'analysis') return '报告中心支持查看/导出；周期报告自动发布至客户端，企业诊断仅运营内部使用。'
   if (key === 'users') return '用户新增下分平台/客户两种创建能力；用户列表、职位管理、操作审批可单独授权。'
-  if (key === 'diagnosis') return '品牌诊断与售前诊断：前者基于签约企业监测数据，后者面向潜在客户交付 HTML。'
+  if (key === 'diagnosis') return '品牌诊断、售前诊断与 H5 付费订单。'
   if (key === 'backfill') return '抓取失败或需覆盖更正时，运营粘贴分享链接与回答正文；可单独授权查看与提交。'
   if (key === 'system') return '系统配置可按「接口密钥 / 调度策略 / 缓存与队列 / 通知规则 / 菜单权限」拆分授权；操作日志与模型平台单独控制。'
+  if (key === 'credit') return '侧栏统一从「算力运营」进入；运营看板、企业充扣、提交拦截可按职位拆分授权。'
   return '平台运营端用于内部管理，可按职位控制新增、编辑、禁用和导出。'
 }
 
 export function permissionGroupKey(menu: MenuInfo) {
   if (menu.identity_type === 'CUSTOMER') {
     if (['customer.workspace', 'customer.brand_analysis'].includes(menu.menu_code)) return 'workspace'
-    if (['customer.realtime', 'customer.links'].includes(menu.menu_code)) return 'monitor'
-    if (['customer.diagnosis', 'customer.competitor', 'customer.sources', 'customer.reports'].includes(menu.menu_code)) return 'analysis'
+    if (['customer.realtime'].includes(menu.menu_code)) return 'monitor'
+    if (['customer.competitor', 'customer.sources', 'customer.reports'].includes(menu.menu_code)) return 'analysis'
     if (menu.menu_code === 'customer.knowledge') return 'knowledge'
     return 'other'
   }
   if (menu.menu_code === 'platform.dashboard') return 'dashboard'
   if (menu.menu_code.startsWith('platform.audit')) return 'audit'
   if (menu.menu_code.startsWith('platform.users') || menu.menu_code === POSITION_MENU || menu.menu_code === 'platform.approvals') return 'users'
-  if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis') return 'diagnosis'
+  if (menu.menu_code === 'platform.diagnosis' || menu.menu_code === 'platform.lead_diagnosis' || menu.menu_code === 'platform.h5_diagnosis_orders') return 'diagnosis'
   if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
   if (['platform.models', 'platform.alerts', 'platform.logs'].includes(menu.menu_code) || menu.menu_code.startsWith('platform.settings')) return 'system'
+  if (['platform.credit_ops_board', 'platform.tenant_credit', 'platform.tenant_credit_blocks'].includes(menu.menu_code)) return 'credit'
   return 'other'
 }
 
@@ -62,7 +65,7 @@ export function permissionGroupsFor(
   selectedMenuIds: number[] = [],
 ) {
   const order = type === 'PLATFORM'
-    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'other']
+    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'credit', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   const buckets: Record<string, MenuInfo[]> = {}
   // 2026-07-31 - 方案B：权限配置文案分组也不列品牌洞察/信源分析（侧栏菜单仍保留）

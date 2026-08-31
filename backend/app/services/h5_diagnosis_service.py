@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -267,3 +267,68 @@ def mask_openid(openid: str) -> str:
     if len(text) <= 8:
         return "***"
     return f"{text[:4]}***{text[-4:]}"
+
+
+def require_h5_order_admin_access(db: Session, current, action: str = "can_export") -> None:
+    from app.services.menu_permission_service import has_identity_menu_permission
+
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可查看 H5 订单")
+    if not has_identity_menu_permission(db, current.identity.id, "platform.h5_diagnosis_orders", action):
+        raise PermissionError("当前身份无 H5 订单权限")
+
+
+def list_h5_diagnosis_orders(
+    db: Session,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """平台后台：H5 付费订单列表。"""
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 20)))
+    stmt = select(H5DiagnosisOrder)
+    status_text = str(status or "").strip().lower()
+    if status_text:
+        stmt = stmt.where(H5DiagnosisOrder.status == status_text)
+    kw = str(keyword or "").strip()
+    if kw:
+        like = f"%{kw}%"
+        stmt = stmt.where(
+            (H5DiagnosisOrder.brand_name.like(like))
+            | (H5DiagnosisOrder.contact_phone.like(like))
+            | (H5DiagnosisOrder.out_trade_no.like(like))
+        )
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    rows = db.scalars(
+        stmt.order_by(H5DiagnosisOrder.id.desc()).offset((page - 1) * page_size).limit(page_size)
+    ).all()
+    items = []
+    for order in rows:
+        form = order.form_json if isinstance(order.form_json, dict) else {}
+        items.append(
+            {
+                "id": order.id,
+                "out_trade_no": order.out_trade_no,
+                "brand_name": order.brand_name,
+                "contact_phone_masked": mask_phone(order.contact_phone),
+                "amount_fen": order.amount_fen,
+                "amount_yuan": round(int(order.amount_fen or 0) / 100, 2),
+                "status": order.status,
+                "pay_channel": str(form.get("pay_channel") or "wechat"),
+                "pay_trade_type": str(form.get("pay_trade_type") or ("jsapi" if order.openid and order.openid != "native_pc" else "native")),
+                "openid_masked": mask_openid(order.openid),
+                "wx_transaction_id": order.wx_transaction_id,
+                "lead_diagnosis_id": order.lead_diagnosis_id,
+                "paid_at": order.paid_at.isoformat(sep=" ", timespec="seconds") if order.paid_at else None,
+                "created_at": order.created_at.isoformat(sep=" ", timespec="seconds") if order.created_at else None,
+            }
+        )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }

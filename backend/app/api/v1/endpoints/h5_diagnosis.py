@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import CurrentSession, get_current_session
 from app.core.config import settings
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
@@ -21,8 +22,10 @@ from app.services.h5_diagnosis_service import (
     fulfill_h5_order_paid,
     get_h5_diagnosis_public_config,
     get_h5_order_status,
+    list_h5_diagnosis_orders,
     mark_h5_order_paid_dev,
     mask_openid,
+    require_h5_order_admin_access,
 )
 from app.services.wechat_oauth_service import build_oauth_redirect_url, exchange_code_for_openid
 from app.services.wechat_pay_service import decrypt_notify_resource
@@ -71,6 +74,23 @@ def _oauth_return_url(target: str | None) -> str:
 def public_config(db: Session = Depends(get_db)) -> ApiResponse[dict]:
     data = get_h5_diagnosis_public_config(db)
     return ApiResponse(data=data)
+
+
+@router.get("/admin/orders", response_model=ApiResponse[dict])
+def admin_list_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current: CurrentSession = Depends(get_current_session),
+) -> ApiResponse[dict]:
+    # 2026-08-31 - 平台后台 H5 付费订单列表（独立菜单权限）
+    try:
+        require_h5_order_admin_access(db, current, "can_export")
+        return ApiResponse(data=list_h5_diagnosis_orders(db, page=page, page_size=page_size, status=status, keyword=keyword))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/session", response_model=ApiResponse[dict])

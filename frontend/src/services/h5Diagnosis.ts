@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { extractErrorDetail } from '../utils/requestError'
+import { http as authHttp } from './http'
 
 const http = axios.create({
   baseURL: '/api',
@@ -108,6 +109,37 @@ export async function fetchH5OrderStatus(outTradeNo: string): Promise<H5OrderSta
 
 export async function markH5OrderDevPaid(outTradeNo: string): Promise<H5OrderStatus> {
   const resp = await http.post(`/v1/h5/diagnosis/orders/${encodeURIComponent(outTradeNo)}/dev-paid`)
+  return unwrap(resp)
+}
+
+export async function listH5DiagnosisAdminOrders(params?: {
+  page?: number
+  page_size?: number
+  status?: string
+  keyword?: string
+}): Promise<{
+  items: Array<{
+    id: number
+    out_trade_no: string
+    brand_name: string
+    contact_phone_masked: string
+    amount_fen: number
+    amount_yuan: number
+    status: string
+    pay_channel: string
+    pay_trade_type: string
+    openid_masked: string
+    wx_transaction_id: string | null
+    lead_diagnosis_id: number | null
+    paid_at: string | null
+    created_at: string | null
+  }>
+  total: number
+  page: number
+  page_size: number
+}> {
+  // 2026-08-31 - 后台列表走登录态 http，勿用 H5 公开 axios
+  const resp = await authHttp.get('/v1/h5/diagnosis/admin/orders', { params })
   return unwrap(resp)
 }
 

@@ -12,6 +12,7 @@ import {
   Layers3,
   Megaphone,
   Radar,
+  Receipt,
   Search,
   Settings,
   SlidersHorizontal,
@@ -38,6 +39,7 @@ const iconMap: Record<string, Component> = {
   Layers3,
   Megaphone,
   Radar,
+  Receipt,
   Search,
   Settings,
   SlidersHorizontal,
@@ -61,6 +63,7 @@ const menuCodeIconMap: Record<string, Component> = {
   'customer.knowledge': BookOpen,
   'platform.dashboard': LayoutDashboard,
   'platform.lead_diagnosis': Stethoscope,
+  'platform.h5_diagnosis_orders': Receipt,
   'platform.reports': FileBarChart,
 }
 

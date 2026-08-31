@@ -13,6 +13,7 @@ import {
   USER_LIST_MENU,
   hiddenFromAssignablePermissionMenus,
   hiddenPlatformMenus,
+  sidebarHiddenAssignableCreditMenus,
 } from './constants'
 import { permissionGroupKey, permissionGroupNote, permissionGroupTitle } from './permissionGroups'
 
@@ -42,6 +43,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'platform.competitor': ['can_export'],
   'platform.sources': ['can_export'],
   'platform.lead_diagnosis': ['can_export', 'can_create'],
+  'platform.h5_diagnosis_orders': ['can_export'],
   'platform.snapshot_backfill': ['can_export', 'can_update'],
   'platform.reports': ['can_export', 'can_create'],
 
@@ -60,12 +62,13 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   [POSITION_MENU]: ['can_export', 'can_update', 'can_delete'],
   'platform.approvals': ['can_export', 'can_update'],
   'platform.announcements': ['can_export', 'can_create', 'can_update', 'can_delete'],
+  'platform.credit_ops_board': ['can_export', 'can_update'],
+  'platform.tenant_credit_blocks': ['can_export'],
+  'platform.tenant_credit': ['can_export', 'can_update'],
 
   'customer.workspace': ['can_export'],
   'customer.brand_analysis': ['can_export'],
   'customer.realtime': ['can_export'],
-  'customer.links': ['can_export'],
-  'customer.diagnosis': ['can_export'],
   'customer.competitor': ['can_export'],
   'customer.sources': ['can_export'],
   'customer.reports': ['can_export'],
@@ -83,9 +86,13 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   'platform.audit.competitors': { can_export: '查看', can_update: '编辑竞品' },
   'platform.audit.files': { can_export: '查看', can_create: '上传', can_update: '删除' },
   'platform.lead_diagnosis': { can_export: '查看/导出 HTML', can_create: '新建诊断' },
+  'platform.h5_diagnosis_orders': { can_export: '查看订单' },
   'platform.snapshot_backfill': { can_export: '查看待补录', can_update: '提交补录' },
   'platform.reports': { can_export: '查看/导出', can_create: '生成诊断' },
   'platform.alerts': { can_export: '查看', can_update: '配置规则' },
+  'platform.credit_ops_board': { can_export: '查看', can_update: '发布规则/单价' },
+  'platform.tenant_credit_blocks': { can_export: '查看拦截' },
+  'platform.tenant_credit': { can_export: '查看', can_update: '充值扣减/策略' },
   [SETTINGS_SECRETS_MENU]: { can_export: '查看', can_update: '修改密钥' },
   [SETTINGS_SCHEDULE_MENU]: { can_export: '查看', can_update: '修改调度' },
   [SETTINGS_CACHE_QUEUE_MENU]: { can_export: '查看', can_update: '修改缓存队列' },
@@ -124,7 +131,7 @@ export type PermissionMenuRow = {
 }
 
 const HIDDEN_ASSIGNABLE = new Set([
-  ...hiddenPlatformMenus,
+  ...hiddenPlatformMenus.filter(code => !(sidebarHiddenAssignableCreditMenus as readonly string[]).includes(code)),
   ...hiddenFromAssignablePermissionMenus,
   'customer.assets',
   'customer.batch',
@@ -376,7 +383,7 @@ export function permissionModulesFor(type: IdentityType, menus: MenuInfo[]) {
     buckets[key].push(menu)
   }
   const order = type === 'PLATFORM'
-    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'other']
+    ? ['dashboard', 'audit', 'analysis', 'users', 'diagnosis', 'backfill', 'system', 'credit', 'other']
     : ['workspace', 'monitor', 'analysis', 'knowledge', 'other']
   return order
     .filter(key => buckets[key]?.length)

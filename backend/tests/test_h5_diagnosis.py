@@ -180,3 +180,23 @@ def test_h5_jsapi_order_requires_openid(monkeypatch) -> None:
     )
     assert resp.status_code == 400
     assert "授权" in resp.json()["detail"]
+
+
+def test_list_h5_diagnosis_orders_service() -> None:
+    from app.core.database import SessionLocal
+    from app.services.h5_diagnosis_service import list_h5_diagnosis_orders
+
+    db = SessionLocal()
+    try:
+        data = list_h5_diagnosis_orders(db, page=1, page_size=5)
+        assert "items" in data
+        assert "total" in data
+        assert isinstance(data["items"], list)
+    finally:
+        db.close()
+
+
+def test_admin_orders_requires_auth() -> None:
+    client.cookies.clear()
+    resp = client.get("/api/v1/h5/diagnosis/admin/orders")
+    assert resp.status_code in {401, 403}
