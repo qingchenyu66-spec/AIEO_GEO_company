@@ -112,28 +112,41 @@ export async function markH5OrderDevPaid(outTradeNo: string): Promise<H5OrderSta
   return unwrap(resp)
 }
 
+export type H5DiagnosisAdminOrder = {
+  id: number
+  out_trade_no: string
+  brand_name: string
+  contact_phone: string
+  contact_phone_masked: string
+  wechat_id?: string
+  amount_fen: number
+  amount_yuan: number
+  status: string
+  pay_channel: string
+  pay_trade_type: string
+  openid_masked: string
+  wx_transaction_id: string | null
+  lead_diagnosis_id: number | null
+  paid_at: string | null
+  created_at: string | null
+  industry?: string
+  product_focus?: string
+  website_url?: string
+  brand_aliases?: string[]
+  competitors?: string[]
+  schedule_runs?: number | null
+  schedule_days?: number
+  platforms?: string[]
+  prompts?: string[]
+}
+
 export async function listH5DiagnosisAdminOrders(params?: {
   page?: number
   page_size?: number
   status?: string
   keyword?: string
 }): Promise<{
-  items: Array<{
-    id: number
-    out_trade_no: string
-    brand_name: string
-    contact_phone_masked: string
-    amount_fen: number
-    amount_yuan: number
-    status: string
-    pay_channel: string
-    pay_trade_type: string
-    openid_masked: string
-    wx_transaction_id: string | null
-    lead_diagnosis_id: number | null
-    paid_at: string | null
-    created_at: string | null
-  }>
+  items: H5DiagnosisAdminOrder[]
   total: number
   page: number
   page_size: number

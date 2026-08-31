@@ -308,12 +308,19 @@ def list_h5_diagnosis_orders(
     items = []
     for order in rows:
         form = order.form_json if isinstance(order.form_json, dict) else {}
+        prompts = order.prompts_json if isinstance(order.prompts_json, list) else []
+        platforms = order.platforms_json if isinstance(order.platforms_json, list) else []
+        aliases = form.get("brand_aliases") if isinstance(form.get("brand_aliases"), list) else []
+        competitors = form.get("competitors") if isinstance(form.get("competitors"), list) else []
         items.append(
             {
                 "id": order.id,
                 "out_trade_no": order.out_trade_no,
                 "brand_name": order.brand_name,
+                # 2026-08-31 - 运营后台点名要明文手机号；masked 字段保留兼容
+                "contact_phone": order.contact_phone,
                 "contact_phone_masked": mask_phone(order.contact_phone),
+                "wechat_id": order.wechat_id or "",
                 "amount_fen": order.amount_fen,
                 "amount_yuan": round(int(order.amount_fen or 0) / 100, 2),
                 "status": order.status,
@@ -324,6 +331,16 @@ def list_h5_diagnosis_orders(
                 "lead_diagnosis_id": order.lead_diagnosis_id,
                 "paid_at": order.paid_at.isoformat(sep=" ", timespec="seconds") if order.paid_at else None,
                 "created_at": order.created_at.isoformat(sep=" ", timespec="seconds") if order.created_at else None,
+                # 2026-08-31 - 抽屉看填报：列表一次带齐，避免再开详情接口
+                "industry": str(form.get("industry") or ""),
+                "product_focus": str(form.get("product_focus") or ""),
+                "website_url": str(form.get("website_url") or ""),
+                "brand_aliases": aliases,
+                "competitors": competitors,
+                "schedule_runs": int(form.get("schedule_runs") or 0) or None,
+                "schedule_days": int(order.schedule_days or 0),
+                "platforms": platforms,
+                "prompts": [str(p) for p in prompts],
             }
         )
     return {

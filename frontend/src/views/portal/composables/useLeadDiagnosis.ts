@@ -1,4 +1,5 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -759,7 +760,31 @@ export function useLeadDiagnosis() {
     }
   }
 
-  onMounted(loadRecords)
+  const route = useRoute()
+
+  // 2026-08-31 - H5 订单抽屉「链诊断」带 lead_id 跳转后自动选中
+  async function loadRecordsAndMaybeSelect(options?: { silent?: boolean }) {
+    await loadRecords(options)
+    const raw = route.query.lead_id
+    const id = Number(Array.isArray(raw) ? raw[0] : raw)
+    if (Number.isFinite(id) && id > 0) {
+      void selectRecord(id)
+    }
+  }
+
+  watch(
+    () => route.query.lead_id,
+    (raw) => {
+      const id = Number(Array.isArray(raw) ? raw[0] : raw)
+      if (Number.isFinite(id) && id > 0 && selectedId.value !== id) {
+        void selectRecord(id)
+      }
+    },
+  )
+
+  onMounted(() => {
+    void loadRecordsAndMaybeSelect()
+  })
   onUnmounted(() => {
     stopPolling()
     revokePreviewHtmlBlob()

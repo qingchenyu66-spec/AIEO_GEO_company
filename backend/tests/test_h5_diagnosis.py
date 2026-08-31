@@ -192,6 +192,15 @@ def test_list_h5_diagnosis_orders_service() -> None:
         assert "items" in data
         assert "total" in data
         assert isinstance(data["items"], list)
+        if data["items"]:
+            row = data["items"][0]
+            assert "contact_phone" in row
+            assert "out_trade_no" in row
+            assert "prompts" in row
+            assert "platforms" in row
+            phone = str(row.get("contact_phone") or "")
+            if phone:
+                assert "*" not in phone
     finally:
         db.close()
 
