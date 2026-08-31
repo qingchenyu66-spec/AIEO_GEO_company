@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  PROMPT_TEMPLATES,
   buildNonbrandPromptSet,
   nonbrandTopicLabel,
 } from '../portal/composables/useLeadDiagnosis'
@@ -39,20 +38,11 @@ const form = ref({
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
 const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, form.value.product_focus))
 
-function applyTemplate(value: string) {
-  const emptyIndex = form.value.prompts.findIndex(item => !item.trim())
-  if (emptyIndex < 0) return
-  form.value.prompts[emptyIndex] = value.replace(/^例如[：:]\s*/, '').replace(/XXX/g, form.value.brand_name.trim() || '品牌')
-}
-
 function applyRecommendedSet() {
+  // 2026-08-31 - 一键推荐一次写满 5 条：3 非品牌 + 2 品牌问法
   const [a, b, c] = buildNonbrandPromptSet(topicLabel.value)
-  form.value.prompts = [a, b, c, '', '']
-}
-
-function applyBrandDefenseSet() {
   const brand = form.value.brand_name.trim() || '品牌'
-  form.value.prompts = [`${brand}公司介绍`, `${brand}公司怎么样`, '', '', '']
+  form.value.prompts = [a, b, c, `${brand}公司介绍`, `${brand}公司怎么样`]
 }
 
 async function bootstrap() {
@@ -177,18 +167,6 @@ onMounted(bootstrap)
         <div class="prompt-head">
           <strong>检测问题（{{ filledPromptCount }}/5）</strong>
           <button type="button" class="link" @click="applyRecommendedSet">一键推荐</button>
-          <button type="button" class="link" @click="applyBrandDefenseSet">品牌问法</button>
-        </div>
-        <div class="chips">
-          <button
-            v-for="item in PROMPT_TEMPLATES"
-            :key="item.label"
-            type="button"
-            class="chip"
-            @click="applyTemplate(item.value)"
-          >
-            {{ item.label }}
-          </button>
         </div>
         <label v-for="(_, index) in form.prompts" :key="index">
           问题 {{ index + 1 }}
@@ -234,15 +212,13 @@ input {
 }
 .prompt-block { display: grid; gap: 8px; padding: 12px; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; }
 .prompt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip, .link {
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  border-radius: 999px;
-  padding: 6px 10px;
+.link {
+  border: none;
+  color: #0f766e;
+  background: transparent;
+  padding: 0;
   font-size: 12px;
 }
-.link { border: none; color: #0f766e; background: transparent; padding: 0; }
 .submit {
   margin-top: 8px;
   border: none;
