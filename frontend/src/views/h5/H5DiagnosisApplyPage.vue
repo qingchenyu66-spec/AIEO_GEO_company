@@ -145,7 +145,7 @@ onMounted(bootstrap)
         <input v-model="form.website_url" maxlength="500" placeholder="https://www.example.com" />
       </label>
       <label>
-        所属行业 / 主要产品
+        所属行业
         <input v-model="form.industry" maxlength="200" placeholder="例如：户外广告、蛋白粉、智能体平台" />
       </label>
       <label>

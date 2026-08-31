@@ -267,8 +267,8 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
     "h5_diagnosis_schedule_days": ConfigMeta(
         field="h5_diagnosis_schedule_days",
         category="schedule",
-        label="H5 诊断天数",
-        description="与售前诊断 schedule_days 同口径，默认 3",
+        label="H5 诊断天数（由次数换算）",
+        description="后台按监测次数配置，每天最多 3 档；天数=次数÷3，如 6 次=2 天、9 次=3 天",
         value_type="int",
     ),
     "h5_diagnosis_platforms": ConfigMeta(

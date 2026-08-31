@@ -7,6 +7,10 @@ import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 
 const props = defineProps<{ canEdit: boolean }>()
 
+const SLOTS_PER_DAY = 3
+const MIN_RUNS = 3
+const MAX_RUNS = 90 // 30 天 × 每天 3 档
+
 const loading = ref(false)
 const saving = ref(false)
 const rows = ref<SystemConfigRecord[]>([])
@@ -14,11 +18,11 @@ const rows = ref<SystemConfigRecord[]>([])
 const form = ref({
   enabled: true,
   price_yuan: 9.9,
-  schedule_days: 3,
+  schedule_runs: 9,
   platforms: [] as string[],
 })
 
-const scheduleTotal = computed(() => Math.max(1, Number(form.value.schedule_days) || 3) * 3)
+const derivedDays = computed(() => Math.max(1, Math.round(Number(form.value.schedule_runs) || MIN_RUNS) / SLOTS_PER_DAY))
 
 function rowByKey(key: string) {
   return rows.value.find(item => item.config_key === key)
@@ -34,10 +38,20 @@ function parsePlatforms(raw: string | undefined) {
   }
 }
 
+function normalizeRuns(raw: number) {
+  let runs = Math.round(Number(raw) || MIN_RUNS)
+  // 2026-08-31 - 后台改配次数：每天最多 3 档，次数须为 3 的倍数，天数=次数÷3
+  if (runs % SLOTS_PER_DAY !== 0) {
+    runs = Math.max(MIN_RUNS, Math.round(runs / SLOTS_PER_DAY) * SLOTS_PER_DAY)
+  }
+  return Math.max(MIN_RUNS, Math.min(MAX_RUNS, runs))
+}
+
 function loadFormFromRows() {
   form.value.enabled = String(rowByKey('h5_diagnosis_enabled')?.config_value || 'true').toLowerCase() !== 'false'
   form.value.price_yuan = Number(rowByKey('h5_diagnosis_price_fen')?.config_value || 990) / 100
-  form.value.schedule_days = Number(rowByKey('h5_diagnosis_schedule_days')?.config_value || 3)
+  const days = Number(rowByKey('h5_diagnosis_schedule_days')?.config_value || 3)
+  form.value.schedule_runs = normalizeRuns(Math.max(1, days) * SLOTS_PER_DAY)
   form.value.platforms = parsePlatforms(rowByKey('h5_diagnosis_platforms')?.config_value)
 }
 
@@ -65,12 +79,15 @@ async function saveAll() {
     ElMessage.warning('请至少选择一个监测平台')
     return
   }
+  const runs = normalizeRuns(form.value.schedule_runs)
+  form.value.schedule_runs = runs
+  const days = runs / SLOTS_PER_DAY
   saving.value = true
   try {
     const updates: Array<[string, string]> = [
       ['h5_diagnosis_enabled', form.value.enabled ? 'true' : 'false'],
       ['h5_diagnosis_price_fen', String(Math.round(Number(form.value.price_yuan) * 100))],
-      ['h5_diagnosis_schedule_days', String(Math.max(1, Math.min(30, Math.round(Number(form.value.schedule_days)))))],
+      ['h5_diagnosis_schedule_days', String(days)],
       ['h5_diagnosis_platforms', JSON.stringify(form.value.platforms)],
     ]
     for (const [key, value] of updates) {
@@ -95,7 +112,7 @@ onMounted(loadRows)
     <div class="head">
       <div>
         <h3>H5 付费诊断（9.9）</h3>
-        <p>控制微信 H5 体验价、监测平台与抓取天数。共 {{ scheduleTotal }} 次监测（每天 3 档）。</p>
+        <p>按监测次数配置（每天最多 {{ SLOTS_PER_DAY }} 档）。当前 {{ form.schedule_runs }} 次 ≈ {{ derivedDays }} 天。</p>
       </div>
       <button v-if="canEdit" type="button" class="primary-btn small-btn" :disabled="saving || loading" @click="saveAll">
         {{ saving ? '保存中…' : '保存 H5 配置' }}
@@ -116,8 +133,16 @@ onMounted(loadRows)
         <input v-model.number="form.price_yuan" type="number" min="0.01" step="0.01" :disabled="!canEdit">
       </label>
       <label class="field">
-        <span>监测天数</span>
-        <input v-model.number="form.schedule_days" type="number" min="1" max="30" :disabled="!canEdit">
+        <span>监测次数</span>
+        <input
+          v-model.number="form.schedule_runs"
+          type="number"
+          :min="MIN_RUNS"
+          :max="MAX_RUNS"
+          :step="SLOTS_PER_DAY"
+          :disabled="!canEdit"
+          @blur="form.schedule_runs = normalizeRuns(form.schedule_runs)"
+        >
       </label>
       <div class="field full">
         <span>监测平台</span>
