@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import AppBrandLogo from '../../components/AppBrandLogo.vue'
 import { fetchH5DiagnosisConfig, type H5DiagnosisConfig } from '../../services/h5Diagnosis'
 import { supportedPlatforms } from '../portal/platformMeta'
 
@@ -98,9 +99,10 @@ function goApply() {
     <div class="orb orb-b" aria-hidden="true" />
 
     <header class="topbar">
+      <!-- 2026-08-31 - H5 顶栏去掉艾迪亚企业标，改用产品亦智方标 -->
       <div class="logo">
-        <span class="logo-mark">艾</span>
-        <span class="logo-text">艾迪亚 GEO</span>
+        <AppBrandLogo variant="icon" alt="亦智广告" class="logo-img" />
+        <span class="logo-text">GEO Monitor</span>
       </div>
       <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
         {{ priceText }} 体检
@@ -251,16 +253,13 @@ function goApply() {
   align-items: center;
   gap: 8px;
 }
-.logo-mark {
-  display: grid;
-  place-items: center;
+.logo :deep(.app-brand-logo),
+.logo-img {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: #2563eb;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 800;
+  object-fit: contain;
+  display: block;
 }
 .logo-text {
   font-size: 15px;
@@ -577,11 +576,11 @@ function goApply() {
   .topbar {
     padding: 22px 32px 0;
   }
-  .logo-mark {
+  .logo :deep(.app-brand-logo),
+  .logo-img {
     width: 34px;
     height: 34px;
     border-radius: 10px;
-    font-size: 15px;
   }
   .logo-text {
     font-size: 17px;
