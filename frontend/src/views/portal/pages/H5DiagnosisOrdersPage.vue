@@ -111,10 +111,7 @@ onMounted(loadOrders)
 
 <template>
   <section class="h5-orders-page">
-    <header class="head">
-      <h2>H5 订单</h2>
-    </header>
-
+    <!-- 2026-08-31 - 标题/副标题已由 Portal 外壳提供，页内勿再重复 -->
     <div class="toolbar">
       <input v-model="keyword" class="search-input" placeholder="品牌 / 手机号 / 商户单号" @keyup.enter="search">
       <select v-model="status" class="status-select" @change="search">
@@ -290,14 +287,6 @@ onMounted(loadOrders)
   display: grid;
   gap: 12px;
   max-width: 1120px;
-}
-
-.head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.02em;
 }
 
 .toolbar {
