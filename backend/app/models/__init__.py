@@ -2,15 +2,7 @@ from app.models.brand import BrandAsset, BrandCompetitor, BrandKeywordGroup, Bra
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_identity import UserIdentity
-from app.models.permission import CustomerPosition, CustomerPositionMenu, Menu, Position, PositionMenu, Role, RoleMenu, UserIdentityMenu
-from app.models.credit import (
-    BillingModeChangeLog,
-    CreditPriceRule,
-    CreditSubmitBlock,
-    CreditTermsAck,
-    CreditTermsVersion,
-    TenantCreditLedger,
-)
+from app.models.permission import Menu, Position, PositionMenu, Role, RoleMenu, UserIdentityMenu
 from app.models.system import OperationLog, SystemConfig
 from app.models.menu_config import MenuConfig
 from app.models.monitor import (
@@ -48,20 +40,12 @@ __all__ = [
     "BrandCompetitor",
     "BrandKeywordGroup",
     "BrandWordGroup",
-    "BillingModeChangeLog",
-    "CreditPriceRule",
-    "CreditSubmitBlock",
-    "CreditTermsAck",
-    "CreditTermsVersion",
-    "CustomerPosition",
-    "CustomerPositionMenu",
     "Menu",
     "Position",
     "PositionMenu",
     "Role",
     "RoleMenu",
     "Tenant",
-    "TenantCreditLedger",
     "User",
     "UserIdentity",
     "UserIdentityMenu",
