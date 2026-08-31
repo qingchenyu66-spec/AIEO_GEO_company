@@ -14,7 +14,7 @@ import {
   markH5OrderDevPaid,
   startH5OAuth,
   type H5DiagnosisConfig,
-} from '../services/h5Diagnosis'
+} from '../../services/h5Diagnosis'
 
 const loading = ref(true)
 const submitting = ref(false)
