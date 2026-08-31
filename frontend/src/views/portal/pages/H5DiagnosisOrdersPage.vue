@@ -40,6 +40,21 @@ function joinList(list: string[] | undefined) {
   return list.filter(Boolean).join('、')
 }
 
+/** 列表只留月日时分，完整时间放 title */
+function shortTime(value: string | null | undefined) {
+  if (!value) return '—'
+  const m = String(value).match(/(\d{2})-(\d{2})\s+(\d{2}:\d{2})/)
+  if (m) return `${m[1]}-${m[2]} ${m[3]}`
+  return value
+}
+
+/** 商户单号过长时中间省略，悬停看全 */
+function shortTradeNo(value: string | null | undefined) {
+  const text = String(value || '').trim()
+  if (text.length <= 18) return text || '—'
+  return `${text.slice(0, 8)}…${text.slice(-6)}`
+}
+
 async function loadOrders() {
   loading.value = true
   try {
@@ -82,21 +97,27 @@ function openLeadDiagnosis() {
   navigateToMenu('platform.lead_diagnosis', false, { lead_id: String(leadId) })
 }
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择')
+  }
+}
+
 onMounted(loadOrders)
 </script>
 
 <template>
   <section class="h5-orders-page">
     <header class="head">
-      <div>
-        <h2>H5 订单</h2>
-        <p>付费诊断成交记录：支付状态、金额、扫码/微信内付、关联售前诊断。</p>
-      </div>
+      <h2>H5 订单</h2>
     </header>
 
-    <div class="filters">
-      <input v-model="keyword" placeholder="品牌 / 手机号 / 商户单号" @keyup.enter="search">
-      <select v-model="status" @change="search">
+    <div class="toolbar">
+      <input v-model="keyword" class="search-input" placeholder="品牌 / 手机号 / 商户单号" @keyup.enter="search">
+      <select v-model="status" class="status-select" @change="search">
         <option value="">全部状态</option>
         <option value="pending">待支付</option>
         <option value="paid">已支付</option>
@@ -104,46 +125,51 @@ onMounted(loadOrders)
         <option value="closed">已关闭</option>
       </select>
       <button type="button" class="primary-btn small-btn" :disabled="loading" @click="search">查询</button>
+      <span class="toolbar-meta">共 {{ total }} 条</span>
     </div>
 
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>下单时间</th>
-            <th>品牌</th>
-            <th>商户单号</th>
-            <th>手机号</th>
-            <th>金额</th>
-            <th>方式</th>
-            <th>状态</th>
-            <th>微信单号</th>
-            <th>售前诊断</th>
-            <th>操作</th>
+            <th class="col-time">下单时间</th>
+            <th class="col-brand">品牌</th>
+            <th class="col-trade">商户单号</th>
+            <th class="col-phone">手机号</th>
+            <th class="col-amount">金额</th>
+            <th class="col-pay">方式</th>
+            <th class="col-status">状态</th>
+            <th class="col-ops">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="10" class="empty">加载中…</td>
+            <td colspan="8" class="empty">加载中…</td>
           </tr>
           <tr v-else-if="!items.length">
-            <td colspan="10" class="empty">暂无订单</td>
+            <td colspan="8" class="empty">暂无订单</td>
           </tr>
-          <tr v-for="row in items" :key="row.id">
-            <td>{{ row.created_at || '—' }}</td>
-            <td class="brand">{{ row.brand_name }}</td>
-            <td class="mono">{{ row.out_trade_no }}</td>
-            <td>{{ row.contact_phone || row.contact_phone_masked || '—' }}</td>
-            <td>¥{{ row.amount_yuan }}</td>
-            <td>{{ tradeTypeLabel[row.pay_trade_type] || row.pay_trade_type }}</td>
-            <td>
-              <span class="status" :data-status="row.status">{{ statusLabel[row.status] || row.status }}</span>
-              <div v-if="row.paid_at" class="muted">{{ row.paid_at }}</div>
+          <tr v-for="row in items" :key="row.id" class="data-row" @click="openDrawer(row)">
+            <td class="col-time" :title="row.created_at || ''">{{ shortTime(row.created_at) }}</td>
+            <td class="col-brand">{{ row.brand_name }}</td>
+            <td class="col-trade">
+              <button
+                type="button"
+                class="trade-btn"
+                :title="row.out_trade_no"
+                @click.stop="copyText(row.out_trade_no)"
+              >
+                {{ shortTradeNo(row.out_trade_no) }}
+              </button>
             </td>
-            <td class="mono">{{ row.wx_transaction_id || '—' }}</td>
-            <td>{{ row.lead_diagnosis_id ? `#${row.lead_diagnosis_id}` : '—' }}</td>
-            <td>
-              <button type="button" class="link" @click="openDrawer(row)">详情</button>
+            <td class="col-phone">{{ row.contact_phone || row.contact_phone_masked || '—' }}</td>
+            <td class="col-amount">¥{{ row.amount_yuan }}</td>
+            <td class="col-pay">{{ tradeTypeLabel[row.pay_trade_type] || row.pay_trade_type }}</td>
+            <td class="col-status">
+              <span class="status" :data-status="row.status">{{ statusLabel[row.status] || row.status }}</span>
+            </td>
+            <td class="col-ops">
+              <button type="button" class="detail-btn" @click.stop="openDrawer(row)">详情</button>
             </td>
           </tr>
         </tbody>
@@ -152,7 +178,7 @@ onMounted(loadOrders)
 
     <div class="pager">
       <button type="button" :disabled="loading || page <= 1" @click="page -= 1; loadOrders()">上一页</button>
-      <span>第 {{ page }} 页 · 共 {{ total }} 条</span>
+      <span>第 {{ page }} 页</span>
       <button type="button" :disabled="loading || page * pageSize >= total" @click="page += 1; loadOrders()">下一页</button>
     </div>
 
@@ -161,7 +187,10 @@ onMounted(loadOrders)
         <header class="drawer-head">
           <div>
             <h3>{{ selected.brand_name }}</h3>
-            <p class="muted">{{ statusLabel[selected.status] || selected.status }} · ¥{{ selected.amount_yuan }}</p>
+            <p class="muted">
+              <span class="status" :data-status="selected.status">{{ statusLabel[selected.status] || selected.status }}</span>
+              <span>¥{{ selected.amount_yuan }}</span>
+            </p>
           </div>
           <button type="button" class="ghost-btn" @click="closeDrawer">关闭</button>
         </header>
@@ -169,7 +198,11 @@ onMounted(loadOrders)
         <dl class="detail-grid">
           <div>
             <dt>商户单号</dt>
-            <dd class="mono">{{ selected.out_trade_no }}</dd>
+            <dd>
+              <button type="button" class="trade-btn block" :title="selected.out_trade_no" @click="copyText(selected.out_trade_no)">
+                {{ selected.out_trade_no }}
+              </button>
+            </dd>
           </div>
           <div>
             <dt>手机号</dt>
@@ -190,6 +223,10 @@ onMounted(loadOrders)
           <div>
             <dt>支付时间</dt>
             <dd>{{ selected.paid_at || '—' }}</dd>
+          </div>
+          <div>
+            <dt>售前诊断</dt>
+            <dd>{{ selected.lead_diagnosis_id ? `#${selected.lead_diagnosis_id}` : '—' }}</dd>
           </div>
           <div>
             <dt>行业</dt>
@@ -249,82 +286,219 @@ onMounted(loadOrders)
 </template>
 
 <style scoped>
-.h5-orders-page { display: grid; gap: 14px; }
-.head h2 { margin: 0 0 4px; font-size: 20px; }
-.head p { margin: 0; color: #64748b; font-size: 13px; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; }
-.filters input, .filters select {
-  border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  padding: 8px 10px;
-  min-width: 180px;
+.h5-orders-page {
+  display: grid;
+  gap: 12px;
+  max-width: 1120px;
+}
+
+.head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
   background: #fff;
 }
+
+.search-input,
+.status-select {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+  outline: none;
+}
+
+.search-input {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.search-input:focus,
+.status-select:focus {
+  border-color: #93c5fd;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.status-select {
+  min-width: 128px;
+}
+
+.toolbar-meta {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid #e2e8f0;
-  border-radius: 14px;
+  border-radius: 12px;
   background: #fff;
 }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; text-align: left; vertical-align: top; }
-th { background: #f8fafc; color: #475569; font-weight: 600; white-space: nowrap; }
-.brand { font-weight: 600; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+th,
+td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.data-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.data-row:hover {
+  background: #f8fbff;
+}
+
+.col-time { width: 118px; color: #475569; white-space: nowrap; }
+.col-brand { width: 96px; font-weight: 650; color: #0f172a; }
+.col-trade { width: 168px; }
+.col-phone { width: 120px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.col-amount { width: 72px; font-weight: 650; color: #0f172a; white-space: nowrap; }
+.col-pay { width: 88px; color: #475569; white-space: nowrap; }
+.col-status { width: 88px; }
+.col-ops { width: 72px; }
+
+.trade-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #64748b;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-btn:hover { color: #2563eb; }
+.trade-btn.block {
+  display: block;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
 .muted { color: #94a3b8; font-size: 12px; }
-.empty { text-align: center; color: #94a3b8; padding: 28px 12px; }
+.empty { text-align: center; color: #94a3b8; padding: 36px 12px; }
+
 .status {
-  display: inline-block;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
   background: #f1f5f9;
   color: #475569;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .status[data-status='paid'] { background: #ecfdf5; color: #047857; }
 .status[data-status='pending'] { background: #fff7ed; color: #c2410c; }
 .status[data-status='failed'] { background: #fef2f2; color: #b91c1c; }
-.link {
-  border: none;
-  background: transparent;
+.status[data-status='closed'] { background: #f1f5f9; color: #64748b; }
+
+.detail-btn {
+  border: 1px solid #dbe3ef;
+  background: #fff;
   color: #2563eb;
-  padding: 0;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
+.detail-btn:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
 .pager {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   color: #64748b;
   font-size: 13px;
 }
-.pager button, .ghost-btn {
-  border: 1px solid #cbd5e1;
+.pager button,
+.ghost-btn {
+  border: 1px solid #dbe3ef;
   background: #fff;
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   cursor: pointer;
+  color: #334155;
+  font-size: 13px;
 }
-.pager button:disabled { opacity: 0.5; }
+.pager button:disabled { opacity: 0.45; cursor: not-allowed; }
+.pager button:not(:disabled):hover,
+.ghost-btn:hover {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
 
 .drawer-mask {
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(15, 23, 42, 0.32);
   display: flex;
   justify-content: flex-end;
 }
 .drawer {
-  width: min(440px, 100vw);
+  width: min(420px, 100vw);
   height: 100%;
   background: #fff;
-  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.12);
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.14);
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 18px 18px 24px;
+  padding: 20px 20px 24px;
   overflow: auto;
 }
 .drawer-head {
@@ -333,16 +507,26 @@ th { background: #f8fafc; color: #475569; font-weight: 600; white-space: nowrap;
   align-items: flex-start;
   gap: 12px;
 }
-.drawer-head h3 { margin: 0 0 4px; font-size: 18px; }
+.drawer-head h3 { margin: 0 0 8px; font-size: 18px; color: #0f172a; }
+.drawer-head .muted {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: #64748b;
+}
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
+  gap: 14px 16px;
   margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: #f8fafc;
 }
 .detail-grid .span-2 { grid-column: 1 / -1; }
 .detail-grid dt {
-  margin: 0 0 2px;
+  margin: 0 0 4px;
   color: #94a3b8;
   font-size: 12px;
 }
@@ -354,22 +538,31 @@ th { background: #f8fafc; color: #475569; font-weight: 600; white-space: nowrap;
 }
 .prompts-block h4 {
   margin: 0 0 8px;
-  font-size: 14px;
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
 }
 .prompts-block ol {
   margin: 0;
-  padding-left: 18px;
+  padding: 12px 12px 12px 28px;
+  border-radius: 12px;
+  background: #f8fafc;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
   color: #334155;
 }
 .drawer-foot {
   margin-top: auto;
-  padding-top: 8px;
+  padding-top: 4px;
+}
+.drawer-foot .primary-btn {
+  width: 100%;
 }
 .drawer-foot .primary-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 </style>
