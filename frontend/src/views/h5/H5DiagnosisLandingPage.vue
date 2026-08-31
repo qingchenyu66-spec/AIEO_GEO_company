@@ -105,7 +105,7 @@ function goApply() {
         <span class="logo-text">艾迪亚 GEO</span>
       </div>
       <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
-        免费体检入口
+        {{ priceText }} 体检
       </button>
     </header>
 
@@ -126,9 +126,6 @@ function goApply() {
       <div class="hero-actions">
         <button type="button" class="btn-primary" :disabled="loading || !config?.enabled" @click="goApply">
           {{ config?.enabled ? `体验价 ${priceText} 看清可见度` : '活动暂未开放' }}
-        </button>
-        <button type="button" class="btn-secondary" :disabled="loading || !config?.enabled" @click="goApply">
-          预约顾问解读
         </button>
       </div>
 
@@ -347,17 +344,7 @@ function goApply() {
   background: #2563eb;
   box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
 }
-.btn-secondary {
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
-  padding: 12px 18px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #0f172a;
-  background: #fff;
-}
-.btn-primary:disabled,
-.btn-secondary:disabled {
+.btn-primary:disabled {
   opacity: 0.55;
   box-shadow: none;
 }
