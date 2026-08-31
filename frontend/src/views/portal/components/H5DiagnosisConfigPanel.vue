@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { getSystemConfigs, updateSystemConfig, type SystemConfigRecord } from '../../../services/management'
 import { extractErrorDetail } from '../../../utils/requestError'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
@@ -147,20 +148,32 @@ onMounted(loadRows)
           @blur="form.schedule_runs = normalizeRuns(form.schedule_runs)"
         >
       </label>
-      <div class="field full">
-        <span>监测平台</span>
-        <div class="platform-grid">
-          <button
+      <div class="field full keyword-group-platform-field">
+        <!-- 2026-08-31 - H5 平台勾选对齐企业配置 PlatformBadge 格子，去掉胶囊按钮 -->
+        <span>监测平台（{{ form.platforms.length }}）</span>
+        <div class="platform-check-grid compact">
+          <label
             v-for="item in supportedPlatforms"
             :key="item.code"
-            type="button"
-            class="platform-chip"
-            :class="{ active: form.platforms.includes(item.code) }"
-            :disabled="!canEdit"
-            @click="togglePlatform(item.code)"
+            class="platform-check"
+            :class="{
+              'is-selected': form.platforms.includes(item.code),
+              'is-disabled': !canEdit,
+            }"
+            @click.prevent="togglePlatform(item.code)"
           >
-            {{ platformLabelMap[item.code] || item.name || item.code }}
-          </button>
+            <input
+              type="checkbox"
+              tabindex="-1"
+              :checked="form.platforms.includes(item.code)"
+              :disabled="!canEdit"
+            >
+            <PlatformBadge
+              :code="item.code"
+              size="sm"
+              :label="platformLabelMap[item.code] || item.name || item.code"
+            />
+          </label>
         </div>
       </div>
     </div>
@@ -198,18 +211,9 @@ onMounted(loadRows)
   font-size: 14px;
   background: #fff;
 }
-.platform-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.platform-chip {
-  border: 1px solid #cbd5e1;
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: #fff;
-  font-size: 12px;
-}
-.platform-chip.active {
-  border-color: #0f766e;
-  background: #ecfdf5;
-  color: #0f766e;
+.h5-config-panel :deep(.platform-check.is-selected) {
+  border-color: #2d6cdf;
+  background: #eef4ff;
 }
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
