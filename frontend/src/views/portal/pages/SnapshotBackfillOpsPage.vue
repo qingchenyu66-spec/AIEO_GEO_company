@@ -66,6 +66,8 @@ const keywordFilter = ref('')
 const keywordGroupOptions = ref<BrandKeywordGroup[]>([])
 const tenantMonitoredPlatforms = ref<string[]>([])
 const todoOnly = ref(true)
+// 2026-09-01 - 默认日常补录单表；打开才左右对照（词列共用）
+const showBeforeCompare = ref(false)
 
 const platforms = ref<SnapshotBackfillMatrixPlatform[]>([])
 const dates = ref<string[]>([])
@@ -74,6 +76,36 @@ const cells = ref<SnapshotBackfillMatrixCell[]>([])
 const activePlatform = ref('')
 const cellDrawerVisible = ref(false)
 const cellDrawer = ref<SnapshotBackfillMatrixCell | null>(null)
+/** 从「补录前」打开：可点开看，不可补录/忽略 */
+const cellDrawerAllowBackfill = ref(true)
+
+type ComparePaneId = 'before' | 'after'
+const comparePanes: Array<{ id: ComparePaneId; label: string }> = [
+  { id: 'before', label: '补录前' },
+  { id: 'after', label: '补录后' },
+]
+let compareScrollSyncing = false
+
+/** 2026-09-01 - 词列/补录前/补录后：纵滚全同步；左右热力横滚互相同步 */
+function onCompareScroll(event: Event) {
+  if (compareScrollSyncing) return
+  const source = event.currentTarget
+  if (!(source instanceof HTMLElement)) return
+  const root = source.closest('.sb-compare')
+  if (!root) return
+  const sourceAxis = source.dataset.compareAxis || 'xy'
+  compareScrollSyncing = true
+  root.querySelectorAll<HTMLElement>('[data-compare-scroll]').forEach((el) => {
+    if (el === source) return
+    el.scrollTop = source.scrollTop
+    if (sourceAxis === 'xy' && el.dataset.compareAxis === 'xy') {
+      el.scrollLeft = source.scrollLeft
+    }
+  })
+  requestAnimationFrame(() => {
+    compareScrollSyncing = false
+  })
+}
 
 let listRequestSeq = 0
 let listAbortController: AbortController | null = null
@@ -145,51 +177,10 @@ const monitorKeywordOptions = computed(() => {
   return options.sort((left, right) => left.localeCompare(right, 'zh-CN'))
 })
 
-const visiblePlatforms = computed(() => (
-  todoOnly.value ? platforms.value.filter(p => p.todo > 0) : platforms.value
-))
-
 /** 筛选项「全部平台」：主区按端分块竖铺热力 */
 const isAllPlatformsView = computed(() => !platformFilter.value)
 
-const activePlatformMeta = computed(() => (
-  platforms.value.find(p => p.id === activePlatform.value) || null
-))
-
-const allPlatformKpis = computed(() => {
-  let todo = 0
-  let fail = 0
-  const avgs: number[] = []
-  for (const p of platforms.value) {
-    todo += Number(p.todo) || 0
-    fail += Number(p.fail) || 0
-    if (p.avg != null && Number.isFinite(Number(p.avg))) avgs.push(Number(p.avg))
-  }
-  return {
-    todo,
-    fail,
-    avg: avgs.length ? Math.round((avgs.reduce((s, n) => s + n, 0) / avgs.length) * 10) / 10 : null,
-  }
-})
-
-const cellLookup = computed(() => {
-  const map = new Map<string, SnapshotBackfillMatrixCell>()
-  for (const cell of cells.value) {
-    map.set(`${cell.platform}||${cell.word}||${cell.date}`, cell)
-  }
-  return map
-})
-
-const visibleWords = computed(() => {
-  if (!todoOnly.value) return words.value
-  const set = new Set(
-    cells.value
-      .filter(c => c.platform === activePlatform.value && c.has_todo)
-      .map(c => c.word),
-  )
-  const list = words.value.filter(w => set.has(w))
-  return list.length ? list : words.value
-})
+// visiblePlatforms / 前后 lookup / KPI 在 recomputeCell 之后定义
 
 function shortDate(iso: string) {
   return iso.length >= 10 ? iso.slice(5) : iso
@@ -209,22 +200,6 @@ function platformDisplayName(code: string) {
   return platforms.value.find(p => p.id === code)?.name
     || platformLabelMap[code]
     || code
-}
-
-function wordsForPlatform(platformId: string) {
-  // 2026-07-30 - 全部平台只见一端 - 分块矩阵按端各自出词行
-  const platCells = cells.value.filter(c => c.platform === platformId)
-  if (!platCells.length) return [] as string[]
-  if (!todoOnly.value) {
-    const set = new Set(platCells.map(c => c.word))
-    return words.value.filter(w => set.has(w))
-  }
-  const set = new Set(platCells.filter(c => c.has_todo).map(c => c.word))
-  return words.value.filter(w => set.has(w))
-}
-
-function getCell(word: string, date: string, platform?: string) {
-  return cellLookup.value.get(`${platform || activePlatform.value}||${word}||${date}`) || null
 }
 
 async function loadTenants() {
@@ -263,9 +238,9 @@ async function loadTenantKeywordGroups() {
 }
 
 function ensureActivePlatform() {
-  const list = todoOnly.value ? visiblePlatforms.value : platforms.value
+  const list = todoOnly.value ? visiblePlatforms.value : displayPlatforms.value
   if (!list.length) {
-    activePlatform.value = platforms.value[0]?.id || ''
+    activePlatform.value = displayPlatforms.value[0]?.id || platforms.value[0]?.id || ''
     return
   }
   if (!list.some(p => p.id === activePlatform.value)) {
@@ -349,14 +324,51 @@ function maybeCloseCellDrawerAfterTodoClear(cell: SnapshotBackfillMatrixCell | n
 
 const showDismissedSlots = ref(false)
 
+function slotWindowKey(slot: SnapshotBackfillMatrixSlot) {
+  return String(slot.schedule_window_key || slot.schedule_label || slot.subtask_id || '').trim()
+}
+
+/** 同窗多条时抽屉/对照只留一条（与后端去重口径一致） */
+function preferMatrixSlot(a: SnapshotBackfillMatrixSlot, b: SnapshotBackfillMatrixSlot) {
+  const score = (slot: SnapshotBackfillMatrixSlot) => (
+    (slot.backfill_dismissed ? 0 : 1) * 10000
+    + (slot.is_gap ? 0 : 1) * 1000
+    + (slot.has_answer && !slot.needs_backfill ? 1 : 0) * 100
+    + (slot.has_before_backfill ? 1 : 0) * 10
+    + (slot.mention_position != null ? 1 : 0)
+  )
+  return score(a) >= score(b) ? a : b
+}
+
+function dedupeDrawerSlots(slots: SnapshotBackfillMatrixSlot[]) {
+  const best = new Map<string, SnapshotBackfillMatrixSlot>()
+  const order: string[] = []
+  let anon = 0
+  for (const slot of slots) {
+    let key = slotWindowKey(slot)
+    if (!key) {
+      key = `anon:${anon}`
+      anon += 1
+    }
+    const prev = best.get(key)
+    if (!prev) {
+      best.set(key, slot)
+      order.push(key)
+      continue
+    }
+    best.set(key, preferMatrixSlot(prev, slot))
+  }
+  return order.map(key => best.get(key)!).filter(Boolean)
+}
+
 const drawerActiveSlots = computed(() => {
-  const slots = cellDrawer.value?.slots || []
+  const slots = dedupeDrawerSlots(cellDrawer.value?.slots || [])
   // 2026-08-21 - 方案 A：默认只列未忽略；已忽略靠开关展开
   return slots.filter(slot => !slot.backfill_dismissed)
 })
 
 const drawerDismissedSlots = computed(() => {
-  const slots = cellDrawer.value?.slots || []
+  const slots = dedupeDrawerSlots(cellDrawer.value?.slots || [])
   return slots.filter(slot => Boolean(slot.backfill_dismissed))
 })
 
@@ -391,15 +403,17 @@ function selectPlatform(id: string) {
   }
 }
 
-function openCell(word: string, date: string, platform?: string) {
+function openCell(word: string, date: string, platform?: string, pane?: ComparePaneId) {
   const cell = getCell(word, date, platform)
   if (!cell) return
-  openCellDirect(cell)
+  // 2026-09-01 - 补录前对照可点开看，但不允许补录/忽略
+  openCellDirect(cell, pane !== 'before')
 }
 
-function openCellDirect(cell: SnapshotBackfillMatrixCell) {
+function openCellDirect(cell: SnapshotBackfillMatrixCell, allowBackfill = true) {
   activePlatform.value = cell.platform
   cellDrawer.value = cell
+  cellDrawerAllowBackfill.value = allowBackfill
   // 2026-08-21 - 方案 A：每次打开格子默认不展开已忽略，避免误点
   showDismissedSlots.value = false
   cellDrawerVisible.value = true
@@ -408,6 +422,7 @@ function openCellDirect(cell: SnapshotBackfillMatrixCell) {
 function closeCellDrawer() {
   cellDrawerVisible.value = false
   cellDrawer.value = null
+  cellDrawerAllowBackfill.value = true
   showDismissedSlots.value = false
 }
 
@@ -456,6 +471,216 @@ function recomputeCell(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrix
   }
 }
 
+/** 有快照的场次换成补录前位次；无快照保持现状（未补过=前后一样） */
+function slotAsBefore(slot: SnapshotBackfillMatrixSlot): SnapshotBackfillMatrixSlot {
+  if (!slot.has_before_backfill) return slot
+  const beforeHasAnswer = Boolean(slot.before_has_answer)
+  return {
+    ...slot,
+    mention_position: slot.before_mention_position ?? null,
+    has_answer: beforeHasAnswer,
+    needs_backfill: !beforeHasAnswer,
+    status: slot.before_status ?? slot.status,
+  }
+}
+
+function remapCellBefore(cell: SnapshotBackfillMatrixCell): SnapshotBackfillMatrixCell {
+  return recomputeCell({ ...cell, slots: cell.slots.map(slotAsBefore) })
+}
+
+function buildCellLookup(list: SnapshotBackfillMatrixCell[]) {
+  const map = new Map<string, SnapshotBackfillMatrixCell>()
+  for (const cell of list) {
+    map.set(`${cell.platform}||${cell.word}||${cell.date}`, cell)
+  }
+  return map
+}
+
+const afterCells = computed(() => cells.value)
+const beforeCells = computed(() => cells.value.map(remapCellBefore))
+
+const afterCellLookup = computed(() => buildCellLookup(afterCells.value))
+const beforeCellLookup = computed(() => buildCellLookup(beforeCells.value))
+
+function platformsFromCells(
+  base: SnapshotBackfillMatrixPlatform[],
+  list: SnapshotBackfillMatrixCell[],
+): SnapshotBackfillMatrixPlatform[] {
+  return base.map((p) => {
+    const platCells = list.filter(cell => cell.platform === p.id)
+    const avgs = platCells
+      .map(cell => cell.rank)
+      .filter((rank): rank is number => rank != null && Number.isFinite(rank))
+    return {
+      ...p,
+      todo: platCells.filter(cell => cell.has_todo).length,
+      fail: platCells.reduce((sum, cell) => sum + (cell.fail_count || 0), 0),
+      avg: averageRanks(avgs),
+    }
+  })
+}
+
+/** 侧栏 / 待补过滤用补录后；左右对照行对齐也靠这套 */
+const displayPlatforms = computed(() => platformsFromCells(platforms.value, afterCells.value))
+const beforePlatforms = computed(() => platformsFromCells(platforms.value, beforeCells.value))
+
+const visiblePlatforms = computed(() => (
+  todoOnly.value ? displayPlatforms.value.filter(p => p.todo > 0) : displayPlatforms.value
+))
+
+const activePlatformMeta = computed(() => (
+  displayPlatforms.value.find(p => p.id === activePlatform.value) || null
+))
+
+function sumPlatformKpis(list: SnapshotBackfillMatrixPlatform[]) {
+  let todo = 0
+  let fail = 0
+  const avgs: number[] = []
+  for (const p of list) {
+    todo += Number(p.todo) || 0
+    fail += Number(p.fail) || 0
+    if (p.avg != null && Number.isFinite(Number(p.avg))) avgs.push(Number(p.avg))
+  }
+  return {
+    todo,
+    fail,
+    avg: avgs.length ? Math.round((avgs.reduce((s, n) => s + n, 0) / avgs.length) * 10) / 10 : null,
+  }
+}
+
+/** 头栏 KPI：日常看补录后；对照时附带补录前（与当前可见端对齐） */
+const headKpisAfter = computed(() => {
+  if (isAllPlatformsView.value) {
+    return sumPlatformKpis(todoOnly.value ? visiblePlatforms.value : displayPlatforms.value)
+  }
+  return {
+    todo: activePlatformMeta.value?.todo ?? 0,
+    fail: activePlatformMeta.value?.fail ?? 0,
+    avg: activePlatformMeta.value?.avg ?? null,
+  }
+})
+
+const headKpisBefore = computed(() => {
+  if (isAllPlatformsView.value) {
+    const ids = new Set(
+      (todoOnly.value ? visiblePlatforms.value : displayPlatforms.value).map(p => p.id),
+    )
+    return sumPlatformKpis(beforePlatforms.value.filter(p => ids.has(p.id)))
+  }
+  const meta = beforePlatforms.value.find(p => p.id === activePlatform.value)
+  return {
+    todo: meta?.todo ?? 0,
+    fail: meta?.fail ?? 0,
+    avg: meta?.avg ?? null,
+  }
+})
+
+function formatKpiAvg(value: number | null | undefined) {
+  return value == null || !Number.isFinite(Number(value)) ? '—' : String(value)
+}
+
+/** 运营操作始终看补录后格子 */
+function getCell(word: string, date: string, platform?: string) {
+  return afterCellLookup.value.get(`${platform || activePlatform.value}||${word}||${date}`) || null
+}
+
+function getCellForPane(pane: ComparePaneId, word: string, date: string, platform?: string) {
+  const map = pane === 'before' ? beforeCellLookup.value : afterCellLookup.value
+  return map.get(`${platform || activePlatform.value}||${word}||${date}`) || null
+}
+
+function platformMetaForPane(pane: ComparePaneId, platformId: string) {
+  const list = pane === 'before' ? beforePlatforms.value : displayPlatforms.value
+  return list.find(p => p.id === platformId) || null
+}
+
+const visibleWords = computed(() => {
+  if (!todoOnly.value) return words.value
+  const set = new Set(
+    afterCells.value
+      .filter(c => c.platform === activePlatform.value && c.has_todo)
+      .map(c => c.word),
+  )
+  const list = words.value.filter(w => set.has(w))
+  return list.length ? list : words.value
+})
+
+function wordsForPlatform(platformId: string) {
+  // 2026-07-30 - 全部平台只见一端 - 分块矩阵按端各自出词行
+  const platCells = afterCells.value.filter(c => c.platform === platformId)
+  if (!platCells.length) return [] as string[]
+  if (!todoOnly.value) {
+    const set = new Set(platCells.map(c => c.word))
+    return words.value.filter(w => set.has(w))
+  }
+  const set = new Set(platCells.filter(c => c.has_todo).map(c => c.word))
+  return words.value.filter(w => set.has(w))
+}
+
+/** 运营口径：成功才计提及；分母含成功+失败+漏跑+已忽略（与工作台词×平台不同） */
+const MENTION_RATE_SUCCESS = new Set(['completed', 'partial_completed'])
+
+function slotIsSuccessStatus(status: string | null | undefined) {
+  return MENTION_RATE_SUCCESS.has(String(status || '').trim().toLowerCase())
+}
+
+function slotMentionFlags(slot: SnapshotBackfillMatrixSlot, mode: 'after' | 'before') {
+  // 2026-09-01 - 补录页提及率按运营拍板：失败/漏跑/已忽略都进分母压低率
+  if (slot.is_gap) {
+    return { sample: true, mentioned: false }
+  }
+  if (mode === 'before' && slot.has_before_backfill) {
+    return {
+      sample: true,
+      mentioned: slotIsSuccessStatus(slot.before_status) && slot.before_mention_position != null,
+    }
+  }
+  return {
+    sample: true,
+    mentioned: slotIsSuccessStatus(slot.status) && slot.mention_position != null,
+  }
+}
+
+function mentionRateFromSlots(slots: SnapshotBackfillMatrixSlot[], mode: 'after' | 'before') {
+  let sample = 0
+  let mentioned = 0
+  for (const slot of slots) {
+    const flags = slotMentionFlags(slot, mode)
+    if (!flags.sample) continue
+    sample += 1
+    if (flags.mentioned) mentioned += 1
+  }
+  if (!sample) return null
+  return Math.round((mentioned / sample) * 1000) / 10
+}
+
+function wordPeriodMentionRate(platformId: string, word: string, mode: 'after' | 'before') {
+  const slots = cells.value
+    .filter(cell => cell.platform === platformId && cell.word === word)
+    .flatMap(cell => cell.slots)
+  return mentionRateFromSlots(slots, mode)
+}
+
+function formatMentionRate(value: number | null) {
+  return value == null ? '—' : `${value}%`
+}
+
+/** 词列：对照时展示时段提及 前→后；格子悬停仍单侧 */
+function formatWordPeriodMentionRate(platformId: string, word: string) {
+  const after = wordPeriodMentionRate(platformId, word, 'after')
+  const before = wordPeriodMentionRate(platformId, word, 'before')
+  return `${formatMentionRate(before)} → ${formatMentionRate(after)}`
+}
+
+function cellHoverTitle(pane: ComparePaneId, word: string, date: string, platform?: string) {
+  const raw = getCell(word, date, platform)
+  const cell = getCellForPane(pane, word, date, platform)
+  const slots = raw?.slots || cell?.slots || []
+  // 2026-09-01 - 悬停只显示当前侧提及率，不做前→后
+  const mode = pane === 'before' ? 'before' : 'after'
+  return formatMentionRate(mentionRateFromSlots(slots, mode))
+}
+
 function refreshPlatformStats(platformId: string) {
   const platCells = cells.value.filter(cell => cell.platform === platformId)
   const idx = platforms.value.findIndex(p => p.id === platformId)
@@ -484,7 +709,23 @@ function patchSlotLocally(
     touched = true
     touchedPlatform = cell.platform
     const slots = cell.slots.slice()
-    slots[idx] = { ...slots[idx], ...patch, is_gap: false }
+    const old = slots[idx]
+    let next: SnapshotBackfillMatrixSlot = { ...old, ...patch, is_gap: false }
+    // 2026-09-01 - 补录后左屏跟着右屏变 - 无 before 快照时用补丁前旧值冻住
+    if (
+      patch.has_answer
+      && !old.has_before_backfill
+      && !patch.has_before_backfill
+    ) {
+      next = {
+        ...next,
+        has_before_backfill: true,
+        before_mention_position: old.mention_position ?? null,
+        before_has_answer: Boolean(old.has_answer),
+        before_status: old.status ?? null,
+      }
+    }
+    slots[idx] = next
     return recomputeCell({ ...cell, slots })
   })
   if (touchedPlatform) refreshPlatformStats(touchedPlatform)
@@ -629,7 +870,7 @@ function statusAllowsSnapshotBackfill(status: string | null | undefined) {
 }
 
 async function openBackfillFromDetail() {
-  if (!canSubmitBackfill.value || !detailSubtask.value) return
+  if (!canSubmitBackfill.value || !cellDrawerAllowBackfill.value || !detailSubtask.value) return
   // 2026-08-11 - 监测未终态就补录会被同步盖掉
   if (!statusAllowsSnapshotBackfill(detailSubtask.value.status)) {
     ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
@@ -653,7 +894,7 @@ async function openBackfillFromDetail() {
 }
 
 async function openBackfillFromSlot(slot: SnapshotBackfillMatrixSlot) {
-  if (!canSubmitBackfill.value) return
+  if (!canSubmitBackfill.value || !cellDrawerAllowBackfill.value) return
   if (!slot.is_gap && !statusAllowsSnapshotBackfill(slot.status)) {
     ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
     return
@@ -827,7 +1068,7 @@ async function dismissAllInFilter() {
 
 async function dismissSlot(slot: SnapshotBackfillMatrixSlot) {
   // 2026-08-04 - 到期/漏跑缺口格不能忽略 - 先落占位子任务再走同一套 dismiss
-  if (!canSubmitBackfill.value || slot.backfill_dismissed) return
+  if (!canSubmitBackfill.value || !cellDrawerAllowBackfill.value || slot.backfill_dismissed) return
   if (!slot.is_gap && !slot.subtask_id) return
   try {
     if (isFailurePending(slot) || slot.is_gap) {
@@ -892,6 +1133,7 @@ async function undismissFromDetail() {
 
 // 2026-08-21 - 方案 A：格子抽屉对已忽略场次直接取消忽略，再可点补录
 async function undismissFromSlot(slot: SnapshotBackfillMatrixSlot) {
+  if (!canSubmitBackfill.value || !cellDrawerAllowBackfill.value) return
   const subtaskId = String(slot.subtask_id || '').trim()
   if (!subtaskId) {
     ElMessage.warning('缺少子任务，无法取消忽略')
@@ -917,6 +1159,14 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
     }
     if (updatedSubtask.needs_backfill !== undefined) {
       patch.needs_backfill = updatedSubtask.needs_backfill
+    }
+    // 2026-09-01 - 补录成功后本地格子也能切「补录前」
+    const before = updatedSubtask.before_backfill
+    if (before) {
+      patch.has_before_backfill = true
+      patch.before_mention_position = before.mention_position ?? null
+      patch.before_has_answer = Boolean(before.has_answer)
+      patch.before_status = before.status ?? null
     }
     patched = patchSlotLocally(updatedSubtask.subtask_id, patch)
   }
@@ -1162,7 +1412,7 @@ watch(
       </div>
     </div>
 
-    <div class="sb-layout">
+    <div class="sb-layout" :class="{ 'is-compare': showBeforeCompare }">
       <section class="sb-panel sb-main">
         <div class="sb-main-head">
           <div class="sb-platform-title">
@@ -1186,18 +1436,33 @@ watch(
               </p>
             </div>
           </div>
-          <div class="sb-kpis">
-            <div class="sb-kpi primary">
-              <strong>{{ isAllPlatformsView ? allPlatformKpis.todo : (activePlatformMeta?.todo ?? 0) }}</strong>
-              <span>待补录</span>
-            </div>
-            <div class="sb-kpi">
-              <strong>{{ isAllPlatformsView ? allPlatformKpis.fail : (activePlatformMeta?.fail ?? 0) }}</strong>
-              <span>失败未忽略</span>
-            </div>
-            <div class="sb-kpi secondary">
-              <strong>{{ isAllPlatformsView ? (allPlatformKpis.avg ?? '—') : (activePlatformMeta?.avg ?? '—') }}</strong>
-              <span>均位</span>
+          <div class="sb-main-head-right">
+            <label class="sb-toggle" :class="{ on: showBeforeCompare }">
+              <input v-model="showBeforeCompare" type="checkbox">
+              对照补录前
+            </label>
+            <div class="sb-kpis" :class="{ 'is-compare': showBeforeCompare }">
+              <div class="sb-kpi primary">
+                <strong v-if="showBeforeCompare">
+                  <em>{{ headKpisBefore.todo }}</em><i>→</i>{{ headKpisAfter.todo }}
+                </strong>
+                <strong v-else>{{ headKpisAfter.todo }}</strong>
+                <span>待补录</span>
+              </div>
+              <div class="sb-kpi">
+                <strong v-if="showBeforeCompare">
+                  <em>{{ headKpisBefore.fail }}</em><i>→</i>{{ headKpisAfter.fail }}
+                </strong>
+                <strong v-else>{{ headKpisAfter.fail }}</strong>
+                <span>失败未忽略</span>
+              </div>
+              <div class="sb-kpi secondary">
+                <strong v-if="showBeforeCompare">
+                  <em>{{ formatKpiAvg(headKpisBefore.avg) }}</em><i>→</i>{{ formatKpiAvg(headKpisAfter.avg) }}
+                </strong>
+                <strong v-else>{{ formatKpiAvg(headKpisAfter.avg) }}</strong>
+                <span>均位</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1207,6 +1472,135 @@ watch(
           <div v-if="!visiblePlatforms.length || !dates.length" class="mini-empty snapshot-backfill-empty">
             当前筛选下没有矩阵数据
           </div>
+          <template v-else-if="showBeforeCompare">
+            <div class="sb-compare has-words">
+              <div
+                class="sb-compare-words"
+                data-compare-scroll="words"
+                data-compare-axis="y"
+                @scroll.passive="onCompareScroll"
+              >
+                <div class="sb-compare-label">监测词</div>
+                <div class="sb-plat-blocks">
+                  <div
+                    v-for="p in visiblePlatforms"
+                    :key="`words-${p.id}`"
+                    class="sb-plat-block"
+                  >
+                    <!-- 2026-09-01 - 词列平台头与热力同结构，避免行对不齐 -->
+                    <div class="sb-plat-block-head">
+                      <div class="sb-platform-title">
+                        <div class="sb-platform-logo">{{ (p.name || p.id).slice(0, 1) }}</div>
+                        <div>
+                          <h3>{{ p.name || platformLabelMap[p.id] || p.id }}</h3>
+                          <p class="sb-words-plat-meta">
+                            {{ p.todo }} 待补 · {{ p.fail }} 失败 · 均位 {{ p.avg ?? '—' }}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="!wordsForPlatform(p.id).length" class="mini-empty">—</div>
+                    <table v-else class="sb-matrix sb-matrix-words">
+                      <thead>
+                        <tr>
+                          <th>监测词</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="word in wordsForPlatform(p.id)" :key="`words-${p.id}-${word}`">
+                          <th :title="`${word} · 时段提及 ${formatWordPeriodMentionRate(p.id, word)}`">
+                            <div class="sb-word-cell">
+                              <span class="sb-word-text">{{ word }}</span>
+                              <span class="sb-word-rate">{{ formatWordPeriodMentionRate(p.id, word) }}</span>
+                            </div>
+                          </th>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-for="pane in comparePanes"
+                :key="pane.id"
+                class="sb-compare-pane"
+                :data-compare-scroll="pane.id"
+                data-compare-axis="xy"
+                @scroll.passive="onCompareScroll"
+              >
+                <div class="sb-compare-label">{{ pane.label }}</div>
+                <div class="sb-plat-blocks">
+                  <div
+                    v-for="p in visiblePlatforms"
+                    :id="pane.id === 'after' ? `sb-plat-block-${p.id}` : undefined"
+                    :key="`${pane.id}-${p.id}`"
+                    class="sb-plat-block"
+                    :class="{ active: p.id === activePlatform }"
+                  >
+                    <div class="sb-plat-block-head">
+                      <div class="sb-platform-title">
+                        <div class="sb-platform-logo">{{ (p.name || p.id).slice(0, 1) }}</div>
+                        <div>
+                          <h3>{{ p.name || platformLabelMap[p.id] || p.id }}</h3>
+                          <p>
+                            {{ platformMetaForPane(pane.id, p.id)?.todo ?? p.todo }} 待补 ·
+                            {{ platformMetaForPane(pane.id, p.id)?.fail ?? p.fail }} 失败 ·
+                            均位 {{ platformMetaForPane(pane.id, p.id)?.avg ?? p.avg ?? '—' }}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="!wordsForPlatform(p.id).length" class="mini-empty">该端暂无格子</div>
+                    <div v-else class="sb-matrix-wrap">
+                      <table class="sb-matrix sb-matrix-heat">
+                        <thead>
+                          <tr>
+                            <th v-for="d in dates" :key="d">{{ shortDate(d) }}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            v-for="word in wordsForPlatform(p.id)"
+                            :key="`${pane.id}-${p.id}-${word}`"
+                          >
+                            <td v-for="d in dates" :key="`${pane.id}-${p.id}-${word}-${d}`">
+                              <button
+                                v-if="getCellForPane(pane.id, word, d, p.id)"
+                                type="button"
+                                class="sb-cell"
+                                :class="[
+                                  rankClass(getCellForPane(pane.id, word, d, p.id)?.rank),
+                                  { 'has-todo': getCellForPane(pane.id, word, d, p.id)?.has_todo },
+                                ]"
+                                :title="cellHoverTitle(pane.id, word, d, p.id)"
+                                @click="openCell(word, d, p.id, pane.id)"
+                              >
+                                <span>{{ rankText(getCellForPane(pane.id, word, d, p.id)?.rank) }}</span>
+                              </button>
+                              <span
+                                v-else
+                                class="sb-cell rank-none is-empty"
+                                :title="cellHoverTitle(pane.id, word, d, p.id)"
+                              >—</span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sb-legend">
+              <span><i class="sb-swatch" style="background:#e6f7ef" />1–3</span>
+              <span><i class="sb-swatch" style="background:#fff3d9" />4+</span>
+              <span><i class="sb-swatch" style="background:#eef1f4" />无位次</span>
+              <span>
+                <i class="sb-swatch" style="background:#fde8e2;outline:2px solid #e4572e;outline-offset:1px" />
+                暖色+红点 = 待补
+              </span>
+            </div>
+          </template>
           <div v-else class="sb-plat-blocks">
             <div
               v-for="p in visiblePlatforms"
@@ -1247,7 +1641,6 @@ watch(
                           ]"
                           @click="openCell(word, d, p.id)"
                         >
-                          <!-- 2026-08-05 - 矩阵格去掉次数，只留日均位 -->
                           <span>{{ rankText(getCell(word, d, p.id)?.rank) }}</span>
                         </button>
                         <span v-else class="sb-cell rank-none is-empty">—</span>
@@ -1271,6 +1664,90 @@ watch(
         <div v-else-if="!visibleWords.length || !dates.length" class="mini-empty snapshot-backfill-empty">
           当前筛选下没有矩阵数据
         </div>
+        <template v-else-if="showBeforeCompare">
+          <div class="sb-compare has-words">
+            <div
+              class="sb-compare-words"
+              data-compare-scroll="words"
+              data-compare-axis="y"
+              @scroll.passive="onCompareScroll"
+            >
+              <div class="sb-compare-label">监测词</div>
+              <table class="sb-matrix sb-matrix-words">
+                <thead>
+                  <tr>
+                    <th>监测词</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="word in visibleWords" :key="`words-${word}`">
+                    <th :title="`${word} · 时段提及 ${formatWordPeriodMentionRate(activePlatform, word)}`">
+                      <div class="sb-word-cell">
+                        <span class="sb-word-text">{{ word }}</span>
+                        <span class="sb-word-rate">{{ formatWordPeriodMentionRate(activePlatform, word) }}</span>
+                      </div>
+                    </th>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div
+              v-for="pane in comparePanes"
+              :key="pane.id"
+              class="sb-compare-pane"
+              :data-compare-scroll="pane.id"
+              data-compare-axis="xy"
+              @scroll.passive="onCompareScroll"
+            >
+              <div class="sb-compare-label">{{ pane.label }}</div>
+              <div class="sb-matrix-wrap">
+                <table class="sb-matrix sb-matrix-heat">
+                  <thead>
+                    <tr>
+                      <th v-for="d in dates" :key="d">{{ shortDate(d) }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="word in visibleWords"
+                      :key="`${pane.id}-${word}`"
+                    >
+                      <td v-for="d in dates" :key="`${pane.id}-${word}-${d}`">
+                        <button
+                          v-if="getCellForPane(pane.id, word, d)"
+                          type="button"
+                          class="sb-cell"
+                          :class="[
+                            rankClass(getCellForPane(pane.id, word, d)?.rank),
+                            { 'has-todo': getCellForPane(pane.id, word, d)?.has_todo },
+                          ]"
+                          :title="cellHoverTitle(pane.id, word, d)"
+                          @click="openCell(word, d, undefined, pane.id)"
+                        >
+                          <span>{{ rankText(getCellForPane(pane.id, word, d)?.rank) }}</span>
+                        </button>
+                        <span
+                          v-else
+                          class="sb-cell rank-none is-empty"
+                          :title="cellHoverTitle(pane.id, word, d)"
+                        >—</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="sb-legend">
+            <span><i class="sb-swatch" style="background:#e6f7ef" />1–3</span>
+            <span><i class="sb-swatch" style="background:#fff3d9" />4+</span>
+            <span><i class="sb-swatch" style="background:#eef1f4" />无位次</span>
+            <span>
+              <i class="sb-swatch" style="background:#fde8e2;outline:2px solid #e4572e;outline-offset:1px" />
+              暖色+红点 = 待补
+            </span>
+          </div>
+        </template>
         <template v-else>
           <div class="sb-matrix-wrap">
             <table class="sb-matrix">
@@ -1294,7 +1771,6 @@ watch(
                       ]"
                       @click="openCell(word, d)"
                     >
-                      <!-- 2026-08-05 - 矩阵格去掉次数，只留日均位 -->
                       <span>{{ rankText(getCell(word, d)?.rank) }}</span>
                     </button>
                     <span v-else class="sb-cell rank-none is-empty">—</span>
@@ -1315,11 +1791,12 @@ watch(
         </template>
       </section>
 
-      <aside class="sb-panel sb-side">
+      <!-- 2026-09-01 - 对照补录前时藏侧栏，把宽度让给左右热力 -->
+      <aside v-if="!showBeforeCompare" class="sb-panel sb-side">
         <h3>全平台对比</h3>
         <div class="sb-plat-list">
           <button
-            v-for="p in platforms"
+            v-for="p in displayPlatforms"
             :key="p.id"
             type="button"
             class="sb-plat-card"
@@ -1369,7 +1846,7 @@ watch(
           <div class="sb-todo-actions">
             <button v-if="slot.subtask_id" type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
             <button
-              v-if="canSubmitBackfill"
+              v-if="canSubmitBackfill && cellDrawerAllowBackfill"
               type="button"
               class="sb-btn"
               @click="openBackfillFromSlot(slot)"
@@ -1378,7 +1855,7 @@ watch(
               补录
             </button>
             <button
-              v-if="canSubmitBackfill && !slot.backfill_dismissed && (slot.subtask_id || slot.is_gap)"
+              v-if="canSubmitBackfill && cellDrawerAllowBackfill && !slot.backfill_dismissed && (slot.subtask_id || slot.is_gap)"
               type="button"
               class="sb-btn ghost"
               @click="dismissSlot(slot)"
@@ -1408,7 +1885,7 @@ watch(
             <div class="sb-todo-actions">
               <button v-if="slot.subtask_id" type="button" class="sb-btn ghost" @click="openDetail(slotToItem(slot))">详情</button>
               <button
-                v-if="canSubmitBackfill && slot.subtask_id"
+                v-if="canSubmitBackfill && cellDrawerAllowBackfill && slot.subtask_id"
                 type="button"
                 class="sb-btn"
                 @click="undismissFromSlot(slot)"
@@ -1428,7 +1905,7 @@ watch(
       :loading="detailLoading"
       :item="detailItem"
       :subtask="detailSubtask"
-      :can-submit="canSubmitBackfill"
+      :can-submit="canSubmitBackfill && cellDrawerAllowBackfill"
       @update:subtask="detailSubtask = $event"
       @backfill="openBackfillFromDetail"
       @undismiss="undismissFromDetail"

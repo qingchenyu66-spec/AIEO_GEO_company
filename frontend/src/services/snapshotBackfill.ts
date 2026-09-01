@@ -109,6 +109,11 @@ export interface SnapshotBackfillMatrixSlot {
   keyword_group?: string | null
   updated_at?: string | null
   is_gap?: boolean
+  /** 是否有补录前快照（仅本功能上线后补录的有） */
+  has_before_backfill?: boolean
+  before_mention_position?: number | null
+  before_has_answer?: boolean | null
+  before_status?: string | null
 }
 
 export interface SnapshotBackfillMatrixCell {

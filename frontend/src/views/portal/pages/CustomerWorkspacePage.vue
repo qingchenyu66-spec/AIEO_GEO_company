@@ -637,7 +637,7 @@ onUnmounted(() => {
       <article ref="heatmapSectionRef" class="ws-board-card">
         <div class="ws-board-card-title">
           <BarChart3 :size="18" />
-          词 × 平台表现
+          词 × 平台提及率
           <span
             class="ws-board-title-tip"
             tabindex="0"

@@ -98,6 +98,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: nowrap;
   margin-left: auto;
 }
 
@@ -459,6 +460,10 @@
   min-width: 0;
 }
 
+.sb-layout.is-compare {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* 仅很窄时叠成上下；中等宽度仍保留右侧平台列 */
 @media (max-width: 640px) {
   .sb-layout {
@@ -485,7 +490,7 @@
   min-width: 0;
   max-width: 100%;
   overflow-x: hidden;
-  /* 2026-08-25 - 补录页滚轮只在细滚动条上生效 - 主区统一纵滚，勿再套多层 overflow */
+  /* 日常单表主区纵滚；对照模式由 .sb-compare-pane 自己滚 */
   overflow-y: auto;
   max-height: calc(100vh - 168px);
 }
@@ -495,7 +500,7 @@
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 14px;
 }
 
@@ -503,6 +508,143 @@
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.sb-main-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/* 2026-09-01 - 左右对照：词列可开关共用；滚动双向同步 */
+.sb-compare {
+  display: grid;
+  grid-template-columns: minmax(110px, 180px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.sb-compare-words,
+.sb-compare-pane {
+  min-width: 0;
+  max-height: calc(100vh - 240px);
+  overflow: auto;
+  border: 1px solid var(--sb-line);
+  border-radius: 12px;
+  background: #fff;
+  /* 2026-09-01 - 对照顶栏与内容去缝：上内边距交给 sticky 标题吃掉 */
+  padding: 0 0 12px;
+}
+
+.sb-compare-label {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sb-ink);
+  background: rgba(243, 247, 251, 0.96);
+  border-bottom: 1px solid var(--sb-line);
+  backdrop-filter: blur(6px);
+}
+
+.sb-compare-pane .sb-matrix-wrap,
+.sb-compare-words .sb-plat-blocks,
+.sb-compare-pane .sb-plat-blocks,
+.sb-compare-words > .sb-matrix {
+  /* 2026-09-01 - 对照标题与内容去缝：左右留白，顶贴齐 */
+  padding: 0 10px;
+}
+
+.sb-compare-pane .sb-matrix-wrap {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.sb-compare-pane .sb-plat-blocks,
+.sb-compare-words .sb-plat-blocks {
+  min-width: max-content;
+}
+
+/* 2026-09-01 - 对照三栏行高对齐：平台头/表头/词行与格子同高 */
+.sb-compare .sb-plat-block-head {
+  min-height: 64px;
+  box-sizing: border-box;
+}
+
+.sb-compare .sb-plat-block-head p {
+  white-space: nowrap;
+}
+
+.sb-compare-words .sb-words-plat-meta {
+  visibility: hidden;
+}
+
+.sb-compare table.sb-matrix thead th {
+  height: 40px;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.sb-compare table.sb-matrix tbody th,
+.sb-compare table.sb-matrix tbody td {
+  height: 56px;
+  box-sizing: border-box;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  vertical-align: middle;
+}
+
+.sb-matrix-words {
+  width: 100%;
+  min-width: 0;
+}
+
+.sb-matrix-words tbody th {
+  position: static;
+  left: auto;
+  max-width: 168px;
+  white-space: normal;
+  overflow: hidden;
+}
+
+.sb-word-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 160px;
+}
+
+.sb-word-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-word-rate {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sb-muted);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.sb-matrix-heat tbody tr {
+  cursor: default;
 }
 
 .sb-platform-logo {
@@ -531,6 +673,31 @@
 .sb-kpis {
   display: flex;
   gap: 10px;
+}
+
+.sb-kpis.is-compare .sb-kpi {
+  min-width: 118px;
+}
+
+.sb-kpis.is-compare .sb-kpi strong {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 18px;
+}
+
+.sb-kpis.is-compare .sb-kpi strong em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--sb-muted);
+  font-size: 16px;
+}
+
+.sb-kpis.is-compare .sb-kpi strong i {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--sb-muted);
+  font-size: 12px;
 }
 
 .sb-kpi {

@@ -312,6 +312,88 @@ def matrix_cell_has_todo(*, ranks: list[float], sample_count: int, gap_count: in
     return float(avg) > float(backfill_weak_rank_threshold())
 
 
+def _matrix_slot_window_key(slot: dict[str, Any]) -> str:
+    window_key = str(slot.get("schedule_window_key") or "").strip()
+    if window_key:
+        return window_key
+    return str(
+        parse_schedule_slot(slot.get("schedule_window_key"), slot.get("schedule_label"))[0] or ""
+    ).strip()
+
+
+def _matrix_slot_prefer_score(slot: dict[str, Any]) -> tuple:
+    """同窗多条时择优：非忽略 > 非缺口 > 已补完 > 有 before 快照 > 有位次 > 更新更晚。"""
+    return (
+        0 if slot.get("backfill_dismissed") else 1,
+        0 if slot.get("is_gap") else 1,
+        1 if slot.get("has_answer") and not slot.get("needs_backfill") else 0,
+        1 if slot.get("has_before_backfill") else 0,
+        1 if slot.get("mention_position") is not None else 0,
+        str(slot.get("updated_at") or ""),
+    )
+
+
+def dedupe_matrix_cell_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """2026-09-01 - 同窗多子任务/mock 脏数据 - 一场次只留一条，避免抽屉像前后各一条。"""
+    best: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    anon = 0
+    for slot in slots:
+        key = _matrix_slot_window_key(slot)
+        if not key:
+            sid = str(slot.get("subtask_id") or "").strip()
+            key = f"id:{sid}" if sid else f"anon:{anon}"
+            anon += 1
+        if key not in best:
+            best[key] = slot
+            order.append(key)
+            continue
+        if _matrix_slot_prefer_score(slot) > _matrix_slot_prefer_score(best[key]):
+            best[key] = slot
+    return [best[key] for key in order]
+
+
+def recompute_matrix_cell_from_slots(cell: dict[str, Any]) -> dict[str, Any]:
+    slots = list(cell.get("slots") or [])
+    ranks: list[float] = []
+    fail_count = 0
+    gap_count = 0
+    for slot in slots:
+        if slot.get("is_gap") and not slot.get("backfill_dismissed"):
+            gap_count += 1
+        rank = slot.get("mention_position")
+        try:
+            if rank is not None:
+                ranks.append(float(rank))
+        except (TypeError, ValueError):
+            pass
+        if slot.get("needs_backfill") and not slot.get("has_answer") and not slot.get("backfill_dismissed"):
+            if not slot.get("is_gap"):
+                fail_count += 1
+    fail_count += gap_count
+    active = [slot for slot in slots if not slot.get("backfill_dismissed") and not slot.get("is_gap")]
+    active_ranks: list[float] = []
+    for slot in active:
+        rank = slot.get("mention_position")
+        try:
+            if rank is not None:
+                active_ranks.append(float(rank))
+        except (TypeError, ValueError):
+            pass
+    cell["slots"] = slots
+    cell["rank"] = _average_mention_position(ranks)
+    cell["fail_count"] = fail_count
+    cell["gap_count"] = gap_count
+    cell["sample_count"] = len(slots)
+    cell["rank_sample_count"] = len(ranks)
+    cell["has_todo"] = matrix_cell_has_todo(
+        ranks=active_ranks,
+        sample_count=len(active),
+        gap_count=gap_count,
+    )
+    return cell
+
+
 def enrich_subtask_display_backfill_flags(
     display: dict[str, Any],
     subtask: GeoMonitorSubtask,
@@ -334,6 +416,61 @@ def enrich_subtask_display_backfill_flags(
     display["needs_backfill_raw"] = bool(needs)
     display["has_answer"] = bool((subtask.answer_content or "").strip())
     return display
+
+
+# 2026-09-01 - 补录前快照：答案截断上限，避免 raw JSON 膨胀
+_BEFORE_BACKFILL_ANSWER_MAX = 4000
+
+
+def build_before_backfill_snapshot(subtask: GeoMonitorSubtask) -> dict[str, Any]:
+    """补录写入前抓一份可读快照，供矩阵「显示补录前」与详情对照。"""
+    answer = str(subtask.answer_content or "")
+    truncated = len(answer) > _BEFORE_BACKFILL_ANSWER_MAX
+    if truncated:
+        answer = answer[:_BEFORE_BACKFILL_ANSWER_MAX]
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    shot = (subtask.page_screenshot or "").strip() or None
+    return {
+        "captured_at": datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
+        "status": subtask.status,
+        "mention_position": subtask.mention_position,
+        "sentiment": subtask.sentiment,
+        "error_message": subtask.error_message,
+        "page_screenshot": shot,
+        "page_screenshot_url": public_screenshot_url(shot) if shot else None,
+        "answer_content": answer or None,
+        "answer_truncated": truncated,
+        "source": raw.get("source"),
+        "has_answer": bool((subtask.answer_content or "").strip()),
+    }
+
+
+def _before_backfill_matrix_fields(subtask: GeoMonitorSubtask) -> dict[str, Any]:
+    """从 raw.before_backfill 抽出矩阵用轻量字段；无快照则 has_before_backfill=False。"""
+    # 2026-09-01 - 补录页要整页切补录前位次 - 矩阵 slot 带出 before，不只详情
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    before = raw.get("before_backfill")
+    if not isinstance(before, dict):
+        return {
+            "has_before_backfill": False,
+            "before_mention_position": None,
+            "before_has_answer": None,
+            "before_status": None,
+        }
+    pos = before.get("mention_position")
+    try:
+        before_pos = int(pos) if pos is not None else None
+    except (TypeError, ValueError):
+        before_pos = None
+    has_answer = before.get("has_answer")
+    if has_answer is None:
+        has_answer = bool(str(before.get("answer_content") or "").strip())
+    return {
+        "has_before_backfill": True,
+        "before_mention_position": before_pos,
+        "before_has_answer": bool(has_answer),
+        "before_status": before.get("status"),
+    }
 
 
 def build_snapshot_backfill_matrix_sample(
@@ -359,6 +496,7 @@ def build_snapshot_backfill_matrix_sample(
     )
     dismissed = subtask_backfill_dismissed(subtask)
     updated = getattr(subtask, "updated_at", None)
+    before_fields = _before_backfill_matrix_fields(subtask)
     return {
         "subtask_id": subtask.subtask_id,
         "task_id": task.task_id,
@@ -380,6 +518,7 @@ def build_snapshot_backfill_matrix_sample(
         "schedule_label": schedule_ctx.get("schedule_label"),
         "source": _resolve_snapshot_backfill_source(task, lead_ctx or {}),
         "updated_at": updated.isoformat(sep=" ", timespec="seconds") if updated else None,
+        **before_fields,
     }
 
 
@@ -605,6 +744,8 @@ def apply_snapshot_backfill(
         )
         if not has_mol_result:
             raise ValueError("当前无可用快照，请粘贴分享链接补录")
+        # 2026-09-01 - 排名补录也落 before，矩阵可切补录前
+        before_snap = build_before_backfill_snapshot(subtask)
         clear_subtask_backfill_dismiss(subtask)
         subtask.error_message = None
         subtask.status = "completed"
@@ -618,6 +759,7 @@ def apply_snapshot_backfill(
             "rank_only": True,
             "manual_rank_locked": True,
             "replaced": False,
+            "before_backfill": before_snap,
         }
         if previous_raw.get("source"):
             manual_meta["replaced_previous_source"] = previous_raw.get("source")
@@ -713,6 +855,8 @@ def apply_snapshot_backfill(
     previous_raw = dict(subtask.raw_result_json or {})
     previous_source = previous_raw.get("source")
     previous_shot = (subtask.page_screenshot or "").strip() or None
+    # 2026-09-01 - 贴链补录前落快照，供「查看补录前」
+    before_snap = build_before_backfill_snapshot(subtask)
 
     clear_subtask_backfill_dismiss(subtask)
     # 2026-08-27 - 贴链补录留旧 CDN 图运营以为未生效 - 清空待异步新截图；rank_only/误填图链分支不动
@@ -764,6 +908,7 @@ def apply_snapshot_backfill(
         "replaced": bool(previous_answer),
         # 2026-08-12 - 补录位次一律锁定，避免规则升级洗数冲掉
         "manual_rank_locked": True,
+        "before_backfill": before_snap,
         **fetch_meta,
     }
     if previous_answer:
@@ -2028,6 +2173,10 @@ def list_snapshot_backfill_matrix(
                     "monitor_keywords": sample.get("monitor_keywords"),
                     "keyword_group": sample.get("keyword_group"),
                     "updated_at": sample.get("updated_at"),
+                    "has_before_backfill": bool(sample.get("has_before_backfill")),
+                    "before_mention_position": sample.get("before_mention_position"),
+                    "before_has_answer": sample.get("before_has_answer"),
+                    "before_status": sample.get("before_status"),
                 }
             )
         avg = _average_mention_position(ranks)
@@ -2084,25 +2233,31 @@ def list_snapshot_backfill_matrix(
             keyword_group_filter=str(keyword_group or "").strip(),
             purchased_exact=purchased_exact,
         )
-        platform_stats = {
-            code: {"id": code, "name": platform_names.get(code) or code, "todo": 0, "fail": 0, "avg_ranks": []}
-            for code in platform_order
-        }
-        for cell in cells:
-            plat = str(cell.get("platform") or "")
-            stats = platform_stats.setdefault(
-                plat,
-                {"id": plat, "name": platform_names.get(plat) or plat, "todo": 0, "fail": 0, "avg_ranks": []},
-            )
-            if cell.get("has_todo"):
-                stats["todo"] += 1
-            stats["fail"] += int(cell.get("fail_count") or 0)
-            rank = cell.get("rank")
-            if rank is not None:
-                try:
-                    stats["avg_ranks"].append(float(rank))
-                except (TypeError, ValueError):
-                    pass
+
+    # 2026-09-01 - 同窗多子任务去重后再汇总端 KPI，避免对照/抽屉出现「前一条后一条」
+    for cell in cells:
+        cell["slots"] = dedupe_matrix_cell_slots(list(cell.get("slots") or []))
+        recompute_matrix_cell_from_slots(cell)
+
+    platform_stats = {
+        code: {"id": code, "name": platform_names.get(code) or code, "todo": 0, "fail": 0, "avg_ranks": []}
+        for code in platform_order
+    }
+    for cell in cells:
+        plat = str(cell.get("platform") or "")
+        stats = platform_stats.setdefault(
+            plat,
+            {"id": plat, "name": platform_names.get(plat) or plat, "todo": 0, "fail": 0, "avg_ranks": []},
+        )
+        if cell.get("has_todo"):
+            stats["todo"] += 1
+        stats["fail"] += int(cell.get("fail_count") or 0)
+        rank = cell.get("rank")
+        if rank is not None:
+            try:
+                stats["avg_ranks"].append(float(rank))
+            except (TypeError, ValueError):
+                pass
 
     platforms_out: list[dict[str, Any]] = []
     for code in platform_order:

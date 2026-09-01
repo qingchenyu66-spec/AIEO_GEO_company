@@ -1687,3 +1687,44 @@ def test_ensure_then_dismiss_clears_gap_todo(db_session, monkeypatch) -> None:
     assert all(s.get("backfill_dismissed") for s in slots2)
     assert all(not s.get("needs_backfill") for s in slots2)
     assert all(not cell.get("has_todo") for cell in matrix2["cells"])
+
+
+def test_matrix_sample_exposes_before_backfill_fields() -> None:
+    """补录落 before 后，矩阵样本要带出 before 位次供前端整页切换。"""
+    from app.services.snapshot_backfill_service import build_snapshot_backfill_matrix_sample
+
+    task = GeoMonitorTask(
+        task_id="task-before-1",
+        tenant_id=1,
+        status="completed",
+        monitor_keywords="品牌词",
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-before-1",
+        task_id=task.task_id,
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="品牌词推荐",
+        status="completed",
+        mention_position=2,
+        answer_content="补录后回答",
+        raw_result_json={
+            "source": "manual_snapshot",
+            "before_backfill": {
+                "status": "failed",
+                "mention_position": None,
+                "has_answer": False,
+                "answer_content": None,
+            },
+        },
+    )
+    sample = build_snapshot_backfill_matrix_sample(
+        subtask,
+        task,
+        schedule_ctx={"schedule_key": "20260901", "schedule_window_key": "20260901_0930", "schedule_label": "09:30"},
+    )
+    assert sample["has_before_backfill"] is True
+    assert sample["before_mention_position"] is None
+    assert sample["before_has_answer"] is False
+    assert sample["before_status"] == "failed"
+    assert sample["mention_position"] == 2
