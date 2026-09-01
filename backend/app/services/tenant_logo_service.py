@@ -46,6 +46,40 @@ def _safe_logo_path(tenant: Tenant) -> Path:
     return target
 
 
+def _find_disk_logo(tenant_id: int) -> Path | None:
+    """磁盘上已有 logo 文件但库内 logo_path 为空时兜底（审批回滚等会留下孤儿文件）。"""
+    tenant_dir = STORAGE_ROOT / str(int(tenant_id))
+    if not tenant_dir.is_dir():
+        return None
+    for ext in ALLOWED_EXT:
+        candidate = tenant_dir / f"logo{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def backfill_tenant_logo_path_if_missing(db: Session, tenant: Tenant) -> tuple[Path | None, bool]:
+    """2026-08-27 - 库盘不一致时按磁盘回填 logo_path，避免侧栏永远 404。"""
+    if tenant.logo_path:
+        try:
+            return _safe_logo_path(tenant), False
+        except ValueError:
+            pass
+    disk = _find_disk_logo(tenant.id)
+    if disk is None:
+        return None, False
+    stored_rel = f"{tenant.id}/logo{disk.suffix.lower()}"
+    tenant.logo_path = stored_rel
+    tenant.logo_updated_at = datetime.fromtimestamp(disk.stat().st_mtime)
+    db.flush()
+    db.commit()
+    return disk.resolve(), True
+
+
+def tenant_has_logo_on_disk(tenant: Tenant) -> bool:
+    return bool(tenant.logo_path) or _find_disk_logo(tenant.id) is not None
+
+
 def serialize_tenant_logo_meta(tenant: Tenant) -> dict:
     return {
         "has_logo": bool(tenant.logo_path),
@@ -119,7 +153,10 @@ def resolve_tenant_logo_path(
     tenant = db.get(Tenant, tenant_id)
     if tenant is None or tenant.deleted:
         raise ValueError("企业不存在")
-    return tenant, _safe_logo_path(tenant)
+    path, _backfilled = backfill_tenant_logo_path_if_missing(db, tenant)
+    if path is None:
+        raise ValueError("企业尚未上传 Logo")
+    return tenant, path
 
 
 def _validate_staging_key(staging_key: str) -> str:

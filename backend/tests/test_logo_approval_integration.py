@@ -275,3 +275,38 @@ def test_bootstrap_preview_with_logo_staging(monkeypatch):
     logo_rows = [row for row in preview["changes"] if row.get("field") == "企业 Logo"]
     assert len(logo_rows) == 1
     assert logo_rows[0]["after_image_url"] == f"/api/v1/brand/logo-staging/{key}"
+
+
+def test_bootstrap_extras_applies_logo_staging(monkeypatch):
+    """2026-08-27 - 新建企业保存时 Logo 须随 bootstrap 落库。"""
+    from app.schemas.brand import BrandAssetSaveRequest
+    from app.services.brand_service import _apply_bootstrap_extras
+
+    key = "c" * 32
+    calls: list[dict] = []
+
+    def _fake_apply(**kwargs):
+        calls.append(kwargs)
+        return {"tenant_id": kwargs["tenant_id"]}
+
+    monkeypatch.setattr(
+        "app.services.tenant_logo_service.maybe_apply_logo_staging_from_body",
+        lambda db, **kwargs: _fake_apply(**kwargs) or None,
+    )
+    monkeypatch.setattr("app.services.brand_service.save_competitor", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.brand_service.save_brand_word_groups", lambda *a, **k: None)
+
+    payload = BrandAssetSaveRequest(
+        company_full_name="自助测试企业",
+        brand_name="自助测试企业",
+        logo_staging_key=key,
+        keyword_groups=[],
+    )
+    current = CurrentSession(
+        user=MagicMock(id=7),
+        identity=MagicMock(id=1, identity_type="PLATFORM"),
+    )
+    _apply_bootstrap_extras(MagicMock(), 457, payload, current)
+    assert len(calls) == 1
+    assert calls[0]["tenant_id"] == 457
+    assert calls[0]["owner_user_id"] == 7

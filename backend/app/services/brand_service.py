@@ -55,7 +55,16 @@ def _apply_bootstrap_extras(
     payload: BrandAssetSaveRequest,
     current: CurrentSession,
 ) -> None:
-    """新建企业保存时把草稿里的竞品、品牌词一并落库。"""
+    """新建企业保存时把草稿里的竞品、品牌词、Logo 一并落库。"""
+    from app.services.tenant_logo_service import maybe_apply_logo_staging_from_body
+
+    # 2026-08-27 - 新建企业弹窗选的 Logo 须随 bootstrap 落库，勿只留在暂存区
+    maybe_apply_logo_staging_from_body(
+        db,
+        tenant_id=tenant_id,
+        body=payload,
+        owner_user_id=current.user.id,
+    )
     for item in payload.competitors or []:
         name = str(item.name or "").strip()
         if not name:

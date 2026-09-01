@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -72,3 +74,19 @@ def test_brand_asset_has_changes_with_logo_staging_key() -> None:
 
     body = {"logo_staging_key": "b" * 32}
     assert brand_asset_has_changes(None, 1, body) is True
+
+
+def test_backfill_tenant_logo_path_from_disk(tmp_path, monkeypatch) -> None:
+    """2026-08-27 - 磁盘有 logo 且 logo_path 空时 GET 应能回填。"""
+    monkeypatch.setattr(svc, "STORAGE_ROOT", tmp_path / "logos")
+    tenant_dir = tmp_path / "logos" / "457"
+    tenant_dir.mkdir(parents=True)
+    (tenant_dir / "logo.png").write_bytes(b"png457")
+
+    tenant = SimpleNamespace(id=457, logo_path=None, logo_updated_at=None, deleted=False)
+    db = MagicMock()
+    path, backfilled = svc.backfill_tenant_logo_path_if_missing(db, tenant)  # type: ignore[arg-type]
+    assert backfilled is True
+    assert path is not None
+    assert tenant.logo_path == "457/logo.png"
+    db.commit.assert_called_once()

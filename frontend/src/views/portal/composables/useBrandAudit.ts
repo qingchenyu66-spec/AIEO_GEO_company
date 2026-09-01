@@ -4,7 +4,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import {
-  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable, tenantLogoUrl,
+  deleteTenant, getTenants, listTenantSalesOwners, purgeTenant, restoreTenant, transferTenantOwner, updateTenant, checkTenantNameAvailable, tenantLogoUrl, uploadTenantLogo,
   type TenantInfo,
   type TenantSalesOwner,
 } from '../../../services/management'
@@ -982,12 +982,37 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     fillBrandForm(null, null)
   }
 
+  async function applyPendingTenantLogoDirect(): Promise<boolean> {
+    if (!pendingTenantLogoFile.value || !brandForm.tenant_id) return false
+    const file = pendingTenantLogoFile.value
+    loadingBrand.value = true
+    try {
+      // 2026-08-27 - 已有企业改 Logo 走直传，勿只写暂存（审批回滚易库盘不一致）
+      await uploadTenantLogo(brandForm.tenant_id, file)
+      clearPendingTenantLogo()
+      await loadEnterpriseList()
+      await refreshPlatformTenants?.()
+      ElMessage.success('企业 Logo 已更新')
+      return true
+    } catch (error: unknown) {
+      notifyError(error, 'Logo 上传失败')
+      return false
+    } finally {
+      loadingBrand.value = false
+    }
+  }
+
   async function submitBrandAsset(successText = '品牌资产已保存') {
     // 2026-08-10 - 监测词组非必填；企业资料只需全称即可落资产，勿再卡「至少一个词组」
     const missing = brandAssetProfileMissing.value
     if (missing.length) {
       ElMessage.warning(`请先完善：${missing.join('、')}`)
       return
+    }
+    const isDraftCreateEarly = creatingDraftTenant.value || !brandForm.tenant_id
+    if (!isDraftCreateEarly && pendingTenantLogoFile.value) {
+      const logoOk = await applyPendingTenantLogoDirect()
+      if (!logoOk) return
     }
     const keywordGroups = keywordGroupRows.value
       .map((group, index) => {
@@ -1054,7 +1079,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           .filter(item => item.name)
         : undefined
       let logoStagingKey: string | null = null
-      if (pendingTenantLogoFile.value) {
+      // 已有企业 Logo 已在前面直传；仅新建草稿仍走暂存随审批/bootstrap 落库
+      if (pendingTenantLogoFile.value && isDraftCreate) {
         const staged = await uploadLogoStaging(pendingTenantLogoFile.value)
         logoStagingKey = staged.staging_key
       }

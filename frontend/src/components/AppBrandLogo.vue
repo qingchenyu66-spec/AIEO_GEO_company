@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -22,14 +22,25 @@ const srcMap = {
 } as const
 
 const resolvedSrc = computed(() => props.src || srcMap[props.variant])
+const displaySrc = ref(resolvedSrc.value)
+
+watch(resolvedSrc, value => {
+  displaySrc.value = value
+})
+
+function onImgError() {
+  // 2026-08-27 - 预览/列表未刷新 has_logo 时 404 回退亦智默认标
+  displaySrc.value = srcMap[props.variant]
+}
 </script>
 
 <template>
   <img
-    :src="resolvedSrc"
+    :src="displaySrc"
     :alt="alt"
     class="app-brand-logo"
     :class="`app-brand-logo--${variant}`"
     decoding="async"
+    @error="onImgError"
   />
 </template>
