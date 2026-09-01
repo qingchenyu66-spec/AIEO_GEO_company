@@ -7615,21 +7615,31 @@ def compute_workspace_health_score(
 
 def _workspace_competitor_score(
     db: Session,
-    current: CurrentSession,
     tenant_id: int,
     competitor_count: int,
+    *,
+    as_of: date | None = None,
 ) -> dict[str, float | int | None]:
-    """较竞品维度：品牌露出率相对最强竞品的领先幅度映射为 0–100 分。"""
+    """较竞品维度：品牌露出率相对最强竞品的领先幅度映射为 0–100 分。
+
+    2026-09-01 - warm/workspace used gated competitor summary - switch to sessionless aggregate
+    """
     if competitor_count <= 0:
         return {
             "competitor_score": None,
             "top_competitor_mention_rate": None,
             "competitor_lead_delta": None,
         }
-    from app.services.competitor_analytics_service import build_competitor_compare_summary
+    from app.services.competitor_analytics_service import aggregate_competitor_period_stats
 
-    summary = build_competitor_compare_summary(
-        db, current, tenant_id=tenant_id, days=7, subtask_limit=150,
+    end = as_of or customer_display_cutoff().date()
+    start = end - timedelta(days=6)
+    summary = aggregate_competitor_period_stats(
+        db,
+        int(tenant_id),
+        start_date=start,
+        end_date=end,
+        subtask_limit=150,
     )
     if int(summary.get("sample_total") or 0) <= 0:
         return {
@@ -8769,7 +8779,6 @@ def _workspace_keyword_platform_light(
 
 def _workspace_brief_full_from_daily_stats(
     db: Session,
-    current: CurrentSession,
     *,
     tenant_id: int,
     asset,
@@ -8992,7 +9001,12 @@ def _workspace_brief_full_from_daily_stats(
     })
 
     competitor_count = int(kpis.get("competitor_count") or 0)
-    competitor_metrics = _workspace_competitor_score(db, current, tenant_id, competitor_count)
+    competitor_metrics = _workspace_competitor_score(
+        db,
+        tenant_id,
+        competitor_count,
+        as_of=min(trend_end, range_end).date(),
+    )
     health = compute_workspace_health_score(
         brand_mention_rate=float(kpis.get("brand_mention_rate") or 0),
         top3_rate=float(kpis.get("top3_rate") or 0),
@@ -9018,7 +9032,7 @@ def _workspace_brief_full_from_daily_stats(
 
 def workspace_brief(
     db: Session,
-    current: CurrentSession,
+    current: CurrentSession | None,
     *,
     start_date: date | None = None,
     end_date: date | None = None,
@@ -9029,13 +9043,20 @@ def workspace_brief(
     """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources.
 
     CUSTOMER：强制本企业。PLATFORM：可传 tenant_id 做只读预览（口径与客户一致，截至昨日）。
+    current=None：后台物化（窗口快照预热），只认 tenant_id，不走菜单/销售鉴权。
     scope=summary：仅日统计 KPI/趋势，供切换周期；不含快照/信源。
     purpose=geo：日常 GEO 监测（默认）；purpose=brand_word：仅品牌词，供品牌分析页。
     """
     from app.core.monitor_purpose import PURPOSE_BRAND_WORD, PURPOSE_GEO, normalize_task_purpose, task_purpose_eq
 
     purpose = normalize_task_purpose(purpose)
-    tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
+    # 2026-09-01 - window warm must not impersonate platform identity
+    if current is None:
+        if tenant_id is None:
+            raise ValueError("后台物化工作台简报需指定企业")
+        tenant_id = int(tenant_id)
+    else:
+        tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
 
     range_end = customer_display_cutoff()
     start_at = datetime.combine(start_date, time.min) if start_date else None
@@ -9095,7 +9116,6 @@ def workspace_brief(
     if purpose == PURPOSE_GEO and scope == "full" and has_daily_stats(db, [tenant_id]):
         return _workspace_brief_full_from_daily_stats(
             db,
-            current,
             tenant_id=tenant_id,
             asset=asset,
             keyword_group_rows=keyword_group_rows,
@@ -9470,7 +9490,12 @@ def workspace_brief(
     schedule_times = plan.get("schedule_times") or []
     next_schedule_hint = f"每日 {('、'.join(schedule_times))}" if schedule_times else plan.get("schedule_type_label")
 
-    competitor_metrics = _workspace_competitor_score(db, current, tenant_id, competitor_count)
+    competitor_metrics = _workspace_competitor_score(
+        db,
+        tenant_id,
+        competitor_count,
+        as_of=min(trend_end, range_end).date(),
+    )
     health = compute_workspace_health_score(
         brand_mention_rate=brand_mention_rate,
         top3_rate=top3_rate,

@@ -105,20 +105,17 @@ def build_workspace_brief_window_payload(
     window_days: int,
     as_of_date: date | None = None,
 ) -> dict[str, Any] | None:
-    """用平台身份 + tenant 预览口径生成工作台 brief（与线上读路径同源）。"""
+    """按 tenant 无会话物化工作台 brief（与客户读口径同源，不走菜单/销售鉴权）。
+
+    2026-09-01 - warm used platform session and hit data-scope permission errors - use current=None
+    """
     from app.services.monitor_service import workspace_brief
-    from app.services.platform_session import load_platform_session
 
     as_of = as_of_date or _as_of_customer_cutoff()
     start = as_of - timedelta(days=max(1, int(window_days)) - 1)
-    try:
-        current = load_platform_session(db)
-    except Exception as exc:
-        logger.warning("window snapshot skip tenant=%s no platform session: %s", tenant_id, exc)
-        return None
     return workspace_brief(
         db,
-        current,
+        None,
         tenant_id=int(tenant_id),
         start_date=start,
         end_date=as_of,

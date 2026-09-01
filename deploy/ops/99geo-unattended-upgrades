@@ -1,0 +1,11 @@
+# GEO 生产：无人值守升级黑名单
+# 2026-09-01 - apt-daily-upgrade 自动升 MySQL 触发库重启与业务连锁抖动 - UU 不再自动升库相关包
+# 安全补丁改为人工窗口：apt update && apt install --only-upgrade 'mysql-*'
+Unattended-Upgrade::Package-Blacklist {
+    "mysql-server";
+    "mysql-server-";
+    "mysql-client";
+    "mysql-client-";
+    "mysql-common";
+    "libmysqlclient";
+};
