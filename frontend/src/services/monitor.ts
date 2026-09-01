@@ -82,6 +82,21 @@ export interface MonitorSubtask {
   all_rankings: Array<Record<string, unknown>>
   amount: number | null
   updated_at?: string | null
+  /** 最近一次补录前的快照（仅补录后有） */
+  before_backfill?: {
+    captured_at?: string | null
+    status?: string | null
+    mention_position?: number | null
+    sentiment?: string | null
+    error_message?: string | null
+    page_screenshot?: string | null
+    page_screenshot_url?: string | null
+    answer_content?: string | null
+    answer_truncated?: boolean
+    source?: string | null
+    has_answer?: boolean
+  } | null
+  raw_result?: Record<string, unknown> | null
   tenant_name?: string | null
   tenant_id?: number | null
   source?: 'tenant_monitor' | 'lead_diagnosis' | string
