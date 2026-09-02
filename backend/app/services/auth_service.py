@@ -68,6 +68,25 @@ def authenticate(db: Session, username: str, password: str) -> tuple[User, list[
     return user, identities
 
 
+def authenticate_observer_demo(db: Session) -> tuple[User, list[UserIdentity]]:
+    """H5 一键体验：免密登录写死的艾迪亚观察号（仅该账号）。"""
+    # 2026-09-01 - 落地页样例体验不暴露密码；开关关闭或账号缺失则拒绝
+    if not settings.h5_observer_demo_login_enabled:
+        raise LoginRejected("样例体验暂未开放")
+    from app.services.observer_account import OBSERVER_USERNAME
+
+    user = get_user_for_login(db, OBSERVER_USERNAME)
+    if user is None or not user.status:
+        raise LoginRejected("样例账号未就绪，请联系顾问")
+    identities = active_identities(user)
+    # 优先客户身份，避免观察号误带平台身份时进错门户
+    customer = [item for item in identities if item.identity_type == "CUSTOMER"]
+    chosen = customer or identities
+    if not chosen:
+        raise LoginRejected("样例账号未就绪，请联系顾问")
+    return user, chosen
+
+
 def create_identity_ticket(user: User) -> str:
     return create_token(user.id, "identity_selection", settings.identity_ticket_expire_minutes)
 

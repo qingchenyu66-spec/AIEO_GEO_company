@@ -2,16 +2,21 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchH5DiagnosisConfig, type H5DiagnosisConfig } from '../../services/h5Diagnosis'
+import { useAuthStore } from '../../stores/auth'
 import { supportedPlatforms } from '../portal/platformMeta'
 
 const router = useRouter()
+const auth = useAuthStore()
 const loading = ref(true)
+const demoLoading = ref(false)
+const demoError = ref('')
 const config = ref<H5DiagnosisConfig | null>(null)
 
 // 2026-08-31 - 落地页平台条展示全量非手机端，不跟 H5 体验勾选（体验平台仍后台配置）
 const platformItems = supportedPlatforms.filter(item => !item.code.endsWith('_mobile'))
 
 const priceText = computed(() => `¥${config.value?.price_yuan ?? '9.9'}`)
+const showObserverDemo = computed(() => Boolean(config.value?.observer_demo_enabled))
 
 const heroStats = [
   { value: '数亿+', label: '用户每天问 AI' },
@@ -90,6 +95,24 @@ onMounted(async () => {
 function goApply() {
   router.push('/h5/diagnosis/apply')
 }
+
+async function goObserverDemo() {
+  // 2026-09-01 - 一键体验观察号，不展示密码
+  if (demoLoading.value) return
+  demoLoading.value = true
+  demoError.value = ''
+  try {
+    await auth.loginObserverDemo()
+    await router.push('/customer')
+  } catch (error: unknown) {
+    const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+    demoError.value = typeof detail === 'string' && detail
+      ? detail
+      : (error instanceof Error ? error.message : '样例体验失败，请稍后重试')
+  } finally {
+    demoLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -125,7 +148,17 @@ function goApply() {
         <button type="button" class="btn-primary" :disabled="loading || !config?.enabled" @click="goApply">
           {{ config?.enabled ? `体验价 ${priceText} 看清可见度` : '活动暂未开放' }}
         </button>
+        <button
+          v-if="showObserverDemo"
+          type="button"
+          class="btn-ghost"
+          :disabled="loading || demoLoading"
+          @click="goObserverDemo"
+        >
+          {{ demoLoading ? '进入中…' : '先看艾迪亚样例看板' }}
+        </button>
       </div>
+      <p v-if="demoError" class="demo-error">{{ demoError }}</p>
 
       <div class="platform-block">
         <p>已覆盖主流 AI 平台</p>
@@ -333,6 +366,26 @@ function goApply() {
 .btn-primary.wide {
   width: 100%;
   max-width: 300px;
+}
+.btn-ghost {
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 650;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+.btn-ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.demo-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #b91c1c;
+  text-align: center;
 }
 
 .platform-block {

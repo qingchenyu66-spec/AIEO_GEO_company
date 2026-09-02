@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   buildNonbrandPromptSet,
   nonbrandTopicLabel,
@@ -17,8 +17,10 @@ import {
 } from '../../services/h5Diagnosis'
 
 type PayEnv = 'wechat' | 'pc' | 'mobile_other'
+type PayChannel = 'wechat' | 'alipay'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(true)
 const submitting = ref(false)
 const errorText = ref('')
@@ -26,8 +28,10 @@ const successText = ref('')
 const config = ref<H5DiagnosisConfig | null>(null)
 const sessionReady = ref(false)
 const payEnv = ref<PayEnv>('pc')
+const payChannel = ref<PayChannel>('wechat')
 const nativeCodeUrl = ref('')
 const nativeOutTradeNo = ref('')
+const nativePayChannel = ref<PayChannel>('wechat')
 const polling = ref(false)
 let pollTimer: number | null = null
 
@@ -43,12 +47,30 @@ const form = ref({
 
 const filledPromptCount = computed(() => form.value.prompts.map(v => v.trim()).filter(Boolean).length)
 const topicLabel = computed(() => nonbrandTopicLabel(form.value.industry, ''))
+// 2026-09-01 - 手机其他浏览器微信 H5 未开通，仅展示不可选
+const wechatMobileBrowserReady = false
+const showPayChannelPicker = computed(() => payEnv.value === 'pc' || payEnv.value === 'mobile_other')
 const canSubmit = computed(() => {
   if (!config.value?.enabled || submitting.value) return false
   if (payEnv.value === 'wechat') return sessionReady.value
-  if (payEnv.value === 'mobile_other') return false
+  if (payEnv.value === 'mobile_other' && payChannel.value === 'wechat' && !wechatMobileBrowserReady) {
+    return false
+  }
   return true
 })
+const payButtonLabel = computed(() => {
+  if (submitting.value) return '提交中…'
+  const price = config.value?.price_yuan ?? '—'
+  if (payChannel.value === 'alipay') {
+    if (payEnv.value === 'pc') return `支付宝扫码支付 ¥${price}`
+    return `支付宝支付 ¥${price}`
+  }
+  if (payEnv.value === 'pc') return `微信扫码支付 ¥${price}`
+  return `微信支付 ¥${price}`
+})
+const nativeQrTitle = computed(() =>
+  nativePayChannel.value === 'alipay' ? '请使用支付宝扫码支付' : '请使用微信扫码支付',
+)
 const nativeQrSrc = computed(() => {
   if (!nativeCodeUrl.value) return ''
   // ponytail: 第三方出码服务；若不可用再换本地 qrcode 库
@@ -69,6 +91,12 @@ function detectPayEnv(): PayEnv {
   return isMobile ? 'mobile_other' : 'pc'
 }
 
+function defaultPayChannel(env: PayEnv): PayChannel {
+  // 2026-09-01 - 手机其他默认支付宝；PC 默认微信；微信内固定微信
+  if (env === 'mobile_other') return 'alipay'
+  return 'wechat'
+}
+
 function applyRecommendedSet() {
   // 2026-08-31 - 一键推荐一次写满 5 条：3 非品牌 + 2 品牌问法
   const [a, b, c] = buildNonbrandPromptSet(topicLabel.value)
@@ -84,6 +112,11 @@ function stopPolling() {
   polling.value = false
 }
 
+async function goResult(outTradeNo: string) {
+  // 2026-09-01 - 支付成功进自助结果页看进度
+  await router.push({ path: '/h5/diagnosis/result', query: { out_trade_no: outTradeNo } })
+}
+
 async function pollNativePaid(outTradeNo: string) {
   if (pollTimer != null) {
     window.clearInterval(pollTimer)
@@ -96,7 +129,7 @@ async function pollNativePaid(outTradeNo: string) {
       if (status.status === 'paid') {
         stopPolling()
         nativeCodeUrl.value = ''
-        successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+        await goResult(outTradeNo)
       }
     } catch {
       /* 轮询失败忽略，继续等 */
@@ -108,6 +141,7 @@ async function bootstrap() {
   loading.value = true
   errorText.value = ''
   payEnv.value = detectPayEnv()
+  payChannel.value = defaultPayChannel(payEnv.value)
   try {
     config.value = await fetchH5DiagnosisConfig()
     const session = await fetchH5DiagnosisSession()
@@ -115,6 +149,14 @@ async function bootstrap() {
     // 2026-08-31 - B3：仅微信内强制 OAuth；PC/手机浏览器可先看表单
     if (payEnv.value === 'wechat' && !session.ready && config.value.oauth_required) {
       startH5OAuth('apply')
+      return
+    }
+    // 2026-09-01 - 支付宝回跳带 out_trade_no，轮询后进结果页
+    const returnedNo = String(route.query.out_trade_no || '').trim()
+    if (returnedNo) {
+      loading.value = false
+      successText.value = '正在确认支付结果…'
+      await pollNativePaid(returnedNo)
       return
     }
   } catch (error: unknown) {
@@ -138,13 +180,15 @@ async function submitOrder() {
     errorText.value = '活动暂未开放'
     return
   }
-  if (payEnv.value === 'mobile_other') {
-    errorText.value = '请使用微信打开本页面完成支付'
-    return
-  }
   const formError = validateForm()
   if (formError) {
     errorText.value = formError
+    return
+  }
+  const channel: PayChannel = payEnv.value === 'wechat' ? 'wechat' : payChannel.value
+  // 2026-09-01 - 手机其他选微信：等微信 H5 开通；当前拦截
+  if (payEnv.value === 'mobile_other' && channel === 'wechat' && !wechatMobileBrowserReady) {
+    errorText.value = '微信手机浏览器支付即将开通，请先选支付宝，或用微信打开本页'
     return
   }
   submitting.value = true
@@ -152,7 +196,16 @@ async function submitOrder() {
   successText.value = ''
   try {
     const prompts = form.value.prompts.map(v => v.trim()).filter(Boolean)
-    const tradeType = payEnv.value === 'pc' ? 'native' : 'jsapi'
+    let tradeType: 'jsapi' | 'native' | 'wap' | 'precreate' | 'mweb' = 'jsapi'
+    if (channel === 'alipay') {
+      tradeType = payEnv.value === 'pc' ? 'precreate' : 'wap'
+    } else if (payEnv.value === 'pc') {
+      tradeType = 'native'
+    } else if (payEnv.value === 'mobile_other') {
+      tradeType = 'mweb'
+    } else {
+      tradeType = 'jsapi'
+    }
     const result = await createH5DiagnosisOrder({
       contact_phone: form.value.contact_phone.trim(),
       brand_name: form.value.brand_name.trim(),
@@ -162,17 +215,29 @@ async function submitOrder() {
       website_url: form.value.website_url.trim(),
       competitors: form.value.competitors.trim(),
       pay_trade_type: tradeType,
-      pay_channel: 'wechat',
+      pay_channel: channel,
     })
 
-    if (tradeType === 'native') {
+    if (channel === 'alipay' && tradeType === 'wap') {
+      if (result.dev_auto_paid) {
+        await markH5OrderDevPaid(result.out_trade_no)
+        await goResult(result.out_trade_no)
+        return
+      }
+      const payUrl = String(result.pay_url || '').trim()
+      if (!payUrl) throw new Error('未拿到支付宝收银台链接')
+      window.location.href = payUrl
+      return
+    }
+
+    if (tradeType === 'native' || tradeType === 'precreate') {
       if (result.dev_auto_paid || result.pay_params?.devAutoPaid) {
         await markH5OrderDevPaid(result.out_trade_no)
-        const status = await fetchH5OrderStatus(result.out_trade_no)
-        successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+        await goResult(result.out_trade_no)
         return
       }
       nativeOutTradeNo.value = result.out_trade_no
+      nativePayChannel.value = channel
       nativeCodeUrl.value = String(result.code_url || '')
       if (!nativeCodeUrl.value) {
         throw new Error('未拿到支付二维码，请稍后重试')
@@ -183,8 +248,7 @@ async function submitOrder() {
 
     if (result.pay_params?.devAutoPaid) {
       await markH5OrderDevPaid(result.out_trade_no)
-      const status = await fetchH5OrderStatus(result.out_trade_no)
-      successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+      await goResult(result.out_trade_no)
       return
     }
     if (!result.pay_params) {
@@ -193,7 +257,7 @@ async function submitOrder() {
     await invokeWechatPay(result.pay_params)
     const status = await fetchH5OrderStatus(result.out_trade_no)
     if (status.status === 'paid') {
-      successText.value = `支付成功，诊断已提交（单号 ${status.lead_diagnosis_id || '处理中'}）`
+      await goResult(result.out_trade_no)
     } else {
       successText.value = '支付处理中，请稍后在微信通知中查看或联系顾问'
     }
@@ -229,16 +293,13 @@ onUnmounted(stopPolling)
         </div>
       </header>
 
-      <p v-if="payEnv === 'mobile_other' && !loading" class="banner warn">
-        请使用微信打开本页面完成支付
-      </p>
       <p v-if="loading" class="banner hint">加载中…</p>
       <p v-else-if="errorText" class="banner error">{{ errorText }}</p>
       <p v-else-if="successText" class="banner success">{{ successText }}</p>
 
       <div v-if="nativeCodeUrl && !successText" class="native-pay">
-        <p class="native-title">请使用微信扫码支付</p>
-        <img class="native-qr" :src="nativeQrSrc" alt="微信支付二维码">
+        <p class="native-title">{{ nativeQrTitle }}</p>
+        <img class="native-qr" :src="nativeQrSrc" :alt="nativeQrTitle">
         <p class="native-hint">{{ polling ? '等待支付结果…' : '扫码后请勿关闭本页' }}</p>
         <p class="native-no">单号 {{ nativeOutTradeNo }}</p>
       </div>
@@ -306,9 +367,35 @@ onUnmounted(stopPolling)
           </div>
         </section>
 
+        <!-- 2026-09-02 - 支付方式放表单底部、提交按钮上方 -->
+        <section v-if="showPayChannelPicker" class="section pay-section">
+          <h2 class="section-title">支付方式</h2>
+          <div class="pay-channel">
+            <label
+              class="pay-opt"
+              :class="{ active: payChannel === 'wechat', disabled: payEnv === 'mobile_other' && !wechatMobileBrowserReady }"
+            >
+              <input
+                v-model="payChannel"
+                type="radio"
+                value="wechat"
+                :disabled="payEnv === 'mobile_other' && !wechatMobileBrowserReady"
+              >
+              <span class="pay-opt-text">
+                微信支付
+                <em v-if="payEnv === 'mobile_other' && !wechatMobileBrowserReady" class="pay-opt-note">即将开通</em>
+              </span>
+            </label>
+            <label class="pay-opt" :class="{ active: payChannel === 'alipay' }">
+              <input v-model="payChannel" type="radio" value="alipay">
+              <span class="pay-opt-text">支付宝</span>
+            </label>
+          </div>
+        </section>
+
         <div class="submit-bar">
           <button class="submit" type="submit" :disabled="!canSubmit">
-            {{ submitting ? '提交中…' : (payEnv === 'pc' ? `微信扫码支付 ¥${config.price_yuan}` : `微信支付 ¥${config.price_yuan}`) }}
+            {{ payButtonLabel }}
           </button>
         </div>
       </form>
@@ -523,6 +610,58 @@ input:focus {
 }
 
 .submit-bar { padding-top: 2px; }
+.pay-section { padding-top: 2px; }
+.pay-channel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.pay-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #dbe3f0;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  color: #0f172a;
+  user-select: none;
+}
+.pay-opt.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+.pay-opt.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pay-opt input {
+  flex-shrink: 0;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+}
+.pay-opt-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.pay-opt-note {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  white-space: nowrap;
+}
 .submit {
   width: 100%;
   border: none;

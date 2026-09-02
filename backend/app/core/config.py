@@ -116,12 +116,34 @@ class Settings(BaseSettings):
     wechat_pay_dev_mode: bool = False
     wechat_pay_dev_openid: str = "dev-openid-h5-diagnosis"
 
+    # 2026-09-01 - H5 支付宝手机网站支付（艾迪亚 AppID）
+    alipay_app_id: str = ""
+    alipay_private_key_path: str = ""
+    alipay_private_key: str = ""
+    alipay_public_key_path: str = ""
+    alipay_public_key: str = ""
+    alipay_notify_url: str = ""
+    alipay_return_url: str = "https://www.aieokj.com/api/v1/alipay/return"
+    alipay_quit_url: str = "https://www.aieokj.com/h5/diagnosis/apply"
+    alipay_dev_mode: bool = False
+
     h5_diagnosis_enabled: bool = True
     h5_diagnosis_price_fen: int = 990
     h5_diagnosis_schedule_days: int = 3
     # 2026-08-31 - H5 监测次数（优先于 days×3）
     h5_diagnosis_schedule_runs: int = 9
     h5_diagnosis_platforms: str = '["doubao","deepseek"]'
+    # 2026-09-01 - H5 结果页短链有效天数；阿里云短信（ready 通知）
+    h5_result_token_days: int = 30
+    aliyun_sms_enabled: bool = False
+    aliyun_sms_access_key_id: str = ""
+    aliyun_sms_access_key_secret: str = ""
+    aliyun_sms_sign_name: str = ""
+    # 模板变量约定 ${brand} ${order}；链接须写死在模板正文（阿里云禁止变量传链）
+    aliyun_sms_template_code_h5_ready: str = ""
+    aliyun_sms_region_id: str = "cn-hangzhou"
+    # 2026-09-01 - H5 落地页「一键体验」观察号（不暴露密码）
+    h5_observer_demo_login_enabled: bool = True
 
     # 补录自截图目录（空=backend/storage/backfill_screenshots；生产经软链落 /data/geo/storage）
     backfill_screenshot_dir: str = ""

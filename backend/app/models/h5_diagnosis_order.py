@@ -46,6 +46,11 @@ class H5DiagnosisOrder(Base):
         index=True,
     )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 2026-09-01 - H5 自助结果页短链鉴权 + ready 短信幂等
+    result_access_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    result_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sms_ready_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sms_ready_last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

@@ -28,6 +28,7 @@ from app.schemas.common import ApiResponse
 from app.services.auth_service import (
     LoginRejected,
     authenticate,
+    authenticate_observer_demo,
     change_own_password,
     create_access_token,
     create_identity_ticket,
@@ -84,6 +85,11 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
     from app.services.menu_permission_service import identity_allowed_monitor_platforms
 
     menus = [item.model_dump() for item in get_identity_menus(db, identity)]
+    customer_includes_today = False
+    if identity.identity_type == "CUSTOMER" and identity.tenant_id:
+        from app.services.monitor_service import credit_customer_includes_today
+
+        customer_includes_today = credit_customer_includes_today(db, identity.tenant_id)
     return {
         "access_token": create_access_token(user, identity),
         "token_type": "bearer",
@@ -92,6 +98,7 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
         "identities": [identity_info(item, db) for item in identities],
         "menus": menus,
         "allowed_monitor_platforms": identity_allowed_monitor_platforms(db, identity),
+        "customer_includes_today": customer_includes_today,
     }
 
 
@@ -140,6 +147,30 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     })
 
 
+@router.post("/demo/observer", response_model=ApiResponse[dict])
+def demo_observer_login(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """H5 落地页一键体验：免密进入艾迪亚观察号客户门户。"""
+    # 2026-09-01 - 与 login 同限流，避免被刷成会话洪泛
+    enforce_login_rate_limit(request)
+    try:
+        user, identities = authenticate_observer_demo(db)
+    except LoginRejected as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail) from exc
+    identity = identities[0]
+    session = session_payload(db, user, identity, identities)
+    _attach_session_cookie(response, session)
+    return ApiResponse(
+        data={
+            "requires_identity_selection": False,
+            "session": public_session(session),
+        }
+    )
+
+
 @router.post("/select-identity", response_model=ApiResponse[dict])
 def select_identity(payload: IdentitySelectRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> ApiResponse[dict]:
     enforce_identity_select_rate_limit(request)
@@ -177,6 +208,11 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
         db.commit()
     # 2026-07-30 - /me 刷新会话冲掉平台白名单 - 与 login/switch 同口径带回 allowed_monitor_platforms
     from app.services.menu_permission_service import identity_allowed_monitor_platforms
+    from app.services.monitor_service import credit_customer_includes_today
+
+    customer_includes_today = False
+    if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
+        customer_includes_today = credit_customer_includes_today(db, current.identity.tenant_id)
 
     return ApiResponse(data={
         "user": _user_public(current.user),
@@ -184,6 +220,7 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
         "identities": [identity_info(item, db) for item in identities],
         "menus": [item.model_dump() for item in get_identity_menus(db, current.identity)],
         "allowed_monitor_platforms": identity_allowed_monitor_platforms(db, current.identity),
+        "customer_includes_today": customer_includes_today,
     })
 
 

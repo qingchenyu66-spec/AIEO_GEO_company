@@ -27,7 +27,10 @@ const statusLabel: Record<string, string> = {
 
 const tradeTypeLabel: Record<string, string> = {
   jsapi: '微信内付',
-  native: '扫码付',
+  native: '微信扫码',
+  wap: '支付宝手机',
+  precreate: '支付宝扫码',
+  mweb: '微信H5',
 }
 
 function platformText(codes: string[] | undefined) {

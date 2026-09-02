@@ -26,6 +26,7 @@ export interface H5DiagnosisConfig {
   min_prompts: number
   oauth_required: boolean
   dev_mode: boolean
+  observer_demo_enabled?: boolean
 }
 
 export interface H5DiagnosisSession {
@@ -48,8 +49,9 @@ export interface H5OrderCreateResult {
   out_trade_no: string
   amount_fen: number
   pay_channel?: string
-  pay_trade_type?: 'jsapi' | 'native' | string
+  pay_trade_type?: 'jsapi' | 'native' | 'wap' | 'precreate' | 'mweb' | string
   code_url?: string | null
+  pay_url?: string | null
   pay_params: H5PayParams | null
   dev_auto_paid?: boolean
 }
@@ -62,6 +64,35 @@ export interface H5OrderStatus {
   lead_diagnosis_id: number | null
   paid_at: string | null
   contact_phone_masked: string
+}
+
+export interface H5DiagnosisResult {
+  out_trade_no: string
+  order_status: string
+  brand_name: string
+  contact_phone_masked: string | null
+  platforms: string[]
+  schedule_runs: number
+  lead_diagnosis_id: number | null
+  lead_status: string
+  ready: boolean
+  progress: {
+    completed_runs: number
+    total_runs: number
+    percent: number
+  }
+  plan_hint: string
+  summary: {
+    health_score?: number | string | null
+    mention_rate?: number | string | null
+    avg_rank?: number | string | null
+    headline?: string | null
+    bullets?: string[]
+    platforms?: Array<Record<string, unknown>>
+    prompts?: string[]
+  } | null
+  access_token?: string | null
+  sms_ready_sent?: boolean
 }
 
 function unwrap<T>(resp: { data: { code?: number; data?: T; message?: string } }): T {
@@ -95,8 +126,8 @@ export async function createH5DiagnosisOrder(payload: {
   product_focus?: string
   website_url?: string
   competitors?: string
-  pay_trade_type?: 'jsapi' | 'native'
-  pay_channel?: 'wechat' | string
+  pay_trade_type?: 'jsapi' | 'native' | 'wap' | 'precreate' | 'mweb'
+  pay_channel?: 'wechat' | 'alipay' | string
 }): Promise<H5OrderCreateResult> {
   const resp = await http.post('/v1/h5/diagnosis/orders', payload)
   return unwrap(resp)
@@ -109,6 +140,27 @@ export async function fetchH5OrderStatus(outTradeNo: string): Promise<H5OrderSta
 
 export async function markH5OrderDevPaid(outTradeNo: string): Promise<H5OrderStatus> {
   const resp = await http.post(`/v1/h5/diagnosis/orders/${encodeURIComponent(outTradeNo)}/dev-paid`)
+  return unwrap(resp)
+}
+
+// 2026-09-01 - H5 自助结果页
+export async function fetchH5DiagnosisResult(
+  outTradeNo: string,
+  params?: { t?: string; phone_tail?: string },
+): Promise<H5DiagnosisResult> {
+  const resp = await http.get(`/v1/h5/diagnosis/orders/${encodeURIComponent(outTradeNo)}/result`, {
+    params,
+  })
+  return unwrap(resp)
+}
+
+export async function unlockH5DiagnosisResult(
+  outTradeNo: string,
+  phoneTail: string,
+): Promise<{ out_trade_no: string; access_token: string; result_url: string }> {
+  const resp = await http.post(`/v1/h5/diagnosis/orders/${encodeURIComponent(outTradeNo)}/result/unlock`, {
+    phone_tail: phoneTail,
+  })
   return unwrap(resp)
 }
 

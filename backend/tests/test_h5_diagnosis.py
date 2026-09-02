@@ -166,6 +166,68 @@ def test_h5_native_order_dev_mode(monkeypatch) -> None:
     assert data.get("dev_auto_paid") is True
 
 
+def test_h5_alipay_precreate_order_dev_mode(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "alipay_dev_mode", True)
+    monkeypatch.setattr(settings, "alipay_app_id", "2021006197673020")
+    client.cookies.clear()
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138005",
+            "brand_name": "支付宝扫码测试",
+            "prompts": ["蛋白粉推荐"],
+            "pay_trade_type": "precreate",
+            "pay_channel": "alipay",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["pay_channel"] == "alipay"
+    assert data["pay_trade_type"] == "precreate"
+    assert data["code_url"]
+    assert data.get("dev_auto_paid") is True
+
+
+def test_h5_wechat_mweb_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    client.cookies.clear()
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138006",
+            "brand_name": "微信H5未开通",
+            "prompts": ["蛋白粉推荐"],
+            "pay_trade_type": "mweb",
+            "pay_channel": "wechat",
+        },
+    )
+    assert resp.status_code == 400
+    assert "即将开通" in resp.json()["detail"]
+
+
+def test_h5_alipay_wap_order_dev_mode(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "alipay_dev_mode", True)
+    monkeypatch.setattr(settings, "alipay_app_id", "2021006197673020")
+    monkeypatch.setattr(settings, "alipay_return_url", "https://www.aieokj.com/api/v1/alipay/return")
+    client.cookies.clear()
+    resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138004",
+            "brand_name": "支付宝测试品牌",
+            "prompts": ["蛋白粉推荐"],
+            "pay_trade_type": "wap",
+            "pay_channel": "alipay",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["pay_channel"] == "alipay"
+    assert data["pay_trade_type"] == "wap"
+    assert data["pay_url"]
+    assert data.get("dev_auto_paid") is True
+
+
 def test_h5_jsapi_order_requires_openid(monkeypatch) -> None:
     monkeypatch.setattr(settings, "wechat_pay_dev_mode", False)
     client.cookies.clear()
@@ -209,3 +271,126 @@ def test_admin_orders_requires_auth() -> None:
     client.cookies.clear()
     resp = client.get("/api/v1/h5/diagnosis/admin/orders")
     assert resp.status_code in {401, 403}
+
+
+def test_fulfill_idempotent_same_lead(monkeypatch) -> None:
+    """P0：重复履约不新建第二份售前诊断。"""
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    monkeypatch.setattr(
+        "app.services.lead_diagnosis_service.submit_due_lead_run",
+        lambda *args, **kwargs: None,
+    )
+    client.cookies.set("geo_h5_wx_openid", "pytest-openid-h5-idem")
+    create_resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138010",
+            "brand_name": "幂等履约品牌",
+            "prompts": ["蛋白粉推荐"],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    out_trade_no = create_resp.json()["data"]["out_trade_no"]
+
+    first = client.post(f"/api/v1/h5/diagnosis/orders/{out_trade_no}/dev-paid")
+    assert first.status_code == 200, first.text
+    lead_id = first.json()["data"]["lead_diagnosis_id"]
+    assert lead_id
+
+    from app.core.database import SessionLocal
+    from app.services.h5_diagnosis_service import fulfill_h5_order_paid
+
+    db = SessionLocal()
+    try:
+        second = fulfill_h5_order_paid(
+            db,
+            out_trade_no=out_trade_no,
+            wx_transaction_id="DEV-REPEAT",
+        )
+        assert second["status"] == "paid"
+        assert second["lead_diagnosis_id"] == lead_id
+    finally:
+        db.close()
+
+
+def test_fulfill_repairs_paid_without_lead(monkeypatch) -> None:
+    """P0：已 paid 但缺 lead_diagnosis_id 时，重放履约应补建。"""
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    monkeypatch.setattr(
+        "app.services.lead_diagnosis_service.submit_due_lead_run",
+        lambda *args, **kwargs: None,
+    )
+    client.cookies.set("geo_h5_wx_openid", "pytest-openid-h5-repair")
+    create_resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138011",
+            "brand_name": "补建诊断品牌",
+            "prompts": ["蛋白粉哪家好"],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    out_trade_no = create_resp.json()["data"]["out_trade_no"]
+
+    from datetime import datetime
+
+    from app.core.database import SessionLocal
+    from app.models.h5_diagnosis_order import H5DiagnosisOrder
+    from app.services.h5_diagnosis_service import fulfill_h5_order_paid
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        order = db.scalar(select(H5DiagnosisOrder).where(H5DiagnosisOrder.out_trade_no == out_trade_no))
+        assert order is not None
+        # 模拟：钱已到账、诊断未挂上
+        order.status = "paid"
+        order.wx_transaction_id = "DEV-GAP"
+        order.paid_at = datetime.utcnow()
+        order.lead_diagnosis_id = None
+        db.commit()
+
+        repaired = fulfill_h5_order_paid(
+            db,
+            out_trade_no=out_trade_no,
+            wx_transaction_id="DEV-GAP-RETRY",
+        )
+        assert repaired["status"] == "paid"
+        assert repaired["lead_diagnosis_id"]
+    finally:
+        db.close()
+
+
+def test_h5_order_snapshot_has_schedule_runs_and_platforms(monkeypatch) -> None:
+    """P0：下单快照带监测次数与平台，供履约追踪。"""
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", True)
+    monkeypatch.setattr(
+        "app.services.lead_diagnosis_service.submit_due_lead_run",
+        lambda *args, **kwargs: None,
+    )
+    client.cookies.set("geo_h5_wx_openid", "pytest-openid-h5-snap")
+    create_resp = client.post(
+        "/api/v1/h5/diagnosis/orders",
+        json={
+            "contact_phone": "13800138012",
+            "brand_name": "快照配置品牌",
+            "prompts": ["蛋白粉推荐"],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    out_trade_no = create_resp.json()["data"]["out_trade_no"]
+
+    from app.core.database import SessionLocal
+    from app.models.h5_diagnosis_order import H5DiagnosisOrder
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        order = db.scalar(select(H5DiagnosisOrder).where(H5DiagnosisOrder.out_trade_no == out_trade_no))
+        assert order is not None
+        platforms = list(order.platforms_json or [])
+        assert platforms
+        form = order.form_json if isinstance(order.form_json, dict) else {}
+        assert int(form.get("schedule_runs") or 0) >= 1
+    finally:
+        db.close()

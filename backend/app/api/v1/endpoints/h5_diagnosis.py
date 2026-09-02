@@ -15,7 +15,7 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.config import settings
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
-from app.schemas.h5_diagnosis import H5DiagnosisOrderCreateRequest
+from app.schemas.h5_diagnosis import H5DiagnosisOrderCreateRequest, H5ResultUnlockRequest
 from app.services.h5_diagnosis_service import (
     _H5_OPENID_COOKIE,
     create_h5_diagnosis_order,
@@ -27,11 +27,19 @@ from app.services.h5_diagnosis_service import (
     mask_openid,
     require_h5_order_admin_access,
 )
+from app.services.h5_result_service import (
+    build_h5_result_report_html,
+    get_h5_diagnosis_result,
+    result_cookie_name,
+    unlock_h5_result_by_phone_tail,
+)
+from app.services.alipay_pay_service import verify_notify_signature
 from app.services.wechat_oauth_service import build_oauth_redirect_url, exchange_code_for_openid
 from app.services.wechat_pay_service import decrypt_notify_resource
 
 router = APIRouter(prefix="/h5/diagnosis")
 wechat_pay_router = APIRouter(prefix="/wechat-pay")
+alipay_router = APIRouter(prefix="/alipay")
 
 _OAUTH_STATE_COOKIE = "geo_h5_oauth_state"
 
@@ -199,6 +207,80 @@ def order_status(out_trade_no: str, db: Session = Depends(get_db)) -> ApiRespons
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/orders/{out_trade_no}/result", response_model=ApiResponse[dict])
+def order_result(
+    out_trade_no: str,
+    request: Request,
+    t: str | None = Query(default=None, description="短信短链 token"),
+    phone_tail: str | None = Query(default=None, description="手机号后四位"),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    # 2026-09-01 - H5 自助结果页：token / openid cookie / 手机后四位
+    token = str(t or request.cookies.get(result_cookie_name()) or "").strip() or None
+    openid = _resolve_openid(request) or None
+    try:
+        data = get_h5_diagnosis_result(
+            db,
+            out_trade_no=out_trade_no,
+            token=token,
+            openid=openid,
+            phone_tail=phone_tail,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.post("/orders/{out_trade_no}/result/unlock", response_model=ApiResponse[dict])
+def unlock_order_result(
+    out_trade_no: str,
+    payload: H5ResultUnlockRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    try:
+        data = unlock_h5_result_by_phone_tail(
+            db,
+            out_trade_no=out_trade_no,
+            phone_tail=payload.phone_tail,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    token = str(data.get("access_token") or "")
+    if token:
+        response.set_cookie(
+            result_cookie_name(),
+            token,
+            httponly=True,
+            secure=settings.auth_cookie_secure,
+            samesite=settings.auth_cookie_samesite,
+            max_age=86400 * max(1, int(settings.h5_result_token_days or 30)),
+        )
+    return ApiResponse(data=data)
+
+
+@router.get("/orders/{out_trade_no}/report.html")
+def order_result_report_html(
+    out_trade_no: str,
+    request: Request,
+    t: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> Response:
+    token = str(t or request.cookies.get(result_cookie_name()) or "").strip() or None
+    openid = _resolve_openid(request) or None
+    try:
+        html = build_h5_result_report_html(db, out_trade_no=out_trade_no, token=token, openid=openid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
 @router.post("/orders/{out_trade_no}/dev-paid", response_model=ApiResponse[dict])
 def dev_mark_paid(out_trade_no: str, db: Session = Depends(get_db)) -> ApiResponse[dict]:
     try:
@@ -226,8 +308,42 @@ async def wechat_pay_notify(request: Request, db: Session = Depends(get_db)) -> 
         return Response(status_code=400, content="missing out_trade_no")
 
     try:
-        fulfill_h5_order_paid(db, out_trade_no=out_trade_no, wx_transaction_id=transaction_id)
+        fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=transaction_id)
     except ValueError:
         return Response(status_code=404, content="order not found")
 
     return Response(content=json.dumps({"code": "SUCCESS", "message": "成功"}), media_type="application/json")
+
+
+@alipay_router.post("/notify")
+async def alipay_notify(request: Request, db: Session = Depends(get_db)) -> Response:
+    # 2026-09-01 - 支付宝异步通知：form 字段 + RSA2 验签
+    form = await request.form()
+    params = {str(k): str(v) for k, v in form.items()}
+    if not verify_notify_signature(params):
+        return Response(content="fail", media_type="text/plain")
+    trade_status = str(params.get("trade_status") or "").strip()
+    if trade_status not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
+        return Response(content="success", media_type="text/plain")
+    out_trade_no = str(params.get("out_trade_no") or "").strip()
+    trade_no = str(params.get("trade_no") or "").strip()
+    if not out_trade_no:
+        return Response(content="fail", media_type="text/plain")
+    try:
+        fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=trade_no)
+    except ValueError:
+        return Response(content="fail", media_type="text/plain")
+    return Response(content="success", media_type="text/plain")
+
+
+@alipay_router.get("/return")
+async def alipay_return(request: Request) -> RedirectResponse:
+    """同步回跳：验签后带回申请页轮询。"""
+    params = {str(k): str(v) for k, v in request.query_params.items()}
+    out_trade_no = str(params.get("out_trade_no") or "").strip()
+    parsed = urlparse(settings.alipay_return_url or settings.wechat_h5_base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    target = f"{origin}/h5/diagnosis/apply"
+    if out_trade_no and (not params.get("sign") or verify_notify_signature(params)):
+        target = f"{target}?out_trade_no={out_trade_no}&from=alipay"
+    return RedirectResponse(url=target, status_code=302)

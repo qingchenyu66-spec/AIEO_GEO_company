@@ -22,6 +22,7 @@ from app.schemas.lead_diagnosis import normalize_brand_aliases
 from app.services.lead_diagnosis_service import create_lead_diagnosis_from_h5_order
 from app.services.molizhishu_catalog_service import filter_submittable_platforms
 from app.services.system_config_service import get_runtime_config
+from app.services.alipay_pay_service import AlipayPayError, create_precreate_qr_code, create_wap_pay_url
 from app.services.wechat_pay_service import WechatPayError, build_jsapi_pay_params, create_jsapi_prepay, create_native_code_url
 
 _H5_OPENID_COOKIE = "geo_h5_wx_openid"
@@ -87,6 +88,8 @@ def get_h5_diagnosis_public_config(db: Session) -> dict[str, Any]:
         "min_prompts": 1,
         "oauth_required": not settings.wechat_pay_dev_mode,
         "dev_mode": settings.wechat_pay_dev_mode,
+        # 2026-09-01 - 落地页是否展示「一键体验」观察号入口
+        "observer_demo_enabled": bool(settings.h5_observer_demo_login_enabled),
     }
 
 
@@ -115,12 +118,17 @@ def create_h5_diagnosis_order(
         raise ValueError("H5 付费诊断暂未开放")
     trade_type = str(pay_trade_type or "jsapi").strip().lower() or "jsapi"
     channel = str(pay_channel or "wechat").strip().lower() or "wechat"
-    if channel != "wechat":
-        raise ValueError("暂仅支持微信支付")
-    if trade_type not in {"jsapi", "native"}:
+    if channel not in {"wechat", "alipay"}:
+        raise ValueError("暂仅支持微信或支付宝")
+    if channel == "wechat" and trade_type not in {"jsapi", "native"}:
+        # 2026-09-01 - 手机其他浏览器选微信须等微信 H5(MWEB) 开通后再接
+        if trade_type == "mweb":
+            raise ValueError("微信手机浏览器支付即将开通，请先用支付宝或微信内打开")
         raise ValueError("不支持的支付方式")
+    if channel == "alipay" and trade_type not in {"wap", "precreate"}:
+        raise ValueError("支付宝请使用手机网站支付或扫码支付")
     # 2026-08-31 - B3：Native 扫码无需 openid；JSAPI 仍必须微信授权
-    if trade_type == "jsapi" and not openid:
+    if channel == "wechat" and trade_type == "jsapi" and not openid:
         raise ValueError("请在微信内打开并完成授权")
     normalized_prompts = normalize_lead_prompts(prompts)
     if not normalized_prompts:
@@ -139,7 +147,10 @@ def create_h5_diagnosis_order(
     competitor_list = _split_csv_terms(competitors, max_items=10)
 
     out_trade_no = _gen_out_trade_no()
-    order_openid = openid if trade_type == "jsapi" else (openid or "native_pc")
+    if channel == "alipay":
+        order_openid = openid or (f"alipay_{trade_type}"[:64])
+    else:
+        order_openid = openid if trade_type == "jsapi" else (openid or "native_pc")
     order = H5DiagnosisOrder(
         out_trade_no=out_trade_no,
         openid=order_openid,
@@ -169,6 +180,52 @@ def create_h5_diagnosis_order(
 
     description = "GEO售前诊断"
     try:
+        # 2026-09-01 - 支付宝：wap 跳转 / precreate 当面付出码
+        if channel == "alipay":
+            if trade_type == "precreate":
+                code_url = create_precreate_qr_code(
+                    out_trade_no=out_trade_no,
+                    amount_fen=order.amount_fen,
+                    subject=description,
+                )
+                order.prepay_id = code_url[:64]
+                db.commit()
+                result_qr: dict[str, Any] = {
+                    "out_trade_no": out_trade_no,
+                    "amount_fen": order.amount_fen,
+                    "pay_channel": channel,
+                    "pay_trade_type": trade_type,
+                    "pay_url": None,
+                    "code_url": code_url,
+                    "pay_params": None,
+                }
+                if settings.alipay_dev_mode:
+                    result_qr["dev_auto_paid"] = True
+                return result_qr
+
+            # 2026-09-01 - 同步回跳走 /alipay/return 再进申请页轮询
+            pay_url = create_wap_pay_url(
+                out_trade_no=out_trade_no,
+                amount_fen=order.amount_fen,
+                subject=description,
+                return_url=(settings.alipay_return_url or "").strip() or None,
+                quit_url=settings.alipay_quit_url or "https://www.aieokj.com/h5/diagnosis/apply",
+            )
+            order.prepay_id = pay_url[:64]
+            db.commit()
+            result_alipay: dict[str, Any] = {
+                "out_trade_no": out_trade_no,
+                "amount_fen": order.amount_fen,
+                "pay_channel": channel,
+                "pay_trade_type": trade_type,
+                "pay_url": pay_url,
+                "code_url": None,
+                "pay_params": None,
+            }
+            if settings.alipay_dev_mode:
+                result_alipay["dev_auto_paid"] = True
+            return result_alipay
+
         if trade_type == "native":
             code_url = create_native_code_url(
                 out_trade_no=out_trade_no,
@@ -184,6 +241,7 @@ def create_h5_diagnosis_order(
                 "pay_trade_type": trade_type,
                 "code_url": code_url,
                 "pay_params": None,
+                "pay_url": None,
             }
             if settings.wechat_pay_dev_mode:
                 result["dev_auto_paid"] = True
@@ -195,7 +253,7 @@ def create_h5_diagnosis_order(
             amount_fen=order.amount_fen,
             description=description,
         )
-    except WechatPayError as exc:
+    except (WechatPayError, AlipayPayError) as exc:
         order.status = "failed"
         db.commit()
         raise ValueError(str(exc)) from exc
@@ -218,17 +276,20 @@ def create_h5_diagnosis_order(
 
 
 def mark_h5_order_paid_dev(db: Session, out_trade_no: str) -> dict[str, Any]:
-    if not settings.wechat_pay_dev_mode:
+    if not (settings.wechat_pay_dev_mode or settings.alipay_dev_mode):
         raise ValueError("仅开发模式可用")
-    return fulfill_h5_order_paid(db, out_trade_no=out_trade_no, wx_transaction_id=f"DEV-{out_trade_no}")
+    return fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=f"DEV-{out_trade_no}")
 
 
 def fulfill_h5_order_paid(
     db: Session,
     *,
     out_trade_no: str,
-    wx_transaction_id: str,
+    transaction_id: str = "",
+    wx_transaction_id: str = "",
 ) -> dict[str, Any]:
+    # 2026-09-01 - 兼容微信旧参数名 wx_transaction_id
+    tx_id = str(transaction_id or wx_transaction_id or "").strip()
     order = db.scalar(select(H5DiagnosisOrder).where(H5DiagnosisOrder.out_trade_no == out_trade_no))
     if order is None:
         raise ValueError("订单不存在")
@@ -236,7 +297,8 @@ def fulfill_h5_order_paid(
         return get_h5_order_status(db, out_trade_no)
 
     order.status = "paid"
-    order.wx_transaction_id = wx_transaction_id
+    if tx_id:
+        order.wx_transaction_id = tx_id
     order.paid_at = datetime.utcnow()
 
     if not order.lead_diagnosis_id:

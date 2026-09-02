@@ -17,6 +17,8 @@ _EXEMPT_PREFIXES = (
     "/api/v1/health",
     "/api/v1/monitor/molizhishu/callback",
     "/api/v1/wechat-pay/notify",
+    "/api/v1/alipay/notify",
+    "/api/v1/alipay/return",
     "/api/v1/h5/diagnosis",
 )
 

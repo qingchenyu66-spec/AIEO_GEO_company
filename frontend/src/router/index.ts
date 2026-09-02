@@ -6,6 +6,7 @@ const ChangePasswordView = () => import('../views/ChangePasswordView.vue')
 const PortalView = () => import('../views/PortalView.vue')
 const H5DiagnosisLandingPage = () => import('../views/h5/H5DiagnosisLandingPage.vue')
 const H5DiagnosisApplyPage = () => import('../views/h5/H5DiagnosisApplyPage.vue')
+const H5DiagnosisResultPage = () => import('../views/h5/H5DiagnosisResultPage.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -14,6 +15,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/h5/diagnosis', name: 'h5-diagnosis', component: H5DiagnosisLandingPage, meta: { public: true } },
     { path: '/h5/diagnosis/apply', name: 'h5-diagnosis-apply', component: H5DiagnosisApplyPage, meta: { public: true } },
+    { path: '/h5/diagnosis/result', name: 'h5-diagnosis-result', component: H5DiagnosisResultPage, meta: { public: true } },
     { path: '/change-password', name: 'change-password', component: ChangePasswordView },
     { path: '/platform', name: 'platform', component: PortalView, meta: { identity: 'PLATFORM' } },
     { path: '/customer', name: 'customer', component: PortalView, meta: { identity: 'CUSTOMER' } },
