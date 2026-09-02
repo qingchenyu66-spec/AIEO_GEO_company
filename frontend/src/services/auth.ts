@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export type IdentityType = 'PLATFORM' | 'CUSTOMER'
 
@@ -66,7 +66,8 @@ export async function loginApi(username: string, password: string): Promise<Logi
 
 /** 2026-09-01 - H5 落地页一键体验观察号（免密） */
 export async function demoObserverLoginApi(): Promise<LoginResult> {
-  const response = await http.post('/v1/auth/demo/observer', null, { silentError: true })
+  // 2026-09-02 - vue-tsc 不认 silentError - 与 announcements 一样走 GeoHttpRequestConfig
+  const response = await http.post('/v1/auth/demo/observer', null, { silentError: true } as GeoHttpRequestConfig)
   return response.data.data
 }
 
