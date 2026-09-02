@@ -47,6 +47,8 @@ export interface AuthSession {
   menus: MenuInfo[]
   /** 有平台范围编辑权时生效；空数组=不可勾任何端 */
   allowed_monitor_platforms?: string[]
+  /** 算力自助客户监测数据含今日；托管客户为 false */
+  customer_includes_today?: boolean
 }
 
 export interface LoginResult {
@@ -59,6 +61,12 @@ export interface LoginResult {
 
 export async function loginApi(username: string, password: string): Promise<LoginResult> {
   const response = await http.post('/v1/auth/login', { username, password })
+  return response.data.data
+}
+
+/** 2026-09-01 - H5 落地页一键体验观察号（免密） */
+export async function demoObserverLoginApi(): Promise<LoginResult> {
+  const response = await http.post('/v1/auth/demo/observer', null, { silentError: true })
   return response.data.data
 }
 

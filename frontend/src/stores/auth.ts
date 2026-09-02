@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import {
-  loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi,
+  loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi, demoObserverLoginApi,
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
 import { invalidatePortalMonitorReadCaches } from '../services/monitor'
@@ -61,6 +61,15 @@ export const useAuthStore = defineStore('auth', {
         this.pendingIdentities = result.identities || []
       }
       return result.requires_identity_selection
+    },
+    // 2026-09-01 - H5 一键体验观察号
+    async loginObserverDemo() {
+      const result = await demoObserverLoginApi()
+      if (!result.session) {
+        throw new Error('样例登录失败')
+      }
+      this.saveSession(result.session)
+      return result.session
     },
     async selectIdentity(identityId: number) {
       const session = await selectIdentityApi(this.pendingTicket, identityId)
