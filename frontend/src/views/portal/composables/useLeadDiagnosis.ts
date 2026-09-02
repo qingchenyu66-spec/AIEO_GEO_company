@@ -347,7 +347,6 @@ export function useLeadDiagnosis() {
     && canExport.value
     && (detail.value?.status === 'pending' || detail.value?.status === 'collecting')
   ))
-  const revisePlatformOptions = computed(() => supportedPlatforms)
   const configEditing = ref(false)
   const configSaving = ref(false)
   const configEditScheduleSlots = ref<LeadConfigScheduleSlot[]>([])
