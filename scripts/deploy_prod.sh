@@ -87,6 +87,30 @@ nginx -t
 echo "==> restart services"
 systemctl restart geo-api geo-api-heavy geo-api-callback
 systemctl restart geo-celery-beat geo-celery-submit geo-celery-sync geo-celery-default || true
+# 2026-09-02 - 补录 Playwright 独立队列；无 unit 时现场安装
+if [[ ! -f /etc/systemd/system/geo-celery-backfill.service ]]; then
+  cat > /etc/systemd/system/geo-celery-backfill.service <<'EOF'
+[Unit]
+Description=GEO Celery Backfill Worker
+After=network.target redis-server.service
+
+[Service]
+User=root
+WorkingDirectory=/opt/geo/AIEO_GEO/backend
+Environment=PYTHONPATH=/opt/geo/AIEO_GEO/backend
+EnvironmentFile=/opt/geo/AIEO_GEO/backend/.env
+# 浏览器任务串行，避免本机 Chromium 打满
+ExecStart=/opt/geo/AIEO_GEO/backend/.venv/bin/celery -A app.celery_app worker -Q backfill -n backfill@%%h -c 1 --loglevel=info
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable geo-celery-backfill
+fi
+systemctl restart geo-celery-backfill || true
 systemctl reload nginx
 
 echo "==> health check"
@@ -95,5 +119,6 @@ for port in 8001 8002 8003; do
   curl -sf "http://127.0.0.1:${port}/api/v1/health" | head -c 120
   echo " (port ${port})"
 done
+systemctl is-active geo-celery-backfill || echo "WARN: geo-celery-backfill not active" >&2
 curl -sf -o /dev/null -w "https:%{http_code}\n" https://www.aieokj.com/api/v1/health || true
 echo "DEPLOY_OK"

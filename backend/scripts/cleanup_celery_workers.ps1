@@ -1,4 +1,4 @@
-# 清理重复 Celery 进程（beat / submit / sync / default / flower）
+# 清理重复 Celery 进程（beat / submit / sync / default / backfill / flower）
 $ErrorActionPreference = "Stop"
 
 Write-Host "Stopping Celery-related processes..."
@@ -7,12 +7,14 @@ $patterns = @(
     "celery_worker_submit.cmd",
     "celery_worker_sync.cmd",
     "celery_worker_default.cmd",
+    "celery_worker_backfill.cmd",
     "celery_beat.cmd",
     "celery_flower",
     "start_flower.py",
     "GEO Celery Submit Worker",
     "GEO Celery Sync Worker",
     "GEO Celery Default Worker",
+    "GEO Celery Backfill Worker",
     "GEO Celery Beat",
     "GEO Celery Flower"
 )

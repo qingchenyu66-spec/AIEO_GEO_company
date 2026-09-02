@@ -967,6 +967,9 @@ def monitor_subtask_detail(
     ops_meta = build_snapshot_backfill_item(db, subtask, task)
     # display 的 page_screenshot 已代理；ops_meta 同字段不得用库内原文覆盖
     merged = {**ops_meta, **display}
+    from app.services.snapshot_backfill_service import enrich_subtask_display_backfill_flags
+
+    merged = enrich_subtask_display_backfill_flags(merged, subtask)
     return ApiResponse(data=merged)
 
 

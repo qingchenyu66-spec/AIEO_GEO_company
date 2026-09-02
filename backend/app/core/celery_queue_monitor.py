@@ -16,7 +16,8 @@ from app.core.redis_client import get_json_cache, get_redis_client, prefixed_key
 logger = logging.getLogger(__name__)
 
 # 2026-08-27 - 纳入 default（矩阵异步构建等），便于运营看积压
-QUEUE_NAMES = ("submit", "sync", "default")
+# 2026-09-02 - 纳入 backfill（Playwright 解析/截图）
+QUEUE_NAMES = ("submit", "sync", "default", "backfill")
 ALERT_LOG = "celery-alerts"
 BEAT_HISTORY_KEY = "celery:beat:history"
 BEAT_HISTORY_MAX = 15
@@ -29,6 +30,8 @@ TASK_LABELS: dict[str, str] = {
     "app.tasks.monitor.sync_one_monitor_task": "同步监测结果",
     "app.tasks.monitoring.check_queue_backlog": "检查队列积压",
     "app.tasks.monitor.build_ranking_matrix_job_task": "排名矩阵异步构建",
+    "app.tasks.snapshot_backfill.parse_and_apply_backfill_task": "补录分享页解析",
+    "app.tasks.snapshot_backfill.fail_stale_backfill_parses_task": "补录解析超时清理",
 }
 
 BEAT_TASK_KEYS = frozenset(TASK_LABELS.keys())
@@ -44,12 +47,14 @@ TECHNICAL_METRIC_LABELS: dict[str, str] = {
     "celery_queue_submit": "提交队列积压",
     "celery_queue_sync": "同步队列积压",
     "celery_queue_default": "默认队列积压",
+    "celery_queue_backfill": "补录解析队列积压",
 }
 
 QUEUE_METRIC_BY_NAME = {
     "submit": "celery_queue_submit",
     "sync": "celery_queue_sync",
     "default": "celery_queue_default",
+    "backfill": "celery_queue_backfill",
 }
 
 _THRESHOLD_CACHE: dict[str, int] = {}
@@ -64,13 +69,31 @@ def _broker_client():
         return None
     try:
         from redis import Redis
+        from redis.exceptions import RedisError
 
-        return Redis.from_url(
-            settings.celery_broker_url,
+        from app.core.redis_client import _is_auth_redis_error, redis_url_without_auth
+
+        url = settings.celery_broker_url
+        client = Redis.from_url(
+            url,
             decode_responses=True,
             socket_timeout=settings.redis_socket_timeout_seconds,
             socket_connect_timeout=settings.redis_socket_timeout_seconds,
         )
+        try:
+            client.ping()
+        except RedisError as exc:
+            if not _is_auth_redis_error(exc):
+                raise
+            client.close()
+            client = Redis.from_url(
+                redis_url_without_auth(url),
+                decode_responses=True,
+                socket_timeout=settings.redis_socket_timeout_seconds,
+                socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            )
+            client.ping()
+        return client
     except Exception as exc:
         logger.warning("Celery broker client unavailable: %s", exc)
         return None
@@ -91,13 +114,15 @@ _RUNTIME_INSPECT_CACHE_TTL_SECONDS = 10.0
 def _worker_role_from_name(worker_name: str) -> str:
     """Celery -n 形如 submit@HOST；取 @ 前缀比子串匹配更稳。"""
     prefix = str(worker_name or "").split("@", 1)[0].strip().lower()
-    if prefix in {"submit", "sync", "default", "beat"}:
+    if prefix in {"submit", "sync", "default", "backfill", "beat"}:
         return prefix
     lowered = worker_name.lower()
     if "submit" in lowered:
         return "submit"
     if "sync" in lowered:
         return "sync"
+    if "backfill" in lowered:
+        return "backfill"
     return "default"
 
 
@@ -659,6 +684,8 @@ def _threshold(queue_name: str, level: str) -> int:
         return settings.celery_queue_submit_warning if level == "warning" else settings.celery_queue_submit_critical
     if queue_name == "default":
         return settings.celery_queue_default_warning if level == "warning" else settings.celery_queue_default_critical
+    if queue_name == "backfill":
+        return settings.celery_queue_backfill_warning if level == "warning" else settings.celery_queue_backfill_critical
     return settings.celery_queue_sync_warning if level == "warning" else settings.celery_queue_sync_critical
 
 
@@ -789,6 +816,7 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
         "submit": "提交队列",
         "sync": "同步队列",
         "default": "默认队列（矩阵/知识库）",
+        "backfill": "补录解析队列（Playwright）",
     }
     status_labels = {
         "normal": "正常",

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { MonitorSubtask } from '../../../services/monitor'
 import { submitSnapshotBackfill } from '../../../services/snapshotBackfill'
 import { notifyOperationError } from '../../../utils/requestError'
@@ -15,6 +16,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   success: [subtask: MonitorSubtask]
+  /** 慢路径已入队：关窗后由页面后台轮询，勿窗内干等 */
+  'parse-queued': [subtask: MonitorSubtask]
 }>()
 
 const submitting = ref(false)
@@ -69,6 +72,10 @@ watch(
     }
     // 2026-07-29 - 预填旧名次导致粘贴链接仍锁定 manual_rank、位次看似未变 - 打开时不预填，有链接留空走自动解析
     form.mention_position = ''
+    // 2026-09-02 - A：解析中不窗内干等 - 仅提示可关窗等矩阵
+    if (String(props.subtask?.backfill_parse_status || '').toLowerCase() === 'pending') {
+      ElMessage.info('该条正在后台解析，可关闭窗口稍后看矩阵')
+    }
   },
 )
 
@@ -99,8 +106,15 @@ async function handleSubmit() {
       snapshot_url: payloadUrl,
       mention_position: rank,
     })
-    emit('success', result.subtask)
+    const subtask = result.subtask
     dialogVisible.value = false
+    // 2026-09-02 - A：慢路径立刻关窗，页面后台轮询
+    if (result.parse_async) {
+      ElMessage.success('已提交后台解析，完成后矩阵会更新')
+      emit('parse-queued', subtask)
+      return
+    }
+    emit('success', subtask)
   } catch (error: unknown) {
     notifyOperationError(error, '快照补录失败')
   } finally {
@@ -159,7 +173,7 @@ async function handleSubmit() {
       >
         {{
           submitting
-            ? (hasShareUrl ? '正在解析分享页…' : '提交中…')
+            ? '提交中…'
             : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录'
         }}
       </button>
@@ -185,13 +199,7 @@ async function handleSubmit() {
   border-radius: 8px;
   background: #fff7ed;
   color: #9a3412;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.45;
-}
-.snapshot-backfill-form {
-  margin-top: 8px;
-}
-.snapshot-backfill-form textarea {
-  min-height: 88px;
 }
 </style>

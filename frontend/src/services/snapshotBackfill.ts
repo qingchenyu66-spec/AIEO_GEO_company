@@ -98,6 +98,8 @@ export interface SnapshotBackfillMatrixSlot {
   backfill_dismissed?: boolean
   has_answer?: boolean
   status?: string | null
+  /** pending=后台解析中；ok/failed 见详情 */
+  backfill_parse_status?: string | null
   error_message?: string | null
   prompt?: string
   platform?: string
@@ -229,14 +231,61 @@ export async function submitSnapshotBackfill(
     sentiment?: string | null
     reference_urls?: string[]
   },
-): Promise<{ subtask: MonitorSubtask }> {
-  // 2026-08-17 - 补录默认 30s 被艾迪亚信源重刷拖死；后端已异步，前端仍放宽兜底
+): Promise<{ subtask: MonitorSubtask; parse_async?: boolean }> {
   const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill`, payload, {
-    timeout: 120000,
+    timeout: 30000,
   })
   invalidateCache('/v1/monitor')
   invalidateCache('/v1/brand/asset')
   return response.data.data
+}
+
+const BACKFILL_PARSE_POLL_MS = 2000
+// 2026-09-02 - 对齐后端 watchdog(300)/hard(240)，勿在 soft(180) 边界停轮假失败
+const BACKFILL_PARSE_TIMEOUT_MS = 300000
+
+/** 慢路径异步入队后轮询直至解析完成或失败。 */
+export async function waitForBackfillParse(
+  subtaskId: string,
+  options?: { signal?: AbortSignal },
+): Promise<MonitorSubtask> {
+  const { getMonitorSubtask } = await import('./monitor')
+  const started = Date.now()
+  while (Date.now() - started < BACKFILL_PARSE_TIMEOUT_MS) {
+    if (options?.signal?.aborted) {
+      throw new Error('已取消等待')
+    }
+    const detail = await getMonitorSubtask(subtaskId, { include_ops: true })
+    const status = String(detail.backfill_parse_status || '').toLowerCase()
+    if (status === 'ok' || (!status && detail.answer_content)) {
+      return detail
+    }
+    if (status === 'failed') {
+      throw new Error(detail.backfill_parse_error || '分享页解析失败')
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, BACKFILL_PARSE_POLL_MS)
+      options?.signal?.addEventListener('abort', () => {
+        window.clearTimeout(timer)
+        reject(new Error('已取消等待'))
+      }, { once: true })
+    })
+  }
+  // 末次再拉一次，避免刚好写完却落超时
+  if (!options?.signal?.aborted) {
+    const detail = await getMonitorSubtask(subtaskId, { include_ops: true })
+    const status = String(detail.backfill_parse_status || '').toLowerCase()
+    if (status === 'ok' || (!status && detail.answer_content)) {
+      return detail
+    }
+    if (status === 'failed') {
+      throw new Error(detail.backfill_parse_error || '分享页解析失败')
+    }
+    if (status === 'pending') {
+      throw new Error('分享页解析仍在处理，请稍后刷新查看')
+    }
+  }
+  throw new Error('分享页解析超时，请稍后刷新查看')
 }
 
 export async function dismissSnapshotBackfill(subtaskId: string): Promise<{

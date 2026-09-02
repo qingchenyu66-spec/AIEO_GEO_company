@@ -13,6 +13,7 @@ import {
   ensureGapBackfillSubtask,
   getSnapshotBackfillMatrix,
   undismissSnapshotBackfill,
+  waitForBackfillParse,
   type SnapshotBackfillMatrixCell,
   type SnapshotBackfillMatrixPlatform,
   type SnapshotBackfillMatrixSlot,
@@ -109,6 +110,8 @@ function onCompareScroll(event: Event) {
 
 let listRequestSeq = 0
 let listAbortController: AbortController | null = null
+// 2026-09-02 - A：关窗后后台轮询解析结果
+const parsePollControllers = new Map<string, AbortController>()
 let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let filterBootstrapping = false
 
@@ -285,12 +288,33 @@ async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
     }
     // 2026-08-04 - 缺口忽略后抽屉仍显示漏跑 - 矩阵重拉后同步格子待办
     syncCellDrawerFromMatrix()
+    // 2026-09-02 - 刷新后矩阵仍 pending 时自动续轮，勿只靠本次提交触发
+    resumePendingParsePolls()
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if ((error as { code?: string })?.code === 'ERR_CANCELED') return
     notifyOperationError(error, '加载补录矩阵失败')
   } finally {
     if (seq === listRequestSeq && !quiet) loading.value = false
+  }
+}
+
+/** 扫描矩阵 pending 槽位，已在轮询的跳过，避免刷新丢续等。 */
+function resumePendingParsePolls() {
+  const seen = new Set<string>()
+  for (const cell of cells.value) {
+    for (const slot of cell.slots || []) {
+      const sid = String(slot.subtask_id || '').trim()
+      if (!sid || seen.has(sid)) continue
+      if (String(slot.backfill_parse_status || '').toLowerCase() !== 'pending') continue
+      seen.add(sid)
+      if (parsePollControllers.has(sid)) continue
+      // 2026-09-02 - 刷新续轮静默完成，勿连开详情/连弹成功
+      void handleParseQueued({
+        subtask_id: sid,
+        answer_content: slot.has_answer ? '1' : '',
+      } as MonitorSubtask, { silent: true })
+    }
   }
 }
 
@@ -1156,6 +1180,7 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
       status: updatedSubtask.status ?? null,
       error_message: updatedSubtask.error_message ?? null,
       is_gap: false,
+      backfill_parse_status: updatedSubtask.backfill_parse_status ?? null,
     }
     if (updatedSubtask.needs_backfill !== undefined) {
       patch.needs_backfill = updatedSubtask.needs_backfill
@@ -1193,6 +1218,99 @@ async function handleSuccess(updatedSubtask?: MonitorSubtask) {
 
   ElMessage.success('快照补录已保存')
   clearDeepLink()
+}
+
+/** 后台解析完成：只 patch/刷矩阵；silent=刷新续轮，勿开详情、勿连弹成功。 */
+async function applyBackgroundParseDone(
+  updatedSubtask: MonitorSubtask,
+  options?: { silent?: boolean },
+) {
+  const silent = Boolean(options?.silent)
+  let patched = false
+  const patch: Partial<SnapshotBackfillMatrixSlot> = {
+    mention_position: updatedSubtask.mention_position ?? null,
+    has_answer: Boolean(updatedSubtask.answer_content),
+    status: updatedSubtask.status ?? null,
+    error_message: updatedSubtask.error_message ?? null,
+    is_gap: false,
+    backfill_parse_status: updatedSubtask.backfill_parse_status ?? 'ok',
+  }
+  if (updatedSubtask.needs_backfill !== undefined) {
+    patch.needs_backfill = updatedSubtask.needs_backfill
+  }
+  const before = updatedSubtask.before_backfill
+  if (before) {
+    patch.has_before_backfill = true
+    patch.before_mention_position = before.mention_position ?? null
+    patch.before_has_answer = Boolean(before.has_answer)
+    patch.before_status = before.status ?? null
+  }
+  patched = patchSlotLocally(updatedSubtask.subtask_id, patch)
+  if (!patched) {
+    await loadMatrix({ quiet: true, skipCache: true })
+  }
+  syncCellDrawerFromMatrix()
+  emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+  // 2026-09-02 - 主动提交轻提示；续轮静默。两侧都不自动开详情
+  if (!silent) {
+    ElMessage.success('快照补录已保存')
+  }
+}
+
+/** 2026-09-02 - A：慢路径入队后关窗，本地标「解析中」并后台轮询刷新 */
+async function handleParseQueued(subtask: MonitorSubtask, options?: { silent?: boolean }) {
+  if (!subtask?.subtask_id) return
+  const sid = subtask.subtask_id
+  const silent = Boolean(options?.silent)
+  patchSlotLocally(sid, {
+    is_gap: false,
+    backfill_parse_status: 'pending',
+    needs_backfill: true,
+    has_answer: Boolean(subtask.answer_content),
+  })
+  syncCellDrawerFromMatrix()
+  parsePollControllers.get(sid)?.abort()
+  const controller = new AbortController()
+  parsePollControllers.set(sid, controller)
+  const releaseController = () => {
+    if (parsePollControllers.get(sid) === controller) {
+      parsePollControllers.delete(sid)
+    }
+  }
+  try {
+    const done = await waitForBackfillParse(sid, { signal: controller.signal })
+    if (controller.signal.aborted) return
+    await applyBackgroundParseDone(done, { silent })
+  } catch (error: unknown) {
+    if (controller.signal.aborted) return
+    // 2026-09-02 - 先释放 controller 再 loadMatrix，避免 resume 因 Map 占用而跳过导致停轮假死
+    releaseController()
+    try {
+      const detail = await getMonitorSubtask(sid, { include_ops: true })
+      const status = String(detail.backfill_parse_status || '').toLowerCase()
+      if (status === 'ok' || (!status && detail.answer_content)) {
+        await applyBackgroundParseDone(detail, { silent })
+        return
+      }
+      if (status === 'pending') {
+        // 仍在跑：轻提示后交给矩阵 resume，勿本地标 failed
+        ElMessage.warning('分享页仍在后台解析，请稍后刷新查看')
+        await loadMatrix({ quiet: true, skipCache: true })
+        return
+      }
+      patchSlotLocally(sid, { backfill_parse_status: 'failed' })
+      syncCellDrawerFromMatrix()
+      // 失败始终提示；silent 只禁成功连弹/开详情
+      notifyOperationError(error, '快照补录解析失败')
+    } catch {
+      patchSlotLocally(sid, { backfill_parse_status: 'failed' })
+      syncCellDrawerFromMatrix()
+      notifyOperationError(error, '快照补录解析失败')
+    }
+    await loadMatrix({ quiet: true, skipCache: true })
+  } finally {
+    releaseController()
+  }
 }
 
 function backfillItemFromSubtask(subtask: MonitorSubtask): SnapshotBackfillPendingItem {
@@ -1249,6 +1367,9 @@ async function openFromQuery() {
 }
 
 function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
+  const parseStatus = String(slot.backfill_parse_status || '').toLowerCase()
+  if (parseStatus === 'pending') return '解析中'
+  if (parseStatus === 'failed') return '解析失败'
   if (slot.is_gap) return '漏跑待补'
   if (slot.backfill_dismissed) return '已忽略'
   if (slot.needs_backfill && !slot.has_answer) return '失败待补'
@@ -1293,6 +1414,8 @@ onMounted(async () => {
 onUnmounted(() => {
   if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
   listAbortController?.abort()
+  for (const controller of parsePollControllers.values()) controller.abort()
+  parsePollControllers.clear()
 })
 
 watch(
@@ -1915,6 +2038,7 @@ watch(
       v-model:visible="backfillVisible"
       :subtask="backfillTarget"
       @success="handleSuccess"
+      @parse-queued="handleParseQueued"
     />
   </section>
 </template>

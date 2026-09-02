@@ -18,6 +18,35 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+
+def _ensure_windows_playwright_event_loop() -> None:
+    """Celery/Windows 下 Selector 事件循环不能起子进程，Playwright 会直接 NotImplementedError。"""
+    # 2026-09-02 - backfill Worker 秒失败 NotImplementedError - 切 Proactor 后再开浏览器
+    import sys
+
+    if sys.platform != "win32":
+        return
+    import asyncio
+
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        return
+    loop = None
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None and not loop.is_closed() and type(loop).__name__ == "ProactorEventLoop":
+        return
+    if loop is not None:
+        try:
+            loop.close()
+        except Exception:
+            pass
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 _ICON_HOST_BITS = (
     "byteimg.com",
     "doubao.com",
@@ -690,6 +719,172 @@ def _expand_citation_panels(page: Any) -> None:
         pass
 
 
+def try_fast_fetch_share_page(url: str) -> SharePageFetchResult | None:
+    """HTTP/API 快路径；需 Playwright 时返回 None（由 Celery Worker 异步解析）。"""
+    value = str(url or "").strip()
+    if not value.startswith(("http://", "https://")):
+        raise ValueError("分享链接无效")
+    host = _normalize_host(value)
+
+    qianwen_api_refs: list[dict[str, Any]] | None = None
+    qianwen_api_title: str | None = None
+    if _is_qianwen_share_host(host):
+        api_hit = _try_qianwen_share_api(value)
+        if api_hit is not None and _refs_quality_ok(api_hit.references, page_host=host):
+            if len(api_hit.answer_content or "") >= 80:
+                return api_hit
+            qianwen_api_refs = list(api_hit.references or [])
+            qianwen_api_title = api_hit.title
+
+    http_hit = _try_http_fetch(value, host)
+    if http_hit is not None and _http_refs_enough(http_hit, host):
+        if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
+            http_hit.references = qianwen_api_refs
+            http_hit.claimed_refs = len(qianwen_api_refs)
+            if qianwen_api_title and not http_hit.title:
+                http_hit.title = qianwen_api_title
+        return http_hit
+    return None
+
+
+def _playwright_timeout_message(url: str) -> str:
+    return "分享页打开超时，请稍后重试或更换可公开访问的链接"
+
+
+def fetch_share_page_browser_combined(
+    url: str,
+    *,
+    subtask_id: str | None = None,
+    timeout_ms: int = 120000,
+) -> tuple[SharePageFetchResult, str | None]:
+    """一次 Playwright：解析正文/信源 + 截图（G）。
+
+    2026-09-02 - 严格 G：即使千问 API 已命中也要开浏览器截图，禁止无截图提前返回。
+    """
+    import time
+
+    from app.services.share_page_screenshot_service import capture_share_page_screenshot_from_page
+
+    value = str(url or "").strip()
+    if not value.startswith(("http://", "https://")):
+        raise ValueError("分享链接无效")
+    host = _normalize_host(value)
+
+    qianwen_api_hit: SharePageFetchResult | None = None
+    qianwen_api_refs: list[dict[str, Any]] | None = None
+    qianwen_api_title: str | None = None
+    if _is_qianwen_share_host(host):
+        api_hit = _try_qianwen_share_api(value)
+        if api_hit is not None and _refs_quality_ok(api_hit.references, page_host=host):
+            if len(api_hit.answer_content or "") >= 80:
+                # 保留 API 正文，仍进浏览器只为截图（G）
+                qianwen_api_hit = api_hit
+            qianwen_api_refs = list(api_hit.references or [])
+            qianwen_api_title = api_hit.title
+
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise ValueError("服务器未安装 Playwright，无法解析分享页") from exc
+
+    mobile = host in ("yb.tencent.com", "yuanbao.tencent.com")
+    shot_path: str | None = None
+    try:
+        _ensure_windows_playwright_event_loop()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                if mobile:
+                    context = browser.new_context(
+                        viewport={"width": 390, "height": 844},
+                        device_scale_factor=2,
+                        is_mobile=True,
+                        has_touch=True,
+                        user_agent=(
+                            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                            "Mobile/15E148 Safari/604.1"
+                        ),
+                    )
+                else:
+                    context = browser.new_context(
+                        user_agent=_BROWSER_UA,
+                        viewport={"width": 1280, "height": 900},
+                    )
+                page = context.new_page()
+                page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
+                body_text = ""
+                # API 已有正文时缩短等待，优先截图
+                wait_budget = 1.0 if qianwen_api_hit is not None else 2.5
+                deadline = time.monotonic() + wait_budget
+                while True:
+                    body_text = page.inner_text("body") or ""
+                    if len(_clean_answer_text(body_text)) >= 80:
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    page.wait_for_timeout(200)
+                _expand_citation_panels(page)
+                title = (page.title() or "").strip() or None
+                page_html = page.content() or ""
+                result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
+                if result is not None and qianwen_api_refs and not _refs_quality_ok(result.references, page_host=host):
+                    result.references = qianwen_api_refs
+                    result.claimed_refs = len(qianwen_api_refs)
+                    if qianwen_api_title and not result.title:
+                        result.title = qianwen_api_title
+                if result is None and qianwen_api_refs:
+                    body = _extract_answer_from_html(page_html, body_text)
+                    if len(body) < 20 and qianwen_api_title:
+                        body = qianwen_api_title
+                    if len(body) >= 20:
+                        result = SharePageFetchResult(
+                            answer_content=body,
+                            references=qianwen_api_refs,
+                            title=title or qianwen_api_title,
+                            source_host=host or None,
+                            claimed_refs=len(qianwen_api_refs),
+                        )
+                if result is None and qianwen_api_hit is not None:
+                    result = qianwen_api_hit
+                if result is None:
+                    answer = _extract_answer_from_html(page_html, body_text)
+                    if _looks_like_share_error_page(answer):
+                        raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
+                    raise ValueError("未能从分享页解析到回答正文，请确认链接可公开访问")
+                # 浏览器正文过短时优先用 API 正文
+                if (
+                    qianwen_api_hit is not None
+                    and len(result.answer_content or "") < 80
+                    and len(qianwen_api_hit.answer_content or "") >= 80
+                ):
+                    result = SharePageFetchResult(
+                        answer_content=qianwen_api_hit.answer_content,
+                        references=result.references or qianwen_api_hit.references,
+                        title=result.title or qianwen_api_hit.title,
+                        source_host=result.source_host or qianwen_api_hit.source_host,
+                        claimed_refs=result.claimed_refs or qianwen_api_hit.claimed_refs,
+                    )
+                try:
+                    shot_path = capture_share_page_screenshot_from_page(page, value, subtask_id=subtask_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "combined backfill screenshot failed subtask_id=%s err=%s",
+                        subtask_id,
+                        exc,
+                    )
+                    shot_path = None
+                context.close()
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        if "Timeout" in type(exc).__name__ or "timeout" in str(exc).lower():
+            raise ValueError(_playwright_timeout_message(value)) from exc
+        raise ValueError(f"分享页解析失败：{exc}") from exc
+    return result, shot_path
+
+
 def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResult:
     """抓取分享页正文 + 信源；优先 HTTP，SPA/弱信源再 Playwright。"""
     import time
@@ -722,35 +917,47 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
         return http_hit
 
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         if http_hit is not None:
             return http_hit
         raise ValueError("服务器未安装 Playwright，无法解析分享页") from exc
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        try:
-            page = browser.new_page(
-                user_agent=_BROWSER_UA,
-                viewport={"width": 1280, "height": 900},
-            )
-            page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-            # 正文够长即停，最多再等约 2.5s
-            body_text = ""
-            deadline = time.monotonic() + 2.5
-            while True:
-                body_text = page.inner_text("body") or ""
-                if len(_clean_answer_text(body_text)) >= 80:
-                    break
-                if time.monotonic() >= deadline:
-                    break
-                page.wait_for_timeout(200)
-            _expand_citation_panels(page)
-            title = (page.title() or "").strip() or None
-            page_html = page.content() or ""
-        finally:
-            browser.close()
+    try:
+        _ensure_windows_playwright_event_loop()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(
+                    user_agent=_BROWSER_UA,
+                    viewport={"width": 1280, "height": 900},
+                )
+                page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
+                # 正文够长即停，最多再等约 2.5s
+                body_text = ""
+                deadline = time.monotonic() + 2.5
+                while True:
+                    body_text = page.inner_text("body") or ""
+                    if len(_clean_answer_text(body_text)) >= 80:
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    page.wait_for_timeout(200)
+                _expand_citation_panels(page)
+                title = (page.title() or "").strip() or None
+                page_html = page.content() or ""
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        if http_hit is not None:
+            if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
+                http_hit.references = qianwen_api_refs
+                http_hit.claimed_refs = len(qianwen_api_refs)
+            return http_hit
+        if "Timeout" in type(exc).__name__ or "timeout" in str(exc).lower():
+            raise ValueError(_playwright_timeout_message(value)) from exc
+        raise ValueError(f"分享页解析失败：{exc}") from exc
 
     result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
     if result is not None and qianwen_api_refs and not _refs_quality_ok(result.references, page_host=host):

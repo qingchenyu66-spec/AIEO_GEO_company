@@ -23,12 +23,14 @@ $BeatVbs = Join-Path $PSScriptRoot "celery_beat_hidden.vbs"
 $SubmitVbs = Join-Path $PSScriptRoot "celery_worker_submit_hidden.vbs"
 $SyncVbs = Join-Path $PSScriptRoot "celery_worker_sync_hidden.vbs"
 $DefaultVbs = Join-Path $PSScriptRoot "celery_worker_default_hidden.vbs"
+$BackfillVbs = Join-Path $PSScriptRoot "celery_worker_backfill_hidden.vbs"
 $FlowerVbs = Join-Path $PSScriptRoot "celery_flower_hidden.vbs"
 
 $BeatTaskName = "GEO-Celery-Beat"
 $SubmitTaskName = "GEO-Celery-Worker-Submit"
 $SyncTaskName = "GEO-Celery-Worker-Sync"
 $DefaultTaskName = "GEO-Celery-Worker-Default"
+$BackfillTaskName = "GEO-Celery-Worker-Backfill"
 $FlowerTaskName = "GEO-Celery-Flower"
 $LegacyTasks = @("GEO-Monitor-Submit", "GEO-Monitor-Sync")
 
@@ -58,7 +60,7 @@ function Disable-LegacyMonitorTasks {
 }
 
 function Install-CeleryTasks {
-    foreach ($path in @($BeatVbs, $SubmitVbs, $SyncVbs, $DefaultVbs, $FlowerVbs)) {
+    foreach ($path in @($BeatVbs, $SubmitVbs, $SyncVbs, $DefaultVbs, $BackfillVbs, $FlowerVbs)) {
         if (-not (Test-Path $path)) {
             throw "Missing script: $path"
         }
@@ -71,6 +73,7 @@ function Install-CeleryTasks {
     Remove-CeleryTask $SubmitTaskName
     Remove-CeleryTask $SyncTaskName
     Remove-CeleryTask $DefaultTaskName
+    Remove-CeleryTask $BackfillTaskName
     Remove-CeleryTask $FlowerTaskName
 
     Invoke-SchTasks /Create `
@@ -102,6 +105,13 @@ function Install-CeleryTasks {
         /F | Out-Null
 
     Invoke-SchTasks /Create `
+        /TN $BackfillTaskName `
+        /TR "wscript.exe `"$BackfillVbs`"" `
+        /SC ONLOGON `
+        /RL LIMITED `
+        /F | Out-Null
+
+    Invoke-SchTasks /Create `
         /TN $FlowerTaskName `
         /TR "wscript.exe `"$FlowerVbs`"" `
         /SC ONLOGON `
@@ -115,6 +125,7 @@ function Install-CeleryTasks {
     Write-Host "  $SubmitTaskName"
     Write-Host "  $SyncTaskName"
     Write-Host "  $DefaultTaskName"
+    Write-Host "  $BackfillTaskName"
     Write-Host "  $FlowerTaskName"
     Write-Host "Flower dashboard: http://127.0.0.1:5555"
     Write-Host "Logs:"
@@ -122,11 +133,12 @@ function Install-CeleryTasks {
     Write-Host "  $(Join-Path $BackendRoot 'storage\logs\celery-worker-submit.log')"
     Write-Host "  $(Join-Path $BackendRoot 'storage\logs\celery-worker-sync.log')"
     Write-Host "  $(Join-Path $BackendRoot 'storage\logs\celery-worker-default.log')"
+    Write-Host "  $(Join-Path $BackendRoot 'storage\logs\celery-worker-backfill.log')"
     Write-Host "  $(Join-Path $BackendRoot 'storage\logs\celery-flower.log')"
 }
 
 function Show-CeleryTaskStatus {
-    foreach ($name in @($BeatTaskName, $SubmitTaskName, $SyncTaskName, $DefaultTaskName, $FlowerTaskName) + $LegacyTasks) {
+    foreach ($name in @($BeatTaskName, $SubmitTaskName, $SyncTaskName, $DefaultTaskName, $BackfillTaskName, $FlowerTaskName) + $LegacyTasks) {
         if (Test-TaskExists $name) {
             Write-Host "=== $name ==="
             schtasks /Query /TN $name /V /FO LIST | Select-String "TaskName|Status|Scheduled Task State|Next Run|Last Run|Task To Run"
@@ -138,11 +150,11 @@ function Show-CeleryTaskStatus {
 }
 
 function Start-CeleryProcesses {
-    foreach ($vbs in @($SubmitVbs, $SyncVbs, $DefaultVbs, $BeatVbs, $FlowerVbs)) {
+    foreach ($vbs in @($SubmitVbs, $SyncVbs, $DefaultVbs, $BackfillVbs, $BeatVbs, $FlowerVbs)) {
         Start-Process wscript.exe -ArgumentList "`"$vbs`"" -WindowStyle Hidden
         Start-Sleep -Seconds 1
     }
-    Write-Host "Started Celery beat/submit/sync/default/flower in background."
+    Write-Host "Started Celery beat/submit/sync/default/backfill/flower in background."
     Write-Host "Flower: http://127.0.0.1:5555"
 }
 
@@ -159,6 +171,7 @@ function Stop-CeleryProcesses {
                 $_.CommandLine -like "*celery -A app.celery_app worker -Q submit*" -or
                 $_.CommandLine -like "*celery -A app.celery_app worker -Q sync*" -or
                 $_.CommandLine -like "*celery -A app.celery_app worker -Q default*" -or
+                $_.CommandLine -like "*celery -A app.celery_app worker -Q backfill*" -or
                 $_.CommandLine -like "*celery -A app.celery_app flower*" -or
                 $_.CommandLine -like "*start_flower.py*"
             )
@@ -176,6 +189,7 @@ switch ($Action) {
         Remove-CeleryTask $SubmitTaskName
         Remove-CeleryTask $SyncTaskName
         Remove-CeleryTask $DefaultTaskName
+        Remove-CeleryTask $BackfillTaskName
         Remove-CeleryTask $FlowerTaskName
     }
     "status" { Show-CeleryTaskStatus }

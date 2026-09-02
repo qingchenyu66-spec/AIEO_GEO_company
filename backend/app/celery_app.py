@@ -9,9 +9,29 @@ from app.core.config import settings
 
 celery_app = Celery("geo_monitor")
 
+# 2026-09-02 - 本地无 requirepass 时勿带着密码连 broker（否则 delay 报 Client sent AUTH）
+try:
+    from app.core.redis_client import redis_url_without_auth
+    from redis import Redis
+    from redis.exceptions import RedisError
+
+    _broker = settings.celery_broker_url
+    _backend = settings.celery_result_backend
+    try:
+        _probe = Redis.from_url(_broker, socket_connect_timeout=1.5, socket_timeout=1.5)
+        _probe.ping()
+        _probe.close()
+    except RedisError as _exc:
+        if "auth" in str(_exc).lower() or "no password is set" in str(_exc).lower():
+            _broker = redis_url_without_auth(_broker)
+            _backend = redis_url_without_auth(_backend)
+except Exception:
+    _broker = settings.celery_broker_url
+    _backend = settings.celery_result_backend
+
 celery_app.conf.update(
-    broker_url=settings.celery_broker_url,
-    result_backend=settings.celery_result_backend,
+    broker_url=_broker,
+    result_backend=_backend,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
@@ -46,7 +66,10 @@ celery_app.conf.update(
         "app.tasks.monitor.sync_announcement_lifecycle": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
-        "app.tasks.snapshot_backfill.capture_backfill_screenshot_task": {"queue": "default"},
+        # 2026-09-02 - Playwright 解析/截图独立队列 - 勿与报表/知识库抢 default
+        "app.tasks.snapshot_backfill.capture_backfill_screenshot_task": {"queue": "backfill"},
+        "app.tasks.snapshot_backfill.parse_and_apply_backfill_task": {"queue": "backfill"},
+        "app.tasks.snapshot_backfill.fail_stale_backfill_parses_task": {"queue": "default"},
         "app.tasks.snapshot_backfill.refresh_source_daily_after_backfill_task": {"queue": "default"},
         "app.tasks.report_source_value.pregenerate_source_value_task": {"queue": "default"},
         "app.tasks.report_source_value.scan_source_value_pregenerate": {"queue": "default"},
@@ -122,6 +145,11 @@ celery_app.conf.update(
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",
             "schedule": crontab(minute="*/5"),
         },
+        # 2026-09-02 - 补录解析 pending 硬杀/超时兜底
+        "fail-stale-backfill-parses": {
+            "task": "app.tasks.snapshot_backfill.fail_stale_backfill_parses_task",
+            "schedule": crontab(minute="*/2"),
+        },
         "scan-source-value-pregenerate": {
             "task": "app.tasks.report_source_value.scan_source_value_pregenerate",
             # 每日 22:00 预热，赶在 00:05 周期报生成前
@@ -146,3 +174,25 @@ import app.tasks.monitoring  # noqa: E402, F401
 import app.tasks.knowledge  # noqa: E402, F401
 import app.tasks.snapshot_backfill  # noqa: E402, F401
 import app.tasks.report_source_value  # noqa: E402, F401
+
+try:
+    from celery.signals import worker_process_init, worker_ready
+except Exception:  # pragma: no cover
+    worker_process_init = None  # type: ignore[assignment]
+    worker_ready = None  # type: ignore[assignment]
+
+
+def _fix_windows_playwright_loop(**_kwargs) -> None:
+    # 2026-09-02 - Worker 进程启动即切 Proactor，避免补录 Playwright NotImplementedError
+    try:
+        from app.services.share_page_fetch_service import _ensure_windows_playwright_event_loop
+
+        _ensure_windows_playwright_event_loop()
+    except Exception:
+        pass
+
+
+if worker_process_init is not None:
+    worker_process_init.connect(_fix_windows_playwright_loop, weak=False)
+if worker_ready is not None:
+    worker_ready.connect(_fix_windows_playwright_loop, weak=False)

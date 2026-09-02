@@ -61,6 +61,9 @@ export interface MonitorSubtask {
   screenshot_pending?: boolean
   /** 后台截图是否成功；未结束时为 null/undefined */
   screenshot_ok?: boolean | null
+  /** 慢路径分享页解析：pending | ok | failed */
+  backfill_parse_status?: 'pending' | 'ok' | 'failed' | string | null
+  backfill_parse_error?: string | null
   answer_content: string | null
   reference_list: Array<{ title?: string; url?: string; site?: string; index?: number }>
   reference_count?: number

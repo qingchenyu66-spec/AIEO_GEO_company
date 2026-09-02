@@ -1,9 +1,10 @@
 param(
-    [ValidateSet("submit", "sync", "default", "beat", "all")]
+    [ValidateSet("submit", "sync", "default", "backfill", "beat", "all")]
     [string]$Role = "all",
     [int]$SubmitConcurrency = 4,
     [int]$SyncConcurrency = 8,
     [int]$DefaultConcurrency = 2,
+    [int]$BackfillConcurrency = 1,
     [switch]$ShowWindows
 )
 
@@ -22,8 +23,8 @@ function Stop-ExistingCelery {
             $cmd = $_.CommandLine
             if (-not $cmd) { return $false }
             if ($cmd -match 'celery -A app\.celery_app (worker|beat|flower)') { return $true }
-            if ($cmd -match 'celery_worker_(submit|sync|default)\.cmd' -or $cmd -match 'celery_beat\.cmd') { return $true }
-            if ($_.Name -eq 'powershell.exe' -and $cmd -match 'GEO Celery (Submit|Sync|Default|Beat|Flower)') { return $true }
+            if ($cmd -match 'celery_worker_(submit|sync|default|backfill)\.cmd' -or $cmd -match 'celery_beat\.cmd') { return $true }
+            if ($_.Name -eq 'powershell.exe' -and $cmd -match 'GEO Celery (Submit|Sync|Default|Backfill|Beat|Flower)') { return $true }
             return $false
         } |
         ForEach-Object {
@@ -52,6 +53,8 @@ function Start-CeleryRole {
     $command = @"
 Set-Location '$BackendRoot'
 `$env:PYTHONPATH='$BackendRoot'
+`$env:PYTHONIOENCODING='utf-8'
+`$env:PYTHONUTF8='1'
 Write-Host '$Title'
 try {
     & '$Python' -m celery $($CeleryArgs -join ' ') 2>&1 | Tee-Object -FilePath '$logPath' -Append
@@ -80,8 +83,9 @@ try {
         "submit" { $roles = @("submit") }
         "sync" { $roles = @("sync") }
         "default" { $roles = @("default") }
+        "backfill" { $roles = @("backfill") }
         "beat" { $roles = @("beat") }
-        "all" { $roles = @("submit", "sync", "default", "beat") }
+        "all" { $roles = @("submit", "sync", "default", "backfill", "beat") }
     }
 
     foreach ($item in $roles) {
@@ -112,6 +116,17 @@ try {
                     "-Q", "default",
                     "-n", "default@$env:COMPUTERNAME",
                     "-c", "$DefaultConcurrency",
+                    "--pool=solo",
+                    "--loglevel=info"
+                )
+            }
+            "backfill" {
+                # 2026-09-02 - Playwright 补录解析/截图，默认并发 1
+                Start-CeleryRole "GEO Celery Backfill Worker" "celery-worker-backfill.log" @(
+                    "-A", "app.celery_app", "worker",
+                    "-Q", "backfill",
+                    "-n", "backfill@$env:COMPUTERNAME",
+                    "-c", "$BackfillConcurrency",
                     "--pool=solo",
                     "--loglevel=info"
                 )

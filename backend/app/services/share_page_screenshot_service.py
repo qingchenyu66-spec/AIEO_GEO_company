@@ -10,6 +10,7 @@ import re
 import threading
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -379,6 +380,45 @@ def _quality_ok(png: bytes) -> bool:
     return True
 
 
+def _capture_png_bytes_from_page(page: Any, url: str) -> bytes:
+    """已打开的分享页上截长图（供独立截图或与解析合并 G）。"""
+    host = _host(url)
+    deepseek = host == "deepseek.com" or host.endswith(".deepseek.com")
+    doubao = host == "doubao.com" or host.endswith(".doubao.com")
+    qianwen = "qianwen" in host or host.endswith("tongyi.com")
+    mobile = host in ("yb.tencent.com", "yuanbao.tencent.com")
+    prefer_expand = not mobile and not qianwen
+    page.evaluate(HIDE_CHROME_JS)
+    page.wait_for_timeout(200)
+    sel = _pick_scroller(page, host)
+    png: bytes | None = None
+    scrollers = _scroller_list(host)
+    if prefer_expand:
+        for cand in scrollers + [sel]:
+            png = _element_png(page, cand)
+            if png and _quality_ok(png):
+                break
+            png = None
+    if png is None:
+        png = _stitch_png(page, sel, overlap=220 if (deepseek or doubao or qianwen) else 100)
+    if not _quality_ok(png):
+        raise ValueError("截图质量不足（可能页面空白或链接失效）")
+    return png
+
+
+def save_backfill_screenshot_png(png: bytes, *, subtask_id: str | None = None) -> str:
+    safe_sid = re.sub(r"[^A-Za-z0-9_-]+", "_", str(subtask_id or "shot"))[:48] or "shot"
+    file_id = f"{safe_sid}_{uuid4().hex[:10]}.png"
+    path = backfill_screenshot_dir() / file_id
+    path.write_bytes(png)
+    return f"{BACKFILL_SHOT_PATH_PREFIX}{file_id}"
+
+
+def capture_share_page_screenshot_from_page(page: Any, url: str, *, subtask_id: str | None = None) -> str:
+    # 2026-09-02 - D+G 解析与截图同会话 - 勿二次 goto
+    return save_backfill_screenshot_png(_capture_png_bytes_from_page(page, url), subtask_id=subtask_id)
+
+
 def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) -> str:
     """截分享页并落盘，返回 `/api/v1/media/backfill-shot/{file}`。失败抛 ValueError。"""
     value = str(url or "").strip()
@@ -391,12 +431,9 @@ def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) ->
 
     host = _host(value)
     mobile = host in ("yb.tencent.com", "yuanbao.tencent.com")
-    deepseek = host == "deepseek.com" or host.endswith(".deepseek.com")
-    doubao = host == "doubao.com" or host.endswith(".doubao.com")
-    qianwen = "qianwen" in host or host.endswith("tongyi.com")
-    # 2026-08-25 - deepseek 也先整容器展开截，失败再滚屏拼（已弃用「deepseek 必拼」）
-    # 2026-08-25 - 千问 answer 展开虚高空白，优先真滚 page-content 拼接
-    prefer_expand = not mobile and not qianwen
+    from app.services.share_page_fetch_service import _ensure_windows_playwright_event_loop
+
+    _ensure_windows_playwright_event_loop()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -425,32 +462,12 @@ def capture_share_page_screenshot(url: str, *, subtask_id: str | None = None) ->
             page = context.new_page()
             page.goto(value, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(4500)
-            page.evaluate(HIDE_CHROME_JS)
-            page.wait_for_timeout(200)
-            sel = _pick_scroller(page, host)
-            png: bytes | None = None
-            scrollers = _scroller_list(host)
-            if prefer_expand:
-                for cand in scrollers + [sel]:
-                    png = _element_png(page, cand)
-                    if png and _quality_ok(png):
-                        break
-                    png = None
-            if png is None:
-                # DeepSeek/豆包/千问滚屏叠得更狠，加大 overlap 去重条带
-                png = _stitch_png(page, sel, overlap=220 if (deepseek or doubao or qianwen) else 100)
+            png = _capture_png_bytes_from_page(page, value)
             context.close()
         finally:
             browser.close()
 
-    if not _quality_ok(png):
-        raise ValueError("截图质量不足（可能页面空白或链接失效）")
-
-    safe_sid = re.sub(r"[^A-Za-z0-9_-]+", "_", str(subtask_id or "shot"))[:48] or "shot"
-    file_id = f"{safe_sid}_{uuid4().hex[:10]}.png"
-    path = backfill_screenshot_dir() / file_id
-    path.write_bytes(png)
-    return f"{BACKFILL_SHOT_PATH_PREFIX}{file_id}"
+    return save_backfill_screenshot_png(png, subtask_id=subtask_id)
 
 
 def apply_backfill_screenshot(db, *, subtask_id: str, snapshot_url: str) -> dict:
@@ -515,19 +532,16 @@ def _spawn_backfill_screenshot(*, subtask_id: str, snapshot_url: str) -> None:
 
 
 def enqueue_backfill_screenshot(*, subtask_id: str, snapshot_url: str) -> str:
-    """投递异步截图；绝不在请求线程里同步截。返回 queued | thread_fallback。"""
-    if settings.celery_enabled:
-        try:
-            from app.tasks.snapshot_backfill import capture_backfill_screenshot_task
+    """投递异步截图；绝不在请求线程里同步截。返回 queued | thread_fallback。
 
-            capture_backfill_screenshot_task.delay(subtask_id, snapshot_url)
-            return "queued"
-        except Exception as exc:  # noqa: BLE001
-            # 2026-08-07 - Celery 投递失败曾同步截导致提交卡十几秒 - 改后台线程，勿堵 HTTP
-            logger.warning(
-                "backfill screenshot enqueue failed, thread fallback subtask_id=%s err=%s",
-                subtask_id,
-                exc,
-            )
+    celery_enabled=True：只走 Celery，失败抛错由上层记 screenshot_error。
+    celery_enabled=False：才允许线程兜底。
+    """
+    # 2026-09-02 - 与解析入队对齐：生产禁线程兜底，避免进程重启丢截图却像成功
+    if settings.celery_enabled:
+        from app.tasks.snapshot_backfill import capture_backfill_screenshot_task
+
+        capture_backfill_screenshot_task.delay(subtask_id, snapshot_url)
+        return "queued"
     _spawn_backfill_screenshot(subtask_id=subtask_id, snapshot_url=snapshot_url)
     return "thread_fallback"

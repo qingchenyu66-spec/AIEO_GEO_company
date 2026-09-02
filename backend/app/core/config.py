@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # 2026-08-27 - default 含矩阵/知识库/预热，阈值低于 sync
     celery_queue_default_warning: int = 30
     celery_queue_default_critical: int = 80
+    # 2026-09-02 - backfill 浏览器任务，积压很快就会拖超时
+    celery_queue_backfill_warning: int = 10
+    celery_queue_backfill_critical: int = 30
     celery_pending_sync_task_warning: int = 80
     celery_pending_sync_task_critical: int = 200
 

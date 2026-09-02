@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -9,7 +11,9 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from sqlalchemy import and_, false, func, or_, select, update
+from sqlalchemy import insert as sa_insert
 from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.dependencies import CurrentSession
@@ -54,7 +58,7 @@ from app.services.monitor_service import (
 from app.core.masking import excerpt_sensitive_text
 from app.services.ranking_parser import rankings_for_storage
 from app.services.schedule_history import schedule_times_for_asset_on_day
-from app.services.share_page_fetch_service import fetch_share_page
+from app.services.share_page_fetch_service import try_fast_fetch_share_page
 from app.services.share_page_screenshot_service import (
     enqueue_backfill_screenshot,
     is_image_screenshot_url,
@@ -68,6 +72,78 @@ from app.services.schedule_context import (
 from app.services.system_notification_service import (
     resolve_subtask_backfill_notification,
     upsert_batch_backfill_notification as persist_batch_backfill_notification,
+)
+
+logger = logging.getLogger(__name__)
+
+# 2026-09-02 - 用户可重提阈值（与前端提示对齐）；watchdog 落 failed 须更晚，避开 soft/hard limit 边界
+_BACKFILL_PARSE_RETRY_STALE_SECONDS = 180
+_BACKFILL_PARSE_WATCHDOG_SECONDS = 300
+# 兼容旧名
+_BACKFILL_PARSE_PENDING_STALE_SECONDS = _BACKFILL_PARSE_RETRY_STALE_SECONDS
+
+
+def _backfill_parse_age_seconds(raw: dict[str, Any]) -> float | None:
+    started = raw.get("_pending_parse_started_at")
+    if not started:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _backfill_parse_pending_stale(
+    raw: dict[str, Any],
+    *,
+    timeout_seconds: int | None = None,
+) -> bool:
+    """pending 是否可重试 / 是否应按超时处理。默认用可重提阈值（180s）。"""
+    if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+        return False
+    enqueue = str(raw.get("backfill_parse_enqueue") or "").strip().lower()
+    # 2026-09-02 - 无标记才算孤儿；dispatching/queued 等按 started_at 计时，避免刚落库误显 failed
+    if not enqueue:
+        return True
+    age = _backfill_parse_age_seconds(raw)
+    if age is None:
+        return True
+    limit = int(timeout_seconds if timeout_seconds is not None else _BACKFILL_PARSE_RETRY_STALE_SECONDS)
+    return age >= max(30, limit)
+
+
+def _backfill_parse_display_stale(raw: dict[str, Any]) -> bool:
+    """详情/矩阵伪装 failed：对齐 watchdog，勿在 soft/可重提边界误报失败。"""
+    # 2026-09-02 - 展示失败须晚于 Worker hard limit，避免 180s 假失败逼用户重提
+    return _backfill_parse_pending_stale(raw, timeout_seconds=_BACKFILL_PARSE_WATCHDOG_SECONDS)
+
+
+def _new_backfill_parse_job_id() -> str:
+    return uuid4().hex
+
+
+def _owns_backfill_parse_job(subtask: GeoMonitorSubtask, parse_job_id: str) -> bool:
+    """写回前确认仍是当前解析任务，避免超时重提后旧 Worker 覆盖。"""
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+        return False
+    return str(raw.get("_pending_parse_job_id") or "") == str(parse_job_id or "")
+
+
+_PENDING_PARSE_KEYS = (
+    "backfill_parse_status",
+    "backfill_parse_error",
+    "_pending_mention_position",
+    "_pending_answer_content",
+    "_pending_reference_urls",
+    "_pending_sentiment",
+    "_pending_operator_user_id",
+    "_pending_parse_started_at",
+    "_pending_parse_job_id",
+    "backfill_parse_enqueue",
 )
 
 _SNAPSHOT_HOST_HINTS: dict[str, set[str]] = {
@@ -415,6 +491,18 @@ def enrich_subtask_display_backfill_flags(
     display["needs_backfill"] = bool(needs) and not dismissed
     display["needs_backfill_raw"] = bool(needs)
     display["has_answer"] = bool((subtask.answer_content or "").strip())
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    parse_status = str(raw.get("backfill_parse_status") or "").strip().lower()
+    # 2026-09-02 - 孤儿/超时 pending 轮询会干等 - 详情展示直接当 failed，便于前端停下
+    # 展示超时对齐 watchdog，勿在 180s 可重提边界伪装 failed
+    if parse_status == "pending" and _backfill_parse_display_stale(raw):
+        display["backfill_parse_status"] = "failed"
+        display["backfill_parse_error"] = str(raw.get("backfill_parse_error") or "上次解析未启动或已超时，请重新提交")[:240]
+        return display
+    if parse_status:
+        display["backfill_parse_status"] = parse_status
+    if raw.get("backfill_parse_error"):
+        display["backfill_parse_error"] = str(raw.get("backfill_parse_error"))[:240]
     return display
 
 
@@ -497,6 +585,11 @@ def build_snapshot_backfill_matrix_sample(
     dismissed = subtask_backfill_dismissed(subtask)
     updated = getattr(subtask, "updated_at", None)
     before_fields = _before_backfill_matrix_fields(subtask)
+    raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
+    parse_status = str(raw.get("backfill_parse_status") or "").strip().lower() or None
+    # 2026-09-02 - 矩阵展示后台解析中 - 孤儿/超长 pending 不当作进行中（对齐 watchdog）
+    if parse_status == "pending" and _backfill_parse_display_stale(raw):
+        parse_status = "failed"
     return {
         "subtask_id": subtask.subtask_id,
         "task_id": task.task_id,
@@ -513,6 +606,7 @@ def build_snapshot_backfill_matrix_sample(
         "backfill_dismissed": dismissed,
         "has_answer": has_answer,
         "status": subtask.status,
+        "backfill_parse_status": parse_status,
         "schedule_key": schedule_ctx.get("schedule_key"),
         "schedule_window_key": schedule_ctx.get("schedule_window_key"),
         "schedule_label": schedule_ctx.get("schedule_label"),
@@ -684,6 +778,631 @@ def _notify_subtask_backfill(
     )
 
 
+def _pack_backfill_apply_response(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    *,
+    rank_only: bool = False,
+    parse_async: bool = False,
+) -> dict[str, Any]:
+    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
+    groups = (
+        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+        if task.tenant_id
+        else []
+    )
+    display = enrich_subtask_display_backfill_flags(
+        serialize_subtask_for_display(
+            subtask,
+            monitor_keywords=task.monitor_keywords,
+            asset=asset,
+            keyword_groups=groups,
+        ),
+        subtask,
+    )
+    payload: dict[str, Any] = {
+        "subtask": display,
+        "task": {
+            "task_id": task.task_id,
+            "status": task.status,
+            "completed_items": task.completed_items,
+            "failed_items": task.failed_items,
+        },
+        "brand_terms": _brand_terms_for_task(db, task, asset),
+        "lead_context": _lead_context_for_task(db, task.task_id),
+    }
+    if rank_only:
+        payload["rank_only"] = True
+    if parse_async:
+        payload["parse_async"] = True
+    return payload
+
+
+def _apply_share_fetched_backfill(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    current: CurrentSession,
+    *,
+    url: str,
+    content: str,
+    fetched_refs: list[dict[str, Any]],
+    fetch_meta: dict[str, Any],
+    mention_position: int | None,
+    sentiment: str | None,
+    reference_urls: list[str] | None,
+    previous_stat_date: Any,
+    screenshot_path: str | None = None,
+    enqueue_screenshot: bool = True,
+    parse_job_id: str | None = None,
+) -> dict[str, Any]:
+    if not content:
+        raise ValueError("未能解析分享页正文")
+    # 2026-09-02 - 写答案前行锁 + 认 job - 防同 job 并发双写 / 超时重提冒用
+    if parse_job_id:
+        locked = db.scalar(
+            select(GeoMonitorSubtask)
+            .where(GeoMonitorSubtask.subtask_id == subtask.subtask_id)
+            .with_for_update()
+        )
+        if locked is None:
+            raise ValueError("子任务不存在")
+        subtask = locked
+        if not _owns_backfill_parse_job(subtask, parse_job_id):
+            raise ValueError("parse_job_superseded")
+
+    previous_answer = subtask.answer_content
+    previous_raw = dict(subtask.raw_result_json or {})
+    previous_source = previous_raw.get("source")
+    previous_shot = (subtask.page_screenshot or "").strip() or None
+    before_snap = build_before_backfill_snapshot(subtask)
+
+    clear_subtask_backfill_dismiss(subtask)
+    if screenshot_path:
+        subtask.page_screenshot = screenshot_path
+        fetch_meta["screenshot_pending"] = False
+        fetch_meta["screenshot_ok"] = True
+        fetch_meta["screenshot_combined"] = True
+    else:
+        subtask.page_screenshot = None
+        fetch_meta["screenshot_pending"] = True
+    if previous_shot and not screenshot_path:
+        fetch_meta["replaced_previous_screenshot"] = previous_shot
+    subtask.answer_content = content
+    subtask.error_message = None
+    subtask.status = "completed"
+    subtask.mention_context = None
+
+    refs: list[dict[str, Any]] = []
+    if reference_urls:
+        for index, item in enumerate(reference_urls, start=1):
+            text = str(item or "").strip()
+            if text:
+                refs.append({"index": index, "url": text, "title": text})
+    if not refs and fetched_refs:
+        refs = fetched_refs
+    from app.services.monitor_service import _filter_citation_sources
+
+    subtask.reference_list_json = _filter_citation_sources(refs) or None
+    subtask.citation_list_json = None
+
+    if sentiment:
+        subtask.sentiment = sentiment.strip().lower()
+    elif previous_answer:
+        subtask.sentiment = None
+
+    subtask.all_rankings_json = rankings_for_storage(_subtask_answer_plaintext(subtask), None)
+    subtask.competitor_rankings_json = None
+
+    recompute_subtask_rank_from_answer(
+        db,
+        subtask,
+        task,
+        override_mention_position=mention_position,
+        force=mention_position is None,
+    )
+
+    manual_meta = {
+        "source": "manual_snapshot",
+        "snapshot_url": url,
+        "operator_user_id": current.user.id,
+        "replaced": bool(previous_answer),
+        "manual_rank_locked": True,
+        "before_backfill": before_snap,
+        **fetch_meta,
+    }
+    if previous_answer:
+        manual_meta["replaced_previous_source"] = previous_source
+        manual_meta["replaced_previous_answer_preview"] = excerpt_sensitive_text(previous_answer, limit=80)
+    raw = dict(subtask.raw_result_json or previous_raw or {})
+    raw.update(manual_meta)
+    if enqueue_screenshot and not screenshot_path:
+        raw.pop("screenshot_ok", None)
+        raw.pop("screenshot_error", None)
+    for key in _PENDING_PARSE_KEYS:
+        raw.pop(key, None)
+    # 2026-09-02 - 异步成功态写进同一次 commit - 勿 apply 后再 commit ok（会盖掉新 pending）
+    if parse_job_id:
+        raw["backfill_parse_status"] = "ok"
+        raw.pop("backfill_parse_error", None)
+    subtask.raw_result_json = raw
+
+    _reconcile_task_progress(task)
+    task.failed_items = sum(
+        1 for item in (task.subtasks or []) if item.status in {"failed", "stopped"} and not item.answer_content
+    )
+    task.completed_items = sum(1 for item in (task.subtasks or []) if item.answer_content)
+
+    action_type = "快照覆盖" if previous_answer else "快照补录"
+    write_operation_log(
+        db,
+        current,
+        action_type,
+        _snapshot_backfill_log_description(db, subtask, task, action_type=action_type),
+        target_module="快照补录",
+        tenant_id=task.tenant_id,
+        risk_level="关注" if previous_answer else "正常",
+    )
+
+    db.flush()
+
+    run = db.scalar(select(LeadDiagnosisRun).where(LeadDiagnosisRun.task_id == task.task_id))
+    if run is not None and run.status == "failed" and (task.completed_items or 0) > 0:
+        run.status = "completed"
+        run.error_message = None
+
+    db.commit()
+
+    if enqueue_screenshot and not screenshot_path:
+        try:
+            mode = enqueue_backfill_screenshot(subtask_id=subtask.subtask_id, snapshot_url=url)
+            db.refresh(subtask)
+            raw2 = dict(subtask.raw_result_json or {})
+            raw2["screenshot_enqueue"] = mode
+            subtask.raw_result_json = raw2
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.refresh(subtask)
+            raw2 = dict(subtask.raw_result_json or {})
+            raw2["screenshot_pending"] = False
+            raw2["screenshot_ok"] = False
+            raw2["screenshot_error"] = f"enqueue_failed:{exc}"[:240]
+            subtask.raw_result_json = raw2
+            db.commit()
+
+    from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    if task.tenant_id:
+        refresh_stats_after_subtask_backfill(
+            db,
+            task=task,
+            subtask=subtask,
+            previous_stat_date=previous_stat_date,
+        )
+        db.commit()
+        invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+    else:
+        invalidate_monitor_summary_cache(bust_overview=True)
+    resolve_subtask_backfill_notification(db, subtask.subtask_id)
+    _bust_snapshot_backfill_matrix_cache()
+
+    from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
+
+    refresh_lead_diagnosis_after_backfill(db, task.task_id)
+
+    db.refresh(subtask)
+    db.refresh(task)
+    return _pack_backfill_apply_response(db, subtask, task)
+
+
+def _spawn_backfill_parse(*, subtask_id: str, parse_job_id: str) -> None:
+    def _job() -> None:
+        from app.core.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            run_async_backfill_parse(db, subtask_id, parse_job_id=parse_job_id)
+        except Exception:
+            logger.exception("background backfill parse crashed subtask_id=%s", subtask_id)
+        finally:
+            db.close()
+
+    threading.Thread(
+        target=_job,
+        name=f"backfill-parse-{subtask_id}",
+        daemon=True,
+    ).start()
+
+
+def enqueue_backfill_parse(*, subtask_id: str, parse_job_id: str) -> str:
+    """慢路径解析入队；绝不在 HTTP 线程同步 Playwright。
+
+    celery_enabled=True（生产）：只走 Celery，失败抛错由上层清 pending。
+    celery_enabled=False（本地）：才允许线程兜底。
+    """
+    from app.core.config import settings
+
+    job_id = str(parse_job_id or "").strip()
+    if not job_id:
+        raise ValueError("parse_job_id required")
+
+    # 2026-09-02 - 生产禁线程兜底 - 进程重启会丢任务却仍显示 pending
+    # 2026-09-02 - delay 必须带 job_id - 防排队旧任务启动后读到新身份
+    if settings.celery_enabled:
+        from app.celery_app import celery_app
+        from app.core.redis_client import _is_auth_redis_error, redis_url_without_auth
+        from app.tasks.snapshot_backfill import parse_and_apply_backfill_task
+
+        try:
+            parse_and_apply_backfill_task.delay(subtask_id, job_id)
+        except Exception as exc:  # noqa: BLE001
+            # 2026-09-02 - 本地 Redis 无密码但 URL/连接池误带 AUTH - 去认证并用新连接重试
+            if not _is_auth_redis_error(exc):
+                raise
+            bare_broker = redis_url_without_auth(str(celery_app.conf.broker_url or settings.celery_broker_url))
+            bare_backend = redis_url_without_auth(
+                str(celery_app.conf.result_backend or settings.celery_result_backend)
+            )
+            logger.warning(
+                "backfill enqueue AUTH rejected, retry without redis auth broker=%s err=%s",
+                bare_broker,
+                exc,
+            )
+            celery_app.conf.broker_url = bare_broker
+            celery_app.conf.result_backend = bare_backend
+            try:
+                celery_app.pool.force_close_all()
+            except Exception:
+                pass
+            with celery_app.connection_or_acquire(connection=celery_app.connection(bare_broker)) as conn:
+                parse_and_apply_backfill_task.apply_async(args=(subtask_id, job_id), connection=conn)
+        return "queued"
+    _spawn_backfill_parse(subtask_id=subtask_id, parse_job_id=job_id)
+    return "thread_fallback"
+
+
+def _queue_async_share_backfill_parse(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    current: CurrentSession,
+    *,
+    url: str,
+    mention_position: int | None,
+    answer_content: str | None,
+    reference_urls: list[str] | None,
+    sentiment: str | None,
+) -> dict[str, Any]:
+    # 2026-09-02 - D 慢路径异步入队 - HTTP 线程不跑 Playwright
+    raw = dict(subtask.raw_result_json or {})
+    if str(raw.get("backfill_parse_status") or "").lower() == "pending":
+        if not _backfill_parse_pending_stale(raw):
+            raise ValueError("该条正在解析中，请稍后再试")
+    parse_job_id = _new_backfill_parse_job_id()
+    raw.update(
+        {
+            "backfill_parse_status": "pending",
+            "backfill_parse_error": None,
+            "snapshot_url": url,
+            "_pending_mention_position": mention_position,
+            "_pending_answer_content": (answer_content or "").strip() or None,
+            "_pending_reference_urls": list(reference_urls or []) or None,
+            "_pending_sentiment": (sentiment or "").strip() or None,
+            "_pending_operator_user_id": current.user.id,
+            "_pending_parse_started_at": datetime.now(UTC).isoformat(),
+            # 2026-09-02 - 解析任务身份 - 旧 Worker 写回前须仍匹配
+            "_pending_parse_job_id": parse_job_id,
+            # 2026-09-02 - 先标 dispatching 再投递 - 避免无 enqueue 窗口被详情当成孤儿 failed
+            "backfill_parse_enqueue": "dispatching",
+        }
+    )
+    subtask.raw_result_json = raw
+    db.commit()
+    try:
+        mode = enqueue_backfill_parse(subtask_id=subtask.subtask_id, parse_job_id=parse_job_id)
+    except Exception as exc:  # noqa: BLE001
+        # 2026-09-02 - 入队失败勿留 pending 卡死 - 清状态便于立刻重试
+        logger.exception(
+            "backfill parse enqueue failed subtask_id=%s job_id=%s err=%r",
+            subtask.subtask_id,
+            parse_job_id,
+            exc,
+        )
+        db.refresh(subtask)
+        raw_fail = dict(subtask.raw_result_json or {})
+        for key in _PENDING_PARSE_KEYS:
+            raw_fail.pop(key, None)
+        raw_fail["backfill_parse_status"] = "failed"
+        detail = str(exc).strip() or type(exc).__name__
+        raw_fail["backfill_parse_error"] = f"解析任务入队失败：{detail}"[:240]
+        subtask.raw_result_json = raw_fail
+        db.commit()
+        raise ValueError(f"解析任务入队失败，请重试（{detail}）") from exc
+    db.refresh(subtask)
+    raw2 = dict(subtask.raw_result_json or {})
+    raw2["backfill_parse_enqueue"] = mode
+    subtask.raw_result_json = raw2
+    db.commit()
+    db.refresh(subtask)
+    return _pack_backfill_apply_response(db, subtask, task, parse_async=True)
+
+
+def _operator_session_from_raw(db: Session, raw: dict[str, Any]) -> CurrentSession:
+    from types import SimpleNamespace
+
+    from app.models.user import User
+    from app.models.user_identity import UserIdentity
+
+    user_id = int(raw.get("_pending_operator_user_id") or 0)
+    user = db.get(User, user_id) if user_id else None
+    if user is None:
+        user = SimpleNamespace(id=0, display_name="系统", username="system")  # type: ignore[assignment]
+    identity = db.scalar(
+        select(UserIdentity).where(
+            UserIdentity.user_id == getattr(user, "id", 0),
+            UserIdentity.identity_type == "PLATFORM",
+        ).limit(1)
+    )
+    if identity is None:
+        identity = SimpleNamespace(  # type: ignore[assignment]
+            id=0,
+            identity_type="PLATFORM",
+            tenant_id=None,
+            identity_name=getattr(user, "display_name", None) or getattr(user, "username", "系统"),
+            position_id=None,
+        )
+    return CurrentSession(user=user, identity=identity)  # type: ignore[arg-type]
+
+
+def _mark_backfill_parse_failed(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    message: str,
+    *,
+    parse_job_id: str | None = None,
+) -> bool:
+    # 2026-09-02 - 写 failed 前行锁 + refresh - 防盖掉并发成功的 apply / 新 pending
+    locked = db.scalar(
+        select(GeoMonitorSubtask)
+        .where(GeoMonitorSubtask.subtask_id == subtask.subtask_id)
+        .with_for_update()
+    )
+    if locked is None:
+        return False
+    subtask = locked
+    raw = dict(subtask.raw_result_json or {})
+    if parse_job_id and str(raw.get("_pending_parse_job_id") or "") != str(parse_job_id):
+        return False
+    if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+        return False
+    for key in _PENDING_PARSE_KEYS:
+        raw.pop(key, None)
+    raw["backfill_parse_status"] = "failed"
+    raw["backfill_parse_error"] = str(message or "解析失败")[:240]
+    subtask.raw_result_json = raw
+    db.commit()
+    return True
+
+
+def fail_stale_backfill_parses(
+    db: Session,
+    *,
+    timeout_seconds: int | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """定时扫卡住的补录解析 pending，落 failed（硬杀/超时未写回时的兜底）。"""
+    # 2026-09-02 - watchdog：写 failed 后旧 Worker 因 job/status 校验会 skip
+    # 2026-09-02 - watchdog 比 soft(180)/hard(240) 更晚 - 避免任务边界误标 failed
+    seconds = max(30, int(timeout_seconds or _BACKFILL_PARSE_WATCHDOG_SECONDS))
+    cap = max(1, min(int(limit or 100), 500))
+    # MySQL JSON_EXTRACT 带引号，需 UNQUOTE；SQLite 直接比字符串
+    bind = db.get_bind()
+    extract = func.json_extract(GeoMonitorSubtask.raw_result_json, "$.backfill_parse_status")
+    if bind is not None and bind.dialect.name == "mysql":
+        pending_expr = func.json_unquote(extract) == "pending"
+    else:
+        pending_expr = extract == "pending"
+    rows = list(
+        db.scalars(
+            select(GeoMonitorSubtask)
+            .where(
+                GeoMonitorSubtask.raw_result_json.is_not(None),
+                pending_expr,
+            )
+            .order_by(GeoMonitorSubtask.updated_at.asc())
+            .limit(cap)
+        )
+    )
+    failed = 0
+    checked = 0
+    now = datetime.now(UTC)
+    for subtask in rows:
+        checked += 1
+        raw = dict(subtask.raw_result_json or {})
+        if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+            continue
+        # 无入队标记的孤儿立刻失败；dispatching/queued 按 started_at / updated_at 超时
+        enqueue = str(raw.get("backfill_parse_enqueue") or "").strip()
+        is_orphan = not enqueue
+        age_seconds: float | None = None
+        started = raw.get("_pending_parse_started_at")
+        if started:
+            try:
+                ts = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                age_seconds = (now - ts.astimezone(UTC)).total_seconds()
+            except (TypeError, ValueError):
+                age_seconds = float(seconds)
+        elif getattr(subtask, "updated_at", None) is not None:
+            updated = subtask.updated_at
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=UTC)
+            age_seconds = (now - updated.astimezone(UTC)).total_seconds()
+        if not is_orphan and (age_seconds is None or age_seconds < seconds):
+            continue
+        job_id = str(raw.get("_pending_parse_job_id") or "").strip() or None
+        msg = "解析任务未入队或已丢失，请重新提交" if is_orphan else "解析超时未完成，请重新提交"
+        # 2026-09-02 - mark 可能因 job 不匹配跳过 - 仅真正写库才计入 failed
+        if _mark_backfill_parse_failed(db, subtask, msg, parse_job_id=job_id):
+            failed += 1
+    return {"status": "ok", "checked": checked, "failed": failed}
+
+def run_async_backfill_parse(
+    db: Session,
+    subtask_id: str,
+    *,
+    parse_job_id: str | None = None,
+) -> dict[str, Any]:
+    """Celery/线程：Playwright 合并解析+截图（G），再入库。
+
+    parse_job_id 必须由入队方传入；与库中当前身份不一致则 skip，防止排队旧任务冒用新 job。
+    """
+    from app.models.monitor import GeoMonitorSubtask
+    from app.services.share_page_fetch_service import fetch_share_page_browser_combined
+
+    expected_job_id = str(parse_job_id or "").strip()
+    subtask = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id))
+    if subtask is None:
+        return {"status": "missing", "subtask_id": subtask_id}
+    raw = dict(subtask.raw_result_json or {})
+    if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+        return {"status": "skipped", "subtask_id": subtask_id}
+
+    current_job_id = str(raw.get("_pending_parse_job_id") or "").strip()
+    # 2026-09-02 - 入队时绑定的 job_id 为准；库已换新身份则旧 Worker 立刻退出
+    if expected_job_id:
+        if not current_job_id or current_job_id != expected_job_id:
+            logger.info(
+                "async backfill parse skipped mismatched job subtask_id=%s expected=%s current=%s",
+                subtask_id,
+                expected_job_id,
+                current_job_id or "-",
+            )
+            return {"status": "skipped", "subtask_id": subtask_id, "reason": "superseded"}
+        job_id = expected_job_id
+    else:
+        # 无入参不得用库里“当前”身份——排队旧任务会冒用新 job；只 skip 勿落 failed（防滚动发布误杀）
+        logger.warning(
+            "async backfill parse skipped missing parse_job_id subtask_id=%s current=%s",
+            subtask_id,
+            current_job_id or "-",
+        )
+        return {"status": "skipped", "subtask_id": subtask_id, "reason": "missing_parse_job_id"}
+
+    task = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == subtask.task_id))
+    if task is None:
+        _mark_backfill_parse_failed(db, subtask, "任务不存在", parse_job_id=job_id)
+        return {"status": "failed", "subtask_id": subtask_id}
+
+    url = str(raw.get("snapshot_url") or "").strip()
+    if not url:
+        _mark_backfill_parse_failed(db, subtask, "缺少分享链接", parse_job_id=job_id)
+        return {"status": "failed", "subtask_id": subtask_id}
+
+    previous_stat_date = None
+    if task.tenant_id:
+        from app.services.monitor_stats_service import _detect_stat_date
+        from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
+
+        schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        lead_run = lead_diagnosis_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        asset = get_brand_asset(db, task.tenant_id)
+        previous_stat_date = _detect_stat_date(
+            subtask,
+            task,
+            schedule_run=schedule_run,
+            lead_run=lead_run,
+            asset=asset,
+        )
+
+    mention_position = raw.get("_pending_mention_position")
+    if mention_position is not None:
+        try:
+            mention_position = int(mention_position)
+        except (TypeError, ValueError):
+            mention_position = None
+    answer_content = raw.get("_pending_answer_content")
+    reference_urls = raw.get("_pending_reference_urls")
+    sentiment = raw.get("_pending_sentiment")
+    current = _operator_session_from_raw(db, raw)
+
+    try:
+        fetched, shot_path = fetch_share_page_browser_combined(url, subtask_id=subtask_id)
+        # 2026-09-02 - Playwright 后再认一次 job - 超时重提后旧任务不得写回
+        db.refresh(subtask)
+        if not _owns_backfill_parse_job(subtask, job_id):
+            logger.info(
+                "async backfill parse superseded subtask_id=%s job_id=%s",
+                subtask_id,
+                job_id,
+            )
+            return {"status": "skipped", "subtask_id": subtask_id, "reason": "superseded"}
+
+        content = (fetched.answer_content or "").strip()
+        if not content and answer_content:
+            content = str(answer_content).strip()
+        fetch_meta = {
+            "fetch_host": fetched.source_host,
+            "fetch_title": fetched.title,
+            "fetch_reference_count": len(fetched.references or []),
+            "fetch_async": True,
+            "parse_job_id": job_id,
+        }
+        out = _apply_share_fetched_backfill(
+            db,
+            subtask,
+            task,
+            current,
+            url=url,
+            content=content,
+            fetched_refs=list(fetched.references or []),
+            fetch_meta=fetch_meta,
+            mention_position=mention_position,
+            sentiment=str(sentiment) if sentiment else None,
+            reference_urls=list(reference_urls) if isinstance(reference_urls, list) else None,
+            previous_stat_date=previous_stat_date,
+            screenshot_path=shot_path,
+            enqueue_screenshot=not bool(shot_path),
+            parse_job_id=job_id,
+        )
+        # ok 已在 apply 同行锁 commit；勿再二次写 raw（会抹掉期间新入队的 pending）
+        return {"status": "ok", "subtask_id": subtask_id, **out}
+    except ValueError as exc:
+        if str(exc) == "parse_job_superseded":
+            logger.info(
+                "async backfill parse superseded on apply subtask_id=%s job_id=%s",
+                subtask_id,
+                job_id,
+            )
+            return {"status": "skipped", "subtask_id": subtask_id, "reason": "superseded"}
+        db.rollback()
+        db.refresh(subtask)
+        err_text = str(exc).strip() or repr(exc)
+        _mark_backfill_parse_failed(db, subtask, err_text, parse_job_id=job_id)
+        logger.warning(
+            "async backfill parse failed subtask_id=%s type=%s err=%r",
+            subtask_id,
+            type(exc).__name__,
+            exc,
+        )
+        return {"status": "failed", "subtask_id": subtask_id, "error": err_text[:240]}
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        db.refresh(subtask)
+        err_text = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
+        _mark_backfill_parse_failed(db, subtask, err_text, parse_job_id=job_id)
+        logger.exception(
+            "async backfill parse crashed subtask_id=%s type=%s err=%r",
+            subtask_id,
+            type(exc).__name__,
+            exc,
+        )
+        return {"status": "failed", "subtask_id": subtask_id, "error": err_text[:240]}
+
+
 def apply_snapshot_backfill(
     db: Session,
     *,
@@ -744,6 +1463,10 @@ def apply_snapshot_backfill(
         )
         if not has_mol_result:
             raise ValueError("当前无可用快照，请粘贴分享链接补录")
+        # 2026-09-02 - 解析进行中勿只改排名 - 避免 UI 仍「解析中」且 Worker 回来覆盖
+        if str(previous_raw.get("backfill_parse_status") or "").lower() == "pending":
+            if not _backfill_parse_pending_stale(previous_raw):
+                raise ValueError("该条正在解析中，请稍后再改排名")
         # 2026-09-01 - 排名补录也落 before，矩阵可切补录前
         before_snap = build_before_backfill_snapshot(subtask)
         clear_subtask_backfill_dismiss(subtask)
@@ -765,6 +1488,8 @@ def apply_snapshot_backfill(
             manual_meta["replaced_previous_source"] = previous_raw.get("source")
         raw = dict(subtask.raw_result_json or previous_raw or {})
         raw.update(manual_meta)
+        for key in _PENDING_PARSE_KEYS:
+            raw.pop(key, None)
         subtask.raw_result_json = raw
 
         write_operation_log(
@@ -831,189 +1556,57 @@ def apply_snapshot_backfill(
         }
 
     url = validate_snapshot_url(url_raw, platform=subtask.platform)
-    # 只要补录就从分享页抓取并覆盖正文；可选手工正文仅作抓取失败时的兼容兜底
-    fetched_refs: list[dict[str, Any]] = []
-    fetch_meta: dict[str, Any] = {}
-    content = (answer_content or "").strip()
+    content_manual = (answer_content or "").strip()
     try:
-        fetched = fetch_share_page(url)
-        content = (fetched.answer_content or "").strip()
-        fetched_refs = list(fetched.references or [])
-        fetch_meta = {
-            "fetch_host": fetched.source_host,
-            "fetch_title": fetched.title,
-            "fetch_reference_count": len(fetched_refs),
-        }
+        fast = try_fast_fetch_share_page(url)
     except ValueError:
-        if not content:
+        if not content_manual:
             raise
+        fast = None
+
+    if fast is None and not content_manual:
+        return _queue_async_share_backfill_parse(
+            db,
+            subtask,
+            task,
+            current,
+            url=url,
+            mention_position=mention_position,
+            answer_content=answer_content,
+            reference_urls=reference_urls,
+            sentiment=sentiment,
+        )
+
+    if fast is None:
+        fetched_refs: list[dict[str, Any]] = []
         fetch_meta = {"fetch_skipped": True, "fetch_fallback": "manual_answer"}
-    if not content:
-        raise ValueError("未能解析分享页正文")
+        content = content_manual
+    else:
+        content = (fast.answer_content or "").strip()
+        fetched_refs = list(fast.references or [])
+        fetch_meta = {
+            "fetch_host": fast.source_host,
+            "fetch_title": fast.title,
+            "fetch_reference_count": len(fetched_refs),
+            "fetch_fast": True,
+        }
 
-    previous_answer = subtask.answer_content
-    previous_raw = dict(subtask.raw_result_json or {})
-    previous_source = previous_raw.get("source")
-    previous_shot = (subtask.page_screenshot or "").strip() or None
-    # 2026-09-01 - 贴链补录前落快照，供「查看补录前」
-    before_snap = build_before_backfill_snapshot(subtask)
-
-    clear_subtask_backfill_dismiss(subtask)
-    # 2026-08-27 - 贴链补录留旧 CDN 图运营以为未生效 - 清空待异步新截图；rank_only/误填图链分支不动
-    subtask.page_screenshot = None
-    fetch_meta["screenshot_pending"] = True
-    if previous_shot:
-        fetch_meta["replaced_previous_screenshot"] = previous_shot
-    subtask.answer_content = content
-    subtask.error_message = None
-    subtask.status = "completed"
-    subtask.mention_context = None
-
-    refs: list[dict[str, Any]] = []
-    if reference_urls:
-        for index, item in enumerate(reference_urls, start=1):
-            text = str(item or "").strip()
-            if text:
-                refs.append({"index": index, "url": text, "title": text})
-    if not refs and fetched_refs:
-        refs = fetched_refs
-    # 2026-08-14 - 补录抓到的引用也过静态资源过滤，与同步写入一致
-    from app.services.monitor_service import _filter_citation_sources
-
-    subtask.reference_list_json = _filter_citation_sources(refs) or None
-    subtask.citation_list_json = None
-
-    if sentiment:
-        subtask.sentiment = sentiment.strip().lower()
-    elif previous_answer:
-        subtask.sentiment = None
-
-    # 2026-07-27 - 补录写榜丢掉 category - 入库保留段内序与分类
-    subtask.all_rankings_json = rankings_for_storage(_subtask_answer_plaintext(subtask), None)
-    subtask.competitor_rankings_json = None
-
-    # 2026-08-12 - 补录写入允许重算；批量洗数默认跳过 manual_snapshot
-    recompute_subtask_rank_from_answer(
+    return _apply_share_fetched_backfill(
         db,
         subtask,
         task,
-        override_mention_position=mention_position,
-        force=mention_position is None,
-    )
-
-    manual_meta = {
-        "source": "manual_snapshot",
-        "snapshot_url": url,
-        "operator_user_id": current.user.id,
-        "replaced": bool(previous_answer),
-        # 2026-08-12 - 补录位次一律锁定，避免规则升级洗数冲掉
-        "manual_rank_locked": True,
-        "before_backfill": before_snap,
-        **fetch_meta,
-    }
-    if previous_answer:
-        manual_meta["replaced_previous_source"] = previous_source
-        manual_meta["replaced_previous_answer_preview"] = excerpt_sensitive_text(previous_answer, limit=80)
-    # 在重算后的 raw 上合并补录元数据，避免冲掉 rank_resolution
-    raw = dict(subtask.raw_result_json or previous_raw or {})
-    raw.update(manual_meta)
-    raw.pop("screenshot_ok", None)
-    raw.pop("screenshot_error", None)
-    subtask.raw_result_json = raw
-
-    _reconcile_task_progress(task)
-    task.failed_items = sum(
-        1 for item in (task.subtasks or []) if item.status in {"failed", "stopped"} and not item.answer_content
-    )
-    task.completed_items = sum(1 for item in (task.subtasks or []) if item.answer_content)
-
-    action_type = "快照覆盖" if previous_answer else "快照补录"
-    write_operation_log(
-        db,
         current,
-        action_type,
-        _snapshot_backfill_log_description(db, subtask, task, action_type=action_type),
-        target_module="快照补录",
-        tenant_id=task.tenant_id,
-        risk_level="关注" if previous_answer else "正常",
+        url=url,
+        content=content,
+        fetched_refs=fetched_refs,
+        fetch_meta=fetch_meta,
+        mention_position=mention_position,
+        sentiment=sentiment,
+        reference_urls=reference_urls,
+        previous_stat_date=previous_stat_date,
+        screenshot_path=None,
+        enqueue_screenshot=True,
     )
-
-    db.flush()
-
-    run = db.scalar(select(LeadDiagnosisRun).where(LeadDiagnosisRun.task_id == task.task_id))
-    if run is not None and run.status == "failed" and (task.completed_items or 0) > 0:
-        run.status = "completed"
-        run.error_message = None
-
-    db.commit()
-    # commit 后再投递，避免 worker 读到未提交行
-    try:
-        mode = enqueue_backfill_screenshot(subtask_id=subtask.subtask_id, snapshot_url=url)
-        # 2026-08-07 - 同步截图另开会话写库后，原 session 仍持旧 raw，再 commit 会盖掉 screenshot_ok
-        db.refresh(subtask)
-        raw2 = dict(subtask.raw_result_json or {})
-        raw2["screenshot_enqueue"] = mode
-        subtask.raw_result_json = raw2
-        db.commit()
-    except Exception as exc:  # noqa: BLE001
-        db.refresh(subtask)
-        raw2 = dict(subtask.raw_result_json or {})
-        raw2["screenshot_pending"] = False
-        raw2["screenshot_ok"] = False
-        raw2["screenshot_error"] = f"enqueue_failed:{exc}"[:240]
-        subtask.raw_result_json = raw2
-        db.commit()
-
-    from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
-    from app.services.monitor_service import invalidate_monitor_summary_cache
-
-    if task.tenant_id:
-        refresh_stats_after_subtask_backfill(
-            db,
-            task=task,
-            subtask=subtask,
-            previous_stat_date=previous_stat_date,
-        )
-        db.commit()
-        invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
-    else:
-        invalidate_monitor_summary_cache(bust_overview=True)
-    resolve_subtask_backfill_notification(db, subtask.subtask_id)
-    _bust_snapshot_backfill_matrix_cache()
-
-    from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
-
-    refresh_lead_diagnosis_after_backfill(db, task.task_id)
-
-    db.refresh(subtask)
-    db.refresh(task)
-    asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
-    groups = (
-        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
-        if task.tenant_id
-        else []
-    )
-    display = enrich_subtask_display_backfill_flags(
-        serialize_subtask_for_display(
-            subtask,
-            monitor_keywords=task.monitor_keywords,
-            asset=asset,
-            keyword_groups=groups,
-        ),
-        subtask,
-    )
-    return {
-        "subtask": display,
-        "task": {
-            "task_id": task.task_id,
-            "status": task.status,
-            "completed_items": task.completed_items,
-            "failed_items": task.failed_items,
-        },
-        "brand_terms": _brand_terms_for_task(db, task, asset),
-        "lead_context": _lead_context_for_task(db, task.task_id),
-    }
-
 
 
 def build_backfill_notification_context(
@@ -1262,8 +1855,15 @@ def _bulk_insert_gap_dismissals(
 ) -> int:
     if not rows:
         return 0
-    stmt = mysql_insert(GeoSnapshotBackfillGapDismiss).values(rows)
-    stmt = stmt.prefix_with("IGNORE")
+    dialect = db.get_bind().dialect.name if db.get_bind() is not None else ""
+    if dialect == "mysql":
+        stmt = mysql_insert(GeoSnapshotBackfillGapDismiss).values(rows).prefix_with("IGNORE")
+    elif dialect == "sqlite":
+        stmt = sqlite_insert(GeoSnapshotBackfillGapDismiss).values(rows).on_conflict_do_nothing(
+            index_elements=["tenant_id", "platform", "prompt", "schedule_window_key"]
+        )
+    else:
+        stmt = sa_insert(GeoSnapshotBackfillGapDismiss).values(rows)
     result = db.execute(stmt)
     return int(result.rowcount or 0)
 
@@ -1367,8 +1967,7 @@ def dismiss_snapshot_backfill_slots(
             dismissed += int(result.rowcount or 0)
 
     if gap_rows:
-        _bulk_insert_gap_dismissals(db, rows=gap_rows)
-        dismissed += len(gap_rows)
+        dismissed += _bulk_insert_gap_dismissals(db, rows=gap_rows)
 
     truncated = len(slots) > BATCH_DISMISS_SLOTS_MAX
     if dismissed:
@@ -2163,6 +2762,7 @@ def list_snapshot_backfill_matrix(
                     "backfill_dismissed": bool(sample.get("backfill_dismissed")),
                     "has_answer": bool(sample.get("has_answer")),
                     "status": sample.get("status"),
+                    "backfill_parse_status": sample.get("backfill_parse_status"),
                     "error_message": sample.get("error_message"),
                     "prompt": sample.get("prompt"),
                     "platform": plat,

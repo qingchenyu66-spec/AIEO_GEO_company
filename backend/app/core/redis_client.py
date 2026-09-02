@@ -49,6 +49,20 @@ def bare_redis_url(url: str) -> str:
     return urlunparse((parsed.scheme, netloc, parsed.path or "", "", parsed.query, parsed.fragment))
 
 
+def redis_url_without_auth(url: str) -> str:
+    """去掉 URL 中的账号密码（本地 Redis 无 requirepass 时 Celery/redis-py 误带 AUTH 用）。"""
+    # 2026-09-02 - Client sent AUTH, but no password is set - 入队/缓存统一去认证重试
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return url
+    if parsed.username is None and parsed.password is None:
+        return url
+    host = parsed.hostname or "127.0.0.1"
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{host}{port}"
+    return urlunparse((parsed.scheme, netloc, parsed.path or "", "", parsed.query, parsed.fragment))
+
+
 def _new_redis_client(url: str) -> Redis:
     return Redis.from_url(
         bare_redis_url(url),
@@ -81,9 +95,10 @@ def get_redis_client() -> Redis | None:
         except RedisError as exc:
             if _is_auth_redis_error(exc):
                 # 2026-08-27 - 本地无密码 Redis 勿发 AUTH；与生产同代码，仅规范化 URL
-                logger.warning("Redis AUTH rejected, retry with bare URL: %s", exc)
+                # 2026-09-02 - 误带非空密码也会触发 no password is set，须去掉认证段重试
+                logger.warning("Redis AUTH rejected, retry without auth: %s", exc)
                 reset_redis_client()
-                _client = _new_redis_client(bare_redis_url(settings.redis_url))
+                _client = _new_redis_client(redis_url_without_auth(settings.redis_url))
                 try:
                     _client.ping()
                 except RedisError as retry_exc:
