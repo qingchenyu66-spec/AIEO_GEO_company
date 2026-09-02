@@ -504,6 +504,10 @@ def enrich_subtask_display_backfill_flags(
         display["backfill_parse_status"] = parse_status
     if raw.get("backfill_parse_error"):
         display["backfill_parse_error"] = str(raw.get("backfill_parse_error"))[:240]
+    # 2026-09-02 - 异步解析中仍返回旧截图 - 详情「查看快照」会露旧图；pending 时对外藏图
+    if parse_status == "pending":
+        display["page_screenshot"] = None
+        display["screenshot_pending"] = True
     return display
 
 
@@ -869,7 +873,14 @@ def _apply_share_fetched_backfill(
     previous_raw = dict(subtask.raw_result_json or {})
     previous_source = previous_raw.get("source")
     previous_shot = (subtask.page_screenshot or "").strip() or None
-    before_snap = build_before_backfill_snapshot(subtask)
+    # 2026-09-02 - 入队时可能已清展示图 - before 优先用入队前快照，避免对照丢旧图
+    queued_before = previous_raw.get("before_backfill")
+    if isinstance(queued_before, dict) and (
+        queued_before.get("page_screenshot") or queued_before.get("answer_content") is not None
+    ):
+        before_snap = queued_before
+    else:
+        before_snap = build_before_backfill_snapshot(subtask)
 
     clear_subtask_backfill_dismiss(subtask)
     if screenshot_path:
@@ -1094,11 +1105,18 @@ def _queue_async_share_backfill_parse(
         if not _backfill_parse_pending_stale(raw):
             raise ValueError("该条正在解析中，请稍后再试")
     parse_job_id = _new_backfill_parse_job_id()
+    # 2026-09-02 - 入队即藏旧图 - 解析完成前详情不得再露上一张快照
+    previous_shot = (subtask.page_screenshot or "").strip() or None
+    before_snap = build_before_backfill_snapshot(subtask)
+    if previous_shot:
+        subtask.page_screenshot = None
     raw.update(
         {
             "backfill_parse_status": "pending",
             "backfill_parse_error": None,
             "snapshot_url": url,
+            "screenshot_pending": True,
+            "before_backfill": before_snap,
             "_pending_mention_position": mention_position,
             "_pending_answer_content": (answer_content or "").strip() or None,
             "_pending_reference_urls": list(reference_urls or []) or None,
@@ -1111,6 +1129,10 @@ def _queue_async_share_backfill_parse(
             "backfill_parse_enqueue": "dispatching",
         }
     )
+    if previous_shot:
+        raw["replaced_previous_screenshot"] = previous_shot
+    raw.pop("screenshot_ok", None)
+    raw.pop("screenshot_error", None)
     subtask.raw_result_json = raw
     db.commit()
     try:
@@ -1130,6 +1152,15 @@ def _queue_async_share_backfill_parse(
         raw_fail["backfill_parse_status"] = "failed"
         detail = str(exc).strip() or type(exc).__name__
         raw_fail["backfill_parse_error"] = f"解析任务入队失败：{detail}"[:240]
+        # 入队失败：恢复展示图，避免误伤成永久无图
+        restored = raw_fail.get("replaced_previous_screenshot") or (
+            (raw_fail.get("before_backfill") or {}).get("page_screenshot")
+            if isinstance(raw_fail.get("before_backfill"), dict)
+            else None
+        )
+        if restored and not (subtask.page_screenshot or "").strip():
+            subtask.page_screenshot = str(restored)
+        raw_fail.pop("screenshot_pending", None)
         subtask.raw_result_json = raw_fail
         db.commit()
         raise ValueError(f"解析任务入队失败，请重试（{detail}）") from exc
@@ -1194,6 +1225,13 @@ def _mark_backfill_parse_failed(
         raw.pop(key, None)
     raw["backfill_parse_status"] = "failed"
     raw["backfill_parse_error"] = str(message or "解析失败")[:240]
+    # 2026-09-02 - 解析失败恢复入队前图 - 避免失败后详情永久「生成中」且无图
+    restored = raw.get("replaced_previous_screenshot")
+    if not restored and isinstance(raw.get("before_backfill"), dict):
+        restored = raw["before_backfill"].get("page_screenshot")
+    if restored and not (subtask.page_screenshot or "").strip():
+        subtask.page_screenshot = str(restored)
+    raw.pop("screenshot_pending", None)
     subtask.raw_result_json = raw
     db.commit()
     return True

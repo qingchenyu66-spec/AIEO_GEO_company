@@ -37,7 +37,10 @@ const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props
 
 const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
 
-const screenshotPending = computed(() => Boolean(props.subtask?.screenshot_pending))
+const parsePending = computed(() => String(props.subtask?.backfill_parse_status || '').toLowerCase() === 'pending')
+
+// 2026-09-02 - 解析中/截图未出都不得露旧快照链接
+const screenshotPending = computed(() => Boolean(props.subtask?.screenshot_pending) || parsePending.value)
 
 const screenshotFailed = computed(() => {
   if (snapshotLink.value || screenshotPending.value) return false
@@ -46,7 +49,8 @@ const screenshotFailed = computed(() => {
 
 const snapshotEmptyHint = computed(() => {
   // 2026-08-07 - 「暂无快照请填 URL」误导异步截图中的运营 - 按状态分文案
-  if (screenshotPending.value) return '快照生成中，稍后将自动可用'
+  if (parsePending.value) return '正文解析中，快照稍后生成'
+  if (props.subtask?.screenshot_pending) return '快照生成中，稍后将自动可用'
   if (screenshotFailed.value) return '快照生成失败，可重新补录分享链接'
   return '暂无快照'
 })

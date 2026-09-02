@@ -59,7 +59,9 @@ def test_slow_share_url_queues_async_parse(monkeypatch) -> None:
         mode="standard",
         prompt="问题",
         status="failed",
-        raw_result_json={},
+        page_screenshot="https://img.molizhishu.com/screenshots/old.png",
+        answer_content="旧回答",
+        raw_result_json={"screenshot_ok": True},
     )
     task.subtasks = [subtask]
 
@@ -87,7 +89,14 @@ def test_slow_share_url_queues_async_parse(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service._pack_backfill_apply_response",
-        lambda db, st, tk, **kwargs: {"parse_async": kwargs.get("parse_async", False), "subtask": {"subtask_id": st.subtask_id}},
+        lambda db, st, tk, **kwargs: {
+            "parse_async": kwargs.get("parse_async", False),
+            "subtask": {
+                "subtask_id": st.subtask_id,
+                "page_screenshot": st.page_screenshot,
+                "screenshot_pending": bool((st.raw_result_json or {}).get("screenshot_pending")),
+            },
+        },
     )
     enqueued: list[str] = []
     seen_enqueue_at_delay: list[str] = []
@@ -119,6 +128,15 @@ def test_slow_share_url_queues_async_parse(monkeypatch) -> None:
     assert enqueued == [("st-async", job_id)]
     assert seen_enqueue_at_delay == ["dispatching"]
     assert subtask.raw_result_json.get("backfill_parse_enqueue") == "queued"
+    # 2026-09-02 - 入队即清旧图，解析完成前不得再展示
+    assert subtask.page_screenshot is None
+    assert subtask.raw_result_json.get("screenshot_pending") is True
+    assert subtask.raw_result_json.get("replaced_previous_screenshot") == (
+        "https://img.molizhishu.com/screenshots/old.png"
+    )
+    assert (subtask.raw_result_json.get("before_backfill") or {}).get("page_screenshot") == (
+        "https://img.molizhishu.com/screenshots/old.png"
+    )
 
 
 def test_dispatching_pending_not_immediately_stale() -> None:
@@ -659,7 +677,80 @@ def test_display_stale_later_than_retry_stale() -> None:
     mid = {
         "backfill_parse_status": "pending",
         "backfill_parse_enqueue": "queued",
-        "_pending_parse_started_at": (datetime.now(UTC) - timedelta(seconds=200)).isoformat(),
+        "_pending_parse_started_at": (datetime.now(UTC) - __import__("datetime").timedelta(seconds=200)).isoformat(),
     }
     assert _backfill_parse_pending_stale(mid) is True
     assert _backfill_parse_display_stale(mid) is False
+
+
+def test_enrich_hides_screenshot_while_parse_pending() -> None:
+    from app.services.snapshot_backfill_service import enrich_subtask_display_backfill_flags
+
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-hide-shot",
+        task_id="task-hide",
+        platform="doubao",
+        mode="standard",
+        prompt="问题",
+        status="completed",
+        page_screenshot="https://cdn.example/old.png",
+        answer_content="正文",
+        raw_result_json={
+            "backfill_parse_status": "pending",
+            "backfill_parse_enqueue": "queued",
+            "_pending_parse_started_at": datetime.now(UTC).isoformat(),
+            "screenshot_pending": True,
+        },
+    )
+    display = enrich_subtask_display_backfill_flags(
+        {"mention_position": 2, "page_screenshot": "https://cdn.example/old.png", "brand_mentioned": True},
+        subtask,
+    )
+    assert display["page_screenshot"] is None
+    assert display["screenshot_pending"] is True
+    assert display["backfill_parse_status"] == "pending"
+
+
+def test_mark_parse_failed_restores_cleared_screenshot(db_session) -> None:
+    from app.services.snapshot_backfill_service import _mark_backfill_parse_failed
+
+    task = GeoMonitorTask(
+        task_id="task-restore-shot",
+        monitor_keywords="品牌A",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["问题"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-restore-shot",
+        task_id="task-restore-shot",
+        platform="doubao",
+        mode="standard",
+        prompt="问题",
+        status="completed",
+        page_screenshot=None,
+        answer_content="旧",
+        raw_result_json={
+            "backfill_parse_status": "pending",
+            "backfill_parse_enqueue": "queued",
+            "_pending_parse_job_id": "job-r1",
+            "_pending_parse_started_at": datetime.now(UTC).isoformat(),
+            "screenshot_pending": True,
+            "replaced_previous_screenshot": "https://cdn.example/keep.png",
+        },
+    )
+    task.subtasks = [subtask]
+    db_session.add(task)
+    db_session.commit()
+
+    ok = _mark_backfill_parse_failed(db_session, subtask, "timeout", parse_job_id="job-r1")
+    assert ok is True
+    db_session.refresh(subtask)
+    assert subtask.page_screenshot == "https://cdn.example/keep.png"
+    assert subtask.raw_result_json.get("screenshot_pending") is None
+    assert subtask.raw_result_json.get("backfill_parse_status") == "failed"
