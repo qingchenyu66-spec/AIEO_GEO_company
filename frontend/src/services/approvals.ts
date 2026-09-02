@@ -37,6 +37,9 @@ export interface OperationApproval {
   reviewer_name?: string | null
   review_comment?: string | null
   reviewed_at?: string | null
+  resubmit_count?: number
+  rejection_history?: Array<Record<string, unknown>>
+  resubmitted?: boolean
   created_at: string
   pending_approval?: boolean
   duplicate_merged?: boolean
@@ -54,6 +57,40 @@ export function pendingApprovalMessage(data: OperationApproval, fallback: string
 
 export function isDuplicateMergedApproval(data: OperationApproval): boolean {
   return Boolean(data.duplicate_merged)
+}
+
+export function isResubmittedApproval(data: OperationApproval): boolean {
+  return Boolean(data.resubmitted)
+}
+
+export async function getApproval(approvalId: number): Promise<OperationApproval> {
+  const response = await http.get(`/v1/approvals/${approvalId}`)
+  return response.data.data
+}
+
+export async function resubmitApproval(
+  approvalId: number,
+  payload: { body: Record<string, unknown> },
+): Promise<OperationApproval> {
+  const response = await http.post(`/v1/approvals/${approvalId}/resubmit`, payload)
+  return response.data.data
+}
+
+/** 驳回单跳回原业务表单预填修改。 */
+export function resubmitTargetForApproval(row: OperationApproval): { menu: string; query: Record<string, string> } | null {
+  const id = String(row.id)
+  if (row.operation_key === 'lead_diagnosis.create') {
+    return { menu: 'platform.lead_diagnosis', query: { resubmit_approval_id: id } }
+  }
+  if (row.operation_key === 'management.tenant.create') {
+    return { menu: 'platform.audit', query: { resubmit_approval_id: id } }
+  }
+  if (row.operation_key === 'brand.asset.upsert') {
+    const query: Record<string, string> = { resubmit_approval_id: id }
+    if (row.tenant_id) query.tenant_id = String(row.tenant_id)
+    return { menu: 'platform.audit', query }
+  }
+  return null
 }
 
 export async function getPendingApprovalCount(): Promise<number> {

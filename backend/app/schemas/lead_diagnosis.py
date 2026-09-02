@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.lead_diagnosis_config import (
+    H5_SCHEDULE_RUNS_MAX,
     LEAD_SCHEDULE_DAYS,
     LEAD_SCHEDULE_DAYS_MAX,
     LEAD_SCHEDULE_DAYS_MIN,
@@ -63,6 +64,41 @@ def normalize_lead_context(value: Any) -> dict[str, str]:
         except (TypeError, ValueError):
             pass
     return out
+
+
+def normalize_lead_schedule_datetimes(value: Any, *, max_items: int = H5_SCHEDULE_RUNS_MAX) -> list[str]:
+    """自定义抓取时间点：YYYY-MM-DDTHH:MM，去重排序。"""
+    raw_items: list[Any]
+    if value is None:
+        raw_items = []
+    elif isinstance(value, str):
+        raw_items = re.split(r"[,，;]+", value)
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    parsed: list[datetime] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        dt = None
+        for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+        if dt is None:
+            continue
+        key = dt.strftime("%Y-%m-%dT%H:%M")
+        if key in seen:
+            continue
+        seen.add(key)
+        parsed.append(dt)
+    parsed.sort()
+    return [dt.strftime("%Y-%m-%dT%H:%M") for dt in parsed[:max_items]]
 
 
 def normalize_brand_aliases(value: Any, *, max_items: int = 20, max_len: int = 100) -> list[str]:
@@ -174,3 +210,49 @@ class LeadDiagnosisUpdateRequest(BaseModel):
     contact_name: str | None = Field(default=None, max_length=60)
     contact_phone: str | None = Field(default=None, max_length=30)
     contact_note: str | None = Field(default=None, max_length=500)
+
+
+class LeadDiagnosisConfigReviseRequest(BaseModel):
+    """运营/管理员在任务配置页修改（不含检测问法、品牌名）。"""
+
+    brand_aliases: list[str] | None = None
+    lead_context: LeadContext | None = None
+    competitors: list[str] | None = None
+    platforms: list[str] | None = None
+    region_codes: list[str] | None = None
+    schedule_datetimes: list[str] | None = None
+    schedule_days: int | None = Field(default=None, ge=LEAD_SCHEDULE_DAYS_MIN, le=LEAD_SCHEDULE_DAYS_MAX)
+    contact_name: str | None = Field(default=None, max_length=60)
+    contact_phone: str | None = Field(default=None, max_length=30)
+    contact_note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("brand_aliases", mode="before")
+    @classmethod
+    def normalize_aliases(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_brand_aliases(value)
+
+    @field_validator("competitors", mode="before")
+    @classmethod
+    def normalize_competitors(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_brand_aliases(value, max_items=10)
+
+    @field_validator("schedule_datetimes", mode="before")
+    @classmethod
+    def normalize_schedule_datetimes_field(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = normalize_lead_schedule_datetimes(value)
+        if not normalized:
+            raise ValueError("请至少配置一个抓取时间点")
+        return normalized
+
+    @field_validator("schedule_days")
+    @classmethod
+    def normalize_revise_schedule_days(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return clamp_lead_schedule_days(value)

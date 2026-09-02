@@ -51,6 +51,7 @@ export interface LeadDiagnosisItem {
   region_codes?: string[]
   schedule_times: string[]
   schedule_days?: number
+  schedule_datetimes?: string[]
   schedule_calendar_days?: number
   plan_end_date?: string
   schedule_total_count?: number
@@ -118,6 +119,25 @@ export async function finalizeLeadDiagnosisEarly(leadId: number): Promise<LeadDi
 
 export async function refreshLeadDiagnosis(leadId: number): Promise<LeadDiagnosisDetail> {
   const response = await http.post(`/v1/lead-diagnosis/${leadId}/refresh`)
+  return response.data.data
+}
+
+export interface ReviseLeadDiagnosisConfigPayload {
+  brand_aliases?: string[]
+  lead_context?: LeadContext
+  competitors?: string[]
+  platforms?: string[]
+  region_codes?: string[]
+  schedule_datetimes?: string[]
+  schedule_days?: number
+  contact_note?: string | null
+}
+
+export async function reviseLeadDiagnosisConfig(
+  leadId: number,
+  payload: ReviseLeadDiagnosisConfigPayload,
+): Promise<LeadDiagnosisDetail> {
+  const response = await http.post(`/v1/lead-diagnosis/${leadId}/revise-config`, payload)
   return response.data.data
 }
 

@@ -28,6 +28,7 @@ import {
   classifyLeadConfigPrompt,
   displayOrEmpty,
 } from '../composables/leadDiagnosisConfigDisplay'
+import { formatScheduleDatetimeLabel } from '../composables/useLeadDiagnosis'
 import '../../../styles/lead-diagnosis.css'
 
 const {
@@ -51,6 +52,18 @@ const {
   canCreate,
   canExport,
   canEditRegions,
+  canReviseConfig,
+  configEditing,
+  configSaving,
+  configEditForm,
+  configEditScheduleSlots,
+  configScheduleDisplaySlots,
+  scheduleDatetimeMinLocal,
+  openConfigEdit,
+  cancelConfigEdit,
+  saveConfigRevise,
+  addConfigScheduleSlot,
+  removeConfigScheduleSlot,
   filteredRecords,
   statsSummary,
   kpis,
@@ -169,6 +182,11 @@ function toggleConfigSection(key: string) {
     ...configSectionOpen.value,
     [key]: !configSectionOpen.value[key],
   }
+}
+
+function openConfigEditPanel() {
+  configSectionOpen.value = { ...configSectionOpen.value, brand: true, scope: true, prompts: true }
+  openConfigEdit()
 }
 
 const promptTrendRefs = new Map<number, HTMLElement>()
@@ -741,9 +759,20 @@ onUnmounted(() => {
             </section>
 
             <section v-else class="lead-panel">
-              <div class="lead-panel-title">
-                <h3>任务配置</h3>
-                <p>建单完整输入（只读）。点击标题展开 / 收起各块。</p>
+              <div class="lead-panel-title lead-config-title-row">
+                <div>
+                  <h3>任务配置</h3>
+                  <p v-if="configEditing">修改后保存；检测问法、诊断平台、监测地区不可改，已执行时间点只读。</p>
+                </div>
+                <div v-if="canReviseConfig" class="lead-config-actions">
+                  <template v-if="configEditing">
+                    <button type="button" class="lead-secondary-btn small" @click="cancelConfigEdit">取消</button>
+                    <button type="button" class="lead-primary-btn small" :disabled="configSaving" @click="saveConfigRevise">
+                      {{ configSaving ? '保存中…' : '保存配置' }}
+                    </button>
+                  </template>
+                  <button v-else type="button" class="lead-secondary-btn small" @click="openConfigEditPanel">修改配置</button>
+                </div>
               </div>
 
               <div class="lead-config-accordion">
@@ -753,7 +782,41 @@ onUnmounted(() => {
                     <ChevronDown :size="16" />
                   </button>
                   <div v-show="configSectionOpen.brand" class="lead-config-block-body">
-                    <div class="lead-config-list">
+                    <div v-if="configEditing" class="lead-config-edit-form">
+                      <label class="lead-field">
+                        <span>品牌名称（不可改）</span>
+                        <input :value="detail.brand_name" disabled />
+                      </label>
+                      <label class="lead-field">
+                        <span>露出词 / 别名</span>
+                        <input v-model="configEditForm.brand_aliases_text" placeholder="多个用逗号分隔" />
+                      </label>
+                      <label class="lead-field">
+                        <span>官网</span>
+                        <input v-model="configEditForm.website_url" placeholder="https://..." />
+                      </label>
+                      <label class="lead-field">
+                        <span>行业</span>
+                        <input v-model="configEditForm.industry" />
+                      </label>
+                      <label class="lead-field">
+                        <span>产品焦点</span>
+                        <input v-model="configEditForm.product_focus" />
+                      </label>
+                      <label class="lead-field">
+                        <span>采购场景</span>
+                        <input v-model="configEditForm.purchase_scenario" />
+                      </label>
+                      <label class="lead-field">
+                        <span>竞品</span>
+                        <input v-model="configEditForm.competitorsText" placeholder="多个用逗号分隔" />
+                      </label>
+                      <label class="lead-field">
+                        <span>销售备注</span>
+                        <textarea v-model="configEditForm.contact_note" rows="2" />
+                      </label>
+                    </div>
+                    <div v-else class="lead-config-list">
                       <div><strong>品牌名称</strong><span>{{ displayOrEmpty(detail.brand_name) }}</span></div>
                       <div><strong>露出词 / 别名</strong><span>{{ displayOrEmpty((detail.brand_aliases || []).join('、')) }}</span></div>
                       <div><strong>官网</strong><span>{{ displayOrEmpty(detail.lead_context?.website_url) }}</span></div>
@@ -772,29 +835,75 @@ onUnmounted(() => {
                     <ChevronDown :size="16" />
                   </button>
                   <div v-show="configSectionOpen.scope" class="lead-config-block-body">
-                    <div class="lead-config-list">
+                    <div class="lead-config-list" :class="{ 'has-locked-fields': configEditing }">
                       <div class="lead-config-platforms">
                         <strong>诊断平台</strong>
-                        <div v-if="configPlatformConfigured.length" class="lead-config-platform-badges">
-                          <PlatformBadge
-                            v-for="item in configPlatformConfigured"
-                            :key="`cfg-${item.code}`"
-                            :code="item.code"
-                            size="sm"
-                            :label="item.label"
-                          />
+                        <div class="lead-config-field-value">
+                          <div v-if="configPlatformConfigured.length" class="lead-config-platform-badges">
+                            <PlatformBadge
+                              v-for="item in configPlatformConfigured"
+                              :key="`cfg-${item.code}`"
+                              :code="item.code"
+                              size="sm"
+                              :label="item.label"
+                            />
+                          </div>
+                          <span v-else class="lead-config-muted">未填写</span>
+                          <span v-if="configEditing" class="lead-config-lock-tag">不可改</span>
                         </div>
-                        <span v-else class="lead-config-muted">未填写</span>
                       </div>
-                      <div><strong>监测地区</strong><span>{{ displayOrEmpty(regionLabels(detail.region_codes)) }}</span></div>
-                      <div><strong>诊断天数</strong><span>{{ detail.schedule_days != null ? `${detail.schedule_days} 天` : '未填写' }}</span></div>
-                      <div><strong>抓取时段</strong><span>{{ displayOrEmpty((detail.schedule_times || scheduleSlots).join('、')) }}</span></div>
                       <div>
-                        <strong>抓取计划</strong>
-                        <span>
-                          共 {{ detail.schedule_total_count ?? scheduleTotal }} 次
-                          （{{ detail.schedule_days || scheduleDays }} 天 × 每日 {{ (detail.schedule_times || scheduleSlots).length }} 档）
+                        <strong>监测地区</strong>
+                        <span class="lead-config-field-value">
+                          {{ displayOrEmpty(regionLabels(detail.region_codes)) }}
+                          <span v-if="configEditing" class="lead-config-lock-tag">不可改</span>
                         </span>
+                      </div>
+                      <template v-if="!configEditing">
+                        <div>
+                          <strong>抓取时间点</strong>
+                          <span v-if="configScheduleDisplaySlots.length">{{ configScheduleDisplaySlots.join('、') }}</span>
+                          <span v-else class="lead-config-muted">未填写</span>
+                        </div>
+                        <div>
+                          <strong>抓取计划</strong>
+                          <span>共 {{ detail.schedule_total_count ?? scheduleTotal }} 次</span>
+                        </div>
+                      </template>
+                    </div>
+                    <div v-if="configEditing" class="schedule-time-picker lead-config-schedule-editor">
+                      <div class="schedule-time-title">
+                        <span>抓取时间段（日期 + 时间）</span>
+                        <button type="button" class="filter-reset-btn" @click="addConfigScheduleSlot">新增时间</button>
+                      </div>
+                      <div class="schedule-time-list is-datetime">
+                        <div
+                          v-for="(slot, index) in configEditScheduleSlots"
+                          :key="`cfg-slot-${slot.value}-${index}`"
+                          :class="{ 'schedule-slot-locked': slot.locked }"
+                        >
+                          <template v-if="slot.locked">
+                            <span class="schedule-slot-readonly">{{ formatScheduleDatetimeLabel(slot.value) }}</span>
+                            <em class="schedule-slot-tag">已执行/已过</em>
+                          </template>
+                          <template v-else>
+                            <input
+                              v-model="configEditScheduleSlots[index].value"
+                              type="datetime-local"
+                              :min="scheduleDatetimeMinLocal"
+                            />
+                            <button
+                              type="button"
+                              class="danger-text-btn"
+                              @click="removeConfigScheduleSlot(index)"
+                            >
+                              删除
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+                      <div v-if="!configEditScheduleSlots.length" class="mini-empty compact-empty">
+                        暂无抓取时间，请点击「新增时间」配置。
                       </div>
                     </div>
                   </div>
@@ -802,7 +911,7 @@ onUnmounted(() => {
 
                 <section class="lead-config-block" :class="{ open: configSectionOpen.prompts }">
                   <button type="button" class="lead-config-block-head" @click="toggleConfigSection('prompts')">
-                    <span>检测问法（{{ configPromptRows.length }}）</span>
+                    <span>检测问法（{{ configPromptRows.length }}）· 不可修改</span>
                     <ChevronDown :size="16" />
                   </button>
                   <div v-show="configSectionOpen.prompts" class="lead-config-block-body">
@@ -848,3 +957,22 @@ onUnmounted(() => {
     </template>
   </section>
 </template>
+
+<style scoped>
+.lead-config-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.lead-config-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lead-config-edit-form {
+  display: grid;
+  gap: 12px;
+}
+</style>

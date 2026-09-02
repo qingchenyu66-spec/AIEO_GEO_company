@@ -12,6 +12,7 @@ import {
   getLeadDiagnosisList,
   LEAD_STATUS_LABELS,
   refreshLeadDiagnosis,
+  reviseLeadDiagnosisConfig,
   submitLeadDiagnosisRun,
   type LeadDiagnosisDetail,
   type LeadDiagnosisItem,
@@ -19,9 +20,12 @@ import {
   type LeadDiagnosisStatus,
 } from '../../../services/leadDiagnosis'
 import {
+  getApproval,
   isDuplicateMergedApproval,
   isPendingApproval,
+  isResubmittedApproval,
   pendingApprovalMessage,
+  resubmitApproval,
 } from '../../../services/approvals'
 import { notifyOperationError } from '../../../utils/requestError'
 import { injectReportPreviewBase } from '../../../utils/reportPreviewHtml'
@@ -107,6 +111,117 @@ export function scheduleTotalForDays(days: number) {
   return clampScheduleDays(days) * SCHEDULE_SLOTS.length
 }
 
+/** 从详情还原可编辑时间点列表（自定义 > 计划 > 天数×时段）。 */
+export function buildLeadScheduleDatetimesFromDetail(row: {
+  schedule_datetimes?: string[]
+  schedule_plan?: Array<{ day: string; slot: string }>
+  diagnosis_date: string
+  schedule_days?: number
+  schedule_times?: string[]
+}): string[] {
+  if (row.schedule_datetimes?.length) {
+    return [...row.schedule_datetimes]
+  }
+  if (row.schedule_plan?.length) {
+    return row.schedule_plan.map(entry => `${entry.day}T${entry.slot}`)
+  }
+  const slots = row.schedule_times?.length ? row.schedule_times : SCHEDULE_SLOTS
+  const days = row.schedule_days ?? SCHEDULE_DAYS
+  const out: string[] = []
+  for (let dayOffset = 0; dayOffset < days; dayOffset += 1) {
+    const dayDate = addDays(row.diagnosis_date, dayOffset)
+    for (const slot of slots) {
+      out.push(`${dayDate}T${slot}`)
+    }
+  }
+  return out
+}
+
+export function formatScheduleDatetimeLabel(value: string) {
+  return String(value || '').trim().replace('T', ' ')
+}
+
+export type LeadConfigScheduleSlot = { value: string; locked: boolean }
+
+export function normalizeScheduleDatetimeValue(value: string): string {
+  let text = String(value || '').trim()
+  if (text.includes(' · ')) text = text.split(' · ', 1)[0].trim()
+  return text.replace(' ', 'T').slice(0, 16)
+}
+
+export function parseScheduleDatetimeMs(value: string): number | null {
+  const normalized = normalizeScheduleDatetimeValue(value)
+  if (!normalized) return null
+  const dt = new Date(normalized)
+  return Number.isNaN(dt.getTime()) ? null : dt.getTime()
+}
+
+export function formatDatetimeLocalInput(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day}T${h}:${min}`
+}
+
+export function scheduleKeyToDatetimeValue(scheduleKey: string): string {
+  const text = String(scheduleKey || '').trim().split('-rg')[0]
+  const matched = text.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})$/)
+  if (!matched) return ''
+  return `${matched[1]}-${matched[2]}-${matched[3]}T${matched[4]}:${matched[5]}`
+}
+
+export function buildLeadScheduleSlotsForEdit(row: LeadDiagnosisDetail): LeadConfigScheduleSlot[] {
+  const now = Date.now()
+  const seen = new Set<string>()
+  const items: LeadConfigScheduleSlot[] = []
+
+  const findRun = (normalized: string) => (row.runs || []).find((run) => (
+    normalizeScheduleDatetimeValue(run.schedule_label || '') === normalized
+    || scheduleKeyToDatetimeValue(run.schedule_key || '') === normalized
+  ))
+
+  const isLocked = (normalized: string): boolean => {
+    const ms = parseScheduleDatetimeMs(normalized)
+    const run = findRun(normalized)
+    if (run && ['completed', 'submitted', 'failed', 'skipped'].includes(run.status)) return true
+    if (ms != null && ms <= now) return true
+    return false
+  }
+
+  const add = (raw: string) => {
+    const normalized = normalizeScheduleDatetimeValue(raw)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    items.push({ value: normalized, locked: isLocked(normalized) })
+  }
+
+  for (const run of row.runs || []) {
+    if (run.schedule_label) add(run.schedule_label)
+  }
+  for (const dt of buildLeadScheduleDatetimesFromDetail(row)) {
+    add(dt)
+  }
+
+  items.sort((a, b) => (parseScheduleDatetimeMs(a.value) ?? 0) - (parseScheduleDatetimeMs(b.value) ?? 0))
+  return items
+}
+
+export function nextDefaultScheduleDatetime(existing: string[], baseDate?: string) {
+  const now = new Date()
+  now.setSeconds(0, 0)
+  const floor = formatDatetimeLocalInput(now)
+  const base = baseDate || floor.slice(0, 10)
+  const last = existing.length ? existing[existing.length - 1] : `${base}T09:30`
+  const dt = new Date(last.replace('T', ' '))
+  if (Number.isNaN(dt.getTime())) return floor
+  dt.setHours(dt.getHours() + 4)
+  dt.setSeconds(0, 0)
+  const candidate = formatDatetimeLocalInput(dt)
+  return candidate < floor ? floor : candidate
+}
+
 function addDays(isoDate: string, days: number): string {
   const [year, month, day] = isoDate.split('-').map(part => Number.parseInt(part, 10))
   const date = new Date(year, month - 1, day + days)
@@ -141,6 +256,7 @@ export function useLeadDiagnosis() {
   const keywordFilter = ref('')
   const statusFilter = ref<'' | LeadDiagnosisStatus>('')
   const showCreatePanel = ref(false)
+  const resubmitApprovalId = ref<number | null>(null)
   const createStep = ref(1)
   const detailTab = ref<DetailTab>('progress')
   const submittingSlotKey = ref<string | null>(null)
@@ -225,6 +341,140 @@ export function useLeadDiagnosis() {
   const canEditRegions = computed(() => auth.allowedMenus.some(
     menu => menu.menu_code === 'platform.audit.regions' && menu.can_update,
   ))
+  const isSales = computed(() => auth.session?.identity?.position_code === 'PLATFORM_SALES')
+  const canReviseConfig = computed(() => (
+    !isSales.value
+    && canExport.value
+    && (detail.value?.status === 'pending' || detail.value?.status === 'collecting')
+  ))
+  const revisePlatformOptions = computed(() => supportedPlatforms)
+  const configEditing = ref(false)
+  const configSaving = ref(false)
+  const configEditScheduleSlots = ref<LeadConfigScheduleSlot[]>([])
+  const scheduleDatetimeMinLocal = computed(() => {
+    const d = new Date()
+    d.setSeconds(0, 0)
+    return formatDatetimeLocalInput(d)
+  })
+  const configEditForm = ref({
+    brand_aliases_text: '',
+    website_url: '',
+    industry: '',
+    product_focus: '',
+    purchase_scenario: '',
+    competitorsText: '',
+    contact_note: '',
+  })
+
+  const configScheduleDisplaySlots = computed(() => {
+    const row = detail.value
+    if (!row) return [] as string[]
+    return buildLeadScheduleSlotsForEdit(row).map(slot => formatScheduleDatetimeLabel(slot.value))
+  })
+
+  function fillConfigEditForm() {
+    const row = detail.value
+    if (!row) return
+    configEditForm.value = {
+      brand_aliases_text: (row.brand_aliases || []).join('、'),
+      website_url: row.lead_context?.website_url || '',
+      industry: row.lead_context?.industry || '',
+      product_focus: row.lead_context?.product_focus || '',
+      purchase_scenario: row.lead_context?.purchase_scenario || '',
+      competitorsText: (row.competitors || []).join('、'),
+      contact_note: row.contact_note || '',
+    }
+    configEditScheduleSlots.value = buildLeadScheduleSlotsForEdit(row)
+  }
+
+  function openConfigEdit() {
+    fillConfigEditForm()
+    configEditing.value = true
+    detailTab.value = 'config'
+  }
+
+  function cancelConfigEdit() {
+    configEditing.value = false
+  }
+
+  function addConfigScheduleSlot() {
+    const list = configEditScheduleSlots.value
+    const values = list.map(item => item.value)
+    configEditScheduleSlots.value = [
+      ...list,
+      { value: nextDefaultScheduleDatetime(values, detail.value?.diagnosis_date), locked: false },
+    ]
+  }
+
+  function removeConfigScheduleSlot(index: number) {
+    const list = [...configEditScheduleSlots.value]
+    const item = list[index]
+    if (!item) return
+    if (item.locked) {
+      ElMessage.warning('已执行或已过的时间点不可删除')
+      return
+    }
+    const editableCount = list.filter(slot => !slot.locked).length
+    if (editableCount <= 1) {
+      ElMessage.warning('至少保留一个可修改的未来时间点')
+      return
+    }
+    list.splice(index, 1)
+    configEditScheduleSlots.value = list
+  }
+
+  async function saveConfigRevise() {
+    if (!selectedId.value || configSaving.value) return
+    const form = configEditForm.value
+    const scheduleDatetimes = configEditScheduleSlots.value.map(item => item.value.trim()).filter(Boolean)
+    if (!scheduleDatetimes.length) {
+      ElMessage.warning('请至少添加一个抓取时间点')
+      return
+    }
+    const now = Date.now()
+    for (const slot of configEditScheduleSlots.value) {
+      if (slot.locked) continue
+      const ms = parseScheduleDatetimeMs(slot.value)
+      if (ms != null && ms < now) {
+        ElMessage.warning('抓取时间点不能早于当前时间')
+        return
+      }
+    }
+    const hasFuture = configEditScheduleSlots.value.some((slot) => {
+      const ms = parseScheduleDatetimeMs(slot.value)
+      return ms != null && ms >= now
+    })
+    if (!hasFuture) {
+      ElMessage.warning('请至少保留一个当前或未来的时间点')
+      return
+    }
+    configSaving.value = true
+    try {
+      const updated = await reviseLeadDiagnosisConfig(selectedId.value, {
+        brand_aliases: form.brand_aliases_text.split(/[,，、]/).map(s => s.trim()).filter(Boolean),
+        lead_context: {
+          website_url: form.website_url.trim(),
+          industry: form.industry.trim(),
+          product_focus: form.product_focus.trim(),
+          purchase_scenario: form.purchase_scenario.trim(),
+        },
+        competitors: form.competitorsText.split(/[,，、]/).map(s => s.trim()).filter(Boolean),
+        schedule_datetimes: scheduleDatetimes,
+        contact_note: form.contact_note.trim() || null,
+      })
+      detail.value = updated
+      const idx = records.value.findIndex(item => item.id === updated.id)
+      if (idx >= 0) {
+        records.value[idx] = { ...records.value[idx], ...updated }
+      }
+      configEditing.value = false
+      ElMessage.success('任务配置已保存，后续抓取将按新配置执行')
+    } catch (error: unknown) {
+      notifyOperationError(error, '保存任务配置失败')
+    } finally {
+      configSaving.value = false
+    }
+  }
 
   const filteredRecords = computed(() => {
     const keyword = keywordFilter.value.trim().toLowerCase()
@@ -417,6 +667,7 @@ export function useLeadDiagnosis() {
 
   async function selectRecord(id: number) {
     const seq = ++detailSeq
+    configEditing.value = false
     selectedId.value = id
     detailTab.value = 'progress'
     detailLoading.value = true
@@ -444,6 +695,49 @@ export function useLeadDiagnosis() {
     },
   )
 
+  function prefillCreateFormFromBody(body: Record<string, unknown>) {
+    const leadContext = (body.lead_context || {}) as Record<string, unknown>
+    const prompts = Array.isArray(body.prompts) ? body.prompts.map(item => String(item || '')) : []
+    while (prompts.length < 5) prompts.push('')
+    createForm.value = {
+      brand_name: String(body.brand_name || ''),
+      brand_aliases: Array.isArray(body.brand_aliases) ? body.brand_aliases.join('、') : '',
+      website_url: String(leadContext.website_url || ''),
+      industry: String(leadContext.industry || ''),
+      product_focus: String(leadContext.product_focus || ''),
+      prompts: prompts.slice(0, 5),
+      competitors: Array.isArray(body.competitors) ? body.competitors.join('、') : '',
+      platforms: Array.isArray(body.platforms) ? [...body.platforms as string[]] : [],
+      region_codes: Array.isArray(body.region_codes) ? [...body.region_codes as string[]] : [],
+      contact_note: String(body.contact_note || ''),
+      schedule_days: clampScheduleDays(Number(body.schedule_days || SCHEDULE_DAYS)),
+      start_immediately: body.start_immediately !== false,
+    }
+    createStep.value = 1
+    showCreatePanel.value = true
+  }
+
+  async function loadResubmitDraftFromRoute() {
+    const raw = route.query.resubmit_approval_id
+    const id = Number(Array.isArray(raw) ? raw[0] : raw)
+    if (!Number.isFinite(id) || id <= 0) return
+    try {
+      const row = await getApproval(id)
+      if (row.status !== 'rejected' || row.operation_key !== 'lead_diagnosis.create') {
+        ElMessage.warning('该审批单不可在此处修改')
+        return
+      }
+      resubmitApprovalId.value = id
+      const body = (row.lead_adopted_body || row.payload?.body || {}) as Record<string, unknown>
+      prefillCreateFormFromBody(body)
+      if (row.review_comment) {
+        ElMessage.warning(`上次驳回：${row.review_comment}`)
+      }
+    } catch (error: unknown) {
+      notifyOperationError(error, '加载驳回单失败')
+    }
+  }
+
   function openCreatePanel() {
     createStep.value = 1
     createForm.value = {
@@ -466,6 +760,7 @@ export function useLeadDiagnosis() {
   function closeCreatePanel() {
     showCreatePanel.value = false
     createStep.value = 1
+    resubmitApprovalId.value = null
   }
 
   function toggleCreatePlatform(code: string) {
@@ -607,7 +902,7 @@ export function useLeadDiagnosis() {
       if (!lead_context.website_url) {
         ElMessage.info('未填官网：信源与行动建议质量可能下降')
       }
-      const created = await createLeadDiagnosis({
+      const submitBody = {
         brand_name: brand,
         prompts,
         competitors,
@@ -618,12 +913,22 @@ export function useLeadDiagnosis() {
         lead_context,
         schedule_days: days,
         start_immediately: createForm.value.start_immediately,
-      })
+      }
+      if (resubmitApprovalId.value) {
+        const updated = await resubmitApproval(resubmitApprovalId.value, { body: submitBody as Record<string, unknown> })
+        closeCreatePanel()
+        const msg = pendingApprovalMessage(updated, '已重新提交，等待运营或管理员审核')
+        ElMessage.success(msg)
+        await loadRecords()
+        return
+      }
+      const created = await createLeadDiagnosis(submitBody)
       closeCreatePanel()
       // 2026-07-30 - 销售新建进审批后仍用审批单 id 拉详情 404 - 待审态只提示，不 selectRecord
       if (isPendingApproval(created)) {
         const msg = pendingApprovalMessage(created, '已提交审批，等待运营或管理员审核通过后生效')
         if (isDuplicateMergedApproval(created)) ElMessage.warning(msg)
+        else if (isResubmittedApproval(created)) ElMessage.success(msg)
         else ElMessage.info(msg)
         await loadRecords()
         return
@@ -765,12 +1070,20 @@ export function useLeadDiagnosis() {
   // 2026-08-31 - H5 订单抽屉「链诊断」带 lead_id 跳转后自动选中
   async function loadRecordsAndMaybeSelect(options?: { silent?: boolean }) {
     await loadRecords(options)
+    await loadResubmitDraftFromRoute()
     const raw = route.query.lead_id
     const id = Number(Array.isArray(raw) ? raw[0] : raw)
     if (Number.isFinite(id) && id > 0) {
       void selectRecord(id)
     }
   }
+
+  watch(
+    () => route.query.resubmit_approval_id,
+    () => {
+      void loadResubmitDraftFromRoute()
+    },
+  )
 
   watch(
     () => route.query.lead_id,
@@ -817,6 +1130,18 @@ export function useLeadDiagnosis() {
     canCreate,
     canExport,
     canEditRegions,
+    canReviseConfig,
+    configEditing,
+    configSaving,
+    configEditForm,
+    configEditScheduleSlots,
+    configScheduleDisplaySlots,
+    scheduleDatetimeMinLocal,
+    openConfigEdit,
+    cancelConfigEdit,
+    saveConfigRevise,
+    addConfigScheduleSlot,
+    removeConfigScheduleSlot,
     filteredRecords,
     statsSummary,
     diagnosisResult,

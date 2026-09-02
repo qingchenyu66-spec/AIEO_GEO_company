@@ -14,6 +14,7 @@ from app.services.approval_service import (
     get_approval,
     list_approvals,
     reject_approval,
+    resubmit_approval,
     revise_lead_diagnosis_create_approval,
 )
 
@@ -86,6 +87,26 @@ def approval_revise_lead_diagnosis(
     except Exception as exc:
         db.rollback()
         raise_write_endpoint_error(exc, context="approvals.revise_lead_diagnosis")
+    return ApiResponse(data=data)
+
+
+@router.post("/{approval_id}/resubmit", response_model=ApiResponse[dict])
+def approval_resubmit(
+    approval_id: int,
+    payload: dict | None = None,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """销售修改已驳回审批单并重新提交（原单复活为 pending）。"""
+    try:
+        data = resubmit_approval(db, current, approval_id, payload or {})
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise_write_endpoint_error(exc, context="approvals.resubmit")
     return ApiResponse(data=data)
 
 

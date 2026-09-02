@@ -23,6 +23,7 @@ from app.models.tenant import Tenant
 from app.core.lead_diagnosis_config import (
     DEFAULT_LEAD_SCHEDULE_TIMES,
     LEAD_DIAGNOSIS_CREATE_COOLDOWN_DAYS,
+    LEAD_SCHEDULE_DAYS,
     clamp_h5_schedule_runs,
     clamp_lead_schedule_days,
     h5_runs_to_schedule_days,
@@ -33,8 +34,10 @@ from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.lead_diagnosis import (
     LeadDiagnosisCreateRequest,
     LeadDiagnosisUpdateRequest,
+    LeadDiagnosisConfigReviseRequest,
     normalize_brand_aliases,
     normalize_lead_context,
+    normalize_lead_schedule_datetimes,
 )
 from app.schemas.monitor import FAST_MONITOR_MODE, CompetitorBrand, MonitorTaskCreateRequest, PlatformConfig
 from app.services.deepseek_client import DeepseekApiError, DeepseekClient
@@ -350,17 +353,144 @@ def _schedule_slots(lead: LeadDiagnosis) -> list[str]:
     return cleaned or list(DEFAULT_LEAD_SCHEDULE_TIMES)
 
 
+def _parse_lead_schedule_datetime(text: str) -> datetime | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _schedule_label_to_datetime(label: str) -> datetime | None:
+    # 2026-09-02 - run.schedule_label 带「· 地区」后缀 - 改时间时误拒已跑档
+    text = str(label or "").strip()
+    if " · " in text:
+        text = text.split(" · ", 1)[0].strip()
+    return _parse_lead_schedule_datetime(text)
+
+
+def _schedule_key_to_datetime(schedule_key: str) -> datetime | None:
+    text = str(schedule_key or "").strip()
+    if "-rg" in text:
+        text = text.split("-rg", 1)[0]
+    matched = re.match(r"^(\d{8})-(\d{4})$", text)
+    if not matched:
+        return None
+    day = datetime.strptime(matched.group(1), "%Y%m%d").date()
+    slot_time = datetime.strptime(matched.group(2), "%H%M").time()
+    return datetime.combine(day, slot_time)
+
+
+def _run_schedule_datetime(run: Any) -> datetime | None:
+    dt = _schedule_label_to_datetime(getattr(run, "schedule_label", "") or "")
+    if dt is not None:
+        return dt
+    return _schedule_key_to_datetime(getattr(run, "schedule_key", "") or "")
+
+
+def _schedule_datetime_key(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M")
+
+
+def _lead_locked_schedule_datetime_keys(lead: LeadDiagnosis) -> set[str]:
+    """已执行或已过期的时间点：配置修改时允许保留，不可改早。"""
+    keys: set[str] = set()
+    now = datetime.now().replace(second=0, microsecond=0)
+    for run in lead.runs or []:
+        dt = _run_schedule_datetime(run)
+        if dt is None:
+            continue
+        key = _schedule_datetime_key(dt)
+        status = str(getattr(run, "status", "") or "").strip().lower()
+        if status in {"completed", "submitted", "failed", "skipped"} or dt <= now:
+            keys.add(key)
+    for key in lead_schedule_datetime_strings(lead):
+        dt = _parse_lead_schedule_datetime(key)
+        if dt is not None and dt <= now:
+            keys.add(_schedule_datetime_key(dt))
+    if not lead_schedule_datetimes_from_context(lead):
+        for day_offset in range(_schedule_days(lead)):
+            day = lead.diagnosis_date + timedelta(days=day_offset)
+            for slot in _schedule_slots(lead):
+                scheduled = _slot_scheduled_at(day, slot)
+                if scheduled is not None and scheduled <= now:
+                    keys.add(_schedule_datetime_key(scheduled))
+    return keys
+
+
+def _validate_revise_schedule_datetimes(lead: LeadDiagnosis, datetimes: list[str]) -> None:
+    # 2026-09-02 - 改配置允许保留已跑/已过时间点，新增或改未来档不得早于当前
+    now = datetime.now().replace(second=0, microsecond=0)
+    locked = _lead_locked_schedule_datetime_keys(lead)
+    for item in datetimes:
+        dt = _parse_lead_schedule_datetime(item)
+        if dt is None:
+            raise ValueError(f"抓取时间格式无效：{item}")
+        key = _schedule_datetime_key(dt)
+        if key in locked:
+            continue
+        if dt < now:
+            raise ValueError("抓取时间点不能早于当前时间")
+
+
+def lead_schedule_datetimes_from_context(lead: LeadDiagnosis) -> list[datetime]:
+    ctx = lead.lead_context_json if isinstance(lead.lead_context_json, dict) else {}
+    raw = ctx.get("schedule_datetimes")
+    if not isinstance(raw, list):
+        return []
+    out: list[datetime] = []
+    seen: set[str] = set()
+    for item in raw:
+        dt = _parse_lead_schedule_datetime(str(item))
+        if dt is None:
+            continue
+        key = dt.strftime("%Y-%m-%dT%H:%M")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dt)
+    return sorted(out)
+
+
+def lead_schedule_datetime_strings(lead: LeadDiagnosis) -> list[str]:
+    return [dt.strftime("%Y-%m-%dT%H:%M") for dt in lead_schedule_datetimes_from_context(lead)]
+
+
+def _schedule_days_from_datetimes(datetimes: list[datetime], diagnosis_date: date) -> int:
+    if not datetimes:
+        return LEAD_SCHEDULE_DAYS
+    offsets = {(dt.date() - diagnosis_date).days for dt in datetimes}
+    return clamp_lead_schedule_days(max(offsets) + 1 if offsets else LEAD_SCHEDULE_DAYS)
+
+
+def _merge_schedule_datetimes_into_context(ctx: dict[str, Any], datetimes: list[str]) -> dict[str, Any]:
+    merged = dict(ctx)
+    if datetimes:
+        merged["schedule_datetimes"] = datetimes
+    else:
+        merged.pop("schedule_datetimes", None)
+    return merged
+
+
 def _schedule_days(lead: LeadDiagnosis) -> int:
     # 2026-08-04 - 诊断天数可配 - 读库字段，旧单/缺省回落默认 3
     return clamp_lead_schedule_days(getattr(lead, "schedule_days", None))
 
 
 def _schedule_total_count(lead: LeadDiagnosis) -> int:
-    region_count = len(region_submission_targets(lead.region_codes_json))
-    return _schedule_days(lead) * len(_schedule_slots(lead)) * region_count
+    # 2026-09-02 - 自定义 schedule_datetimes 后仍按天×档计数 - 改跟计划迭代口径一致
+    return sum(1 for _ in _iter_schedule_plan(lead))
 
 
 def _schedule_rounds_per_region(lead: LeadDiagnosis) -> int:
+    custom = lead_schedule_datetimes_from_context(lead)
+    if custom:
+        anchor = _schedule_anchor(lead)
+        return sum(1 for dt in custom if dt >= anchor)
     # 2026-08-31 - H5 可配任意次数 - lead_context.schedule_runs 优先于「天×档」
     ctx = lead.lead_context_json if isinstance(lead.lead_context_json, dict) else {}
     raw_runs = ctx.get("schedule_runs")
@@ -388,6 +518,14 @@ def _slot_scheduled_at(day: date, slot: str) -> datetime | None:
 
 def _iter_schedule_slot_rounds(lead: LeadDiagnosis) -> Iterator[tuple[date, str]]:
     """按时间顺序产出计入计划次数的 (日期, 时段)，创建前已过的时段跳过并顺延。"""
+    custom = lead_schedule_datetimes_from_context(lead)
+    if custom:
+        anchor = _schedule_anchor(lead)
+        for dt in custom:
+            if dt < anchor:
+                continue
+            yield dt.date(), dt.strftime("%H:%M")
+        return
     slots = _schedule_slots(lead)
     rounds_needed = _schedule_rounds_per_region(lead)
     anchor = _schedule_anchor(lead)
@@ -582,6 +720,7 @@ def _serialize_lead(
         "region_codes": normalize_region_codes(lead.region_codes_json or []),
         "schedule_times": _schedule_slots(lead),
         "schedule_days": _schedule_days(lead),
+        "schedule_datetimes": lead_schedule_datetime_strings(lead),
         "schedule_calendar_days": _schedule_calendar_days(lead),
         "plan_end_date": _plan_end_date(lead).isoformat(),
         "schedule_total_count": _schedule_total_count(lead),
@@ -861,6 +1000,107 @@ def update_lead_diagnosis(
     if payload.contact_note is not None:
         lead.contact_note = payload.contact_note.strip() or None
     db.commit()
+    return get_lead_diagnosis(db, lead_id, current=current)
+
+
+def can_revise_lead_diagnosis_config(db: Session, current: CurrentSession) -> bool:
+    """仅平台运营/管理员可改任务配置；销售只读。"""
+    try:
+        require_lead_diagnosis_access(db, current, "can_export")
+    except PermissionError:
+        return False
+    return not is_sales_identity(db, current.identity)
+
+
+def _skip_orphan_pending_runs(lead: LeadDiagnosis) -> None:
+    # 2026-09-02 - 任务配置改天数/地区后 - 未提交且不在新计划内的场次标 skipped，后续按新配置走
+    expected = _expected_schedule_keys(lead)
+    for run in lead.runs or []:
+        if run.schedule_key in expected:
+            continue
+        if run.status not in {"pending", "failed"} or run.task_id:
+            continue
+        run.status = "skipped"
+        run.error_message = (run.error_message or "").strip() or "任务配置已变更，该场次不再执行"
+
+
+def revise_lead_diagnosis_config(
+    db: Session,
+    current: CurrentSession,
+    lead_id: int,
+    payload: LeadDiagnosisConfigReviseRequest,
+) -> dict[str, Any]:
+    from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest
+
+    if not can_revise_lead_diagnosis_config(db, current):
+        raise PermissionError("仅运营或管理员可修改任务配置")
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is None:
+        raise ValueError("售前诊断不存在")
+    if lead.status not in ACTIVE_STATUSES:
+        raise ValueError("仅进行中的诊断可修改任务配置")
+
+    patch = payload.model_dump(exclude_unset=True)
+    if "prompts" in patch:
+        raise ValueError("检测问法不可在此修改，请驳回后由销售重新提交")
+
+    current_ctx = normalize_lead_context(lead.lead_context_json)
+    if payload.lead_context is not None:
+        merged_ctx = {**current_ctx, **payload.lead_context.model_dump()}
+        current_ctx = normalize_lead_context(merged_ctx)
+
+    schedule_datetimes: list[str] | None = None
+    if payload.schedule_datetimes is not None:
+        schedule_datetimes = normalize_lead_schedule_datetimes(payload.schedule_datetimes)
+        _validate_revise_schedule_datetimes(lead, schedule_datetimes)
+        current_ctx = _merge_schedule_datetimes_into_context(current_ctx, schedule_datetimes)
+    else:
+        schedule_datetimes = lead_schedule_datetime_strings(lead) or None
+
+    next_schedule_days = payload.schedule_days if payload.schedule_days is not None else _schedule_days(lead)
+    if schedule_datetimes:
+        parsed = [_parse_lead_schedule_datetime(item) for item in schedule_datetimes]
+        parsed = [item for item in parsed if item is not None]
+        next_schedule_days = _schedule_days_from_datetimes(parsed, lead.diagnosis_date)
+
+    next_regions = normalize_region_codes(lead.region_codes_json or [])
+
+    merged = {
+        "brand_name": lead.brand_name,
+        "prompts": list(lead.prompts_json or []),
+        "competitors": payload.competitors if payload.competitors is not None else list(lead.competitors_json or []),
+        "brand_aliases": payload.brand_aliases if payload.brand_aliases is not None else list(lead.brand_aliases_json or []),
+        "platforms": list(lead.platforms_json or []),
+        "region_codes": next_regions,
+        "schedule_days": next_schedule_days,
+        "contact_name": payload.contact_name if payload.contact_name is not None else lead.contact_name,
+        "contact_phone": payload.contact_phone if payload.contact_phone is not None else lead.contact_phone,
+        "contact_note": payload.contact_note if payload.contact_note is not None else lead.contact_note,
+        "lead_context": current_ctx,
+        "start_immediately": False,
+    }
+    validated = LeadDiagnosisCreateRequest.model_validate(merged)
+    body = validated.model_dump(mode="json")
+
+    lead.competitors_json = body["competitors"]
+    lead.brand_aliases_json = body["brand_aliases"]
+    lead.platforms_json = list(body["platforms"])
+    lead.region_codes_json = body["region_codes"]
+    lead.schedule_days = body["schedule_days"]
+    lead.lead_context_json = _merge_schedule_datetimes_into_context(
+        validated.lead_context_dict(),
+        schedule_datetimes or [],
+    )
+    if payload.contact_name is not None:
+        lead.contact_name = (payload.contact_name or "").strip() or None
+    if payload.contact_phone is not None:
+        lead.contact_phone = (payload.contact_phone or "").strip() or None
+    if payload.contact_note is not None:
+        lead.contact_note = (payload.contact_note or "").strip() or None
+
+    _skip_orphan_pending_runs(lead)
+    db.commit()
+    db.refresh(lead)
     return get_lead_diagnosis(db, lead_id, current=current)
 
 
@@ -1312,6 +1552,13 @@ def maybe_finalize_lead_diagnosis(db: Session, lead_id: int) -> bool:
     lead.status = "ready"
     db.commit()
     _kick_lead_export_pregenerate(lead_id)
+    # 2026-09-01 - H5 订单 ready 后发阿里云短信短链（非 H5 单会 skip）
+    try:
+        from app.services.h5_result_service import notify_h5_order_ready_sms
+
+        notify_h5_order_ready_sms(db, lead_id)
+    except Exception as exc:
+        logger.warning("h5 ready sms hook failed lead_id=%s err=%s", lead_id, exc)
     return True
 
 

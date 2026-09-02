@@ -993,6 +993,37 @@
   align-items: start;
 }
 
+.lead-config-field-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lead-config-lock-tag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef3f9;
+  color: #6a7f9a;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.lead-config-list.has-locked-fields .lead-config-platforms,
+.lead-config-list.has-locked-fields > div:not(.lead-config-platforms) {
+  background: #f8fafc;
+}
+
+.lead-config-schedule-editor {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dce9f8;
+}
+
 .lead-config-platform-badges {
   display: flex;
   flex-wrap: wrap;

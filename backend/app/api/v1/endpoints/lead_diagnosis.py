@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
-from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest
+from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest, LeadDiagnosisUpdateRequest, LeadDiagnosisConfigReviseRequest
 from app.services.approval_service import queue_or_run
 from app.services.lead_diagnosis_service import (
     assert_lead_diagnosis_create_allowed,
@@ -23,6 +23,7 @@ from app.services.lead_diagnosis_service import (
     sanitize_lead_region_codes_for_grants,
     submit_due_lead_run,
     update_lead_diagnosis,
+    revise_lead_diagnosis_config,
 )
 from app.services.report_export_service import content_disposition
 
@@ -121,6 +122,22 @@ def update_record(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{lead_id}/revise-config", response_model=ApiResponse[dict])
+def revise_config_record(
+    lead_id: int,
+    payload: LeadDiagnosisConfigReviseRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """运营/管理员修改任务配置（不含检测问法）；后续抓取按新配置执行。"""
+    try:
+        return ApiResponse(data=revise_lead_diagnosis_config(db, current, lead_id, payload))
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/{lead_id}/cancel", response_model=ApiResponse[dict])

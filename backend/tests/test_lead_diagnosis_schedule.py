@@ -10,6 +10,7 @@ from app.services.lead_diagnosis_service import (
     _iter_schedule_slot_rounds,
     _plan_end_date,
     _schedule_calendar_days,
+    _schedule_total_count,
 )
 
 
@@ -65,3 +66,23 @@ def test_custom_schedule_days_five_produces_fifteen_rounds() -> None:
     assert rounds[0] == (date(2026, 7, 7), "09:30")
     assert rounds[-1] == (date(2026, 7, 11), "20:30")
     assert _plan_end_date(lead) == date(2026, 7, 11)
+
+
+def test_custom_schedule_datetimes_total_count() -> None:
+    lead = _lead(
+        diagnosis_date=date(2026, 9, 2),
+        created_at=datetime(2026, 9, 2, 10, 0, 0),
+    )
+    lead.lead_context_json = {
+        "schedule_datetimes": [
+            "2026-09-02T14:30",
+            "2026-09-02T20:30",
+            "2026-09-03T09:30",
+            "2026-09-03T14:30",
+            "2026-09-03T20:30",
+            "2026-09-04T09:30",
+        ],
+    }
+    rounds = list(_iter_schedule_slot_rounds(lead))
+    assert len(rounds) == 6
+    assert _schedule_total_count(lead) == 6

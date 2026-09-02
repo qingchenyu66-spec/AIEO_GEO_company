@@ -80,6 +80,13 @@ SALES_APPROVAL_BYPASS_KEYS = frozenset({
     "brand.competitor.delete",
 })
 
+# 2026-09-02 - 驳回后销售可原单复活重新提交（方案 A）
+RESUBMIT_OPERATION_KEYS = frozenset({
+    "lead_diagnosis.create",
+    "management.tenant.create",
+    "brand.asset.upsert",
+})
+
 
 def requires_sales_approval(db: Session, current: CurrentSession) -> bool:
     """仅销售身份需审批；交付、运营、管理员直接生效。"""
@@ -100,6 +107,52 @@ def can_review_approvals(db: Session, current: CurrentSession) -> bool:
 def ensure_can_review(db: Session, current: CurrentSession) -> None:
     if not can_review_approvals(db, current):
         raise PermissionError("当前账号无权审批操作")
+
+
+def _match_mergeable_approval(
+    candidates: list[OperationApproval],
+    *,
+    operation_key: str,
+    tenant_id: int | None,
+    target_id: int | None,
+    body: dict[str, Any],
+) -> OperationApproval | None:
+    for record in candidates:
+        if target_id is not None and record.target_id == target_id:
+            return record
+        if tenant_id is not None and record.tenant_id == tenant_id and operation_key in {
+            "brand.asset.upsert",
+            "brand.brand_word_groups.upsert",
+            "reports.generate",
+            "diagnosis.record.create",
+            "management.tenant.restore",
+        }:
+            return record
+        if operation_key == "brand.asset.upsert" and tenant_id is None:
+            name = str(body.get("company_full_name") or body.get("brand_name") or "").strip()
+            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
+            if (
+                name
+                and record.tenant_id is None
+                and str(rec_body.get("company_full_name") or rec_body.get("brand_name") or "").strip() == name
+            ):
+                return record
+        if operation_key == "management.tenant.create":
+            name = str(body.get("name") or "").strip()
+            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
+            if name and str(rec_body.get("name") or "").strip() == name:
+                return record
+        if operation_key == "management.user.create":
+            username = str(body.get("username") or "").strip().lower()
+            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
+            if username and str(rec_body.get("username") or "").strip().lower() == username:
+                return record
+        if operation_key == "lead_diagnosis.create":
+            brand = str(body.get("brand_name") or "").strip()
+            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
+            if brand and str(rec_body.get("brand_name") or "").strip() == brand:
+                return record
+    return None
 
 
 def find_pending_duplicate(
@@ -125,40 +178,47 @@ def find_pending_duplicate(
     candidates = list(db.scalars(stmt))
     if not candidates:
         return None
+    return _match_mergeable_approval(
+        candidates,
+        operation_key=operation_key,
+        tenant_id=tenant_id,
+        target_id=target_id,
+        body=_payload_body(payload),
+    )
 
-    body = _payload_body(payload)
 
-    for record in candidates:
-        if target_id is not None and record.target_id == target_id:
-            return record
-        if tenant_id is not None and record.tenant_id == tenant_id and operation_key in {
-            "brand.asset.upsert",
-            "brand.brand_word_groups.upsert",
-            "reports.generate",
-            "diagnosis.record.create",
-            "management.tenant.restore",
-        }:
-            return record
-        if operation_key == "brand.asset.upsert" and tenant_id is None:
-            name = str(body.get("company_full_name") or "").strip()
-            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
-            if (
-                name
-                and record.tenant_id is None
-                and str(rec_body.get("company_full_name") or "").strip() == name
-            ):
-                return record
-        if operation_key == "management.user.create":
-            username = str(body.get("username") or "").strip().lower()
-            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
-            if username and str(rec_body.get("username") or "").strip().lower() == username:
-                return record
-        if operation_key == "lead_diagnosis.create":
-            brand = str(body.get("brand_name") or "").strip()
-            rec_body = _payload_body(record.payload_json if isinstance(record.payload_json, dict) else {})
-            if brand and str(rec_body.get("brand_name") or "").strip() == brand:
-                return record
-    return None
+def find_rejected_resubmit_candidate(
+    db: Session,
+    current: CurrentSession,
+    *,
+    operation_key: str,
+    tenant_id: int | None,
+    target_id: int | None,
+    payload: dict[str, Any],
+) -> OperationApproval | None:
+    """查找同一申请人、同一业务目标下可复活的已驳回单。"""
+    if operation_key not in RESUBMIT_OPERATION_KEYS:
+        return None
+    stmt = (
+        select(OperationApproval)
+        .where(
+            OperationApproval.deleted.is_(False),
+            OperationApproval.status == "rejected",
+            OperationApproval.operation_key == operation_key,
+            OperationApproval.requester_user_id == current.user.id,
+        )
+        .order_by(desc(OperationApproval.id))
+    )
+    candidates = list(db.scalars(stmt))
+    if not candidates:
+        return None
+    return _match_mergeable_approval(
+        candidates,
+        operation_key=operation_key,
+        tenant_id=tenant_id,
+        target_id=target_id,
+        body=_payload_body(payload),
+    )
 
 
 def create_approval_request(
@@ -241,9 +301,193 @@ def approval_to_dict(
         "reviewer_name": reviewer.display_name if reviewer else None,
         "review_comment": record.review_comment,
         "reviewed_at": record.reviewed_at.isoformat() if record.reviewed_at else None,
+        "resubmit_count": _resubmit_count(record.payload_json),
+        "rejection_history": _rejection_history(record.payload_json),
         "executed_result": record.executed_result_json,
         "created_at": record.created_at.isoformat(),
     }
+
+
+def _rejection_history(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    raw = payload if isinstance(payload, dict) else {}
+    history = raw.get("rejection_history")
+    if not isinstance(history, list):
+        return []
+    return [dict(item) for item in history if isinstance(item, dict)]
+
+
+def _resubmit_count(payload: dict[str, Any] | None) -> int:
+    raw = payload if isinstance(payload, dict) else {}
+    try:
+        return max(0, int(raw.get("resubmit_count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _append_rejection_to_payload(
+    record: OperationApproval,
+    payload_json: dict[str, Any],
+) -> dict[str, Any]:
+    if not record.review_comment and not record.reviewed_at:
+        return payload_json
+    out = dict(payload_json)
+    history = out.get("rejection_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "review_comment": record.review_comment,
+            "reviewer_user_id": record.reviewer_user_id,
+            "reviewed_at": record.reviewed_at.isoformat() if record.reviewed_at else None,
+        }
+    )
+    out["rejection_history"] = history[-10:]
+    return out
+
+
+def _preserve_resubmit_meta(old_payload: dict[str, Any] | None, new_payload: dict[str, Any]) -> dict[str, Any]:
+    old = old_payload if isinstance(old_payload, dict) else {}
+    out = dict(new_payload)
+    history = old.get("rejection_history")
+    if isinstance(history, list) and history:
+        out["rejection_history"] = history
+    out["resubmit_count"] = _resubmit_count(old) + 1
+    return out
+
+
+def _validate_resubmit_payload(
+    db: Session,
+    record: OperationApproval,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    operation_key = record.operation_key
+    body = _payload_body(payload)
+    if operation_key == "lead_diagnosis.create":
+        from app.schemas.lead_diagnosis import LeadDiagnosisCreateRequest
+
+        validated = LeadDiagnosisCreateRequest.model_validate(body)
+        stored = normalize_lead_create_approval_payload(
+            {"body": validated.model_dump(mode="json")},
+            refresh_original=True,
+        )
+    elif operation_key == "management.tenant.create":
+        from app.schemas.permission import TenantCreateRequest
+
+        validated = TenantCreateRequest.model_validate(body)
+        stored = {"body": validated.model_dump(mode="json")}
+    elif operation_key == "brand.asset.upsert":
+        from app.schemas.brand import BrandAssetSaveRequest
+
+        validated = BrandAssetSaveRequest.model_validate(body)
+        stored = {"body": validated.model_dump(mode="json")}
+    else:
+        raise ValueError(f"当前审批类型不支持重新提交：{operation_key}")
+    return _preserve_resubmit_meta(record.payload_json if isinstance(record.payload_json, dict) else {}, stored)
+
+
+def _resubmit_summary(record: OperationApproval, payload: dict[str, Any]) -> str:
+    body = _payload_body(payload)
+    if record.operation_key == "lead_diagnosis.create":
+        brand = str(body.get("brand_name") or "").strip() or "未命名"
+        return f"新建售前诊断：{brand}"
+    if record.operation_key == "management.tenant.create":
+        name = str(body.get("name") or "").strip() or "未命名企业"
+        return f"新增企业：{name}"
+    if record.operation_key == "brand.asset.upsert":
+        name = str(body.get("company_full_name") or body.get("brand_name") or "").strip() or "未命名企业"
+        if record.tenant_id is not None:
+            return f"保存企业配置：{name}"
+        return f"新增企业：{name}"
+    return record.summary
+
+
+def _notify_approval_resubmitted(db: Session, record: OperationApproval) -> None:
+    from app.services.system_notification_service import upsert_approval_pending_notification
+
+    requester = db.scalar(select(User).where(User.id == record.requester_user_id))
+    try:
+        upsert_approval_pending_notification(
+            db,
+            approval_id=record.id,
+            summary=record.summary,
+            requester_user_id=record.requester_user_id,
+            requester_name=requester.display_name if requester else None,
+            module_label=MODULE_LABELS.get(record.module, record.module),
+        )
+    except Exception:
+        logger.exception("Failed to push approval resubmit notification id=%s", record.id)
+
+
+def _reopen_rejected_approval(
+    db: Session,
+    record: OperationApproval,
+    *,
+    summary: str,
+    payload_json: dict[str, Any],
+    tenant_id: int | None = None,
+    target_id: int | None = None,
+) -> dict[str, Any]:
+    # 2026-09-02 - 驳回原单复活：保留驳回历史，清空审批人字段，重新进待审
+    payload_json = _append_rejection_to_payload(record, payload_json)
+    record.status = "pending"
+    record.reviewer_user_id = None
+    record.reviewer_identity_id = None
+    record.review_comment = None
+    record.reviewed_at = None
+    record.summary = summary.strip() or record.summary
+    record.payload_json = payload_json
+    if tenant_id is not None:
+        record.tenant_id = tenant_id
+    if target_id is not None:
+        record.target_id = target_id
+    db.commit()
+    db.refresh(record)
+    _notify_approval_resubmitted(db, record)
+    data = approval_to_dict(db, record)
+    data["pending_approval"] = True
+    data["resubmitted"] = True
+    data["message"] = "已修改并重新提交，等待运营或管理员审核"
+    return data
+
+
+def resubmit_approval(
+    db: Session,
+    current: CurrentSession,
+    approval_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not requires_sales_approval(db, current):
+        raise PermissionError("仅销售身份可重新提交审批")
+    record = db.scalar(
+        select(OperationApproval).where(
+            OperationApproval.id == approval_id,
+            OperationApproval.deleted.is_(False),
+        )
+    )
+    if record is None:
+        raise ValueError("审批单不存在")
+    if record.requester_user_id != current.user.id:
+        raise PermissionError("仅原提交人可重新提交")
+    if record.status != "rejected":
+        raise ValueError("仅已驳回单据可重新提交")
+    if record.operation_key not in RESUBMIT_OPERATION_KEYS:
+        raise ValueError(f"当前审批类型不支持重新提交：{record.operation_key}")
+
+    stored = _validate_resubmit_payload(db, record, payload)
+    summary = _resubmit_summary(record, stored)
+    resolved_tenant_id = record.tenant_id
+    if record.operation_key == "brand.asset.upsert":
+        body = _payload_body(stored)
+        tid = body.get("tenant_id")
+        resolved_tenant_id = int(tid) if tid is not None else None
+    return _reopen_rejected_approval(
+        db,
+        record,
+        summary=summary,
+        payload_json=stored,
+        tenant_id=resolved_tenant_id,
+        target_id=record.target_id,
+    )
 
 
 def pending_approval_response(
@@ -310,6 +554,33 @@ def queue_or_run(
             tenant_id,
         )
         return True, pending_approval_response(db, existing, duplicate_merged=True)
+
+    rejected = find_rejected_resubmit_candidate(
+        db,
+        current,
+        operation_key=operation_key,
+        tenant_id=tenant_id,
+        target_id=target_id,
+        payload=payload,
+    )
+    if rejected is not None:
+        stored = _validate_resubmit_payload(db, rejected, payload)
+        data = _reopen_rejected_approval(
+            db,
+            rejected,
+            summary=summary.strip() or _resubmit_summary(rejected, stored),
+            payload_json=stored,
+            tenant_id=tenant_id,
+            target_id=target_id,
+        )
+        logger.info(
+            "approval resubmitted from rejected id=%s key=%s user=%s tenant=%s",
+            rejected.id,
+            operation_key,
+            current.user.id,
+            tenant_id,
+        )
+        return True, data
 
     record = create_approval_request(
         db,

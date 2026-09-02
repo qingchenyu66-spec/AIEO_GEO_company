@@ -5,12 +5,13 @@ import {
   approveOperation,
   listApprovals,
   rejectOperation,
+  resubmitTargetForApproval,
   reviseLeadDiagnosisApproval,
   type ApprovalChangeItem,
   type OperationApproval,
 } from '../../../services/approvals'
 import { useAuthStore } from '../../../stores/auth'
-import { ApprovalPendingRefreshKey } from '../injectionKeys'
+import { ApprovalPendingRefreshKey, PortalNavigateKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { supportedPlatforms } from '../platformMeta'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
@@ -18,6 +19,7 @@ import PlatformBadge from '../../../components/PlatformBadge.vue'
 
 const auth = useAuthStore()
 const refreshPendingCount = inject(ApprovalPendingRefreshKey, () => {})
+const portalNavigate = inject(PortalNavigateKey, null)
 const loading = ref(false)
 const savingId = ref<number | null>(null)
 const actingId = ref<number | null>(null)
@@ -188,6 +190,19 @@ function togglePlatform(code: string) {
   else editForm.platforms.push(code)
 }
 
+function canResubmit(row: OperationApproval) {
+  return !canReview.value && row.status === 'rejected' && Boolean(resubmitTargetForApproval(row))
+}
+
+function openResubmit(row: OperationApproval) {
+  const target = resubmitTargetForApproval(row)
+  if (!target || !portalNavigate) {
+    ElMessage.warning('当前审批类型暂不支持在此修改')
+    return
+  }
+  portalNavigate(target.menu, false, target.query)
+}
+
 async function loadRows() {
   loading.value = true
   try {
@@ -338,6 +353,9 @@ onMounted(loadRows)
         <div v-if="canReview && row.status === 'pending'" class="approval-card-actions">
           <button type="button" class="filter-search-btn" @click="approveRow(row)">通过</button>
           <button type="button" class="danger-text-btn" @click="rejectRow(row)">驳回</button>
+        </div>
+        <div v-else-if="canResubmit(row)" class="approval-card-actions">
+          <button type="button" class="filter-search-btn" @click="openResubmit(row)">修改并重新提交</button>
         </div>
 
         <div v-if="expandedId === row.id" class="approval-detail-panel">
