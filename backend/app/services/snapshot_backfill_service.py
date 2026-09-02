@@ -43,6 +43,7 @@ from app.services.monitor_service import (
     subtask_inflight_blocks_snapshot_backfill,
     TERMINAL_STATUSES,
     _average_mention_position,
+    _matrix_cell_rank,
     _platform_display_names,
     _prompt_belongs_to_group,
     _reconcile_task_progress,
@@ -568,11 +569,22 @@ def build_snapshot_backfill_matrix_sample(
     schedule_ctx: dict[str, Any],
     tenant_name: str | None = None,
     lead_ctx: dict[str, Any] | None = None,
+    asset: BrandAsset | None = None,
+    keyword_groups: list[dict[str, Any]] | None = None,
+    normalize_cache: dict[Any, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """矩阵轻量样本：跳过展示对账，避免千级子任务逐条 serialize。"""
-    # 2026-07-28 - 矩阵加载慢 - 热力只用库内位次，抽屉点详情再拉完整展示
+    """矩阵样本：位次与详情 serialize 同读路径（轻量对账，不全文现算）。"""
+    # 2026-09-02 - 热力/待办「位次 3」详情却无排名 - 弃用裸库内位次，改走 _matrix_cell_rank
+    # 2026-07-28 - 矩阵加载慢 - 热力只用库内位次，抽屉点详情再拉完整展示（已弃用：与详情分叉）
     has_answer = bool((subtask.answer_content or "").strip())
-    pos = subtask.mention_position
+    rank_fields = _matrix_cell_rank(
+        subtask,
+        task.monitor_keywords,
+        asset,
+        keyword_groups,
+        normalize_cache=normalize_cache,
+    )
+    pos = rank_fields.get("mention_position")
     try:
         effective = int(pos) if pos is not None else None
     except (TypeError, ValueError):
@@ -581,6 +593,7 @@ def build_snapshot_backfill_matrix_sample(
         subtask,
         effective_rank=effective,
         use_effective_rank=True,
+        brand_mentioned=rank_fields.get("brand_mentioned"),
     )
     dismissed = subtask_backfill_dismissed(subtask)
     updated = getattr(subtask, "updated_at", None)
@@ -2362,7 +2375,7 @@ def list_snapshot_backfill_page(
 
     include_summary=False 时尽早凑齐本页后停止扫描，供首屏轻量加载；
     汇总请另请求 include_summary=True（可走短缓存）。
-    light=True：矩阵专用，跳过展示位次对账，只取库内位次与待补标记。
+    light=True：矩阵专用，跳过完整 item serialize，位次仍走与详情同款展示读路径。
     """
     platform_code = str(platform or "").strip()
     keyword_text = str(keyword or "").strip()
@@ -2542,6 +2555,8 @@ def list_snapshot_backfill_page(
     keyword_group_dict_cache: dict[int, list[dict[str, Any]]] = {}
     brand_asset_cache: dict[int, BrandAsset | None] = {}
     lead_cache: dict[int, LeadDiagnosis] = {}
+    # 2026-09-02 - 矩阵展示位次要对账 - 同页复用结构化榜 normalize，避免千级重复规范化
+    rank_normalize_cache: dict[Any, list[dict[str, Any]]] = {}
 
     candidates: list[tuple[GeoMonitorSubtask, GeoMonitorTask, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     pending_count = 0
@@ -2559,8 +2574,8 @@ def list_snapshot_backfill_page(
 
         keyword_group_rows: list = []
         keyword_group_dicts: list[dict[str, Any]] = []
-        # light 矩阵且无词组筛选：跳过词组库查询
-        if task.tenant_id and (keyword_group_filter or not light):
+        # 2026-09-02 - 矩阵位次对齐详情 - light 也要品牌词组，否则匹配词空、对账/门禁与详情不一致
+        if task.tenant_id:
             if task.tenant_id not in keyword_groups_cache:
                 try:
                     orm_groups = list_keyword_groups(db, task.tenant_id)
@@ -2572,6 +2587,11 @@ def list_snapshot_backfill_page(
                     for item in orm_groups
                     if item.status and item.monitor_keyword
                 ]
+            if task.tenant_id not in brand_asset_cache:
+                try:
+                    brand_asset_cache[task.tenant_id] = get_brand_asset(db, task.tenant_id)
+                except Exception:
+                    brand_asset_cache[task.tenant_id] = None
             keyword_group_rows = keyword_groups_cache[task.tenant_id]
             keyword_group_dicts = keyword_group_dict_cache[task.tenant_id]
 
@@ -2598,6 +2618,9 @@ def list_snapshot_backfill_page(
                 schedule_ctx=schedule_ctx,
                 tenant_name=tenant_name_map.get(task.tenant_id) if task.tenant_id else None,
                 lead_ctx=lead_ctx,
+                asset=brand_asset_cache.get(task.tenant_id) if task.tenant_id else None,
+                keyword_groups=keyword_group_dicts or None,
+                normalize_cache=rank_normalize_cache,
             )
         else:
             item = build_snapshot_backfill_item(

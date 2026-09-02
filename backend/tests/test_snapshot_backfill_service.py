@@ -494,7 +494,7 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
         )
 
     monkeypatch.setattr(
-        "app.services.snapshot_backfill_service.fetch_share_page",
+        "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
         _fake_fetch,
     )
     enqueued: list[tuple[str, str]] = []
@@ -583,7 +583,7 @@ def test_apply_snapshot_backfill_clears_cdn_screenshot_for_share_url(db_session,
     )
 
     monkeypatch.setattr(
-        "app.services.snapshot_backfill_service.fetch_share_page",
+        "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
         lambda url, **kwargs: SharePageFetchResult(
             answer_content="1. 新正文",
             references=[],
@@ -656,7 +656,7 @@ def test_apply_snapshot_backfill_screenshot_fail_does_not_store_share_link(db_se
     )
 
     monkeypatch.setattr(
-        "app.services.snapshot_backfill_service.fetch_share_page",
+        "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
         lambda url, **kwargs: SharePageFetchResult(
             answer_content="1. 分众传媒\n2. 艾迪亚",
             references=[],
@@ -801,7 +801,7 @@ def test_apply_snapshot_backfill_image_url_treated_as_existing_shot(db_session, 
         raise AssertionError("image url must not fetch share page")
 
     monkeypatch.setattr(
-        "app.services.snapshot_backfill_service.fetch_share_page",
+        "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
         _should_not_fetch,
     )
     result = apply_snapshot_backfill(
@@ -868,7 +868,7 @@ def test_apply_snapshot_backfill_rank_only_keeps_snapshot(db_session, monkeypatc
         raise AssertionError("rank-only path must not fetch share page")
 
     monkeypatch.setattr(
-        "app.services.snapshot_backfill_service.fetch_share_page",
+        "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
         _should_not_fetch,
     )
     result = apply_snapshot_backfill(
@@ -1728,3 +1728,50 @@ def test_matrix_sample_exposes_before_backfill_fields() -> None:
     assert sample["before_has_answer"] is False
     assert sample["before_status"] == "failed"
     assert sample["mention_position"] == 2
+
+
+def test_matrix_sample_rank_matches_display_when_answer_lacks_brand() -> None:
+    """2026-09-02 - 热力裸库内 3、详情无排名 - 矩阵样本须与 serialize 展示位次一致。"""
+    from types import SimpleNamespace
+
+    from app.services.monitor_service import serialize_subtask_for_display
+    from app.services.snapshot_backfill_service import build_snapshot_backfill_matrix_sample
+
+    task = GeoMonitorTask(
+        task_id="task-rank-align-1",
+        tenant_id=1,
+        status="completed",
+        monitor_keywords="电梯广告",
+    )
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-rank-align-1",
+        task_id=task.task_id,
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="电梯广告品牌推荐",
+        status="completed",
+        mention_position=3,
+        answer_content="市面上常见做法是对比投放效果，不必点名具体厂商。",
+        all_rankings_json=[],
+        raw_result_json={},
+    )
+    asset = SimpleNamespace(
+        brand_name="艾迪亚",
+        brand_short_name="艾迪亚",
+        company_full_name="艾迪亚控股集团有限公司",
+        aliases_json=["艾迪亚控股"],
+    )
+    display = serialize_subtask_for_display(
+        subtask,
+        monitor_keywords=task.monitor_keywords,
+        asset=asset,  # type: ignore[arg-type]
+    )
+    sample = build_snapshot_backfill_matrix_sample(
+        subtask,
+        task,
+        schedule_ctx={"schedule_key": "20260902", "schedule_window_key": "20260902_1542", "schedule_label": "15:42"},
+        asset=asset,  # type: ignore[arg-type]
+    )
+    assert display["mention_position"] is None
+    assert sample["mention_position"] is None
+    assert sample["needs_backfill"] is True
