@@ -87,9 +87,13 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
     menus = [item.model_dump() for item in get_identity_menus(db, identity)]
     customer_includes_today = False
     if identity.identity_type == "CUSTOMER" and identity.tenant_id:
-        from app.services.monitor_service import credit_customer_includes_today
+        # 2026-09-02 - credit 助手未随 auth 上线时 ImportError → /me 500 踢登录
+        try:
+            from app.services.monitor_service import credit_customer_includes_today
 
-        customer_includes_today = credit_customer_includes_today(db, identity.tenant_id)
+            customer_includes_today = bool(credit_customer_includes_today(db, identity.tenant_id))
+        except Exception:
+            customer_includes_today = False
     return {
         "access_token": create_access_token(user, identity),
         "token_type": "bearer",
@@ -208,11 +212,16 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
         db.commit()
     # 2026-07-30 - /me 刷新会话冲掉平台白名单 - 与 login/switch 同口径带回 allowed_monitor_platforms
     from app.services.menu_permission_service import identity_allowed_monitor_platforms
-    from app.services.monitor_service import credit_customer_includes_today
 
     customer_includes_today = False
     if current.identity.identity_type == "CUSTOMER" and current.identity.tenant_id:
-        customer_includes_today = credit_customer_includes_today(db, current.identity.tenant_id)
+        # 2026-09-02 - credit 助手未随 auth 上线时 ImportError → /me 500 踢登录
+        try:
+            from app.services.monitor_service import credit_customer_includes_today
+
+            customer_includes_today = bool(credit_customer_includes_today(db, current.identity.tenant_id))
+        except Exception:
+            customer_includes_today = False
 
     return ApiResponse(data={
         "user": _user_public(current.user),

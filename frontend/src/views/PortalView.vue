@@ -406,10 +406,15 @@ async function refreshMenusFromServer() {
   try {
     await auth.refreshSession()
     ensureActiveMenuAllowed()
-  } catch {
-    ElMessage.warning('会话已失效，请重新登录')
-    await auth.logout()
-    await router.replace('/login')
+  } catch (error: unknown) {
+    const status = (error as { response?: { status?: number } })?.response?.status
+    // 2026-09-02 - /me 500 被当成会话失效 - 登录成功又踢回登录叠三条 toast；仅 401 才清会话
+    if (status === 401) {
+      ElMessage.warning('会话已失效，请重新登录')
+      await auth.logout()
+      await router.replace('/login')
+      return
+    }
   }
 }
 

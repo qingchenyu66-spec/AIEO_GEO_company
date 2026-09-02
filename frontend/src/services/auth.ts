@@ -82,7 +82,8 @@ export async function switchIdentityApi(identityId: number): Promise<AuthSession
 }
 
 export async function meApi(): Promise<Omit<AuthSession, 'access_token' | 'token_type'>> {
-  const response = await http.get('/v1/auth/me')
+  // 2026-09-02 - Portal 自处理刷新失败 - 避免与「会话已失效」叠 500 toast
+  const response = await http.get('/v1/auth/me', { silentError: true } as GeoHttpRequestConfig)
   return response.data.data
 }
 
