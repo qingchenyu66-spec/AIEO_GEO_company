@@ -111,7 +111,6 @@ export function scheduleTotalForDays(days: number) {
   return clampScheduleDays(days) * SCHEDULE_SLOTS.length
 }
 
-/** 从详情还原可编辑时间点列表（自定义 > 计划 > 天数×时段）。 */
 export function buildLeadScheduleDatetimesFromDetail(row: {
   schedule_datetimes?: string[]
   schedule_plan?: Array<{ day: string; slot: string }>
@@ -135,6 +134,27 @@ export function buildLeadScheduleDatetimesFromDetail(row: {
     }
   }
   return out
+}
+
+/** 审批单 body：自定义时间点 > 天数×默认时段。 */
+export function buildApprovalScheduleDatetimes(body: Record<string, unknown>): string[] {
+  const ctx = (body.lead_context && typeof body.lead_context === 'object')
+    ? body.lead_context as Record<string, unknown>
+    : {}
+  if (Array.isArray(ctx.schedule_datetimes) && ctx.schedule_datetimes.length) {
+    return ctx.schedule_datetimes.map(item => normalizeScheduleDatetimeValue(String(item)))
+  }
+  const diagnosisDate = String(body.diagnosis_date || new Date().toISOString().slice(0, 10))
+  return buildLeadScheduleDatetimesFromDetail({
+    diagnosis_date: diagnosisDate,
+    schedule_days: Number(body.schedule_days || 3),
+  })
+}
+
+export function formatApprovalScheduleDisplay(body: Record<string, unknown>): string {
+  const slots = buildApprovalScheduleDatetimes(body)
+  if (!slots.length) return '—'
+  return slots.map(formatScheduleDatetimeLabel).join('、')
 }
 
 export function formatScheduleDatetimeLabel(value: string) {

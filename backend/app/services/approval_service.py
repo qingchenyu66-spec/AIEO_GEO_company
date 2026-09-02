@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Callable
 
 from sqlalchemy import desc, func, select
@@ -726,13 +726,43 @@ def revise_lead_diagnosis_create_approval(
     else:
         next_regions = adopted.get("region_codes")
 
+    from app.schemas.lead_diagnosis import normalize_lead_context, normalize_lead_schedule_datetimes
+    from app.services.lead_diagnosis_service import (
+        _merge_schedule_datetimes_into_context,
+        _parse_lead_schedule_datetime,
+        _schedule_days_from_datetimes,
+    )
+
+    schedule_datetimes: list[str] | None = None
+    if "schedule_datetimes" in patch:
+        schedule_datetimes = normalize_lead_schedule_datetimes(patch.get("schedule_datetimes"))
+        if not schedule_datetimes:
+            raise ValueError("请至少配置一个抓取时间点")
+        # 2026-09-02 - 审批修改改时间段 - 待审单无已跑档，全部须 ≥ 当前
+        now = datetime.now().replace(second=0, microsecond=0)
+        for item in schedule_datetimes:
+            dt = _parse_lead_schedule_datetime(item)
+            if dt is None:
+                raise ValueError(f"抓取时间格式无效：{item}")
+            if dt < now:
+                raise ValueError("抓取时间点不能早于当前时间")
+        diagnosis_date = adopted.get("diagnosis_date") or date.today()
+        if isinstance(diagnosis_date, str):
+            diagnosis_date = date.fromisoformat(str(diagnosis_date)[:10])
+        parsed = [dt for dt in (_parse_lead_schedule_datetime(x) for x in schedule_datetimes) if dt is not None]
+        next_schedule_days = _schedule_days_from_datetimes(parsed, diagnosis_date)
+    elif patch.get("schedule_days") is not None:
+        next_schedule_days = patch.get("schedule_days")
+    else:
+        next_schedule_days = adopted.get("schedule_days")
+
     merged = {
         **adopted,
         "brand_name": brand,
         "competitors": patch.get("competitors", adopted.get("competitors")),
         "platforms": patch.get("platforms", adopted.get("platforms")),
         "region_codes": next_regions,
-        "schedule_days": patch.get("schedule_days", adopted.get("schedule_days")),
+        "schedule_days": next_schedule_days,
         "prompts": patch.get("prompts", adopted.get("prompts")),
         "contact_note": patch.get("contact_note", adopted.get("contact_note")),
         "contact_name": adopted.get("contact_name"),
@@ -743,6 +773,16 @@ def revise_lead_diagnosis_create_approval(
     validated = LeadDiagnosisCreateRequest.model_validate(merged)
     body = validated.model_dump(mode="json")
     body["brand_name"] = brand
+    lead_ctx = normalize_lead_context(adopted.get("lead_context") or body.get("lead_context"))
+    if schedule_datetimes is not None:
+        body["lead_context"] = _merge_schedule_datetimes_into_context(lead_ctx, schedule_datetimes)
+    elif isinstance(adopted.get("lead_context"), dict):
+        prev_dts = adopted["lead_context"].get("schedule_datetimes")
+        if prev_dts:
+            body["lead_context"] = _merge_schedule_datetimes_into_context(
+                lead_ctx,
+                normalize_lead_schedule_datetimes(prev_dts),
+            )
     record.payload_json = {
         "body": body,
         "original_body": dict(original),

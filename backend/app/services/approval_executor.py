@@ -160,6 +160,9 @@ def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationA
     )
     db.add(tenant)
     db.flush()
+    from app.services.management_service import apply_tenant_billing_mode_on_create
+
+    apply_tenant_billing_mode_on_create(db, tenant, payload.billing_mode)
     if not tenant.status:
         if tenant.stop_reason == "expired" and tenant.stopped_at is None:
             tenant.stopped_at = datetime.now(UTC)
@@ -346,9 +349,21 @@ def _exec_lead_create(db: Session, current: CurrentSession, record: OperationApp
     del current
     requester, requester_identity = _requester_actor(db, record)
     actor = CurrentSession(user=requester, identity=requester_identity)
-    payload = LeadDiagnosisCreateRequest.model_validate(data.get("body") or data)
+    raw_body = dict(data.get("body") or data)
+    payload = LeadDiagnosisCreateRequest.model_validate(raw_body)
+    from app.schemas.lead_diagnosis import normalize_lead_context, normalize_lead_schedule_datetimes
+    from app.services.lead_diagnosis_service import _merge_schedule_datetimes_into_context
+
+    ctx = normalize_lead_context(raw_body.get("lead_context") or payload.lead_context_dict())
+    raw_lc = raw_body.get("lead_context")
+    if isinstance(raw_lc, dict) and raw_lc.get("schedule_datetimes"):
+        ctx = _merge_schedule_datetimes_into_context(
+            ctx,
+            normalize_lead_schedule_datetimes(raw_lc["schedule_datetimes"]),
+        )
     return create_lead_diagnosis(
         db, actor, payload, enforce_position_platforms=False, enforce_region_grants=False,
+        lead_context_json=ctx,
     )
 
 

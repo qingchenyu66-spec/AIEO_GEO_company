@@ -14,6 +14,13 @@ import { useAuthStore } from '../../../stores/auth'
 import { ApprovalPendingRefreshKey, PortalNavigateKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { supportedPlatforms } from '../platformMeta'
+import {
+  buildApprovalScheduleDatetimes,
+  formatApprovalScheduleDisplay,
+  formatDatetimeLocalInput,
+  nextDefaultScheduleDatetime,
+  parseScheduleDatetimeMs,
+} from '../composables/useLeadDiagnosis'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 
@@ -32,10 +39,12 @@ type LeadEditForm = {
   competitorsText: string
   region_codes: string[]
   platforms: string[]
-  schedule_days: number
+  schedule_datetimes: string[]
   prompts: string[]
   contact_note: string
 }
+
+const scheduleDatetimeMinLocal = computed(() => formatDatetimeLocalInput(new Date()))
 
 const reviewPlatformOptions = supportedPlatforms
 const editDialogVisible = ref(false)
@@ -45,7 +54,7 @@ const editForm = reactive<LeadEditForm>({
   competitorsText: '',
   region_codes: [],
   platforms: [],
-  schedule_days: 3,
+  schedule_datetimes: [],
   prompts: ['', '', '', '', ''],
   contact_note: '',
 })
@@ -84,6 +93,13 @@ function sameStringList(a: unknown, b: unknown) {
   return left.every((item, idx) => item === right[idx])
 }
 
+function sameScheduleDatetimes(a: Record<string, unknown>, b: Record<string, unknown>) {
+  const left = buildApprovalScheduleDatetimes(a).slice().sort()
+  const right = buildApprovalScheduleDatetimes(b).slice().sort()
+  if (left.length !== right.length) return false
+  return left.every((item, idx) => item === right[idx])
+}
+
 /** 审批采用相对销售原文是否已改过（决定是否出右侧对照列）。 */
 function leadHasRevision(row: OperationApproval) {
   const original = leadOriginal(row)
@@ -92,7 +108,7 @@ function leadHasRevision(row: OperationApproval) {
     !sameStringList(original.competitors, adopted.competitors)
     || !sameStringList(original.platforms, adopted.platforms)
     || !sameStringList(original.region_codes, adopted.region_codes)
-    || Number(original.schedule_days || 3) !== Number(adopted.schedule_days || 3)
+    || !sameScheduleDatetimes(original, adopted)
     || !sameStringList(original.prompts, adopted.prompts)
     || String(original.contact_note || '').trim() !== String(adopted.contact_note || '').trim()
   )
@@ -107,9 +123,9 @@ function leadFieldRows(row: OperationApproval): Array<{ field: string; before: s
     { field: '监测地区', before: displayRegions(original.region_codes), after: displayRegions(adopted.region_codes) },
     { field: '诊断平台', before: displayPlatforms(original.platforms), after: displayPlatforms(adopted.platforms) },
     {
-      field: '诊断天数',
-      before: `${Number(original.schedule_days || 3)} 天`,
-      after: `${Number(adopted.schedule_days || 3)} 天`,
+      field: '抓取时间点',
+      before: formatApprovalScheduleDisplay(original),
+      after: formatApprovalScheduleDisplay(adopted),
     },
     {
       field: '检测问题',
@@ -134,7 +150,7 @@ function fillEditForm(row: OperationApproval) {
   editForm.competitorsText = asStringList(adopted.competitors).join('、')
   editForm.region_codes = asStringList(adopted.region_codes)
   editForm.platforms = asStringList(adopted.platforms)
-  editForm.schedule_days = Number(adopted.schedule_days || 3)
+  editForm.schedule_datetimes = buildApprovalScheduleDatetimes(adopted)
   editForm.prompts = prompts.slice(0, 5)
   editForm.contact_note = String(adopted.contact_note || '')
 }
@@ -182,6 +198,14 @@ function displayPlatforms(raw: unknown) {
 function displayRegions(raw: unknown) {
   const list = asStringList(raw)
   return list.length ? list.join('、') : '全部区域'
+}
+
+function addEditScheduleSlot() {
+  editForm.schedule_datetimes.push(nextDefaultScheduleDatetime(editForm.schedule_datetimes))
+}
+
+function removeEditScheduleSlot(index: number) {
+  editForm.schedule_datetimes.splice(index, 1)
 }
 
 function togglePlatform(code: string) {
@@ -234,13 +258,26 @@ async function saveLeadReviseFromDialog() {
     ElMessage.warning('请至少填写一个检测问题')
     return
   }
+  const scheduleDatetimes = editForm.schedule_datetimes.map(item => item.trim()).filter(Boolean)
+  if (!scheduleDatetimes.length) {
+    ElMessage.warning('请至少添加一个抓取时间点')
+    return
+  }
+  const now = Date.now()
+  for (const value of scheduleDatetimes) {
+    const ms = parseScheduleDatetimeMs(value)
+    if (ms != null && ms < now) {
+      ElMessage.warning('抓取时间点不能早于当前时间')
+      return
+    }
+  }
   savingId.value = row.id
   try {
     const updated = await reviseLeadDiagnosisApproval(row.id, {
       competitors: editForm.competitorsText.split(/[,，、]/).map(item => item.trim()).filter(Boolean),
       platforms: [...editForm.platforms],
       region_codes: [...editForm.region_codes],
-      schedule_days: Number(editForm.schedule_days || 3),
+      schedule_datetimes: scheduleDatetimes,
       prompts,
       contact_note: editForm.contact_note.trim() || null,
     })
@@ -443,7 +480,7 @@ onMounted(loadRows)
     <el-dialog
       v-model="editDialogVisible"
       title="修改审批采用"
-      width="640px"
+      width="720px"
       destroy-on-close
       @closed="editTarget = null"
     >
@@ -475,10 +512,28 @@ onMounted(loadRows)
             </label>
           </div>
         </div>
-        <label class="lead-field">
-          <span>诊断天数</span>
-          <input v-model.number="editForm.schedule_days" type="number" min="1" max="30" />
-        </label>
+        <div class="lead-field schedule-time-picker">
+          <div class="schedule-time-title">
+            <span>抓取时间段（日期 + 时间）</span>
+            <button type="button" class="filter-reset-btn" @click="addEditScheduleSlot">新增时间</button>
+          </div>
+          <div class="schedule-time-list is-datetime">
+            <div
+              v-for="(_, index) in editForm.schedule_datetimes"
+              :key="`approval-slot-${index}-${editForm.schedule_datetimes[index]}`"
+            >
+              <input
+                v-model="editForm.schedule_datetimes[index]"
+                type="datetime-local"
+                :min="scheduleDatetimeMinLocal"
+              />
+              <button type="button" class="danger-text-btn" @click="removeEditScheduleSlot(index)">删除</button>
+            </div>
+          </div>
+          <div v-if="!editForm.schedule_datetimes.length" class="mini-empty compact-empty">
+            暂无抓取时间，请点击「新增时间」配置。
+          </div>
+        </div>
         <label class="lead-field">
           <span>销售备注</span>
           <textarea v-model="editForm.contact_note" rows="2" />

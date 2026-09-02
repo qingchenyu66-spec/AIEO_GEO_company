@@ -109,7 +109,7 @@ export async function reviseLeadDiagnosisApproval(
     competitors?: string[]
     platforms?: string[]
     region_codes?: string[]
-    schedule_days?: number
+    schedule_datetimes?: string[]
     prompts?: string[]
     contact_note?: string | null
   },

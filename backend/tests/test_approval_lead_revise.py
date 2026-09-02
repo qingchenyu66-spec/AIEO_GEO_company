@@ -79,6 +79,53 @@ def test_revise_lead_diagnosis_keeps_brand_and_original(monkeypatch) -> None:
     assert out["id"] == 47
 
 
+def test_revise_lead_diagnosis_schedule_datetimes(monkeypatch) -> None:
+    from datetime import datetime, timedelta
+
+    original = {
+        "brand_name": "测试诊断",
+        "competitors": ["竞品A"],
+        "platforms": ["doubao"],
+        "region_codes": [],
+        "schedule_days": 3,
+        "prompts": ["问题一"],
+        "contact_note": "备注",
+        "start_immediately": True,
+    }
+    record = SimpleNamespace(
+        id=48,
+        status="pending",
+        operation_key="lead_diagnosis.create",
+        deleted=False,
+        summary="新建售前诊断：测试诊断",
+        payload_json={"body": dict(original), "original_body": dict(original)},
+    )
+    db = MagicMock()
+    db.scalar.return_value = record
+
+    monkeypatch.setattr("app.services.approval_service.ensure_can_review", lambda db, current: None)
+    monkeypatch.setattr(
+        "app.services.approval_service.approval_to_dict",
+        lambda db, rec: {"id": rec.id, "payload": rec.payload_json},
+    )
+
+    base = datetime.now().replace(second=0, microsecond=0) + timedelta(days=1)
+    future = base.replace(hour=9, minute=30).strftime("%Y-%m-%dT%H:%M")
+    future2 = base.replace(hour=14, minute=30).strftime("%Y-%m-%dT%H:%M")
+    slots = [future, future2]
+
+    current = SimpleNamespace(user=SimpleNamespace(id=10), identity=SimpleNamespace(id=1))
+    revise_lead_diagnosis_create_approval(
+        db,
+        current,
+        48,
+        {"schedule_datetimes": slots},
+    )
+    body = record.payload_json["body"]
+    assert body["lead_context"]["schedule_datetimes"] == slots
+    assert body["schedule_days"] == 2
+
+
 def test_revise_rejects_non_lead_operation(monkeypatch) -> None:
     record = SimpleNamespace(
         id=1,

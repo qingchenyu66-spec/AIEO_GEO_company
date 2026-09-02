@@ -881,6 +881,7 @@ def create_lead_diagnosis(
     *,
     enforce_position_platforms: bool = True,
     enforce_region_grants: bool = True,
+    lead_context_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     assert_lead_diagnosis_create_allowed(db, current, payload.brand_name)
@@ -894,13 +895,20 @@ def create_lead_diagnosis(
         if enforce_region_grants
         else normalize_region_codes(payload.region_codes)
     )
+    ctx = dict(lead_context_json) if lead_context_json is not None else payload.lead_context_dict()
+    schedule_days = clamp_lead_schedule_days(payload.schedule_days)
+    raw_dts = ctx.get("schedule_datetimes") if isinstance(ctx.get("schedule_datetimes"), list) else None
+    if raw_dts:
+        parsed = [dt for dt in (_parse_lead_schedule_datetime(str(x)) for x in raw_dts) if dt is not None]
+        if parsed:
+            schedule_days = _schedule_days_from_datetimes(parsed, diagnosis_date)
     lead = LeadDiagnosis(
         brand_name=payload.brand_name.strip(),
         contact_name=(payload.contact_name or "").strip() or None,
         contact_phone=(payload.contact_phone or "").strip() or None,
         contact_note=(payload.contact_note or "").strip() or None,
         # 2026-08-13 - 入口官网/行业/产品落库 lead_context_json，不再拼进 contact_note
-        lead_context_json=payload.lead_context_dict(),
+        lead_context_json=ctx,
         # 2026-08-13 - 可选露出词落库，提交监测别名与聚合匹配共用
         brand_aliases_json=list(payload.brand_aliases or []),
         prompts_json=payload.prompts,
@@ -908,7 +916,7 @@ def create_lead_diagnosis(
         platforms_json=list(payload.platforms),
         region_codes_json=region_codes,
         schedule_times_json=list(DEFAULT_LEAD_SCHEDULE_TIMES),
-        schedule_days=clamp_lead_schedule_days(payload.schedule_days),
+        schedule_days=schedule_days,
         diagnosis_date=diagnosis_date,
         status="pending",
         created_by_user_id=current.user.id,
