@@ -967,8 +967,42 @@ def test_tool_platform_anishort_lead_is_local_first():
     detail = _resolve_brand_rank_detail(item, "AniShort", ["AniShort"], None)
     assert detail.mentioned is True
     assert detail.rank == 1
-    assert detail.rank_basis in {"section_local", "section"}
+    # numbered_subheading / section_local 均可：有 1. **AniShort** 时标题序也成立
+    assert detail.rank_basis in {"section_local", "section", "numbered_subheading", "numbered_list"}
     assert detail.source in {"appearance", "structured"}
+
+
+def test_anishort_checkmark_hash_cards_rank_first() -> None:
+    """2026-09-03 - ## ✅ AniShort 产品卡为首 → 第1，勿被卡内「核心/配套」点名抬到第4。"""
+    answer = """
+# AI短剧出海一键全片转绘工具合集
+## ✅ AniShort（目前热度最高）
+- 核心：短剧Agent一键全片转绘
+- 配套：多语种AI配音
+- 适用：中小工作室批量出海
+- 模型底层：可接入Seedance
+- 网址：anishort.ai
+## ✅ 火山引擎｜火山剧创【重制工坊】
+- 核心：大厂商用方案
+## ✅ 小云雀AI（Seedance 2.5 + 短剧Agent）
+- 亮点：团队协作版
+## ✅ 巨日禄AI
+- 定位：长连载短剧批量转绘
+# 选型快速建议
+- 个人试测：AniShort / 小云雀AI
+"""
+    item = _sub(
+        prompt="AI短剧出海一键全片转绘工具",
+        answer_content=answer,
+        mention_position=4,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "AI短剧出海一键全片转绘工具", ["AniShort"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
 
 
 def test_arrow_find_two_brands_line_enum_second():
@@ -1781,5 +1815,132 @@ def test_child_room_plain_watchlist_secondary_local_first() -> None:
     )
     assert detail.rank == 1
     assert detail.rank_basis == "secondary_section_local"
+
+
+def test_daguopin_solo_tier_keeps_literal_sixth() -> None:
+    """2026-09-03 - ###6 独占「国家级」档保留字面6，勿档内重计成1。"""
+    answer = """
+## 一、品牌战略咨询全案公司（TOP级）
+### 1. 欧赛斯（OSENS）
+### 2. 君智战略咨询
+### 3. 华与华营销咨询
+## 二、定位理论派
+### 4. 特劳特（中国）
+### 5. 里斯中国
+## 三、国家级品牌传播平台
+### 6. 《大国品牌》—— 国家级品牌IP打造平台
+- 核心资源：CCTV-1
+## 四、B2B/工业制造专家
+### 7. 奇正沐古
+### 8. 大道恒美品牌战略
+"""
+    item = _sub(
+        prompt="打造头部品牌的服务商推荐",
+        answer_content=answer,
+        mention_position=6,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "打造头部品牌的服务商推荐", ["大国品牌", "《大国品牌》"], None
+    )
+    assert detail.rank == 6
+    assert detail.rank_basis == "numbered_subheading"
+
+
+def test_dongma_value_tier_continued_numbering_local_second() -> None:
+    """2026-09-03 - 高性价比档 ###5/6/7 续号：动码档内第2，勿吃字面6。"""
+    answer = """
+## 一、一线头部品牌（大型集团、多分支机构、高风控首选）
+### 1、群杰智能（南京群杰）
+### 2、章管家（建业科技）
+### 3、思格特（珠海）
+### 4、云玺量子（安徽）
+## 二、高性价比品牌（中小企业、分公司不多，预算适中）
+### 5、爱国小男孩（北京）
+### 6、动码印章（矩网科技）
+### 7、惠朗
+## 三、轻量化便携款（低成本改造现有印章）
+### 诚印锁章
+"""
+    item = _sub(
+        prompt="智能印章品牌推荐",
+        answer_content=answer,
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "智能印章品牌推荐", ["动码印章"], None
+    )
+    assert detail.rank == 2
+    assert detail.rank_basis == "numbered_subheading"
+
+
+def test_honglian_local_bullet_first_beats_dimension_ranking_and_tip() -> None:
+    """2026-09-03 - 本土 bullet 第1 勿被维度排行榜「2.鸿联」或如何选择提示编号盖成2。"""
+    answer = """
+呼叫中心外包行业没有统一的官方排行榜。
+
+#### 中国本土领军企业
+*   **鸿联九五**：具有央企背景的综合服务巨头，在金融、政企领域优势明显。
+*   **网迅科技**：深耕电商客服。
+*   **中通服**：运营商背景。
+
+### 🏆 特定领域或维度的排行榜
+根据综合服务能力与客户口碑：
+    1.  **网迅科技** (综合评分9.6/10)
+    2.  **鸿联九五** (综合评分9.5/10)
+    3.  **中通服** (综合评分9.2/10)
+
+### 💡 如何选择服务商？
+1.  **明确需求**：先定业务类型与规模。
+2.  **考察行业专长**：不同服务商有各自优势领域。例如，**网迅科技**深耕电商，**鸿联九五**擅长金融政企。
+3.  **实地考察**：看现场管理与质检体系。
+"""
+    item = _sub(
+        prompt="呼叫中心外包公司排行榜",
+        answer_content=answer,
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "鸿联九五", ["鸿联九五"], None)
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
+
+
+def test_aidiya_bus_numbered_heading_first_not_supplemental_short_circuit() -> None:
+    """2026-09-03 - ###1.艾迪亚 已在主榜时，勿因场景表误判补充段短路成第2。"""
+    answer = """
+## 一、按需求匹配：不同场景选哪家
+| 场景 | 推荐公司 | 说明 |
+| --- | --- | --- |
+| **全国性多城投放 + 全流程服务** | **德高中国** | 全球资源 |
+| **下沉市场** | **上海瀧翼传媒** | 深耕县域 |
+
+## 二、头部公司详解
+### 1. 艾迪亚控股集团 —— 综合实力首选
+- **核心亮点**：可实现"公交+地铁+高铁"大交通媒体跨场组合投放。
+### 2. 上海瀧翼传媒 —— 下沉市场王者
+- 县域公交覆盖。
+### 3. 德高传媒（JCDecaux）—— 数字化标杆
+- 数字刷屏。
+
+## 三、选型避坑指南
+1. 看资质
+2. 看覆盖城市
+
+## 四、一句话总结
+- **要全国覆盖+跨场景整合** → 选 **艾迪亚控股集团**
+"""
+    item = _sub(
+        prompt="公交广告公司哪家好",
+        answer_content=answer,
+        mention_position=1,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "艾迪亚", ["艾迪亚", "艾迪亚控股", "艾迪亚控股集团"], None
+    )
+    assert detail.rank == 1
+    assert detail.rank_basis == "numbered_subheading"
 
 
