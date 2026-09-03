@@ -4208,9 +4208,12 @@ _SUPPLEMENTAL_TIER_HEADING_RE = re.compile(
 )
 # 2026-08-26 - 主榜分档标题（一线头部/速览表等），品牌未进主榜时后续段走补充序
 _PRIMARY_TIER_HEADING_RE = re.compile(
+    r"国产一线|进口高端|国产主流|高性价比国产|全国头部|"
     r"一线(?:头部|品牌)?|主流|头部品牌|国民一线|代表品牌速览|国内一线|一线高端|"
-    r"品牌速览|重点智能|主流品牌|"
-    r"国际一线|国企背景|市场化头部|专业化.{0,12}品牌|国内品牌|国际品牌"
+    r"品牌速览|重点智能|主流品牌|重点品牌|"
+    r"国际一线|国企背景|市场化头部|专业化.{0,12}品牌|国内品牌|国际品牌|"
+    r"尖子生|提优训练|基础弱|中等生|中等水平|"
+    r"本土强手|行业巨头|跨境电商|多语种"
 )
 _TABLE_BRAND_COL_HINTS = ("品牌", "门店名称", "公司名称", "系统名称", "推荐品牌", "名称")
 _POST_TABLE_ENUM_CUE_RE = re.compile(
@@ -4365,6 +4368,8 @@ _GEO_SECTION_FUZZY_HINTS = (
     "国内一线", "国际质感", "国潮审美", "高关注度", "综合实力首选",
     "跨区域", "特定需求", "专业公司", "整合型", "创意型", "如何结合",
     "头部资源", "集团化", "代表性公司", "公司速览", "全链路",
+    # 2026-09-03 - BPO 无#档名须开节：本土强手；勿加「国产一线」以免盖过「性价比」bullet 类名
+    "本土强手", "行业巨头", "高性价比",
     # 2026-08-17 - 「如果你需要投放广告（租用大屏）」未开节 → 艾迪亚全文虚第7
     "投放广告", "租用大屏", "制作LED", "定制与工程", "造屏幕",
     # 2026-08-18 - BPO「中国本土市场活跃榜单」未开节 → 鸿联 bullet 第2吃成全文19
@@ -4446,6 +4451,13 @@ def _heading_title_from_line(raw_line: str) -> str | None:
         return bare[:40] or None
     if re.fullmatch(r"\*\*[^*]{2,40}\*\*\s*$", plain):
         return bare[:40] or None
+    # 2026-09-03 - 无#的「其他值得关注/国产一线」也当标题，补充段与跨档切位才能生效
+    if bare and (
+        _heading_is_supplemental_tier(bare)
+        or _SECONDARY_MENTION_HEADING_RE.search(bare)
+        or _is_plain_tier_restart_title(bare)
+    ):
+        return bare[:40]
     return None
 
 
@@ -5038,14 +5050,73 @@ def _first_numbered_item_in_lines(lines: list[str], start: int) -> int | None:
     return None
 
 
+def _is_plain_tier_restart_title(probe: str) -> bool:
+    """无井号短档名：后文编号常从 1 重计（进口高端 → 国产一线）。
+
+    2026-09-03 - 跨档连号：中古风国产一线第5→7；教辅尖子生第2→7
+    """
+    raw = str(probe or "").strip()
+    text = _strip_section_decorations(raw).strip(" ：:.-—|")
+    if not text or len(text) > 28:
+        return False
+    # 正文句/适用说明勿切档（「初中成绩中等」「国产一线大牌也…」）
+    if "：" in raw or ":" in raw or "。" in text:
+        return False
+    if text.count("、") >= 2:
+        return False
+    if re.match(r"^[-·•*]\s*", raw):
+        return False
+    if _parse_numbered_subsection_header(text) is not None:
+        return False
+    # 补充/关注段：切档；勿套宽泛 PRIMARY（主流/一线）以免误伤
+    if _heading_is_supplemental_tier(text) or _SECONDARY_MENTION_HEADING_RE.search(text):
+        return True
+    return bool(
+        re.match(
+            r"^(?:进口高端|国产一线|高性价比国产|尖子生|基础弱|中等生|中等水平|"
+            r"提优训练|本土强手|行业巨头|跨境电商|多语种|全国头部|本地公交|"
+            r"按成绩分层选|分科精简推荐清单|最简选购方案|"
+            r"尖子生.{0,12}提优|基础弱.{0,12}|中等.{0,8}分)",
+            text,
+        )
+    )
+
+
+def _looks_like_assessment_criterion_heading(bare: str) -> bool:
+    """评估框架「6. 性价比」短标准项：勿当品牌类内节吞掉后面名单。
+
+    2026-09-03 - BPO 鸿联被「性价比」准则节吃成类内第2
+    """
+    text = re.sub(r"\*\*", "", str(bare or "")).strip()
+    text = re.sub(r"^#+\s*", "", text).strip()
+    m = re.match(r"^\d+\s*[\.、．]\s*(.+)$", text)
+    if not m:
+        return False
+    body = re.sub(r"[（(].*$", "", m.group(1).strip()).strip()
+    if not body or len(body) > 18:
+        return False
+    if re.search(r"公司|集团|传媒|控股|品牌|有限|股份", body):
+        return False
+    return bool(
+        re.search(
+            r"合规|数据安全|人才|服务管理|行业经验|技术|创新|性价比|成本|"
+            r"评估|标准|框架|挑选标准|核心标准",
+            body,
+        )
+    )
+
+
 def _is_chapter_scope_boundary_line(plain: str) -> bool:
-    """# / ## / 纯文本「一、二、」大章 → 计位段切换。"""
+    """# / ## / 纯文本「一、二、」/ 无#档名 → 计位段切换。"""
     bare = _line_bare(plain)
     if re.match(r"^#{1,2}\s+\S", bare):
         return True
     # 2026-08-26 - 艾迪亚24885「一、头部 1-3 / 二、代理 1-4」勿跨章累加成7
     probe = re.sub(r"^#+\s*", "", bare).strip()
-    return bool(re.match(r"^[一二三四五六七八九十]+[、.．]\s*\S", probe))
+    if re.match(r"^[一二三四五六七八九十]+[、.．]\s*\S", probe):
+        return True
+    # 2026-09-03 - 纯文本「国产一线」「尖子生」后编号从1重计
+    return _is_plain_tier_restart_title(probe)
 
 
 _GLUE_DASH_BOLD_CARD_RE = re.compile(r"(?:^|[\s\]])-\s*\*\*([^*]{2,48})\*\*")
@@ -5474,14 +5545,33 @@ def _tier_local_brand_token_rank(
                     label = probe[:16]
         elif 2 <= len(plain) <= 48:
             # 2026-08-19 - 「🏢 综合实力型：…」「高合规要求场景」无 # 未开节 → 冒号卡空位/全文14
-            label = _geo_fuzzy_section_label(plain)
+            # 2026-09-03 - 无#「其他值得关注/国产一线」走 category/secondary，勿只靠 fuzzy
+            label = (
+                _category_section_label(plain)
+                or _geo_fuzzy_section_label(plain)
+                or _secondary_section_label(plain)
+            )
         if label:
             # 2026-09-03 - 主榜公司卡勿开类内节，避免卖点词「全链路」吞掉后续决策表抬位
             if _looks_like_numbered_company_card_heading(bare):
                 flush()
                 continue
+            # 2026-09-03 - 评估项「6.性价比」勿开节吞掉后面市场名单
+            if _looks_like_assessment_criterion_heading(bare):
+                flush()
+                continue
             flush()
-            current_title = label
+            # 2026-09-03 - ### N.标题保留字面号，类内直接回 N（万唯###2=2，勿书名单点成1）
+            numbered_heading = (
+                _parse_numbered_subsection_header(re.sub(r"^#+\s*", "", bare))
+                if is_hash_heading
+                else None
+            )
+            current_title = (
+                re.sub(r"^#+\s*", "", bare).strip()[:40]
+                if numbered_heading
+                else label
+            )
             current_lines = []
             continue
         if current_title is not None:
@@ -5497,6 +5587,10 @@ def _tier_local_brand_token_rank(
         if _TIP_RANK_HEADING_RE.search(str(title)):
             continue
         body = "\n".join(body_lines)
+        # 2026-09-03 - ### N.标题节：字面号即位次（万唯在###2下=2，勿书名单点成1）
+        parsed_title = _parse_numbered_subsection_header(str(title or ""))
+        if parsed_title and _configured_exposure_term_in_text(body, brand_terms):
+            return int(parsed_title[0]), title
         # 2026-08-12 - ### 1./2./3. 分档跨行点名优先于卖点 token 出场
         sub_heading = _numbered_subheading_brand_rank(body, brand_terms)
         if sub_heading is not None:

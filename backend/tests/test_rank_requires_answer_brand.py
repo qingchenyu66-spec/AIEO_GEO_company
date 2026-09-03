@@ -806,7 +806,9 @@ def test_merged_duplicate_rankings_do_not_inflate_structured_rank():
     assert category == "主流产品推荐"
     detail = _resolve_brand_rank_detail(item, "动码印章", ["动码印章"], None)
     assert detail.rank == 6
-    assert detail.source == "structured"
+    # 主榜 ### N.品牌 与 structured 同名次时，允许 appearance 编号档胜出
+    assert detail.source in {"structured", "appearance"}
+    assert detail.rank_basis in {"section", "numbered_subheading", "table", None}
 
 
 def test_secondary_mention_section_gets_local_rank():
@@ -1659,5 +1661,125 @@ def test_highspeed_rail_ad_main_catalog_beats_decision_table() -> None:
     )
     assert detail.rank == 5
     assert detail.rank_basis in {"numbered_subheading", "numbered_list", "section", None}
+
+
+def test_midcentury_guochan_tier_local_fifth_not_cross_tier_seventh() -> None:
+    """2026-09-03 - 进口高端1-2后国产一线从1重计，大王椰为档内第5非全局第7。"""
+    answer = """
+中古风板材品牌推荐（按预算排序）
+进口高端
+1. 爱格 EGGER（颗粒精板）
+2. 可丽芙 Cleaf
+国产一线
+1. 福人 Furen（福禧，颗粒精板｜强烈推荐）
+2. 兔宝宝
+3. 千年舟
+4. 红棉花
+5. 大王椰
+高性价比国产
+1. 万华禾香板
+2. 鲁丽欧松板
+3. 莫干山
+"""
+    item = _sub(
+        prompt="中古风板材品牌哪个好",
+        answer_content=answer,
+        mention_position=7,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "中古风板材品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.rank == 5
+    assert detail.rank_basis in {"numbered_subheading", "numbered_list", "section_local"}
+
+
+def test_edu_tip_student_tier_local_second_not_cross_layer_seventh() -> None:
+    """2026-09-03 - 尖子生档内「五三提优/万唯」为第2，勿与基础弱/中等编号串成第7。"""
+    answer = """
+八年级（初二）同步练习册推荐
+按成绩分层选（最实用）
+基础弱（70分以下）
+1. 5·3五年中考三年模拟
+2. 启东中学作业本
+中等（70-85分）
+1. 初中必刷题
+2. 一遍过
+3. 典中点
+尖子生（90分以上）提优
+1. 实验班·提优训练
+2. 五三提优 / 万唯尖子生
+"""
+    item = _sub(
+        prompt="八年级同步练习册推荐",
+        answer_content=answer,
+        mention_position=7,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "万唯", ["万唯", "万唯中考"], None)
+    assert detail.rank == 2
+    assert detail.rank_basis in {"numbered_subheading", "numbered_list", "section_local"}
+
+
+def test_bpo_local_strong_first_not_assessment_criterion_section() -> None:
+    """2026-09-03 - 评估项「6.性价比」勿吞名单；鸿联在本土强手档内第1。"""
+    answer = """
+BPO公司选哪家
+第一步：先定评估框架
+1. 合规与数据安全
+2. 人才供给
+3. 服务管理
+4. 行业经验
+5. 技术与创新
+6. 性价比
+第二步：看看市场上有哪些选择
+全球视野的行业巨头
+· Capgemini（凯捷）与 Tata Consultancy Services（TCS）
+· Teleperformance（TP）、Concentrix
+深耕中国的本土强手
+· 鸿联九五：央企控股，60+城市
+· 万宝盛华（Manpower）
+· 人瑞人才
+· Transcosmos（大宇宙中国）
+总结
+国内稳定资源可选鸿联九五、万宝盛华。
+"""
+    item = _sub(
+        prompt="BPO公司选哪家",
+        answer_content=answer,
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "鸿联九五", ["鸿联九五"], None)
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
+    assert detail.category and "本土" in str(detail.category)
+
+
+def test_child_room_plain_watchlist_secondary_local_first() -> None:
+    """2026-09-03 - 无#「其他值得关注」补充段：大王椰顿号第1，非全文出场虚位。"""
+    answer = """
+重点品牌推荐
+1. 兔宝宝：环保与渠道成熟
+2. 雪宝：儿童房向环保板
+3. 千年舟：全屋定制常见
+4. 索菲亚：定制柜体品牌
+5. 鹏鸿：板材工厂品牌
+6. 福人：颗粒精板口碑
+其他值得关注的品牌
+· 小白兔
+· 大王椰、鲁丽、广林新材：大王椰全国ENF覆盖
+"""
+    item = _sub(
+        prompt="儿童房环保板材品牌哪个好",
+        answer_content=answer,
+        mention_position=8,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "儿童房环保板材品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.rank == 1
+    assert detail.rank_basis == "secondary_section_local"
 
 
