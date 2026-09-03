@@ -447,9 +447,10 @@ def apply_llm_rank_fallback(
     *,
     min_confidence: float = 0.65,
 ) -> BrandRankResolution:
-    """合并规则结果与 LLM：有多个位次时取最靠前（数字最小）。
+    """合并规则结果与 LLM：默认取更靠前；硬结构规则不被 LLM 更靠前数字冲掉。
 
     2026-07-29 - 任何情况取最优 - LLM 不再无条件覆盖 appearance；与规则比 min
+    2026-09-03 - 表行/编号主榜等硬结构已有位次时，禁止 LLM 用更小数字覆盖（鸿联表第2、门店表第7）
     """
     if llm_result is None or llm_result.confidence < min_confidence:
         return resolution
@@ -478,7 +479,46 @@ def apply_llm_rank_fallback(
         llm_key = float(llm_result.rank) if llm_result.rank is not None else float("inf")
     except (TypeError, ValueError):
         return llm_resolution
+    # 硬结构已定位：LLM 更靠前也弃用（虚高/散文举例常见）
+    if _is_hard_rule_rank(resolution) and llm_key + 1e-9 < rule_key:
+        return resolution
     return resolution if rule_key <= llm_key else llm_resolution
+
+
+_HARD_RULE_RANK_BASES = frozenset(
+    {
+        "company_table_row",
+        "numbered_subheading",
+        "numbered_list",
+        "table",
+        "preferred_column",
+        "scenario_table",
+        "rep_column",
+        "if_cluster",
+        "typed_cluster",
+        "company_heading",
+        "cn_chapter",
+        "paren_price_tier",
+    }
+)
+
+
+def _is_hard_rule_rank(resolution: BrandRankResolution) -> bool:
+    if str(resolution.source or "") == "structured":
+        return True
+    basis = str(resolution.rank_basis or "")
+    if basis in _HARD_RULE_RANK_BASES:
+        return True
+    # 2026-09-03 - 「3）高配」字面档号 section_local 也防 LLM 更靠前覆盖（润科 DHA）
+    if basis == "section_local" and resolution.rank is not None:
+        try:
+            n = int(float(resolution.rank))
+        except (TypeError, ValueError):
+            return False
+        cat = str(resolution.category or "")
+        if re.match(rf"^{n}\s*[）).、．]", cat):
+            return True
+    return False
 
 
 def rank_resolution_to_json(resolution: BrandRankResolution) -> dict[str, Any]:

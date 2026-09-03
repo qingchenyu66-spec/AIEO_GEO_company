@@ -3402,6 +3402,11 @@ def _is_brand_like_appearance_token(name: str, brand_terms: list[str] | None = N
         "天津", "苏州", "宁波", "青岛", "长沙", "郑州", "东莞", "佛山", "合肥", "沈阳",
     }:
         return False
+    # 2026-09-03 - 「南京南、广州南」枢纽简称勿进顿号池（高铁答粘连卡行虚第3）
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,4}[南北东西]$", text):
+        return False
+    if text in {"媒体形式", "投放范围", "快消"}:
+        return False
     if "品牌" in text:
         return False
     # 2026-08-12 - 「**方案A（稳妥通用）**」加粗进池 → 语文下万唯被抬成类内第2
@@ -3612,8 +3617,23 @@ def _normalize_appearance_enum_part(
         name = re.split(r"[→➡]", name)[-1].strip()
     name = re.sub(r"^[\-–—·•▪\d\.、．\s→➡]+", "", name).strip()
     # 2026-08-12 - 「找天赐」「可选择艾迪亚」选型句前缀
-    name = re.sub(r"^(?:可以关注|可选择|可选|选择|找)", "", name).strip()
+    # 2026-09-03 - 「是兆讯、华铁、永达、艾迪亚这几家」左格残留「是」导致漏兆讯→虚第3
+    name = re.sub(r"^(?:可以关注|可选择|可选|选择|找|是|为)", "", name).strip()
     name = re.sub(r"^[\-–—·•▪\d\.、．\s→➡]+", "", name).strip()
+    # 2026-09-03 - 「艾迪亚这几家」右格尾巴
+    name = re.sub(r"(?:这几家|这几个|等几家).*$", "", name).strip()
+    # 2026-09-03 - 中文逗号切开后「而是按…分层。头部主力是兆讯」整段过长：收尾「是/为/找+专名」
+    if len(name) > 8:
+        from app.services.ranking_parser import _looks_like_company_list_name
+
+        tail = re.search(r"(?:是|为|找)([\u4e00-\u9fffA-Za-z]{2,10})$", name)
+        if tail:
+            cand = tail.group(1).strip()
+            if cand and (
+                (brand_terms and _configured_exposure_term_in_text(cand, brand_terms))
+                or _looks_like_company_list_name(cand)
+            ):
+                name = cand
     if "：" in name or ":" in name:
         name = re.split(r"[：:]", name)[-1].strip()
         name = _clean_item_name(name)
@@ -4171,11 +4191,12 @@ _SECONDARY_MENTION_HEADING_RE = re.compile(
 )
 # 2026-08-17 - 避坑/选择建议/投放建议段里「比如品牌」虚抬到 7–20 - 建议段一律当次要
 # 2026-08-18 - 「选购决策小贴士」未切开，动码并进电子印章节成第9
+# 2026-09-03 - 「快速选择指南」未进 tip，门店双钥后文末短句盖成第1（千里马市妇婴应主列表2）
 _TIP_RANK_HEADING_RE = re.compile(
     r"避坑|选购建议|投放建议|选择建议|小建议|给你几个|注意事项|温馨提示|"
     r"关键提醒|合作模式建议|怎么选|挑选合作|结语|三点建议|如何选择|按需选择|"
     r"如何结合|结合你的情况|排名陷阱|必须警惕|"
-    r"选购决策|小贴士"
+    r"选购决策|小贴士|快速选择|对号入座|怎么挑选"
 )
 # 2026-09-03 - 「3.看具体合同条款…像菜万家…」是选购提示不是榜单第3
 _ADVICE_NUMBERED_HEADING_RE = re.compile(
@@ -4197,6 +4218,13 @@ _PRIMARY_TIER_HEADING_RE = re.compile(
     r"本土强手|行业巨头|跨境电商|多语种"
 )
 _TABLE_BRAND_COL_HINTS = ("品牌", "门店名称", "公司名称", "系统名称", "推荐品牌", "名称")
+# 2026-09-03 - 「企业类型|优先推荐」对照表不是公司名次主表（动码档内###2 被表行4锁死）
+_SCENARIO_MATRIX_SCENE_HINTS = (
+    "企业类型", "客户类型", "适用场景", "场景", "需求", "投放目标", "适用对象",
+)
+_SCENARIO_MATRIX_REC_HINTS = (
+    "优先推荐", "推荐品牌", "优先选择", "建议品牌", "优先选择品牌",
+)
 _POST_TABLE_ENUM_CUE_RE = re.compile(
     r"其他(?:还)?包括|口碑较好|还有.{0,8}(?:品牌|值得)|此外.{0,24}等|"
     r"除.{0,12}(?:之外|以外).{0,24}等"
@@ -4234,7 +4262,7 @@ _CHAPTER_LABEL_RE = re.compile(
 def _short_tier_section_title(title: str) -> str:
     text = re.sub(r"\*\*", "", str(title or ""))
     text = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", text)
-    text = re.sub(r"^\d+[、.．]\s*", "", text)
+    text = re.sub(r"^\d+\s*[、.．）)]\s*", "", text)
     text = re.sub(r"[（(].*?[)）]", "", text)
     text = re.sub(r"\s+", "", text).strip(" ：:.-—")
     return text[:24]
@@ -4631,9 +4659,9 @@ def _brand_only_after_primary_markdown_table(text: str, brand_terms: list[str]) 
 def _line_is_numbered_catalog_entry(raw_line: str) -> bool:
     plain = _line_plain(raw_line)
     bare = _line_bare(plain)
-    if _parse_numbered_subsection_header(re.sub(r"^#{0,3}\s*", "", bare)):
+    if _parse_numbered_subsection_header(re.sub(r"^#{0,6}\s*", "", bare)):
         return True
-    return bool(re.match(r"^#{0,3}\s*\d+\s*[.．、）)]\s*\S+", bare))
+    return bool(re.match(r"^#{0,6}\s*\d+\s*[.．、）)]\s*\S+", bare))
 
 
 # 2026-08-26 - #### 背景/应用 等小标题不是品牌卡
@@ -4967,6 +4995,12 @@ def _drop_soft_ranks_beaten_by_structured(
         # 决策表/选型误开类内仍丢掉，保住主榜编号卡（高铁5）
         if has_main_catalog and basis == "section_local":
             cat = str(item.category or "")
+            # 2026-09-03 - 卖场/市场小节顺带点名（南京弘阳…大王椰）不得盖主榜编号第4
+            if re.search(
+                r"市场|装饰城|建材城|商城|卖场|地标|集中市场|家装广场",
+                cat,
+            ):
+                continue
             if (
                 item.rank is not None
                 and main_catalog_best is not None
@@ -5025,7 +5059,10 @@ def _drop_soft_ranks_beaten_by_structured(
     return kept
 
 
+# 编号条目：点号/顿号；全角「1）」另见 _PAREN_TIER_ITEM_LINE_RE
 _NUMBERED_ITEM_LINE_RE = re.compile(r"^(\d+)\s*[\.、．]\s*(.+)$")
+# 2026-09-03 - 「1）性价比 / 3）高配」分档（勿并入主编号点号规则，避免误伤括号枚举）
+_PAREN_TIER_ITEM_LINE_RE = re.compile(r"^(\d+)\s*[）)]\s*(.+)$")
 
 
 def _line_plain(raw: str) -> str:
@@ -5148,10 +5185,21 @@ def _glued_dash_bold_card_rank(line: str, brand_terms: list[str]) -> int | None:
 
 
 def _glued_dash_bold_cards_text_rank(text: str, brand_terms: list[str]) -> int | None:
-    """全文扫描粘连 `- **品牌**` 卡，取最靠前类内序。"""
+    """全文扫描粘连 `- **品牌**` 卡，取最靠前类内序。
+
+    2026-09-03 - citation 把下一张卡粘到上一张正文换行后：整段压成一行再扫（高铁兆讯…艾迪亚→4）
+    """
     best: int | None = None
-    for raw_line in str(text or "").splitlines():
+    raw = str(text or "")
+    # 逐行：同段已粘连的短行
+    for raw_line in raw.splitlines():
         rank = _glued_dash_bold_card_rank(raw_line, brand_terms)
+        if rank is not None and (best is None or rank < best):
+            best = rank
+    # 跨行粘连：换行压空格后整段再找一次（≥2 张 `- **` 卡）
+    flat = re.sub(r"\s*\n\s*", " ", raw)
+    if flat != raw:
+        rank = _glued_dash_bold_card_rank(flat, brand_terms)
         if rank is not None and (best is None or rank < best):
             best = rank
     return best
@@ -5204,12 +5252,12 @@ def _split_tier_scopes(text: str) -> list[str]:
 
 
 def _parse_numbered_subsection_header(bare: str) -> tuple[int, str] | None:
-    """### 7.大王椰 或 ### 7. 大王椰；无空格时拒 1.5亿元。"""
-    match = _NUMBERED_ITEM_LINE_RE.match(bare)
+    """### 7.大王椰 或 ### 7. 大王椰；无空格时拒 1.5亿元。兼认「3）高配」。"""
+    match = _NUMBERED_ITEM_LINE_RE.match(bare) or _PAREN_TIER_ITEM_LINE_RE.match(bare)
     if not match:
         return None
     body = match.group(2).strip()
-    if body[:1].isdigit() and not re.search(r"[\.、．]\s", bare):
+    if body[:1].isdigit() and not re.search(r"[\.、．）)]\s*", bare):
         return None
     return int(match.group(1)), body
 
@@ -5225,15 +5273,28 @@ def _collect_numbered_list_items(text: str) -> list[str]:
         match = re.match(r"^(\d+)\s*[\.、．]\s+(.+)$", bare)
         if match:
             items.append(match.group(2).strip())
+        else:
+            # 2026-09-03 - 「3）高配…」分档行
+            match2 = _PAREN_TIER_ITEM_LINE_RE.match(bare)
+            if match2:
+                items.append(match2.group(2).strip())
     return items
 
 
 def _numbered_list_brand_rank(text: str, brand_terms: list[str]) -> int | None:
-    """小节内编号推荐：返回含露出词条目在**当前计位段**内的 1-based 序（非行首字面号）。"""
+    """小节内编号推荐：返回含露出词条目在**当前计位段**内的 1-based 序（非行首字面号）。
+
+    2026-09-03 - 跳过「快速对号入座」等提示段（千里马主榜 ####3 被提示第2盖掉）
+    """
     if not text or not brand_terms:
         return None
     scopes = _split_tier_scopes(text) or [str(text)]
     for scope in scopes:
+        # 段首若是选购/对号提示标题，整段不当扁平编号榜
+        head = "\n".join(str(scope).splitlines()[:4])
+        head_plain = re.sub(r"\*\*", "", head)
+        if _TIP_RANK_HEADING_RE.search(head_plain):
+            continue
         if not _configured_exposure_term_in_text(scope, brand_terms):
             continue
         items = _collect_numbered_list_items(scope)
@@ -5250,14 +5311,24 @@ def _is_advice_numbered_block_heading(heading: str) -> bool:
     return bool(_ADVICE_NUMBERED_HEADING_RE.search(plain))
 
 
+def _is_scenario_recommend_matrix_cols(cols: list[str]) -> bool:
+    """企业类型×优先推荐 对照表：行是场景不是品牌梯队。"""
+    norms = [re.sub(r"\s+", "", str(c or "")) for c in cols]
+    has_scene = any(any(h in c for h in _SCENARIO_MATRIX_SCENE_HINTS) for c in norms)
+    has_rec = any(any(h in c for h in _SCENARIO_MATRIX_REC_HINTS) for c in norms)
+    return has_scene and has_rec
+
+
 def _company_markdown_table_row_rank(text: str, brand_terms: list[str]) -> int | None:
     """公司名称列 Markdown 表：品牌所在数据行序（1-based）。
 
     2026-09-03 - 菜万家在表第5行却被「3.合同条款」顺带提及抬成第3
+    2026-09-03 - 跳过「企业类型|优先推荐」场景对照（动码应走档内###序）
+    2026-09-03 - 门店/市场表备注格点名按主表行序（天津登发行7，勿落到电话表6）
     """
     if not text or not brand_terms:
         return None
-    from app.services.ranking_parser import _is_markdown_table_line
+    from app.services.ranking_parser import _is_markdown_table_line, _split_markdown_table_cells
 
     lines = [str(ln or "").rstrip() for ln in str(text).splitlines()]
     i = 0
@@ -5265,13 +5336,25 @@ def _company_markdown_table_row_rank(text: str, brand_terms: list[str]) -> int |
         if not _is_markdown_table_line(lines[i]):
             i += 1
             continue
+        cols = [c.strip() for c in _split_markdown_table_cells(lines[i])]
         brand_col, end_idx, rows = _markdown_table_data_rows(lines, i)
+        if _is_scenario_recommend_matrix_cols(cols):
+            i = end_idx
+            continue
         if len(rows) >= 2:
             for row_no, cells in enumerate(rows, 1):
                 if brand_col < len(cells) and _configured_exposure_term_in_text(
                     cells[brand_col], brand_terms
                 ):
                     return row_no
+            # 名称列未命中时：带地址/备注/区域的推荐表允许其它格点名计行
+            head = "".join(re.sub(r"\s+", "", c) for c in cols)
+            if any(k in head for k in ("地址", "备注", "所在区域", "主营", "市场")):
+                for row_no, cells in enumerate(rows, 1):
+                    if any(
+                        _configured_exposure_term_in_text(c, brand_terms) for c in cells
+                    ):
+                        return row_no
         i = end_idx
     return None
 
@@ -5357,7 +5440,7 @@ def _iter_numbered_subsection_blocks(text: str) -> list[tuple[int, str, list[str
         tier_segment = []
 
     def _heading_probe_for_tip(bare_line: str) -> str | None:
-        m_h = re.match(r"^#{1,3}\s+(.+)$", bare_line)
+        m_h = re.match(r"^#{1,6}\s+(.+)$", bare_line)
         if m_h:
             return _strip_section_decorations(re.sub(r"\*\*", "", m_h.group(1)).strip())
         probe = re.sub(r"^#+\s*", "", bare_line).strip()
@@ -5382,11 +5465,12 @@ def _iter_numbered_subsection_blocks(text: str) -> list[tuple[int, str, list[str
         if in_tip_scope:
             # 提示段内 1./2. 不是主推荐编号卡
             continue
-        # 无编号 ### 子档标题（首条编号为 1）仅作标签，不参与切块
-        m = re.match(r"^###\s+(.+)$", bare)
+        # 无编号 ###/#### 子档标题（首条编号为 1）仅作标签，不参与切块
+        m = re.match(r"^#{1,6}\s+(.+)$", bare)
         if m and _parse_numbered_subsection_header(m.group(1).strip()) is None:
             continue
-        parsed = _parse_numbered_subsection_header(re.sub(r"^#{0,3}\s*", "", bare))
+        # 2026-09-03 - #### 2.门店卡：剥尽 # 再认编号（原 #{0,3} 会留下一个 #）
+        parsed = _parse_numbered_subsection_header(re.sub(r"^#{0,6}\s*", "", bare))
         if parsed:
             flush_current_block_to_tier()
             current_num, current_heading = parsed
@@ -5625,7 +5709,8 @@ def _tier_local_brand_token_rank(
         current_lines = []
 
     header_re = re.compile(
-        r"^(?:#{1,3}\s*|[一二三四五六七八九十]+[、.．]\s*|\d+[、.．]\s*)(.+)$"
+        # 2026-09-03 - 认「1）性价比入门」分档开节
+        r"^(?:#{1,6}\s*|[一二三四五六七八九十]+[、.．]\s*|\d+\s*[、.．）)]\s*)(.+)$"
     )
     for raw_line in lines:
         line = re.sub(r"<[^>]+>", " ", raw_line)
@@ -5642,7 +5727,7 @@ def _tier_local_brand_token_rank(
         else:
             # ### 第二站：… 在去掉 # 后若整行以第N站开头
             station_line = re.match(
-                r"^#{0,3}\s*(第[一二三四五六七八九十百零〇\d]+站.*)$",
+                r"^#{0,6}\s*(第[一二三四五六七八九十百零〇\d]+站.*)$",
                 bare,
             )
             if station_line:
@@ -5658,11 +5743,17 @@ def _tier_local_brand_token_rank(
                         header_body = bullet_bold.group(1).strip()
         # 2026-08-12 - 先用整行再认 header_body：去掉「四、」后「试卷类」认不出 → 万唯全文虚第5
         label = None
-        is_hash_heading = bool(re.match(r"^#{1,3}\s+", bare))
+        # 2026-09-03 - #### 2.门店卡也要开节（仅 #{1,3} 会把四级标题粘进上级）
+        is_hash_heading = bool(re.match(r"^#{1,6}\s+", bare))
         if header_body:
             label = _category_section_label(bare) or _category_section_label(header_body)
             if not label and is_hash_heading:
                 # 2026-08-19 - 「### 如何选择」未开节，并进垂直专家后编号/总结把类内4抬成7
+                probe = _strip_section_decorations(header_body).strip(" ：:.-—|？?")
+                if 2 <= len(probe) <= 40:
+                    label = probe[:16]
+            # 2026-09-03 - 「3）高配高吸收款」无 category 提示也开节，否则并进「中端口碑」虚成第1
+            if not label and _PAREN_TIER_ITEM_LINE_RE.match(re.sub(r"^#+\s*", "", bare)):
                 probe = _strip_section_decorations(header_body).strip(" ：:.-—|？?")
                 if 2 <= len(probe) <= 40:
                     label = probe[:16]
@@ -5685,14 +5776,14 @@ def _tier_local_brand_token_rank(
                 continue
             flush()
             # 2026-09-03 - ### N.标题保留字面号，类内直接回 N（万唯###2=2，勿书名单点成1）
-            numbered_heading = (
-                _parse_numbered_subsection_header(re.sub(r"^#+\s*", "", bare))
-                if is_hash_heading
-                else None
-            )
+            # 2026-09-03 - #### 2.门店：剥尽 # 再认编号
+            # 2026-09-03 - 仅井号或「N）」分档保留字面标题；普通「1.条目」仍用 label，免回归
+            stripped_bare = re.sub(r"^#+\s*", "", bare)
+            numbered_heading = _parse_numbered_subsection_header(stripped_bare)
+            paren_tier = bool(_PAREN_TIER_ITEM_LINE_RE.match(stripped_bare))
             current_title = (
-                re.sub(r"^#+\s*", "", bare).strip()[:40]
-                if numbered_heading
+                stripped_bare.strip()[:40]
+                if numbered_heading and (is_hash_heading or paren_tier)
                 else label
             )
             current_lines = []
@@ -5714,9 +5805,13 @@ def _tier_local_brand_token_rank(
         peer_card = _peer_hash_product_card_rank(sections, str(title), brand_terms)
         if peer_card is not None:
             return int(peer_card), title
-        # 2026-09-03 - ### N.标题节：字面号即位次（万唯在###2下=2，勿书名单点成1）
-        parsed_title = _parse_numbered_subsection_header(str(title or ""))
-        if parsed_title and _configured_exposure_term_in_text(body, brand_terms):
+        # 2026-09-03 - ###/#### N.标题节：字面号即位次；品牌可在标题本身（门店卡）
+        clean_title = re.sub(r"^#+\s*", "", str(title or "")).strip()
+        parsed_title = _parse_numbered_subsection_header(clean_title)
+        if parsed_title and (
+            _configured_exposure_term_in_text(clean_title, brand_terms)
+            or _configured_exposure_term_in_text(body, brand_terms)
+        ):
             return int(parsed_title[0]), title
         # 2026-08-12 - ### 1./2./3. 分档跨行点名优先于卖点 token 出场
         sub_heading = _numbered_subheading_brand_rank(body, brand_terms)
@@ -6684,8 +6779,17 @@ def _resolve_brand_rank_detail(
             mentioned = True
 
     # 2026-08-17 - 1./2./6. 编号公司列表：无更优类内/结构化时压过全文 token（第6≠11）
+    # 2026-09-03 - 已有 ####/### 标题序时扁平编号榜勿进池（快速对号第2 盖主榜第3）
     if has_brand_in_rankable and not secondary_only:
-        numbered = _numbered_list_brand_rank(rankable_text, brand_terms)
+        has_numbered_subheading = any(
+            str(c.rank_basis or "") == "numbered_subheading" and c.rank is not None
+            for c in candidates
+        )
+        numbered = (
+            None
+            if has_numbered_subheading
+            else _numbered_list_brand_rank(rankable_text, brand_terms)
+        )
         if numbered is not None:
             _peer_bases = {
                 "section_local",

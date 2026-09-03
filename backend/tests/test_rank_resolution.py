@@ -359,3 +359,49 @@ def test_apply_llm_rank_fallback_keeps_high_confidence_structured_rank() -> None
     merged = apply_llm_rank_fallback(resolution, llm)
     assert merged.source == "structured"
     assert merged.rank == 2
+
+
+def test_apply_llm_rank_fallback_hard_table_not_overridden_by_front_llm() -> None:
+    """2026-09-03 - 表行第2/第7 不被 LLM 散文第1 冲掉。"""
+    resolution = BrandRankResolution(
+        rank=7,
+        mentioned=True,
+        source="structured",
+        confidence=0.98,
+        rank_basis="company_table_row",
+    )
+    llm = LlmBrandRankResult(
+        rank=1,
+        mentioned=True,
+        category=None,
+        rank_basis="prose",
+        confidence=0.92,
+        evidence="知名品牌（如大王椰、鹏鸿）",
+    )
+    merged = apply_llm_rank_fallback(resolution, llm)
+    assert merged.rank == 7
+    assert merged.source == "structured"
+    assert merged.rank_basis == "company_table_row"
+
+
+def test_apply_llm_rank_fallback_paren_tier_section_local_not_overridden() -> None:
+    """2026-09-03 - 「3）高配」section_local 也不被 LLM 第1 冲掉。"""
+    resolution = BrandRankResolution(
+        rank=3,
+        mentioned=True,
+        source="appearance",
+        confidence=0.72,
+        category="3）高配高吸收款（吸收率更好）",
+        rank_basis="section_local",
+    )
+    llm = LlmBrandRankResult(
+        rank=1,
+        mentioned=True,
+        category=None,
+        rank_basis="section_bullet",
+        confidence=0.9,
+        evidence="宝得聪",
+    )
+    merged = apply_llm_rank_fallback(resolution, llm)
+    assert merged.rank == 3
+    assert merged.rank_basis == "section_local"

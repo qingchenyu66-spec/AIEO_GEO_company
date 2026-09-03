@@ -78,6 +78,36 @@ def test_pipe_numbered_board_brands_keep_section_order():
     assert "国产主流" in str(brand["category"] or "")
     assert not any(item["name"] in {"生态板", "多层板", "颗粒板"} for item in entries)
 
+
+def test_scoped_rank_prefers_domestic_section_over_import_front_rank():
+    """同品牌跨国产/进口分段时，按问题场景取国产段，不被进口第1抬高。"""
+    entries = [
+        {"name": "示例品牌", "rank": 1, "category": "进口高端品牌"},
+        {"name": "示例品牌", "rank": 5, "category": "国产主流品牌"},
+    ]
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: name == "示例品牌",
+        "国产板材品牌推荐",
+    )
+    assert matched is True
+    assert rank == 5
+
+
+def test_scoped_rank_prefers_prompt_scene_over_other_category_front_rank():
+    """问电梯广告时，不能用同品牌在LED大屏分段里的第1覆盖电梯分段第4。"""
+    entries = [
+        {"name": "艾迪亚控股集团", "rank": 1, "category": "全国LED大屏媒体运营商"},
+        {"name": "艾迪亚控股集团", "rank": 4, "category": "电梯广告资源代理商"},
+    ]
+    rank, matched = find_best_brand_rank_scoped(
+        entries,
+        lambda name: "艾迪亚" in name,
+        "电梯广告公司推荐",
+    )
+    assert matched is True
+    assert rank == 4
+
     beauty = """
 ## 🇨🇳 国产高端｜颜值主力
 1. **福人（福建国企）⭐国产颜值标杆**

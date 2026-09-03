@@ -1647,11 +1647,14 @@ def find_best_brand_hit_scoped(
     if not matched_entries:
         return None, False, None
 
+    scoped_entries, scoped = _entries_in_scope(matched_entries, scope)
+    ranked_pool = scoped_entries if scoped else matched_entries
+
     categorized = [
-        entry for entry in matched_entries
+        entry for entry in ranked_pool
         if str(entry.get("category") or "").strip()
     ]
-    winner = _pick_best_rank_entry(categorized or matched_entries)
+    winner = _pick_best_rank_entry(categorized or ranked_pool)
     if winner is None:
         return None, True, None
     try:
@@ -1660,7 +1663,7 @@ def find_best_brand_hit_scoped(
         return None, True, winner
 
     hits = [
-        entry for entry in matched_entries
+        entry for entry in ranked_pool
         if (numeric := _numeric_rank(entry)) is not None and float(numeric) == target
     ]
     if not hits:
@@ -1686,7 +1689,7 @@ def find_best_brand_rank_scoped(
     *,
     skip_name: Callable[[str], bool] | None = None,
 ) -> tuple[int | float | None, bool]:
-    """分段名次：多命中取最靠前；scope 用于同分时偏爱相关段，不用来抬高差名次。"""
+    """分段名次：多命中时优先取问题场景匹配的分段，再取最靠前名次。"""
     rank, matched, _entry = find_best_brand_hit_scoped(
         entries, match_name, scope, skip_name=skip_name,
     )

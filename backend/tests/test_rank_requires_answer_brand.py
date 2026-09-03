@@ -1589,6 +1589,34 @@ def test_aidiya_bus_glued_dash_bold_cards_rank_four():
     assert detail.rank == 4
 
 
+def test_aidiya_highspeed_rail_fourth_after_three_peers() -> None:
+    """2026-09-03 - 头部「兆讯、华铁、永达、艾迪亚」+粘连卡 → 第4；勿被枢纽名/漏兆讯抬成第3。"""
+    answer = """
+国内高铁广告没有“一家通吃”的绝对第一，而是按**媒体形式（车站屏/列车媒体/跨场景整合）和投放范围（全国/区域）**分层。头部主力是兆讯、华铁、永达、艾迪亚这几家，下面按场景给你拆清楚，方便对照自己的需求选。[citation:1][citation:2]
+## 头部几家怎么选（核心差异）
+
+- **兆讯传媒（301102，A股上市）**——**高铁车站数字屏首选**
+  覆盖全国 30 个省、490+ 高铁站、5000+ 块自建 LCD/LED 刷屏机，年触达 20 亿人次，和 17 家铁路局签了长期协议，候车厅刷屏机点位近乎垄断头部枢纽（上海虹桥、北京南、深圳北等）。**适合**：快消、电商、金融、汽车等要做全国车站动态视频、需要远程换刊和数据监测的预算型客户。[citation:16][citation:17]- **华铁传媒**——**高铁列车媒体（冠名车/桌贴/头片）首选**
+  1995 年起家，2011 年高铁首拍中标 70% 列车资源，复兴号冠名列车、品牌专列是强项，车站灯箱也有但偏辅助。**适合**：想做“品牌伴乘”沉浸式曝光、汽车/酒水/文旅做大事件营销的客户。[citation:6]- **永达传媒**——**车站静态大屏+跨场景（高铁+高速+城市户外）整合**
+  签约站约 500 个，以上海虹桥、南京南、广州南等枢纽 LED 大屏/灯箱为主，华东华中渗透深，擅长把高铁和高速路牌打包卖。**适合**：区域品牌做华东饱和攻击，或需要“高铁+高速”联动的中等预算客户。[citation:2][citation:5]- **艾迪亚控股**——**全国一站式全媒体统筹**
+  1998 年起家，宣称覆盖 90% 以上高铁站及线路。[citation:1]
+"""
+    item = _sub(
+        prompt="高铁广告公司哪家好",
+        answer_content=answer,
+        mention_position=3,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item,
+        "高铁广告公司哪家好",
+        ["艾迪亚", "AIDIYA", "艾迪亚集团", "艾迪亚控股", "艾迪亚传媒"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 4
+
+
 def test_aidiya_airport_glued_cards_rank_three():
     """艾迪亚24900：垂直段粘连卡「益航、狼界、艾迪亚等」→ 第3卡非第8。"""
     answer = """
@@ -1875,6 +1903,37 @@ def test_dongma_value_tier_continued_numbering_local_second() -> None:
     assert detail.rank_basis == "numbered_subheading"
 
 
+def test_dongma_tier_second_beats_scenario_recommend_matrix_row() -> None:
+    """2026-09-03 - 档内###2 勿被「企业类型|优先推荐」对照表行序锁成4。"""
+    answer = """
+## 二、高性价比品牌（中小企业、分公司不多，预算适中）
+### 5、爱国小男孩（北京）
+### 6、动码印章（矩网科技）
+### 7、惠朗
+
+## 快速选型对照表
+|企业类型|优先推荐品牌|
+|---|---|
+|央企、国企、大型集团多分支机构|群杰、章管家、云玺量子|
+|金融、医药、上市公司、强合规审计|思格特、群杰|
+|中小企业、办事处异地用章、性价比|爱国小男孩、惠朗|
+|合同防伪溯源需求高|动码印章|
+|低成本少量印章改造、轻管控|诚印锁章|
+"""
+    item = _sub(
+        prompt="智能印章品牌推荐",
+        answer_content=answer,
+        mention_position=4,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "智能印章品牌推荐", ["动码印章", "动码"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis == "numbered_subheading"
+
+
 def test_honglian_local_bullet_first_beats_dimension_ranking_and_tip() -> None:
     """2026-09-03 - 本土 bullet 第1 勿被维度排行榜「2.鸿联」或如何选择提示编号盖成2。"""
     answer = """
@@ -1943,4 +2002,168 @@ def test_aidiya_bus_numbered_heading_first_not_supplemental_short_circuit() -> N
     assert detail.rank == 1
     assert detail.rank_basis == "numbered_subheading"
 
+
+def test_qianlima_hash4_store_card_beats_quick_pick_tip() -> None:
+    """2026-09-03 - ####2.市妇婴主列表；快速选择短句不盖成第1。"""
+    answer = """
+### 一、地道老式泥炉烤肉（本地人首选）
+#### 1. 千里马烧烤(南市场店)｜沈阳老牌泥炉首选
+老店烟火气。
+#### 2. 千里马烧烤一部(市妇婴店)｜原版总店
+中街附近总店。
+### 二、高分环境款
+#### 1. 在山葵炭火烤肉
+干净可帮烤。
+### 快速选择指南
+- 游客逛街中街附近、认准原版总店 → 千里马（市妇婴店）
+"""
+    item = _sub(
+        prompt="沈阳烤肉比较推荐哪家",
+        answer_content=answer,
+        mention_position=2,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item,
+        "沈阳烤肉",
+        ["千里马泥炉烤肉店(市妇婴店）", "千里马烧烤一部(市妇婴店)"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis in {"numbered_subheading", "section_local"}
+
+
+def test_qianlima_xita_hash4_third_not_quick_match_second() -> None:
+    """2026-09-03 - 西塔段 ####3.千里马；快速对号「2.千里马」勿盖成第2。"""
+    answer = """
+### 一、西塔老牌泥炉炭火烤肉（必吃沈阳韩式老味道）
+#### 1. 西塔老街·烤肉烤鳗鱼牛排(西塔二店)｜首选游客+本地人兼顾
+活鳗鱼现烤。
+#### 2. 熙道老西塔烤肉｜氛围感强，可穿韩服拍照
+带娃友好。
+#### 3. 千里马烧烤一部(市妇婴店)｜老沈阳老式泥炉天花板（市井老店）
+几十年老店。
+### 二、浑南高分口碑店
+#### 1. 在山葵炭火烤肉·酱辣蟹(龙湖天街店)｜综合满分首选
+环境好。
+### 快速对号入座
+1. 打卡西塔正宗泥炉+活鳗鱼 → **西塔老街烤肉**
+2. 想体验老沈阳市井老店、吃老式腌肉 → **千里马（市妇婴总店）**
+3. 浑南新市府、追求环境+口味双在线 → **在山葵炭火烤肉**
+"""
+    item = _sub(
+        prompt="沈阳烤肉比较推荐哪家",
+        answer_content=answer,
+        mention_position=3,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item,
+        "沈阳烤肉",
+        ["千里马泥炉烤肉店(市妇婴店）", "千里马烧烤一部(市妇婴店)"],
+        None,
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+    assert detail.rank_basis == "numbered_subheading"
+
+
+def test_dawangye_tianjin_market_remark_row_seven_not_phone_table_six() -> None:
+    """2026-09-03 - 重点市场表第7行备注点名大王椰；勿落到电话表第6行。"""
+    answer = """
+### 🏠 重点市场及门店推荐
+| 门店/市场名称 | 所在区域 | 主营特色 | 地址 / 备注 |
+| :--- | :--- | :--- | :--- |
+| **珠江装饰城板材区** | **河西区** | **综合性板材** | 解放南路。四通华升。 |
+| **潘庄名贵木材市场** | **宁河区** | **大型批发市场** | 宁河区潘庄镇。 |
+| **华北陶瓷市场** | **滨海新区** | **装饰板材及建材** | 胡家园。吉安。 |
+| **井田装饰城** | **滨海新区** | **板材、五金** | 寨上街。 |
+| **融盛家居生活广场** | **西青区** | **装饰材料** | 杨柳青镇。 |
+| **华北城** | **武清区** | **免漆板材** | 下朱庄街。 |
+| **登发装饰大世界** | **红桥区** | **装饰板材** | 光荣道。**大王椰板材(红桥店)** 位于登发装饰大世界板材厅。 |
+### 📞 出发前的小提醒
+| 门店 | 联系电话 |
+| :--- | :--- |
+| 吉安装饰板材总汇 | 13820236280 |
+| 欣盛国际木业 | 15652389478 |
+| 四通华升板材销售中心 | 13820595736 |
+| 威星威力装饰材料经营部 | 13622177903 |
+| 谢姐木材 | 13920811492 |
+| 大王椰板材(红桥店) | (22) 87702627 |
+"""
+    item = _sub(
+        prompt="天津板材门店推荐",
+        answer_content=answer,
+        mention_position=9,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "天津板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 7
+    assert detail.rank_basis == "company_table_row"
+
+
+def test_nanjing_board_brand_list_fourth_not_venue_incidental() -> None:
+    """2026-09-03 - 市场里顺带点名不得盖掉「品牌授权门店」第4。"""
+    answer = """
+## ✅ 大型板材集中市场（优先推荐，一站式比价）
+### 1. 弘阳装饰城（原红太阳，板桥）
+南京板材最齐全的大市场，兔宝宝、莫干山、千年舟、大王椰、福庆、平安树全部有门店
+### 2. 长江装饰城（赛虹桥）
+同洲木业：千年舟、大王椰多品牌一体门店
+## ✅ 国内一线品牌授权门店（保真，ENF为主）
+1. **兔宝宝**
+- 弘阳广场易装馆
+2. **莫干山板材**
+- 板桥弘阳装饰城旗舰店
+3. **千年舟**
+长江装饰城同洲木业
+4. **大王椰板材运营中心**
+仓储直营，一张起送
+"""
+    item = _sub(
+        prompt="南京板材门店推荐",
+        answer_content=answer,
+        mention_position=4,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "南京板材门店推荐", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.rank == 4
+    assert detail.rank_basis in {"numbered_list", "numbered_subheading"}
+
+
+def test_baodecong_paren_price_tier_third() -> None:
+    """2026-09-03 - 「3）高配」分档字面号=3，勿并进中端口碑虚成1。"""
+    answer = """
+二、分价位品牌推荐（藻油为主）
+1）性价比入门款（平价日常补充）
+诺特兰德 DHA 藻油
+每粒 DHA 100mg
+天然博士 DHA+ARA 藻油
+帝斯曼原料
+2）中端口碑款（母婴圈热门）
+纽曼思 儿童藻油 DHA
+适合婴幼儿长期补充
+3）高配高吸收款（吸收率更好）
+宝得聪 DHA 藻油
+润科原料，每粒 120mg DHA
+4）学龄大童鱼油（4 岁 +）
+可维思 高纯度鱼油 DHA
+"""
+    item = _sub(
+        prompt="儿童DHA品牌推荐",
+        answer_content=answer,
+        mention_position=3,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "儿童DHA品牌推荐", ["宝得聪"], None
+    )
+    assert detail.rank == 3
+    assert detail.rank_basis in {"numbered_subheading", "section_local"}
 
