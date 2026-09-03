@@ -4924,9 +4924,16 @@ def _drop_soft_ranks_beaten_by_structured(
         str(item.rank_basis or "") == "section_local" and item.rank is not None
         for item in candidates
     )
+    has_secondary_local = any(
+        str(item.rank_basis or "") == "secondary_section_local" and item.rank is not None
+        for item in candidates
+    )
     kept: list[BrandRankResolution] = []
     for item in candidates:
         basis = str(item.rank_basis or "")
+        # 2026-09-03 - 补充段小节序已立时丢掉同行顿号（大王椰、鲁丽同行第1 ≠ 关注段第2）
+        if has_secondary_local and basis == "line_enum_local":
+            continue
         # 保留教辅等正式 section_local 与 structured 一起 min；丢掉 secondary/建议软信号
         if has_structured and item.source == "appearance" and basis in {
             "line_enum_local",

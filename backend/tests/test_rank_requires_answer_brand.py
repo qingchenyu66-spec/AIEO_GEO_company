@@ -1570,3 +1570,45 @@ def test_aidiya_airport_glued_cards_rank_three():
     )
     assert detail.mentioned is True
     assert detail.rank == 3
+
+
+def test_child_room_board_dawangye_watchlist_is_section_second():
+    """2026-09-03 - 儿童房截图：大王椰在「其他值得关注」小节第2，勿被同行顿号抬成第1。"""
+    from app.services.ranking_parser import parse_answer_rankings
+
+    answer = """
+## 重点品牌推荐
+1. **兔宝宝**
+2. **雪宝**
+3. **千年舟**
+4. **索菲亚**
+5. **鹏鸿**
+6. **福人**
+
+## 其他值得关注的品牌
+- **小白兔**：专注儿童板材细分市场
+- **大王椰、鲁丽、广林新材**：性价比高，渠道覆盖广
+
+## 如何挑选？记住这几点
+认准ENF级；看权威认证。
+"""
+    entries = parse_answer_rankings(answer)
+    item = _sub(
+        prompt="儿童房环保板材品牌哪个好",
+        answer_content=answer,
+        all_rankings_json=entries,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "儿童房环保板材品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis in {"secondary_section_local", "section"}
+
+    furen = _resolve_brand_rank_detail(
+        item, "儿童房环保板材品牌哪个好", ["福人"], None
+    )
+    assert furen.rank == 6
+
+
