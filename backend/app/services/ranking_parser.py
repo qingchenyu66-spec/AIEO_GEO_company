@@ -127,6 +127,32 @@ _CORP_NAME_HINTS = (
     "公司", "集团", "控股", "股份", "有限", "传媒", "广告", "媒体", "科技", "网络",
     "商社", "银行", "证券", "保险", "医院", "大学", "学院",
 )
+# 适用客户/行业类型整词，不是选手（「招商银行」等实体名仍可过）
+_CUSTOMER_TYPE_TOKENS = frozenset({
+    "政府", "初创公司", "教育平台", "AI公司", "社交媒体", "大促期间",
+    "中小互联网企业", "本地生活平台", "直播平台", "电商", "金融机构",
+})
+# DeepSeek 分享页：引用写成 -\\nN\\n- 链，不是 [citation:N]
+_SHARE_CITATION_CHAIN_RE = re.compile(
+    r"-(?:\s*\n\s*\d{1,3}\s*\n\s*-)+\s*\n\s*\d{1,3}(?=\s*(?:\n|$))",
+)
+_SHARE_CITATION_SINGLE_RE = re.compile(r"(?<=\S)-\s*\n\s*\d{1,3}(?=\s*\n)")
+
+
+def _strip_share_page_citation_markers(text: str) -> str:
+    """去掉分享页 -\\n数字\\n- 引用碎行，避免打断 TSV / 被当成 bullet 选手。
+
+    2026-09-03 - DeepSeek「。-\\n2」被 layout 拆成「- 2」→ 鸿联九五 structured 第2
+    """
+    value = str(text or "")
+    prev = None
+    while prev != value:
+        prev = value
+        value = _SHARE_CITATION_CHAIN_RE.sub("", value)
+        value = _SHARE_CITATION_SINGLE_RE.sub("", value)
+    # 链拆剩的孤立数字行（保留「1. 公司」编号项）
+    value = re.sub(r"(?m)^\s*\d{1,3}\s*$", "", value)
+    return value
 
 
 def _normalize_answer_layout(text: str) -> str:
@@ -135,6 +161,8 @@ def _normalize_answer_layout(text: str) -> str:
     normalized = re.sub(r"<br\s*/?>", " ", text or "", flags=re.I)
     normalized = re.sub(r"<[^>]+>", "\n", normalized)
     normalized = re.sub(r"\r", "\n", normalized)
+    # 须在「句号后 - 拆 bullet」之前，否则 。-\\n2 会变成 - 2 选手
+    normalized = _strip_share_page_citation_markers(normalized)
     # 元宝分享页：孤立「•」行后接「公司名：说明」——合成可解析 bullet
     # ponytail: 只合并空子弹行；编号清单 1.\\n1.\\n 另案，避免把「点位权属」抬成选手
     normalized = re.sub(
@@ -161,7 +189,8 @@ def _clean_item_name(text: str) -> str:
     value = re.sub(r"^[*·•▪]+", "", value.strip())
     value = re.sub(r"^[「『\"'“]+|[」』\"'”]+$", "", value.strip())
     value = re.sub(r"[（(].*?[)）]$", "", value.strip())
-    value = re.sub(r"[：:，,;；\.。]+$", "", value.strip())
+    # 2026-09-03 - 引用掐断后公司格残留「鸿联九五-」
+    value = re.sub(r"[：:，,;；\.。\-]+$", "", value.strip())
     return value.strip()
 
 
@@ -233,6 +262,9 @@ def _looks_like_company_list_name(name: str) -> bool:
     cleaned = str(name or "").strip()
     if not cleaned or len(cleaned) > 40:
         return False
+    # 2026-09-03 - 引用碎行「2」「1」不当选手（鸿联九五被挤成 structured 第2）
+    if cleaned.isdigit() or re.fullmatch(r"\d{1,3}", cleaned):
+        return False
     if _is_subsection_label(cleaned) or cleaned in SUBSECTION_LABELS:
         return False
     # 递归注意：_is_metadata_field_label 会再调 subsection；字段族在此挡「联系方式」
@@ -244,6 +276,9 @@ def _looks_like_company_list_name(name: str) -> bool:
     ):
         return False
     if cleaned in _NON_COMPANY_TOKENS:
+        return False
+    # 整词「银行/政府/公司」是客户类型或后缀提示，不是选手名
+    if cleaned in _CORP_NAME_HINTS or cleaned in _CUSTOMER_TYPE_TOKENS:
         return False
     # A 类 / B类 / 区域强者 — 分类标签，不是选手
     if re.fullmatch(r"[A-Za-zＡ-Ｚａ-ｚ]?\s*类", cleaned) or cleaned.endswith("类") and len(cleaned) <= 4:
@@ -829,9 +864,26 @@ def _is_tsv_table_noise_line(line: str) -> bool:
     return False
 
 
+def _is_tsv_broken_continuation_row(cells: list[str]) -> bool:
+    """引用掐断后「。\\t银行、政府…」续行：首格不是场景/品牌，勿当新选手行。
+
+    2026-09-03 - 场景×推荐 TSV 被 -\\nN 拆行后，适用客户列挤进 company_col
+    """
+    if not cells:
+        return True
+    first = str(cells[0] or "").strip()
+    if not first or first in {".", "。", "，", ",", "-", "—", "–", "·"}:
+        return True
+    if first.startswith(("。", "，", ",", ".")):
+        return True
+    return False
+
+
 def _tsv_row_company_names(line: str, company_col: int) -> list[str]:
     cells = _split_tsv_cells(line)
     if company_col >= len(cells):
+        return []
+    if _is_tsv_broken_continuation_row(cells):
         return []
     names = _split_table_company_cell(cells[company_col])
     # 表头噪声（偶发被当成数据行）
@@ -1066,7 +1118,7 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
     for raw in raw_entries or []:
         if not isinstance(raw, dict):
             continue
-        name = ranking_entry_name(raw)
+        name = _clean_item_name(ranking_entry_name(raw)) or ranking_entry_name(raw)
         if not name:
             continue
         # API/旧缓存也会把「核心优势」当成选手；与正文解析同一门禁
@@ -1094,6 +1146,8 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
 
     # ponytail: 模力 allRankings 常整表 rank=1；无分段且同位次扎堆时按出场序重排
     unscoped = [row for row in results if not row.get("category")]
+    if not unscoped:
+        return results
     if len(unscoped) >= 2:
         numeric_ranks: list[float] = []
         for row in unscoped:
@@ -1103,6 +1157,20 @@ def normalize_structured_rankings(raw_entries: list[Any] | None) -> list[dict[st
         if len(numeric_ranks) == len(unscoped) and len(set(numeric_ranks)) == 1:
             for index, row in enumerate(unscoped, start=1):
                 row["rank"] = index
+            return results
+    # 2026-09-03 - 滤掉引用数字后显式位次留空洞（只剩品牌仍标2）→ 按过滤后出场序重排
+    expected = set(range(1, len(unscoped) + 1))
+    actual: set[int] = set()
+    contiguous = True
+    for row in unscoped:
+        coerced = _coerce_rank_number(row.get("rank"))
+        if coerced is None or float(coerced) != int(coerced):
+            contiguous = False
+            break
+        actual.add(int(coerced))
+    if not contiguous or actual != expected:
+        for index, row in enumerate(unscoped, start=1):
+            row["rank"] = index
     return results
 
 

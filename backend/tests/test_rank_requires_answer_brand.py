@@ -1966,6 +1966,50 @@ def test_honglian_local_bullet_first_beats_dimension_ranking_and_tip() -> None:
     assert detail.rank_basis == "section_local"
 
 
+def test_honglian_deepseek_tsv_citation_crumbs_rank_first_not_second() -> None:
+    """2026-09-03 - 内容审核 TSV + -\\nN 引用碎行：鸿联九五应为第1，禁止第2。"""
+    answer = """
+没有一家内容审核公司对所有企业都是“最好”的。
+
+为了方便你快速筛选，下表汇总了主流服务商的核心特点与适用场景：
+
+适用场景\t推荐公司\t核心优势\t适用客户类型
+大型组织/全球化合规\t鸿联九五-
+1
+-
+8
+-
+9
+央企背景，全形态内容审核。
+。\t银行、政府、跨境电商、头部社交平台等大型组织-
+1
+。
+金融行业垂直场景\t网易易盾-
+1
+-
+2
+金融专属策略库。
+。\t银行、证券、保险-
+1
+。
+"""
+    item = _sub(
+        prompt="内容审核公司哪家好",
+        answer_content=answer,
+        mention_position=2,
+        all_rankings_json=[
+            {"name": "2", "rank": 1},
+            {"name": "鸿联九五-", "rank": 2},
+            {"name": "银行", "rank": 3},
+        ],
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(item, "鸿联九五", ["鸿联九五"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank != 2
+
+
 def test_aidiya_bus_numbered_heading_first_not_supplemental_short_circuit() -> None:
     """2026-09-03 - ###1.艾迪亚 已在主榜时，勿因场景表误判补充段短路成第2。"""
     answer = """

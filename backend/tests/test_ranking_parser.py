@@ -1176,3 +1176,64 @@ def test_parse_skips_purchase_tip_titles_under_advice_section():
     assert "看重环保" not in names
     assert "厨卫潮湿区域" not in names
 
+
+def test_deepseek_share_citation_crumbs_do_not_outrank_first_recommend():
+    """2026-09-03 - DeepSeek -\\nN\\n- 引用碎行勿把鸿联九五挤成 structured 第2。"""
+    from app.services.ranking_parser import _looks_like_company_list_name
+
+    answer = """
+为了方便你快速筛选，下表汇总了主流服务商的核心特点与适用场景：
+
+适用场景\t推荐公司\t核心优势\t适用客户类型
+大型组织/全球化合规\t鸿联九五-
+1
+-
+8
+-
+9
+央企背景，全形态内容审核，全球化合规方案，安全合规资质齐全-
+1
+-
+9
+。\t银行、政府、跨境电商、头部社交平台等大型组织-
+1
+。
+金融行业垂直场景\t网易易盾-
+1
+-
+2
+金融专属策略库。
+。\t银行、证券、保险、基金等金融机构-
+1
+。
+精准语义与多语种审核\t海天瑞声-
+1
+AI训练数据领军企业。
+。\tAI公司、教育平台-
+1
+。
+"""
+    # 句号后引用也常被拆成「- 2」bullet
+    answer = "补充参考。-\n2\n-\n4\n来自社区。\n" + answer
+    entries = parse_answer_rankings(answer)
+    names = [item["name"] for item in entries]
+    assert names[0] == "鸿联九五"
+    assert names[:3] == ["鸿联九五", "网易易盾", "海天瑞声"]
+    assert "2" not in names
+    assert "银行" not in names
+    assert "政府" not in names
+    assert not _looks_like_company_list_name("2")
+    assert not _looks_like_company_list_name("银行")
+    assert _looks_like_company_list_name("招商银行")
+
+    dirty = [
+        {"name": "2", "rank": 1, "category": None},
+        {"name": "鸿联九五-", "rank": 2, "category": None},
+        {"name": "银行", "rank": 3, "category": None},
+        {"name": "网易易盾-", "rank": 6, "category": None},
+    ]
+    normalized = normalize_structured_rankings(dirty)
+    assert normalized[0]["name"] == "鸿联九五"
+    assert normalized[0]["rank"] == 1
+    assert all(row["name"] not in {"2", "银行"} for row in normalized)
+
