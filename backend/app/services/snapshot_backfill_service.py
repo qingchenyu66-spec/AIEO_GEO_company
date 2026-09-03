@@ -144,6 +144,7 @@ _PENDING_PARSE_KEYS = (
     "_pending_operator_user_id",
     "_pending_parse_started_at",
     "_pending_parse_job_id",
+    "_pending_previous_source",
     "backfill_parse_enqueue",
 )
 
@@ -1107,11 +1108,15 @@ def _queue_async_share_backfill_parse(
     parse_job_id = _new_backfill_parse_job_id()
     # 2026-09-02 - 入队即藏旧图 - 解析完成前详情不得再露上一张快照
     previous_shot = (subtask.page_screenshot or "").strip() or None
+    previous_source = raw.get("source")
     before_snap = build_before_backfill_snapshot(subtask)
     if previous_shot:
         subtask.page_screenshot = None
     raw.update(
         {
+            # 2026-09-03 - 入队即标 manual_snapshot - 未等解析完成也挡 sync 盖写
+            "source": "manual_snapshot",
+            "manual_rank_locked": True,
             "backfill_parse_status": "pending",
             "backfill_parse_error": None,
             "snapshot_url": url,
@@ -1125,10 +1130,14 @@ def _queue_async_share_backfill_parse(
             "_pending_parse_started_at": datetime.now(UTC).isoformat(),
             # 2026-09-02 - 解析任务身份 - 旧 Worker 写回前须仍匹配
             "_pending_parse_job_id": parse_job_id,
+            # 2026-09-03 - 入队前 source - 解析失败时还原，避免空失败永久挡 sync
+            "_pending_previous_source": previous_source,
             # 2026-09-02 - 先标 dispatching 再投递 - 避免无 enqueue 窗口被详情当成孤儿 failed
             "backfill_parse_enqueue": "dispatching",
         }
     )
+    if previous_source and previous_source != "manual_snapshot":
+        raw["replaced_previous_source"] = previous_source
     if previous_shot:
         raw["replaced_previous_screenshot"] = previous_shot
     raw.pop("screenshot_ok", None)
@@ -1147,6 +1156,7 @@ def _queue_async_share_backfill_parse(
         )
         db.refresh(subtask)
         raw_fail = dict(subtask.raw_result_json or {})
+        _restore_source_after_pending_backfill_fail(raw_fail)
         for key in _PENDING_PARSE_KEYS:
             raw_fail.pop(key, None)
         raw_fail["backfill_parse_status"] = "failed"
@@ -1200,6 +1210,22 @@ def _operator_session_from_raw(db: Session, raw: dict[str, Any]) -> CurrentSessi
     return CurrentSession(user=user, identity=identity)  # type: ignore[arg-type]
 
 
+def _restore_source_after_pending_backfill_fail(raw: dict[str, Any]) -> None:
+    """解析未成功时撤掉入队为挡 sync 临时打的 manual_snapshot。
+
+    2026-09-03 - 入队即标 source - 失败须还原，否则空失败永久挡住模力正文/截图
+    """
+    if "_pending_previous_source" not in raw:
+        return
+    prev = raw.get("_pending_previous_source")
+    if prev:
+        raw["source"] = prev
+    else:
+        raw.pop("source", None)
+    if str(raw.get("source") or "").strip() != "manual_snapshot":
+        raw.pop("manual_rank_locked", None)
+
+
 def _mark_backfill_parse_failed(
     db: Session,
     subtask: GeoMonitorSubtask,
@@ -1221,6 +1247,7 @@ def _mark_backfill_parse_failed(
         return False
     if str(raw.get("backfill_parse_status") or "").lower() != "pending":
         return False
+    _restore_source_after_pending_backfill_fail(raw)
     for key in _PENDING_PARSE_KEYS:
         raw.pop(key, None)
     raw["backfill_parse_status"] = "failed"

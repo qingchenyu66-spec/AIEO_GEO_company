@@ -85,6 +85,18 @@ def is_manual_snapshot_subtask(subtask: GeoMonitorSubtask) -> bool:
     return str(raw.get("source") or "").strip() == "manual_snapshot"
 
 
+def subtask_blocks_remote_content_overwrite(subtask: GeoMonitorSubtask) -> bool:
+    """人工补录中/已补录：模力同步不得盖正文、截图与 raw 锁定元数据。
+
+    2026-09-03 - 异步补录入队未标 source 时 sync 冲掉补录 - pending 与 manual_snapshot 一并保护
+    """
+    if is_manual_snapshot_subtask(subtask):
+        return True
+    raw = getattr(subtask, "raw_result_json", None)
+    raw = raw if isinstance(raw, dict) else {}
+    return str(raw.get("backfill_parse_status") or "").strip().lower() == "pending"
+
+
 def _ordered_subtask_ids(db: Session, stmt) -> list[int]:
     """ORDER BY/LIMIT 阶段只取主键，避免宽列进 filesort（MySQL 1038）。
 
@@ -1098,7 +1110,10 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
     subtask_id = str(item.get("subTaskId") or "")
     if not subtask_id:
         raise ValueError("监测子任务缺少 subTaskId")
-    subtask = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id))
+    # 2026-09-03 - 补录与 sync 竞态 - 行锁后再判保护，避免读到旧 raw 后整包盖写
+    subtask = db.scalar(
+        select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == subtask_id).with_for_update()
+    )
     if subtask is None:
         subtask = GeoMonitorSubtask(
             subtask_id=subtask_id,
@@ -1110,8 +1125,9 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
             raw_result_json=item,
         )
         db.add(subtask)
-    elif is_manual_snapshot_subtask(subtask):
+    elif subtask_blocks_remote_content_overwrite(subtask):
         # 2026-08-11 - 同步冲掉人工补录 - manual_snapshot 只跟远端状态/费用，不盖正文与锁定元数据
+        # 2026-09-03 - pending 解析同路径 - 勿在截图清空窗口被远端旧图盖回
         incoming_answer = item.get("answerContent")
         has_answer = bool(incoming_answer or subtask.answer_content)
         has_error = bool(item.get("errorMessage") or subtask.error_message)

@@ -123,6 +123,9 @@ def test_slow_share_url_queues_async_parse(monkeypatch) -> None:
     )
     assert out.get("parse_async") is True
     assert subtask.raw_result_json.get("backfill_parse_status") == "pending"
+    # 2026-09-03 - 入队即标 manual_snapshot，缩短 sync 无保护窗口
+    assert subtask.raw_result_json.get("source") == "manual_snapshot"
+    assert subtask.raw_result_json.get("manual_rank_locked") is True
     job_id = subtask.raw_result_json.get("_pending_parse_job_id")
     assert job_id
     assert enqueued == [("st-async", job_id)]

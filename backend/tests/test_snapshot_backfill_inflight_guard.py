@@ -22,3 +22,20 @@ def test_is_manual_snapshot_subtask():
     assert is_manual_snapshot_subtask(SimpleNamespace(raw_result_json={"source": "manual_snapshot"})) is True
     assert is_manual_snapshot_subtask(SimpleNamespace(raw_result_json={"source": "api"})) is False
     assert is_manual_snapshot_subtask(SimpleNamespace(raw_result_json=None)) is False
+
+
+def test_pending_backfill_blocks_remote_overwrite():
+    from app.services.monitor_service import subtask_blocks_remote_content_overwrite
+
+    assert (
+        subtask_blocks_remote_content_overwrite(
+            SimpleNamespace(raw_result_json={"backfill_parse_status": "pending"})
+        )
+        is True
+    )
+    assert (
+        subtask_blocks_remote_content_overwrite(
+            SimpleNamespace(raw_result_json={"backfill_parse_status": "ok", "source": "api"})
+        )
+        is False
+    )
