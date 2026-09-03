@@ -4944,11 +4944,23 @@ def _drop_soft_ranks_beaten_by_structured(
         str(item.rank_basis or "") == "secondary_section_local" and item.rank is not None
         for item in candidates
     )
+    # 2026-09-03 - 主榜编号卡已命中品牌时，决策表/误开类内不得盖掉主榜位次（高铁广告5→2）
+    has_main_catalog = any(
+        str(item.rank_basis or "") in {"numbered_subheading", "numbered_list"}
+        and item.rank is not None
+        for item in candidates
+    )
     kept: list[BrandRankResolution] = []
     for item in candidates:
         basis = str(item.rank_basis or "")
         # 2026-09-03 - 补充段小节序已立时丢掉同行顿号（大王椰、鲁丽同行第1 ≠ 关注段第2）
         if has_secondary_local and basis == "line_enum_local":
+            continue
+        if has_main_catalog and basis in {
+            "section_local",
+            "secondary_section_local",
+            "line_enum_local",
+        }:
             continue
         # 保留教辅等正式 section_local 与 structured 一起 min；丢掉 secondary/建议软信号
         if has_structured and item.source == "appearance" and basis in {
@@ -5299,6 +5311,31 @@ def _company_tail_from_colon_title(title: str) -> str | None:
     return None
 
 
+def _looks_like_numbered_company_card_heading(bare: str) -> bool:
+    """主榜「N. 公司｜卖点」行：勿因卖点含「全链路」等词误开类内节。
+
+    2026-09-03 - 高铁广告 5.艾迪亚控股｜全链路… 被当成「全链路」类 → 决策表抬成第2
+    """
+    text = re.sub(r"\*\*", "", str(bare or "")).strip()
+    text = re.sub(r"^#{1,3}\s*", "", text).strip()
+    m = re.match(r"^\d+\s*[\.、．]\s*(.+)$", text)
+    if not m:
+        return False
+    body = m.group(1).strip()
+    if not body:
+        return False
+    head = re.split(r"[｜|]", body, maxsplit=1)[0].strip()
+    head = re.sub(r"[（(].*$", "", head).strip()
+    if not head or len(head) > 24:
+        return False
+    if re.search(r"公司|集团|传媒|控股|有限|股份|品牌", head):
+        return True
+    # 短中文公司名 + 竖线卖点（华铁传媒｜… / 艾迪亚控股｜…）
+    if ("｜" in body or "|" in body) and re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9·]{2,20}", head):
+        return True
+    return False
+
+
 def _is_company_colon_section_title(title: str) -> bool:
     # 2026-08-26 - 「区域代表性品牌：深耕本地」是档位小标题，勿当公司冒号节跳过类内序
     probe = _strip_section_decorations(re.sub(r"\*\*", "", str(title or "")).strip())
@@ -5439,6 +5476,10 @@ def _tier_local_brand_token_rank(
             # 2026-08-19 - 「🏢 综合实力型：…」「高合规要求场景」无 # 未开节 → 冒号卡空位/全文14
             label = _geo_fuzzy_section_label(plain)
         if label:
+            # 2026-09-03 - 主榜公司卡勿开类内节，避免卖点词「全链路」吞掉后续决策表抬位
+            if _looks_like_numbered_company_card_heading(bare):
+                flush()
+                continue
             flush()
             current_title = label
             current_lines = []

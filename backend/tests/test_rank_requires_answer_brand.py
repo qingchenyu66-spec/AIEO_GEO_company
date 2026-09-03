@@ -1612,3 +1612,52 @@ def test_child_room_board_dawangye_watchlist_is_section_second():
     assert furen.rank == 6
 
 
+def test_highspeed_rail_ad_main_catalog_beats_decision_table() -> None:
+    """2026-09-03 - 主榜 5.艾迪亚控股｜全链路… 勿被决策表「华铁/艾迪亚」抬成第2。"""
+    from types import SimpleNamespace
+
+    from app.services.monitor_service import _resolve_brand_rank_detail
+
+    answer = """
+国内主流高铁广告头部公司对比（2026）
+1. 华铁传媒｜列车媒体龙头（全国全域全场景）
+适合：大品牌全国曝光
+2. 兆讯传媒｜高铁数字屏上市公司（站内 LED / 刷屏机）
+适合：动态广告
+3. 路铁传媒｜高铁站静态灯箱头部
+适合：品牌形象
+4. 永达传媒｜高铁 + 高速双户外场景
+适合：渠道下沉
+5. 艾迪亚控股｜全链路整合服务商（车站 + 列车全触点）
+适合：品牌事件营销
+快速选型决策表
+投放目标	优先选择
+高铁列车冠名、品牌专列	华铁传媒 / 艾迪亚控股
+高铁站 LED 视频、动态广告	兆讯传媒
+"""
+    ranks = [
+        {"name": "华铁传媒｜列车媒体龙头", "rank": 1, "category": None},
+        {"name": "兆讯传媒｜高铁数字屏上市公司", "rank": 2, "category": None},
+        {"name": "路铁传媒｜高铁站静态灯箱头部", "rank": 3, "category": None},
+        {"name": "永达传媒｜高铁 + 高速双户外场景", "rank": 4, "category": None},
+        {"name": "艾迪亚控股｜全链路整合服务商", "rank": 5, "category": None},
+    ]
+    sub = SimpleNamespace(
+        prompt="高铁广告公司哪家好",
+        answer_content=answer,
+        mention_position=None,
+        mention_context=None,
+        all_rankings_json=ranks,
+        competitor_rankings_json=None,
+        reference_list_json=None,
+        citation_list_json=None,
+        raw_result_json={"source": "manual_snapshot", "manual_rank_locked": False},
+        page_screenshot=None,
+    )
+    detail = _resolve_brand_rank_detail(
+        sub, "艾迪亚", ["艾迪亚", "艾迪亚控股", "AIDIYA"], None
+    )
+    assert detail.rank == 5
+    assert detail.rank_basis in {"numbered_subheading", "numbered_list", "section", None}
+
+
