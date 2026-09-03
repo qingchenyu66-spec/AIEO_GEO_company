@@ -308,9 +308,10 @@ def test_cockpit_platform_chart_and_heat_use_matrix():
     import json
     cockpit = json.loads(ctx["cockpit_json"])
     assert [r["key"] for r in cockpit["platformRows"]] == ["chatgpt"]
-    # A+：平台行吃格级；非品牌 1 格未露出 → 0%；不再吃 platform_stats 11.1
+    # A+：平台行吃格级；非品牌 1 格未露出 → 0%；条级主 KPI 用 sample_basis
     assert cockpit["platformRows"][0]["positive"] == 0.0
-    assert cockpit["platformData"]["all"]["visibility"] == 0.0
+    assert cockpit["platformData"]["all"]["visibility"] == 10.0
+    assert cockpit["platformData"]["all"]["cell_visibility"] == 0.0
     assert cockpit["platformData"]["all"]["brand_defense"] == 100.0
     assert cockpit["schema_version"] == "scope-v8"
     assert "productAdjust" not in cockpit
@@ -681,6 +682,13 @@ def test_null0_mention_zero_vs_no_denominator():
     assert ck_na["platformData"]["all"]["primary_kpi_available"] is False
     assert "暂无数据" in ck_na["stageCopy"]["all"]["summary"]
     assert validate_cockpit_null0(ck_na) == []
+
+
+def test_prompt_contains_brand_short_core_name():
+    assert prompt_contains_brand("菜万家品牌怎么样", "广东菜万家供应链有限公司") is True
+    row = classify_prompt("菜万家品牌怎么样", brand="广东菜万家供应链有限公司")
+    assert row["lane"] == "brand_defense"
+    assert row["is_brand_word"] is True
 
 
 def test_which_vendor_reliable_is_recommend_not_compare():

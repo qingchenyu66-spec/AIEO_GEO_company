@@ -16,6 +16,7 @@ from app.services.share_page_fetch_service import (
     extract_json_title_url_references,
     extract_kimi_references,
     fetch_share_page,
+    try_fast_fetch_share_page,
 )
 
 PROBE = Path(__file__).resolve().parents[1] / "_doubao_share_probe.html"
@@ -66,6 +67,20 @@ def test_fetch_share_page_prefers_http(monkeypatch) -> None:
     out = fetch_share_page("https://www.doubao.com/thread/abc1234567890")
     assert out.answer_content == fake.answer_content
     assert out.title == "t"
+
+
+def test_try_fast_fetch_returns_none_when_needs_browser(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.share_page_fetch_service._try_http_fetch",
+        lambda url, host: SharePageFetchResult(
+            answer_content="x" * 100,
+            references=[],
+            title="t",
+            source_host="www.qianwen.com",
+            claimed_refs=18,
+        ),
+    )
+    assert try_fast_fetch_share_page("https://www.qianwen.com/share/chat/abc") is None
 
 
 def test_kimi_and_json_parsers_on_local_probes() -> None:

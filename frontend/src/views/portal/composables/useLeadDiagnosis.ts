@@ -296,7 +296,17 @@ export function useLeadDiagnosis() {
     if (exceptId == null) previewHtmlUrl.value = null
   }
 
-  async function loadPreviewHtml(leadId: number) {
+  function clearPreviewHtmlCache(leadId: number) {
+    const url = previewHtmlBlobById.get(leadId)
+    if (url) {
+      URL.revokeObjectURL(url)
+      previewHtmlBlobById.delete(leadId)
+    }
+    if (selectedId.value === leadId) previewHtmlUrl.value = null
+  }
+
+  async function loadPreviewHtml(leadId: number, options?: { force?: boolean }) {
+    if (options?.force) clearPreviewHtmlCache(leadId)
     const cached = previewHtmlBlobById.get(leadId)
     if (cached) {
       previewHtmlUrl.value = cached
@@ -967,6 +977,10 @@ export function useLeadDiagnosis() {
     detailLoading.value = true
     try {
       detail.value = await refreshLeadDiagnosis(selectedId.value)
+      clearPreviewHtmlCache(selectedId.value)
+      if (detailTab.value === 'report' && detail.value?.status === 'ready') {
+        void loadPreviewHtml(selectedId.value, { force: true })
+      }
       await loadRecords({ silent: true })
       startPollingIfNeeded()
       ElMessage.success('进度已更新')

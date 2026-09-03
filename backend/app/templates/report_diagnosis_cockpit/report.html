@@ -1039,7 +1039,7 @@
         </div>
 
         <div class="metric-grid" aria-label="核心指标">
-          <button class="metric-card" type="button" data-metric="visibility"><span class="metric-label">非品牌词获客提及率</span><span class="metric-value metric-watch" id="metricVisibility">—</span><span class="metric-context">主 KPI · 问法×平台格</span></button>
+          <button class="metric-card" type="button" data-metric="visibility"><span class="metric-label">非品牌词获客提及率</span><span class="metric-value metric-watch" id="metricVisibility">—</span><span class="metric-context">主 KPI · 条级样本</span></button>
           <button class="metric-card" type="button" data-metric="rank"><span class="metric-label">非品牌词平均推荐位</span><span class="metric-value" id="metricRank">—</span><span class="metric-context">主 KPI · 越低越好</span></button>
           <button class="metric-card" type="button" data-metric="decision"><span class="metric-label">非品牌词 Top3 率</span><span class="metric-value metric-watch" id="metricDecision">—</span><span class="metric-context">主 KPI · 问法×平台格</span></button>
           <button class="metric-card" type="button" data-metric="brand_defense"><span class="metric-label">品牌词防守提及率</span><span class="metric-value" id="metricBrandDefense">—</span><span class="metric-context">格级 · 不计入获客主 KPI</span></button>
@@ -1295,6 +1295,9 @@
       if (!title || !body) return;
       title.textContent = '问法快照 · ' + (modelName || snap.slot || '');
       const refs = (snap.references || []).map(u => `<li><a href="${u}" target="_blank" rel="noopener">${u}</a></li>`).join('') || '<li>暂无引用</li>';
+      const toneBadge = snap.sentiment_warning
+        ? `<p class="snap-tone-warn"><strong>${snap.sentiment_warning}</strong></p>`
+        : '';
       let media = '';
       if (snap.kind === 'link' && snap.share_url) {
         media = `<p><a class="snap-open" href="${snap.share_url}" target="_blank" rel="noopener">打开在线快照 / 分享链接</a></p>`;
@@ -1308,11 +1311,19 @@
           <p><strong>问法</strong>：${snap.prompt || ''}</p>
           <p><strong>平台</strong>：${modelName || snap.slot || ''}</p>
           <p><strong>格露出</strong>：${snap.exposed || snap.mentioned ? '是' : '否'} · <strong>均排</strong>：${snap.rank || '—'} · <strong>Top3</strong>：${snap.top3 ? '是' : '否'}${snap.answer_hit_rate != null && snap.answer_hit_rate !== '' ? ` · <strong>回答命中率</strong>：${snap.answer_hit_rate}%` : ''}</p>
+          ${toneBadge}
           <p><strong>回答摘要</strong>：${snap.answer_summary || '（无文本摘要）'}</p>
           <p><strong>引用来源</strong></p><ul>${refs}</ul>
           ${media}
         </div>`;
       document.getElementById('detailDialog')?.showModal?.();
+    }
+    function findHeatSnapshot(question, modelName) {
+      const item = (scenarios || []).find(s => s.question === question);
+      if (!item || !Array.isArray(item.snapshots)) return null;
+      const idx = (modelNames || []).indexOf(modelName);
+      if (idx >= 0 && item.snapshots[idx]) return item.snapshots[idx];
+      return item.snapshots.find(s => s.slot === modelName) || null;
     }
     function renderHeatmap() {
       const sliceKey = 'all';
@@ -1345,6 +1356,10 @@
           ? `回答命中率 ${button.dataset.hit}%（补充，非主 KPI）。`
           : '';
         document.getElementById('heatDetail').textContent = `${button.dataset.question} · ${button.dataset.model}：${state}。${hitTxt}建议：${suggestion}`;
+        const snap = findHeatSnapshot(button.dataset.question, button.dataset.model);
+        if (snap && (snap.screenshot_url || snap.share_url || snap.answer_summary)) {
+          openSnapshotDialog(snap, button.dataset.model);
+        }
       }));
     }
     function renderSources() {

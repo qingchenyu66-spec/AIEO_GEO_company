@@ -542,17 +542,20 @@ onUnmounted(() => {
                 <strong :class="healthTone(Number(detail.health_score ?? diagnosisBlock.health_score))">
                   {{ detail.health_score ?? diagnosisBlock.health_score ?? '-' }}
                 </strong>
-                <span>综合可见度</span>
+                <span v-if="kpis.negative_rate != null">负面 {{ kpis.negative_rate }}%</span>
+                <span v-else>综合可见度</span>
               </div>
               <div class="lead-kpi">
-                <label>品牌提及率</label>
-                <strong>{{ kpis.mention_rate ?? '-' }}<small v-if="kpis.mention_rate != null">%</small></strong>
-                <span>被 AI 推荐占比</span>
+                <label>非品牌提及率</label>
+                <strong>{{ kpis.acquisition_mention_rate ?? kpis.mention_rate ?? '-' }}<small v-if="(kpis.acquisition_mention_rate ?? kpis.mention_rate) != null">%</small></strong>
+                <span v-if="kpis.acquisition_sample_total">条级 {{ kpis.acquisition_sample_mentioned ?? '—' }}/{{ kpis.acquisition_sample_total }}</span>
+                <span v-else>被 AI 推荐占比</span>
               </div>
               <div class="lead-kpi">
-                <label>平均排名</label>
-                <strong>{{ formatRank(kpis.avg_rank) }}</strong>
-                <span>越靠前越好</span>
+                <label>非品牌均排</label>
+                <strong>{{ formatRank(kpis.acquisition_avg_rank ?? kpis.avg_rank) }}</strong>
+                <span v-if="kpis.brand_defense_mention_rate != null">品牌词 {{ kpis.brand_defense_mention_rate }}%</span>
+                <span v-else>越靠前越好</span>
               </div>
               <div class="lead-kpi">
                 <label>采集进度</label>
@@ -636,7 +639,7 @@ onUnmounted(() => {
                 <div v-if="previewHtmlLoading && !previewHtmlUrl" class="lead-empty lead-empty-stage">驾驶舱加载中…</div>
                 <iframe
                   v-else-if="previewHtmlUrl"
-                  :key="previewHtmlUrl"
+                  :key="`${selectedId}-${detail?.updated_at || ''}-${previewHtmlUrl}`"
                   class="lead-html-frame"
                   :src="previewHtmlUrl"
                   title="售前诊断驾驶舱预览"
@@ -742,7 +745,7 @@ onUnmounted(() => {
             <section v-else-if="detailTab === 'platforms'" class="lead-panel">
               <div class="lead-panel-title">
                 <h3>AI 平台表现</h3>
-                <p>按平台统计样本量、品牌提及率与平均排名。</p>
+                <p>按平台统计样本量、条级提及率与平均排名（含品牌词样本）。</p>
               </div>
               <div v-if="!platformStats.length" class="lead-form-hint">
                 <Lightbulb :size="16" /><span>暂无平台数据。</span>

@@ -1485,7 +1485,26 @@ def refresh_lead_diagnosis_runs(
     if lead is None:
         raise ValueError("售前诊断不存在")
     _sync_lead_run_statuses_from_tasks(db, lead)
-    maybe_finalize_lead_diagnosis(db, lead_id)
+    if maybe_finalize_lead_diagnosis(db, lead_id):
+        return get_lead_diagnosis(db, lead_id, current=current)
+    # 2026-09-03 - ready 点「刷新进度」也要重算聚合，否则口径/模板升级后不生效
+    lead = _load_lead_diagnosis(db, lead_id)
+    if lead is not None and lead.status == "ready":
+        tasks = _task_map(db, lead)
+        subtasks = _load_subtasks(db, lead)
+        if subtasks:
+            result = aggregate_lead_diagnosis(
+                lead,
+                subtasks,
+                task_region_map=_task_region_map(tasks),
+                db=db,
+            )
+            lead.diagnosis_result_json = result
+            lead.health_score = (
+                result.get("diagnosis", {}).get("health_score") or result.get("kpis", {}).get("health_score")
+            )
+            db.commit()
+            _kick_lead_export_pregenerate(lead_id)
     return get_lead_diagnosis(db, lead_id, current=current)
 
 
@@ -1645,37 +1664,25 @@ def _task_region_map(tasks: dict[str, GeoMonitorTask]) -> dict[str, list[str] | 
 
 
 def _lead_brand_terms(lead: LeadDiagnosis) -> list[str]:
-    """售前品牌匹配词：全称 + 入口露出词 + 结果里别名 + 去后缀短名。
+    """售前露出/排名匹配词：仅品牌全称 + 入口/结果里配置的露出词别名。
 
-    2026-08-21 - 短别名/短码（如 SAB）虚抬格级 - 弱别名不进自动匹配
+    2026-09-03 - 禁止自动切后缀、三字前缀、核心词干；与「完全一致」口径对齐
     """
     from app.schemas.lead_diagnosis import normalize_brand_aliases
-    from app.services.lead_brand_match import is_weak_brand_alias, matchable_brand_terms
-
-    raw: list[str] = []
-    seen: set[str] = set()
-
-    def _collect(value: str | None) -> None:
-        text = str(value or "").strip()
-        if not text or text in seen:
-            return
-        seen.add(text)
-        raw.append(text)
+    from app.services.lead_brand_match import matchable_brand_terms
 
     brand = str(lead.brand_name or "").strip()
-    _collect(brand)
-    for alias in normalize_brand_aliases(getattr(lead, "brand_aliases_json", None) or []):
-        _collect(alias)
-    stored = lead.diagnosis_result_json if isinstance(lead.diagnosis_result_json, dict) else {}
-    for alias in normalize_brand_aliases(stored.get("brand_aliases") or []):
-        _collect(alias)
-    # 艾迪亚控股集团有限公司 → 艾迪亚控股集团 / 艾迪亚
-    for suffix in ("有限公司", "股份有限公司", "集团有限公司", "控股集团有限公司", "集团"):
-        if brand.endswith(suffix) and len(brand) > len(suffix) + 1:
-            _collect(brand[: -len(suffix)].strip())
-    if brand and len(brand) >= 3 and not is_weak_brand_alias(brand[:3]):
-        _collect(brand[:3])
-    return matchable_brand_terms(brand, raw)
+    aliases: list[str] = []
+    for src in (
+        getattr(lead, "brand_aliases_json", None),
+        (lead.diagnosis_result_json or {}).get("brand_aliases")
+        if isinstance(lead.diagnosis_result_json, dict)
+        else None,
+    ):
+        for alias in normalize_brand_aliases(src):
+            if alias not in aliases:
+                aliases.append(alias)
+    return matchable_brand_terms(brand, aliases)
 
 
 def _effective_lead_mention_position(
@@ -1733,8 +1740,19 @@ def aggregate_lead_diagnosis(
     matrix_cells: dict[str, dict[str, Any]] = {}
     source_map: dict[str, dict[str, Any]] = {}
 
+    from app.services.report_diagnosis_cockpit_taxonomy import classify_prompt
+
+    brand_aliases = [str(x).strip() for x in (lead.brand_aliases_json or []) if str(x).strip()]
+    acquisition_items: list[GeoMonitorSubtask] = []
+    brand_defense_items: list[GeoMonitorSubtask] = []
+
     for item in completed:
         eff = _effective_lead_mention_position(item, brand, brand_terms)
+        prompt_lane = classify_prompt(str(item.prompt or ""), brand=brand, aliases=brand_aliases).get("lane")
+        if prompt_lane == "brand_defense":
+            brand_defense_items.append(item)
+        else:
+            acquisition_items.append(item)
         bucket = platform_buckets.setdefault(
             item.platform,
             {"platform": item.platform, "total": 0, "completed": 0, "mentioned": 0, "rank_total": 0.0, "rank_count": 0},
@@ -1747,11 +1765,23 @@ def aggregate_lead_diagnosis(
             bucket["rank_count"] += 1
 
         cell_key = f"{item.prompt}::{item.platform}"
-        cell = matrix_cells.setdefault(cell_key, {"prompt": item.prompt, "platform": item.platform, "ranks": [], "mentioned": 0, "total": 0})
+        cell = matrix_cells.setdefault(
+            cell_key,
+            {
+                "prompt": item.prompt,
+                "platform": item.platform,
+                "ranks": [],
+                "mentioned": 0,
+                "total": 0,
+                "negative": 0,
+            },
+        )
         cell["total"] += 1
         if eff is not None:
             cell["mentioned"] += 1
             cell["ranks"].append(eff)
+        if str(item.sentiment or "").lower() == "negative":
+            cell["negative"] += 1
 
         for source in item.reference_list_json or []:
             url = source.get("url") or source.get("site") or source.get("title")
@@ -1784,14 +1814,21 @@ def aggregate_lead_diagnosis(
         ranks = cell["ranks"]
         # 2026-08-21 - mention_rate 实为格内回答命中率；对外主展示用 avg_rank/露出
         hit_rate = round(cell["mentioned"] / cell["total"] * 100, 1) if cell["total"] else 0.0
+        neg_rate = round(cell["negative"] / cell["total"] * 100, 1) if cell["total"] else None
+        mentioned_n = int(cell["mentioned"] or 0)
         matrix_rows.append({
             "prompt": cell["prompt"],
             "platform": cell["platform"],
             "sample_count": cell["total"],
+            "mentioned_count": mentioned_n,
             "mention_rate": hit_rate,
             "answer_hit_rate": hit_rate,
             "exposed": bool(ranks),
             "avg_rank": round(sum(ranks) / len(ranks), 1) if ranks else None,
+            "cell_negative_rate": neg_rate,
+            "rank_with_negative_tone": bool(
+                mentioned_n > 0 and int(cell["negative"] or 0) >= max(1, mentioned_n // 2)
+            ),
         })
 
     top_sources = consolidate_top_sources(list(source_map.values()), limit=12)
@@ -1813,8 +1850,11 @@ def aggregate_lead_diagnosis(
 
     kpis = {
         "mention_rate": mention_rate,
+        "overall_mention_rate": mention_rate,
         "avg_rank": avg_rank,
+        "overall_avg_rank": avg_rank,
         "top3_rate": top3_rate,
+        "overall_top3_rate": top3_rate,
         "positive_rate": positive_rate,
         "negative_rate": negative_rate,
         "completed_count": len(completed),
@@ -1823,6 +1863,31 @@ def aggregate_lead_diagnosis(
         "task_count": len({item.task_id for item in completed}),
         "schedule_round_count": schedule_round_count,
     }
+    acq_kpis = _sample_kpis_from_subtasks(acquisition_items, brand, brand_terms)
+    brand_kpis = _sample_kpis_from_subtasks(brand_defense_items, brand, brand_terms)
+    if acquisition_items:
+        kpis.update(
+            {
+                "acquisition_mention_rate": acq_kpis["mention_rate"],
+                "acquisition_avg_rank": acq_kpis["avg_rank"],
+                "acquisition_top3_rate": acq_kpis["top3_rate"],
+                "acquisition_sample_mentioned": acq_kpis["mentioned_count"],
+                "acquisition_sample_total": acq_kpis["total"],
+                # 2026-09-03 - 售前顶栏主 KPI 对齐非品牌条级，格级见驾驶舱
+                "mention_rate": acq_kpis["mention_rate"],
+                "avg_rank": acq_kpis["avg_rank"],
+                "top3_rate": acq_kpis["top3_rate"],
+            }
+        )
+    if brand_defense_items:
+        kpis.update(
+            {
+                "brand_defense_mention_rate": brand_kpis["mention_rate"],
+                "brand_defense_avg_rank": brand_kpis["avg_rank"],
+                "brand_defense_sample_mentioned": brand_kpis["mentioned_count"],
+                "brand_defense_sample_total": brand_kpis["total"],
+            }
+        )
     health_score = _rule_health_score(kpis)
     rule_highlights = _rule_highlights(kpis, platform_stats)
     diagnosis_block = _rule_diagnosis_block(
@@ -1968,31 +2033,68 @@ def aggregate_lead_diagnosis(
     }
     # 2026-08-13 - 方案 B - 收尾时一次生成驾驶舱叙事包
     try:
-        from app.services.report_diagnosis_cockpit_service import ensure_cockpit_narrative
+        from app.services.report_diagnosis_cockpit_service import ensure_cockpit_narrative, sync_rule_stage_copy_to_payload
 
         result_payload = ensure_cockpit_narrative(result_payload)
+        result_payload = sync_rule_stage_copy_to_payload(result_payload)
     except Exception:
         pass
     return result_payload
 
 
+def _sample_kpis_from_subtasks(
+    items: list[GeoMonitorSubtask],
+    brand: str,
+    brand_terms: list[str],
+) -> dict[str, Any]:
+    """条级 KPI：子任务样本命中次数 / 排名。"""
+    effective_ranks: list[float] = []
+    for item in items:
+        pos = _effective_lead_mention_position(item, brand, brand_terms)
+        if pos is not None:
+            effective_ranks.append(pos)
+    total = len(items)
+    mentioned = len(effective_ranks)
+    top3 = sum(1 for rank in effective_ranks if rank <= 3)
+    return {
+        "mention_rate": round(mentioned / total * 100, 1) if total else 0.0,
+        "avg_rank": round(sum(effective_ranks) / len(effective_ranks), 1) if effective_ranks else None,
+        "top3_rate": round(top3 / total * 100, 1) if total else 0.0,
+        "mentioned_count": mentioned,
+        "total": total,
+    }
+
+
 def _rule_health_score(kpis: dict[str, Any]) -> int:
-    mention = float(kpis.get("mention_rate") or 0)
-    top3 = float(kpis.get("top3_rate") or 0)
+    # 2026-09-03 - 健康分主看非品牌条级并扣负面占比，避免品牌词全命中抬高
+    use_acq = int(kpis.get("acquisition_sample_total") or 0) > 0
+    mention = float(kpis.get("acquisition_mention_rate") if use_acq else kpis.get("mention_rate") or 0)
+    top3 = float(kpis.get("acquisition_top3_rate") if use_acq else kpis.get("top3_rate") or 0)
     positive = float(kpis.get("positive_rate") or 0)
-    avg_rank = kpis.get("avg_rank")
+    negative = float(kpis.get("negative_rate") or 0)
+    avg_rank = kpis.get("acquisition_avg_rank") if use_acq else kpis.get("avg_rank")
     rank_bonus = 0.0
     if avg_rank is not None:
         rank_bonus = max(0.0, 100.0 - float(avg_rank) * 12.0)
-    score = mention * 0.35 + top3 * 0.25 + positive * 0.20 + rank_bonus * 0.20
+    score = mention * 0.30 + top3 * 0.25 + positive * 0.15 + rank_bonus * 0.20
+    score -= negative * 0.10
     return max(0, min(100, int(round(score))))
 
 
 def _rule_highlights(kpis: dict[str, Any], platform_stats: list[dict[str, Any]]) -> list[str]:
-    lines = [
-        f"品牌提及率 {kpis.get('mention_rate')}%，Top3 露出率 {kpis.get('top3_rate')}%。",
-        f"平均推荐排名 {kpis.get('avg_rank') or '—'}，共完成 {kpis.get('completed_count')} 条有效样本。",
-    ]
+    acq_total = int(kpis.get("acquisition_sample_total") or 0)
+    acq_mentioned = int(kpis.get("acquisition_sample_mentioned") or 0)
+    if acq_total > 0:
+        lines = [
+            f"非品牌词 {acq_total} 条样本中 {acq_mentioned} 条出现（{kpis.get('acquisition_mention_rate')}%），"
+            f"Top3 露出率 {kpis.get('acquisition_top3_rate')}%。",
+            f"非品牌均排 {kpis.get('acquisition_avg_rank') or '—'}，全样本 {kpis.get('completed_count')} 条。",
+        ]
+    else:
+        lines = [
+            f"品牌提及率 {kpis.get('mention_rate')}%，Top3 露出率 {kpis.get('top3_rate')}%。",
+            f"平均推荐排名 {kpis.get('avg_rank') or '—'}，共完成 {kpis.get('completed_count')} 条有效样本。",
+        ]
     if platform_stats:
         best = platform_stats[0]
         lines.append(f"表现最好平台提及率 {best.get('mention_rate')}%。")

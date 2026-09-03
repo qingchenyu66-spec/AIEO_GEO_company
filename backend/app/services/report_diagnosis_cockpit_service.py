@@ -495,6 +495,41 @@ def publish_kpi_basis(kpi_basis: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _row_answer_hit_rate(row: dict[str, Any]) -> float:
+    raw = row.get("answer_hit_rate")
+    if raw is None:
+        raw = row.get("mention_rate")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        pass
+    total = int(row.get("sample_count") or 0)
+    mentioned = row.get("mentioned_count")
+    if mentioned is not None:
+        try:
+            return round(100.0 * int(mentioned) / total, 1) if total > 0 else 0.0
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
+def _cell_has_hit_granularity(row: dict[str, Any]) -> bool:
+    """仅新聚合写入 mentioned_count 时启用 ≥3/5 阈值；旧矩阵仍按 avg_rank。"""
+    return row.get("mentioned_count") is not None
+
+
+def _cell_passes_mention_threshold(row: dict[str, Any]) -> bool:
+    """2026-09-03 - 格级命中须样本档≥60%（5 档即≥3），避免 1/5 有均排仍算整格露出。"""
+    total = int(row.get("sample_count") or 0)
+    if total <= 0:
+        return False
+    if not _cell_has_hit_granularity(row):
+        return _heat_rank_value(row.get("avg_rank")) > 0
+    min_hits = min(3, max(1, (total + 1) // 2))
+    min_rate = 100.0 * min_hits / total
+    return _row_answer_hit_rate(row) + 1e-9 >= min_rate
+
+
 def _matrix_cell_map(matrix_rows: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
     cell: dict[tuple[str, str], int] = {}
     for row in matrix_rows or []:
@@ -504,8 +539,43 @@ def _matrix_cell_map(matrix_rows: list[dict[str, Any]]) -> dict[tuple[str, str],
         slot = _canonical_platform(str(row.get("platform") or ""))
         if not prompt or not slot:
             continue
-        cell[(prompt, slot)] = _heat_rank_value(row.get("avg_rank"))
+        rank = _heat_rank_value(row.get("avg_rank"))
+        if _cell_has_hit_granularity(row) and rank > 0 and not _cell_passes_mention_threshold(row):
+            rank = 0
+        cell[(prompt, slot)] = rank
     return cell
+
+
+def _worst_acquisition_matrix_cell(
+    matrix_rows: list[dict[str, Any]],
+    acquisition_prompts: set[str],
+    platform_labels: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """非品牌问法×平台格中回答命中率最低的一格（摘要强制露出短板）。"""
+    labels = platform_labels or {}
+    worst: dict[str, Any] | None = None
+    for row in matrix_rows or []:
+        if not isinstance(row, dict):
+            continue
+        prompt = str(row.get("prompt") or "").strip()
+        if prompt not in acquisition_prompts:
+            continue
+        slot = _canonical_platform(str(row.get("platform") or ""))
+        if not slot:
+            continue
+        hit = _row_answer_hit_rate(row)
+        total = int(row.get("sample_count") or 0)
+        mentioned = int(row.get("mentioned_count") or 0)
+        if worst is None or hit < float(worst.get("hit_rate") or 0):
+            worst = {
+                "prompt": prompt,
+                "platform": slot,
+                "platform_label": labels.get(slot) or slot,
+                "hit_rate": hit,
+                "sample_count": total,
+                "mentioned_count": mentioned,
+            }
+    return worst
 
 
 def build_kpi_basis(
@@ -652,6 +722,8 @@ def _build_heat_scenarios(
     """
     cell: dict[tuple[str, str], int] = {}
     hit: dict[tuple[str, str], float | None] = {}
+    cell_neg: dict[tuple[str, str], float] = {}
+    cell_neg_tone: dict[tuple[str, str], bool] = {}
     for row in matrix_rows or []:
         if not isinstance(row, dict):
             continue
@@ -660,6 +732,8 @@ def _build_heat_scenarios(
         if not prompt or not slot:
             continue
         cell[(prompt, slot)] = _heat_rank_value(row.get("avg_rank"))
+        if _cell_has_hit_granularity(row) and cell[(prompt, slot)] > 0 and not _cell_passes_mention_threshold(row):
+            cell[(prompt, slot)] = 0
         # 兼容旧字段 mention_rate；优先显式 answer_hit_rate
         raw_hit = row.get("answer_hit_rate")
         if raw_hit is None:
@@ -668,6 +742,13 @@ def _build_heat_scenarios(
             hit[(prompt, slot)] = float(raw_hit) if raw_hit is not None else None
         except (TypeError, ValueError):
             hit[(prompt, slot)] = None
+        try:
+            if row.get("cell_negative_rate") is not None:
+                cell_neg[(prompt, slot)] = float(row["cell_negative_rate"])
+        except (TypeError, ValueError):
+            pass
+        if row.get("rank_with_negative_tone"):
+            cell_neg_tone[(prompt, slot)] = True
 
     evid = evidence_map if isinstance(evidence_map, dict) else {}
 
@@ -702,6 +783,11 @@ def _build_heat_scenarios(
             else:
                 kind = "none"
                 label = "本次无快照，仅保留文本摘要"
+            sentiment_warning = ""
+            if cell_neg_tone.get((prompt, slot)) or (
+                mentioned and (cell_neg.get((prompt, slot)) or 0) >= 50.0
+            ):
+                sentiment_warning = "有位次但口径偏负"
             snapshots.append(
                 {
                     "slot": slot,
@@ -718,6 +804,7 @@ def _build_heat_scenarios(
                     "answer_summary": summary[:400],
                     "references": [str(x) for x in refs[:8] if str(x).strip()],
                     "is_brand_query": is_brand,
+                    "sentiment_warning": sentiment_warning,
                 }
             )
         # 问法级回答命中：优先样本表；否则格内命中均值
@@ -1607,6 +1694,75 @@ def _prompt_display_rank(row: dict[str, Any]) -> float | None:
     return val if val > 0 else None
 
 
+def _weighted_sample_from_prompts(pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """问法池按 sample_count 加权条级命中率（与顶栏主 KPI 同思路）。"""
+    total_samples = 0
+    mentioned_samples = 0.0
+    for p in pool:
+        n = int(p.get("sample_count") or 0)
+        if n <= 0:
+            continue
+        total_samples += n
+        mentioned_samples += n * _f(p.get("brand_mention_rate"), 0.0) / 100.0
+    if total_samples <= 0:
+        return {"mention_rate": None, "mentioned": 0, "total": 0}
+    return {
+        "mention_rate": round(100.0 * mentioned_samples / total_samples, 1),
+        "mentioned": int(round(mentioned_samples)),
+        "total": total_samples,
+    }
+
+
+def _intent_nonbrand_lane(kpi_basis: dict[str, Any], intent_code: str) -> dict[str, Any]:
+    intents = kpi_basis.get("intents") if isinstance(kpi_basis.get("intents"), dict) else {}
+    raw = intents.get(intent_code) if isinstance(intents.get(intent_code), dict) else {}
+    lane = raw.get("nonbrand") if isinstance(raw.get("nonbrand"), dict) else {}
+    return lane
+
+
+def _acquisition_card_sample_metrics(
+    *,
+    tagged: list[dict[str, Any]],
+    intent_code: str,
+    kpis: dict[str, Any] | None,
+    kpi_basis: dict[str, Any],
+) -> dict[str, Any]:
+    """意图卡条级样本 + 格级补充；单意图占满非品牌格时与顶栏 kpis 同源。"""
+    nb_all = kpi_basis.get("nonbrand") if isinstance(kpi_basis.get("nonbrand"), dict) else {}
+    intent_lane = _intent_nonbrand_lane(kpi_basis, intent_code)
+    intent_cells = int(intent_lane.get("total_cells") or 0)
+    all_cells = int(nb_all.get("total_cells") or 0)
+    acq_pool = [
+        p
+        for p in tagged
+        if p.get("lane") == "acquisition" and str(p.get("intent_code") or "") == intent_code
+    ]
+    # 2026-09-03 - 勿用格级 75% 冒充主展示；单意图=全量获客时读 kpis 条级 55%
+    if (
+        kpis
+        and intent_cells > 0
+        and intent_cells == all_cells
+        and kpis.get("acquisition_mention_rate") is not None
+    ):
+        sample_rate = float(kpis["acquisition_mention_rate"])
+        mentioned = int(kpis.get("acquisition_sample_mentioned") or 0)
+        total = int(kpis.get("acquisition_sample_total") or 0)
+    else:
+        weighted = _weighted_sample_from_prompts(acq_pool)
+        sample_rate = weighted.get("mention_rate")
+        mentioned = int(weighted.get("mentioned") or 0)
+        total = int(weighted.get("total") or 0)
+    cell_metrics = derive_rates_from_counts(intent_lane)
+    return {
+        "sample_rate": sample_rate,
+        "sample_mentioned": mentioned,
+        "sample_total": total,
+        "cell_rate": cell_metrics.get("mention_rate"),
+        "cell_mention_cells": int(intent_lane.get("mention_cells") or 0),
+        "cell_total_cells": intent_cells,
+    }
+
+
 def diagnosis_export_title(brand: str, platform_labels: list[str]) -> str:
     """售前诊断导出标题/文件名：品牌_平台版本_售前品牌诊断报告。"""
     name = str(brand or "").strip() or "品牌"
@@ -1660,6 +1816,11 @@ def build_rule_all_summary(
     filter_mode: str = "intent",
     has_acquisition_kpi: bool = True,
     brand_defense_rate: float | None = None,
+    sample_mention_rate: float | None = None,
+    sample_mentioned: int | None = None,
+    sample_total: int | None = None,
+    worst_cell: dict[str, Any] | None = None,
+    cell_visibility: float | None = None,
 ) -> str:
     """单平台（或需兜底）时的管理层摘要：只谈已测事实 + 非品牌词问法。"""
     names = _platform_names_from_rows(platform_rows)
@@ -1682,9 +1843,23 @@ def build_rule_all_summary(
     strong = strong_pool[0] if strong_pool else None
     weak = weak_pool[0] if weak_pool else None
     parts = [
-        f"本窗基于 {plat} 监测样本（主口径为非品牌词获客）：{brand} 提及率约 {_fmt_metric(visibility, suffix='%')}，"
+        f"本窗基于 {plat} 监测样本（主口径为非品牌词获客）：{brand} 条级提及率约 {_fmt_metric(sample_mention_rate or visibility, suffix='%')}，"
+        f"格级提及率约 {_fmt_metric(cell_visibility if cell_visibility is not None else visibility, suffix='%')}，"
         f"均排约 {rank_txt}，Top3 露出约 {_fmt_metric(decision, suffix='%')}，负面关联约 {_fmt_metric(negative, suffix='%')}。"
     ]
+    if sample_total and sample_mentioned is not None and sample_mention_rate is not None:
+        parts.append(
+            f"条级口径：非品牌词 {sample_total} 条样本中 {sample_mentioned} 条出现"
+            f"（{_fmt_metric(sample_mention_rate, suffix='%')}）；"
+            f"格级口径按问法×平台且须≥3/5 档命中。"
+        )
+    if worst_cell and worst_cell.get("prompt"):
+        wc_plat = str(worst_cell.get("platform_label") or worst_cell.get("platform") or "")
+        parts.append(
+            f"最弱格：「{worst_cell.get('prompt')}」× {wc_plat}，"
+            f"{int(worst_cell.get('mentioned_count') or 0)}/{int(worst_cell.get('sample_count') or 0)} 档命中"
+            f"（{_fmt_metric(worst_cell.get('hit_rate'), suffix='%')}）。"
+        )
     if strong and weak and strong.get("prompt") != weak.get("prompt"):
         parts.append(
             f"非品牌词问法中，相对更好的如「{strong.get('prompt')}」（提及约 {strong.get('mention_rate')}%），"
@@ -2251,6 +2426,7 @@ def _build_portfolio_dimension(
     lead_context: dict[str, Any] | None = None,
     competitors: list[str] | None = None,
     competitor_stats: list[dict[str, Any]] | None = None,
+    kpis: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, str]], dict[str, str], dict[str, str]]:
     """场景优先：仅输出本次问法命中的场景卡；不足用通用意图卡补齐到 6 张。
 
@@ -2265,7 +2441,7 @@ def _build_portfolio_dimension(
     product_hint = str(lead_ctx.get("product_focus") or "").strip()
     industry_hint = str(lead_ctx.get("industry") or "").strip()
     all_label = "全部问法" if filter_mode == "scene" else "全部问法意图"
-    metric_sub = "格级获客提及率"
+    metric_sub = "条级获客提及率"
     nb_all = kpi_basis.get("nonbrand") if isinstance(kpi_basis.get("nonbrand"), dict) else {}
     bd_all = kpi_basis.get("brand") if isinstance(kpi_basis.get("brand"), dict) else {}
     vis_all = nb_all.get("mention_rate")
@@ -2319,7 +2495,7 @@ def _build_portfolio_dimension(
             "label": name,
             "title": title,
             "metric": metric,
-            "metric_sub": metric_sub,
+            "metric_sub": "格级获客提及率",
             "desc": desc,
             "tag": tag,
         }
@@ -2436,15 +2612,38 @@ def _build_portfolio_dimension(
             }
         sm = lane.get("mention_rate")
         rk = lane.get("avg_rank")
-        metric = _fmt_metric(sm, suffix="%")
-        metric_sub_local = "品牌防守提及率" if use_brand else "格级获客提及率"
+        if use_brand:
+            metric = _fmt_metric(sm, suffix="%")
+            metric_sub_local = "品牌防守提及率"
+            rank_bit = f"，均排 {_fmt_metric(rk)}" if rk is not None else ""
+            desc = (
+                f"基于本次「{label}」品牌词问法×平台格"
+                f"（提及 {_fmt_metric(sm, suffix='%')}{rank_bit}）。"
+                + (f"例：{sample}" if sample else "")
+            )
+        else:
+            sample_pack = _acquisition_card_sample_metrics(
+                tagged=tagged,
+                intent_code=intent_code,
+                kpis=kpis,
+                kpi_basis=kpi_basis,
+            )
+            sm = sample_pack.get("sample_rate")
+            metric = _fmt_metric(sm, suffix="%")
+            metric_sub_local = "条级获客提及率"
+            cell_rate = sample_pack.get("cell_rate")
+            cell_m = sample_pack.get("cell_mention_cells")
+            cell_t = sample_pack.get("cell_total_cells")
+            cell_bit = ""
+            if cell_rate is not None and cell_t:
+                cell_bit = f"；格级 {_fmt_metric(cell_rate, suffix='%')}（{cell_m}/{cell_t}格）"
+            rank_bit = f"，均排 {_fmt_metric(rk)}" if rk is not None else ""
+            desc = (
+                f"基于本次「{label}」非品牌词问法×平台"
+                f"（条级 {_fmt_metric(sm, suffix='%')}{rank_bit}{cell_bit}）。"
+                + (f"例：{sample}" if sample else "")
+            )
         tag = "品牌防守" if use_brand else "有问法依据"
-        rank_bit = f"，均排 {_fmt_metric(rk)}" if rk is not None else ""
-        desc = (
-            f"基于本次「{label}」{'品牌词' if use_brand else '非品牌词'}问法×平台格"
-            f"（提及 {_fmt_metric(sm, suffix='%')}{rank_bit}）。"
-            + (f"例：{sample}" if sample else "")
-        )
         return {
             "code": code,
             "label": label,
@@ -2483,13 +2682,22 @@ def _build_portfolio_dimension(
     # 兜底：仍不足 6 时用全部问法锚点卡补
     while len(product_cards) < 6:
         filler_code = f"fill_{len(product_cards)}"
+        acq_mentioned = int((kpis or {}).get("acquisition_sample_mentioned") or 0)
+        acq_total = int((kpis or {}).get("acquisition_sample_total") or 0)
+        if acq_mentioned and acq_total:
+            filler_metric = f"{acq_mentioned}/{acq_total}条"
+            filler_sub = "条级样本命中"
+        else:
+            weighted = _weighted_sample_from_prompts([p for p in tagged if p.get("lane") == "acquisition"])
+            filler_metric = _fmt_metric(weighted.get("mention_rate"), suffix="%")
+            filler_sub = metric_sub
         product_cards.append(
             {
                 "code": filler_code,
                 "label": all_label,
                 "title": f"{brand} 能力锚点",
-                "metric": _fmt_metric(vis_all, suffix="%"),
-                "metric_sub": metric_sub,
+                "metric": filler_metric,
+                "metric_sub": filler_sub,
                 "desc": f"跨问法统一「为什么选{brand}」的决策底稿。",
                 "tag": "品牌锚点",
             }
@@ -2752,7 +2960,12 @@ def build_diagnosis_cockpit_context(
     nb = kpi_basis["nonbrand"]
     bd = kpi_basis["brand"]
     has_acquisition_kpi = bool(nb.get("available")) and int(nb.get("total_cells") or 0) > 0
-    visibility = nb.get("mention_rate") if has_acquisition_kpi else None
+    cell_visibility = nb.get("mention_rate") if has_acquisition_kpi else None
+    sample_visibility = kpis.get("acquisition_mention_rate")
+    if sample_visibility is None:
+        sample_visibility = sample_basis.get("nonbrand_mention_rate")
+    # 2026-09-03 - 首屏圆环/标题用条级样本命中率，格级仅作摘要补充，避免 83% vs 55% 打架
+    visibility = sample_visibility if sample_visibility is not None else cell_visibility
     rank = nb.get("avg_rank") if has_acquisition_kpi else None
     decision = nb.get("top3_rate") if has_acquisition_kpi else None
     brand_defense_rate = bd.get("mention_rate") if int(bd.get("total_cells") or 0) > 0 else None
@@ -2853,6 +3066,14 @@ def build_diagnosis_cockpit_context(
             "slices": _slices_for_platform(None),
         }
     }
+    # 2026-09-03 - JS 圆环读 platformData.visibility；须与条级主展示一致
+    if visibility is not None:
+        platform_data["all"]["visibility"] = visibility
+        platform_data["all"]["cell_visibility"] = cell_visibility
+        all_slice = (platform_data["all"].get("slices") or {}).get("all")
+        if isinstance(all_slice, dict):
+            all_slice["visibility"] = visibility
+            all_slice["cell_visibility"] = cell_visibility
     platform_rows: list[dict[str, Any]] = []
     platform_filter_options: list[dict[str, str]] = [{"code": "all", "label": "全平台"}]
     for slot in display_slots:
@@ -2894,6 +3115,7 @@ def build_diagnosis_cockpit_context(
             lead_context=lead_context,
             competitors=competitors,
             competitor_stats=competitor_stats,
+            kpis=kpis,
         )
     )
 
@@ -2980,6 +3202,10 @@ def build_diagnosis_cockpit_context(
             filter_mode=filter_mode,
             has_acquisition_kpi=has_acquisition_kpi,
             brand_defense_rate=brand_defense_rate,
+            sample_mention_rate=kpis.get("acquisition_mention_rate"),
+            sample_mentioned=kpis.get("acquisition_sample_mentioned"),
+            sample_total=kpis.get("acquisition_sample_total"),
+            cell_visibility=cell_visibility,
         )
     stage_copy = {
         "all": {
@@ -3339,6 +3565,17 @@ def build_diagnosis_cockpit_context(
 
     # 始终用当前格级 KPI 重写管理层摘要（null/0 唯一真相）
     weak_ex2, strong_ex2 = _kpi_prompt_examples(tagged)
+    acq_prompts = {
+        str(p.get("prompt") or "").strip()
+        for p in tagged
+        if p.get("lane") == "acquisition" and str(p.get("prompt") or "").strip()
+    }
+    plat_label_map = {str(r.get("key") or ""): str(r.get("name") or "") for r in (platform_rows or []) if isinstance(r, dict)}
+    worst_cell = _worst_acquisition_matrix_cell(
+        matrix_rows if isinstance(matrix_rows, list) else [],
+        acq_prompts,
+        plat_label_map,
+    )
     stage_copy["all"]["title"] = build_rule_all_title(
         brand=brand,
         platform_rows=platform_rows,
@@ -3357,6 +3594,11 @@ def build_diagnosis_cockpit_context(
         filter_mode=filter_mode,
         has_acquisition_kpi=has_acquisition_kpi,
         brand_defense_rate=brand_defense_rate,
+        sample_mention_rate=kpis.get("acquisition_mention_rate"),
+        sample_mentioned=kpis.get("acquisition_sample_mentioned"),
+        sample_total=kpis.get("acquisition_sample_total"),
+        worst_cell=worst_cell,
+        cell_visibility=cell_visibility,
     )
     stage_copy["all"]["summary"] = _ensure_top3_gap_in_summary(
         str(stage_copy["all"].get("summary") or ""),
@@ -3875,6 +4117,31 @@ def ensure_cockpit_narrative(payload: dict[str, Any], *, force: bool = False) ->
     except Exception:
         # ponytail: 叙事失败不阻断 HTML；继续规则文案
         return payload
+    return payload
+
+
+def sync_rule_stage_copy_to_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """2026-09-03 - 聚合/刷新后写回规则摘要，避免 JSON 与驾驶舱 HTML 口径分裂。"""
+    try:
+        ctx = build_diagnosis_cockpit_context(payload)
+        cockpit = json.loads(ctx["cockpit_json"])
+        all_copy = (cockpit.get("stageCopy") or {}).get("all") or {}
+        summary = str(all_copy.get("summary") or "").strip()
+        if not summary:
+            return payload
+        narrative = dict(payload.get("cockpit_narrative") or {})
+        stage_copy = dict(narrative.get("stage_copy") or {})
+        prev = dict(stage_copy.get("all") or {})
+        stage_copy["all"] = {
+            **prev,
+            "label": all_copy.get("label") or prev.get("label") or "总览",
+            "title": all_copy.get("title") or prev.get("title") or "",
+            "summary": summary,
+        }
+        narrative["stage_copy"] = stage_copy
+        payload["cockpit_narrative"] = narrative
+    except Exception:
+        pass
     return payload
 
 

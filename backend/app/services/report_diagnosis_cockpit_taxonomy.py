@@ -74,6 +74,18 @@ def _normalize_aliases(brand: str, aliases: list[str] | None) -> list[str]:
         text = str(raw or "").strip()
         if text and text not in names:
             names.append(text)
+    # 2026-09-03 - 全称带地域/供应链时问法常只写短名（菜万家）- 抽核心词干参与品牌词判定
+    core = str(brand or "").strip()
+    for prefix in ("广东", "北京", "上海", "深圳", "浙江", "江苏", "四川", "湖南", "湖北", "河南", "山东"):
+        if core.startswith(prefix) and len(core) > len(prefix) + 2:
+            core = core[len(prefix) :].strip()
+            break
+    for mid in ("供应链", "传媒", "科技", "控股", "集团"):
+        if mid in core:
+            head = core.split(mid, 1)[0].strip()
+            if len(head) >= 3 and head not in names:
+                names.append(head)
+            break
     return names
 
 
