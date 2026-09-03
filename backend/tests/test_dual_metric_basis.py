@@ -108,3 +108,69 @@ def test_heat_scenarios_carry_answer_hit_not_as_main_cell_value():
     assert scenarios[0]["answer_hit_rate"] == 33.3
     assert scenarios[0]["snapshots"][0]["exposed"] is True
     assert scenarios[0]["snapshots"][0]["answer_hit_rate"] == 33.3
+
+
+def test_normalize_snapshot_runs_multi_and_legacy():
+    from app.services.report_diagnosis_cockpit_service import _normalize_snapshot_runs
+
+    multi = _normalize_snapshot_runs(
+        {
+            "runs": [
+                {"run_no": 2, "rank": None, "screenshot_url": "https://x/2.png", "answer_summary": "b"},
+                {"run_no": 1, "rank": 3, "share_url": "https://share/1", "answer_summary": "a"},
+            ]
+        }
+    )
+    assert [r["run_no"] for r in multi] == [1, 2]
+    assert multi[0]["kind"] == "link"
+    assert multi[1]["kind"] == "image"
+    assert multi[1]["rank"] is None
+
+    legacy = _normalize_snapshot_runs(
+        {"screenshot_url": "https://x/old.png", "rank": 1, "answer_summary": "legacy"}
+    )
+    assert len(legacy) == 1
+    assert legacy[0]["run_no"] == 1
+    assert legacy[0]["kind"] == "image"
+
+
+def test_heat_scenarios_attach_multi_runs_prefer_image_kind():
+    from app.services.report_diagnosis_cockpit_service import _build_heat_scenarios
+
+    tagged = [
+        {
+            "prompt": "怎么选",
+            "lane": "acquisition",
+            "is_brand_word": False,
+            "intent_label": "推荐名单",
+            "intent_code": "recommend",
+            "scene_code": None,
+            "scene_label": None,
+        }
+    ]
+    matrix = [{"prompt": "怎么选", "platform": "doubao", "avg_rank": 4.0, "mention_rate": 50.0}]
+    evidence = {
+        "怎么选||doubao": {
+            "share_url": "https://share/latest",
+            "screenshot_url": "https://x/2.png",
+            "answer_summary": "第二轮",
+            "runs": [
+                {"run_no": 1, "rank": None, "share_url": "https://share/1", "answer_summary": "未进"},
+                {
+                    "run_no": 2,
+                    "rank": 4,
+                    "screenshot_url": "https://x/2.png",
+                    "share_url": "https://share/latest",
+                    "answer_summary": "第二轮",
+                },
+            ],
+        }
+    }
+    scenarios = _build_heat_scenarios(tagged, matrix, ["doubao"], evidence_map=evidence)
+    snap = scenarios[0]["snapshots"][0]
+    assert snap["run_count"] == 2
+    assert len(snap["runs"]) == 2
+    assert snap["kind"] == "image"
+    assert snap["screenshot_url"] == "https://x/2.png"
+    assert snap["runs"][0]["rank"] is None
+    assert snap["runs"][1]["rank"] == 4.0

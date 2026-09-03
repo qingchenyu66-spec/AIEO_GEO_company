@@ -2513,7 +2513,8 @@ def _build_lead_diagnosis_report_payload(
     # 2026-08-13 - 报告链路透传入口上下文，供 cockpit HTML 的 lead_context/input_context
     lead_ctx = normalize_lead_context(detail.get("lead_context"))
     # 2026-08-13 - 问法×平台快照证据（审计层，不参与 KPI）
-    snapshot_evidence = _build_lead_snapshot_evidence(db, lead_id)
+    # 2026-09-03 - 导出/预览截图改自家 media 代理绝对地址，HTML 源码不出现模力域名
+    snapshot_evidence = _proxy_snapshot_evidence_for_export(_build_lead_snapshot_evidence(db, lead_id))
     return {
         "report_title": _lead_diagnosis_report_title(detail, result),
         "report_type": "diagnosis",
@@ -2539,8 +2540,41 @@ def _build_lead_diagnosis_report_payload(
     }
 
 
+def _proxy_snapshot_evidence_for_export(evidence: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """售前报告导出：白名单截图改写为 /api/v1/media/shot 绝对 URL。"""
+    from app.services.media_proxy_service import public_screenshot_url_absolute
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, raw in (evidence or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        for field in ("screenshot_url", "page_screenshot"):
+            val = str(item.get(field) or "").strip()
+            if val:
+                item[field] = public_screenshot_url_absolute(val) or val
+        runs_out: list[dict[str, Any]] = []
+        for run in item.get("runs") or []:
+            if not isinstance(run, dict):
+                continue
+            row = dict(run)
+            for field in ("screenshot_url", "page_screenshot"):
+                val = str(row.get(field) or "").strip()
+                if val:
+                    row[field] = public_screenshot_url_absolute(val) or val
+            runs_out.append(row)
+        if runs_out:
+            item["runs"] = runs_out
+        out[str(key)] = item
+    return out
+
+
 def _build_lead_snapshot_evidence(db: Session, lead_id: int) -> dict[str, dict[str, Any]]:
-    """从已完成场次子任务提取问法×平台快照/摘要。key = prompt||canonical_slot。"""
+    """从已完成场次子任务提取问法×平台快照/摘要。
+
+    key = prompt||canonical_slot。
+    2026-09-03 - 同格多次监测保留 runs 列表（跑几次展示几张）；顶层字段仍给兼容旧驾驶舱的代表条。
+    """
     from app.services.report_diagnosis_cockpit_service import _canonical_platform
 
     lead = _load_lead_diagnosis(db, lead_id)
@@ -2555,7 +2589,9 @@ def _build_lead_snapshot_evidence(db: Session, lead_id: int) -> dict[str, dict[s
     rows = list(
         db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.task_id.in_(task_ids)))
     )
-    out: dict[str, dict[str, Any]] = {}
+    brand = str(lead.brand_name or "").strip()
+    brand_terms = _lead_brand_terms(lead)
+    buckets: dict[str, list[dict[str, Any]]] = {}
     for st in rows:
         prompt = str(st.prompt or "").strip()
         slot = _canonical_platform(str(st.platform or ""))
@@ -2586,18 +2622,55 @@ def _build_lead_snapshot_evidence(db: Session, lead_id: int) -> dict[str, dict[s
                         u = str(item or "").strip()
                     if u.startswith("http") and u not in refs:
                         refs.append(u)
-        # 优先保留已有更完整的条目
-        prev = out.get(key) or {}
-        if prev.get("share_url") and not share and not answer:
+        if not answer and not share and not shot:
             continue
-        summary = answer[:400] if answer else str(prev.get("answer_summary") or "")
+        eff = _effective_lead_mention_position(st, brand, brand_terms)
+        updated = ""
+        if getattr(st, "updated_at", None) is not None:
+            try:
+                updated = st.updated_at.isoformat(timespec="seconds")  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                updated = str(st.updated_at)
+        buckets.setdefault(key, []).append(
+            {
+                "subtask_id": str(st.subtask_id or ""),
+                "rank": float(eff) if eff is not None else None,
+                "mentioned": eff is not None,
+                "share_url": share,
+                "snapshot_url": share,
+                "page_screenshot": shot,
+                "screenshot_url": shot,
+                "answer_summary": answer[:400],
+                "references": refs,
+                "updated_at": updated,
+            }
+        )
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, runs in buckets.items():
+        # 时间正序：第1次=最早；无时间戳的放后
+        runs_sorted = sorted(
+            runs,
+            key=lambda row: (0 if row.get("updated_at") else 1, str(row.get("updated_at") or "")),
+        )
+        for idx, row in enumerate(runs_sorted, 1):
+            row["run_no"] = idx
+        # 代表条：优先最近一次有截图的，否则最近一次
+        best = next(
+            (row for row in reversed(runs_sorted) if row.get("screenshot_url")),
+            runs_sorted[-1],
+        )
         out[key] = {
-            "share_url": share or str(prev.get("share_url") or ""),
-            "snapshot_url": share or str(prev.get("snapshot_url") or ""),
-            "page_screenshot": shot or str(prev.get("page_screenshot") or ""),
-            "screenshot_url": shot or str(prev.get("screenshot_url") or ""),
-            "answer_summary": summary,
-            "references": refs or list(prev.get("references") or []),
+            "share_url": str(best.get("share_url") or ""),
+            "snapshot_url": str(best.get("snapshot_url") or best.get("share_url") or ""),
+            "page_screenshot": str(best.get("page_screenshot") or ""),
+            "screenshot_url": str(best.get("screenshot_url") or ""),
+            "answer_summary": str(best.get("answer_summary") or ""),
+            "references": list(best.get("references") or []),
+            "rank": best.get("rank"),
+            "mentioned": bool(best.get("mentioned")),
+            "run_count": len(runs_sorted),
+            "runs": runs_sorted,
         }
     return out
 

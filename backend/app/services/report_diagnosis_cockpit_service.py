@@ -706,6 +706,85 @@ def _slice_metrics_from_lanes(
     }
 
 
+def _normalize_snapshot_runs(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """证据 runs 归一：兼容旧单条字段；截图优先于分享链。"""
+    runs_in = raw.get("runs") if isinstance(raw.get("runs"), list) else None
+    rows: list[dict[str, Any]] = []
+    if runs_in:
+        for idx, item in enumerate(runs_in, 1):
+            if not isinstance(item, dict):
+                continue
+            share = str(item.get("share_url") or item.get("snapshot_url") or "").strip()
+            shot = str(item.get("screenshot_url") or item.get("page_screenshot") or "").strip()
+            summary = str(item.get("answer_summary") or "").strip()
+            if not share and not shot and not summary:
+                continue
+            rank_raw = item.get("rank")
+            try:
+                rank_val = float(rank_raw) if rank_raw is not None else None
+            except (TypeError, ValueError):
+                rank_val = None
+            if shot:
+                kind = "image"
+            elif share:
+                kind = "link"
+            else:
+                kind = "none"
+            run_no = item.get("run_no")
+            try:
+                run_no_i = int(run_no) if run_no is not None else idx
+            except (TypeError, ValueError):
+                run_no_i = idx
+            rows.append(
+                {
+                    "run_no": run_no_i,
+                    "subtask_id": str(item.get("subtask_id") or ""),
+                    "rank": rank_val,
+                    "mentioned": bool(item.get("mentioned"))
+                    if item.get("mentioned") is not None
+                    else rank_val is not None,
+                    "kind": kind,
+                    "share_url": share,
+                    "screenshot_url": shot,
+                    "answer_summary": summary[:400],
+                    "updated_at": str(item.get("updated_at") or ""),
+                }
+            )
+    if not rows:
+        share = str(raw.get("share_url") or raw.get("snapshot_url") or "").strip()
+        shot = str(raw.get("screenshot_url") or raw.get("page_screenshot") or "").strip()
+        summary = str(raw.get("answer_summary") or "").strip()
+        if share or shot or summary:
+            if shot:
+                kind = "image"
+            elif share:
+                kind = "link"
+            else:
+                kind = "none"
+            rank_raw = raw.get("rank")
+            try:
+                rank_val = float(rank_raw) if rank_raw is not None else None
+            except (TypeError, ValueError):
+                rank_val = None
+            rows.append(
+                {
+                    "run_no": 1,
+                    "subtask_id": "",
+                    "rank": rank_val,
+                    "mentioned": bool(raw.get("mentioned"))
+                    if raw.get("mentioned") is not None
+                    else rank_val is not None,
+                    "kind": kind,
+                    "share_url": share,
+                    "screenshot_url": shot,
+                    "answer_summary": summary[:400],
+                    "updated_at": "",
+                }
+            )
+    rows.sort(key=lambda row: int(row.get("run_no") or 0))
+    return rows
+
+
 def _build_heat_scenarios(
     tagged: list[dict[str, Any]],
     matrix_rows: list[dict[str, Any]],
@@ -719,6 +798,7 @@ def _build_heat_scenarios(
     2026-08-13 - scenarios 补 is_brand_query / intent / scene / 主 KPI 是否计入
     2026-08-13 - 每格附 snapshot 证据，不参与 KPI
     2026-08-21 - 格主展示露出/均排；matrix.mention_rate 降级为 answer_hit_rate 进详情
+    2026-09-03 - 格点开展示多 run 卡片（跑几次几张），截图优先于分享链
     """
     cell: dict[tuple[str, str], int] = {}
     hit: dict[tuple[str, str], float | None] = {}
@@ -770,16 +850,28 @@ def _build_heat_scenarios(
             raw = evid.get(key) if isinstance(evid.get(key), dict) else {}
             rank = cell.get((prompt, slot), 0)
             mentioned = bool(rank and rank > 0)
+            runs = _normalize_snapshot_runs(raw)
             share = str(raw.get("share_url") or raw.get("snapshot_url") or "").strip()
             shot = str(raw.get("screenshot_url") or raw.get("page_screenshot") or "").strip()
             summary = str(raw.get("answer_summary") or "").strip()
+            if runs:
+                if not share:
+                    share = str(runs[-1].get("share_url") or "").strip()
+                if not shot:
+                    shot = next(
+                        (str(r.get("screenshot_url") or "").strip() for r in reversed(runs) if r.get("screenshot_url")),
+                        "",
+                    )
+                if not summary:
+                    summary = str(runs[-1].get("answer_summary") or "").strip()
             refs = raw.get("references") if isinstance(raw.get("references"), list) else []
-            if share:
-                kind = "link"
-                label = "查看快照"
-            elif shot:
+            # 2026-09-03 - 有截图优先 image，勿被 share 盖成只出链接
+            if shot:
                 kind = "image"
                 label = "查看截图"
+            elif share:
+                kind = "link"
+                label = "查看快照"
             else:
                 kind = "none"
                 label = "本次无快照，仅保留文本摘要"
@@ -805,6 +897,8 @@ def _build_heat_scenarios(
                     "references": [str(x) for x in refs[:8] if str(x).strip()],
                     "is_brand_query": is_brand,
                     "sentiment_warning": sentiment_warning,
+                    "run_count": len(runs),
+                    "runs": runs,
                 }
             )
         # 问法级回答命中：优先样本表；否则格内命中均值

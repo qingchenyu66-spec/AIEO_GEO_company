@@ -7,6 +7,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 2026-09-03 - 桌面 file:// 预览截图：降低 referrer 干扰 OSS/CDN -->
+  <meta name="referrer" content="no-referrer">
   <meta name="description" content="{{ brand }} 态势感知平台（GEO Monitor 监测样本）">
   <title>{{ brand }} 态势感知平台</title>
   <script>document.documentElement.setAttribute("data-ui", "g");</script>
@@ -537,15 +539,89 @@
     .methodology a { color: var(--orange-dark); font-size: 10px; font-weight: 800; text-decoration: none; }
     .report-footer { padding: 19px 0 4px; display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; color: var(--muted); font-size: 9px; }
 
-    dialog { width: min(560px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: var(--radius); box-shadow: 0 26px 70px rgba(8, 22, 33, .28); }
-    dialog::backdrop { background: rgba(4, 14, 21, .62); }
-    .dialog-head { padding: 18px 20px 13px; display: flex; gap: 18px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    /* 2026-09-03 - 勿用全局 dialog{}：放大灯箱也是 dialog，会被 560 宽规则压扁 */
+    /* dialog 关闭态依赖 UA display:none；只能给 [open] 设 flex，否则关不掉 */
+    #detailDialog { width: min(640px, calc(100vw - 32px)); max-height: min(88vh, 860px); padding: 0; border: 0; border-radius: var(--radius); box-shadow: 0 26px 70px rgba(8, 22, 33, .28); overflow: hidden; }
+    #detailDialog[open] { display: flex; flex-direction: column; }
+    #detailDialog::backdrop { background: rgba(4, 14, 21, .62); }
+    .dialog-head { padding: 18px 20px 13px; display: flex; gap: 18px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
     .dialog-head h3 { margin: 0; font-size: 16px; }
     .dialog-close { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 5px; background: white; font-size: 20px; cursor: pointer; }
-    .dialog-body { padding: 18px 20px 22px; color: #405761; font-size: 11px; }
+    .dialog-body { padding: 18px 20px 22px; color: #405761; font-size: 11px; overflow: auto; flex: 1 1 auto; }
     .dialog-body strong { color: var(--ink); }
     .dialog-points { margin: 12px 0 0; padding-left: 17px; }
     .dialog-points li + li { margin-top: 6px; }
+    /* 2026-09-03 - 热力格多 run 卡牌：上图下文 + 位次徽章 */
+    .snap-run-meta { margin: 0 0 12px; color: #64748b; font-size: 11px; line-height: 1.5; }
+    .snap-run-list { display: grid; gap: 12px; }
+    .snap-run-card {
+      display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden;
+      border: 1px solid var(--line); border-radius: 12px; background: #fff;
+      text-align: left; cursor: pointer; width: 100%; font: inherit; color: inherit;
+    }
+    .snap-run-card:hover { border-color: #94a3b8; box-shadow: 0 6px 18px rgba(15, 23, 42, .08); }
+    .snap-run-card.is-empty { cursor: default; opacity: .92; }
+    .snap-run-card.is-empty:hover { box-shadow: none; border-color: var(--line); }
+    .snap-run-thumb {
+      width: 100%; height: 132px; border-radius: 0; object-fit: cover; object-position: top center;
+      background: #f1f5f9; border: 0; border-bottom: 1px solid #e2e8f0; display: block;
+    }
+    .snap-run-thumb.is-broken { display: none; }
+    .snap-run-thumb-ph {
+      width: 100%; height: 72px; border-radius: 0; background: #f8fafc; border: 0; border-bottom: 1px dashed #cbd5e1;
+      display: grid; place-items: center; color: #94a3b8; font-size: 11px; text-align: center; padding: 10px;
+    }
+    .snap-run-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px 12px; }
+    .snap-run-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .snap-run-title { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink); }
+    .snap-run-rank {
+      margin: 0; flex: 0 0 auto; font-size: 11px; font-weight: 700; line-height: 1;
+      padding: 5px 8px; border-radius: 999px; border: 1px solid transparent;
+    }
+    .snap-run-rank.ok { color: #166534; background: #ecfdf3; border-color: #bbf7d0; }
+    .snap-run-rank.miss { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+    .snap-run-summary { margin: 0; color: #475569; font-size: 11px; line-height: 1.5;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .snap-run-hint { margin: 2px 0 0; color: #0f766e; font-size: 10px; font-weight: 600; }
+    /* 2026-09-03 - 放大灯箱：全屏铺图+按宽适配，避免小黑框套白卡、双滚动条 */
+    .snap-zoom {
+      width: 100vw; max-width: none; height: 100vh; max-height: none;
+      margin: 0; padding: 0; border: 0; background: transparent;
+    }
+    .snap-zoom[open] { display: block; }
+    .snap-zoom::backdrop { background: rgba(7, 22, 45, .82); }
+    .snap-zoom-stage {
+      position: relative; width: 100vw; height: 100vh;
+      background: transparent; border-radius: 0; overflow: hidden; box-shadow: none;
+    }
+    .snap-zoom-toolbar {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 4;
+      display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 999px;
+      background: rgba(255, 255, 255, .92); color: #12325a; font-size: 12px; font-weight: 700;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+    }
+    .snap-zoom-toolbar button {
+      border: 1px solid #d9e8f6; background: #fff; color: #12325a;
+      min-width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-weight: 700;
+    }
+    .snap-zoom-toolbar button:hover { background: #eef5fd; color: #2d6cdf; }
+    .snap-zoom-toolbar span { min-width: 48px; text-align: center; color: #58708f; }
+    .snap-zoom-close {
+      position: absolute; top: 14px; right: 16px; z-index: 4; width: 40px; height: 40px; border-radius: 999px;
+      border: 0; background: rgba(255, 255, 255, .92); color: #12325a; font-size: 24px; line-height: 1; cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+    }
+    .snap-zoom-viewport {
+      position: absolute; inset: 0; z-index: 2; overflow: hidden; cursor: grab;
+      display: flex; align-items: flex-start; justify-content: center; padding: 64px 20px 24px;
+      touch-action: none;
+    }
+    .snap-zoom-viewport.is-dragging { cursor: grabbing; }
+    .snap-zoom-viewport img {
+      max-width: none; max-height: none; width: auto; height: auto;
+      transform-origin: center top; user-select: none;
+      border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); background: #fff;
+    }
 
     :focus-visible { outline: 3px solid rgba(241, 90, 36, .32); outline-offset: 2px; }
     @media (max-width: 1180px) {
@@ -1156,6 +1232,21 @@
     <div class="dialog-head"><h3 id="dialogTitle">指标说明</h3><button class="dialog-close" id="dialogClose" type="button" aria-label="关闭">×</button></div>
     <div class="dialog-body" id="dialogBody"></div>
   </dialog>
+  <!-- 2026-09-03 - 放大必须用 dialog.showModal，才能压过列表 dialog 顶层（普通 fixed 再高 z-index 也无效） -->
+  <dialog id="snapZoom" class="snap-zoom" aria-label="截图放大">
+    <div class="snap-zoom-stage">
+      <button type="button" class="snap-zoom-close" id="snapZoomClose" aria-label="关闭">×</button>
+      <div class="snap-zoom-toolbar">
+        <button type="button" id="snapZoomOut" title="缩小">−</button>
+        <span id="snapZoomLabel">100%</span>
+        <button type="button" id="snapZoomIn" title="放大">+</button>
+        <button type="button" id="snapZoomReset" title="重置">重置</button>
+      </div>
+      <div class="snap-zoom-viewport" id="snapZoomViewport">
+        <img id="snapZoomImg" alt="快照截图" draggable="false" />
+      </div>
+    </div>
+  </dialog>
 
 <script>
 
@@ -1289,33 +1380,100 @@
       }).join('');
     }
     function heatClass(rank) { if (rank > 0 && rank <= 3) return 'heat-good'; if (rank >= 4 && rank <= 5) return 'heat-watch'; return 'heat-gap'; }
-    function openSnapshotDialog(snap, modelName) {
+    function escHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function snapRunRankLabel(rank) {
+      const n = Number(rank);
+      if (!Number.isFinite(n) || n <= 0) return { text: '未进入推荐', cls: 'miss' };
+      return { text: `第 ${n} 名`, cls: 'ok' };
+    }
+    function snapHasEvidence(snap) {
+      if (!snap) return false;
+      const runs = Array.isArray(snap.runs) ? snap.runs : [];
+      if (runs.some(r => r && (r.screenshot_url || r.share_url || r.answer_summary))) return true;
+      return !!(snap.screenshot_url || snap.share_url || snap.answer_summary);
+    }
+    function snapRunsForDialog(snap) {
+      const runs = Array.isArray(snap.runs) ? snap.runs.filter(r => r && (r.screenshot_url || r.share_url || r.answer_summary)) : [];
+      if (runs.length) return runs;
+      if (snap.screenshot_url || snap.share_url || snap.answer_summary) {
+        return [{
+          run_no: 1,
+          rank: snap.rank,
+          mentioned: snap.mentioned || snap.exposed,
+          kind: snap.kind,
+          share_url: snap.share_url || '',
+          screenshot_url: snap.screenshot_url || '',
+          answer_summary: snap.answer_summary || '',
+        }];
+      }
+      return [];
+    }
+    // 2026-09-03 - 热力格点开：多 run 卡片列表；点卡片再放大截图
+    function openSnapshotRunsDialog(snap, modelName) {
       const title = document.getElementById('dialogTitle');
       const body = document.getElementById('dialogBody');
-      if (!title || !body) return;
-      title.textContent = '问法快照 · ' + (modelName || snap.slot || '');
-      const refs = (snap.references || []).map(u => `<li><a href="${u}" target="_blank" rel="noopener">${u}</a></li>`).join('') || '<li>暂无引用</li>';
+      if (!title || !body || !snapHasEvidence(snap)) return;
+      const runs = snapRunsForDialog(snap);
+      title.textContent = '监测快照 · ' + (modelName || snap.slot || '');
       const toneBadge = snap.sentiment_warning
-        ? `<p class="snap-tone-warn"><strong>${snap.sentiment_warning}</strong></p>`
+        ? `<p class="snap-tone-warn"><strong>${escHtml(snap.sentiment_warning)}</strong></p>`
         : '';
-      let media = '';
-      if (snap.kind === 'link' && snap.share_url) {
-        media = `<p><a class="snap-open" href="${snap.share_url}" target="_blank" rel="noopener">打开在线快照 / 分享链接</a></p>`;
-      } else if (snap.kind === 'image' && snap.screenshot_url) {
-        media = `<p><img class="snap-thumb" src="${snap.screenshot_url}" alt="快照截图" style="max-width:100%;border-radius:8px;cursor:zoom-in" onclick="window.open(this.src)"/></p>`;
-      } else {
-        media = `<p class="sample-meta">本次无快照，仅保留文本摘要</p>`;
-      }
+      const cards = runs.map((run) => {
+        const rn = run.run_no != null ? run.run_no : '';
+        const rl = snapRunRankLabel(run.rank);
+        const shot = String(run.screenshot_url || '').trim();
+        const share = String(run.share_url || '').trim();
+        const summary = String(run.answer_summary || '').trim();
+        const canZoom = !!shot;
+        const thumb = shot
+          ? `<img class="snap-run-thumb" src="${escHtml(shot)}" alt="" referrerpolicy="no-referrer" decoding="async" data-run="${escHtml(String(rn))}" />`
+          : `<div class="snap-run-thumb-ph">${share ? '有分享链 · 无截图' : '无截图'}</div>`;
+        const hint = canZoom
+          ? '<p class="snap-run-hint">点击卡片放大截图</p>'
+          : (share ? '<p class="snap-run-hint">点击卡片打开分享链接</p>' : '');
+        return `<button type="button" class="snap-run-card${canZoom || share ? '' : ' is-empty'}" data-shot="${escHtml(shot)}" data-share="${escHtml(share)}" ${canZoom || share ? '' : 'disabled'}>
+          ${thumb}
+          <div class="snap-run-body">
+            <div class="snap-run-head">
+              <p class="snap-run-title">第 ${escHtml(String(rn))} 次监测</p>
+              <span class="snap-run-rank ${rl.cls}">${escHtml(rl.text)}</span>
+            </div>
+            <p class="snap-run-summary">${escHtml(summary || '（无文本摘要）')}</p>
+            ${hint}
+          </div>
+        </button>`;
+      }).join('');
       body.innerHTML = `
         <div class="snap-dialog">
-          <p><strong>问法</strong>：${snap.prompt || ''}</p>
-          <p><strong>平台</strong>：${modelName || snap.slot || ''}</p>
-          <p><strong>格露出</strong>：${snap.exposed || snap.mentioned ? '是' : '否'} · <strong>均排</strong>：${snap.rank || '—'} · <strong>Top3</strong>：${snap.top3 ? '是' : '否'}${snap.answer_hit_rate != null && snap.answer_hit_rate !== '' ? ` · <strong>回答命中率</strong>：${snap.answer_hit_rate}%` : ''}</p>
+          <p><strong>问法</strong>：${escHtml(snap.prompt || '')}</p>
+          <p><strong>平台</strong>：${escHtml(modelName || snap.slot || '')}</p>
+          <p class="snap-run-meta">共 ${runs.length} 次监测；格均排 ${snap.rank || '—'}。点卡片看大图。</p>
           ${toneBadge}
-          <p><strong>回答摘要</strong>：${snap.answer_summary || '（无文本摘要）'}</p>
-          <p><strong>引用来源</strong></p><ul>${refs}</ul>
-          ${media}
+          <div class="snap-run-list">${cards}</div>
         </div>`;
+      // 2026-09-03 - 弹层内懒加载易裂图；失败换成矮占位，避免大白块+裂图图标
+      body.querySelectorAll('img.snap-run-thumb').forEach((img) => {
+        img.addEventListener('error', () => {
+          img.classList.add('is-broken');
+          if (img.dataset.ph === '1') return;
+          img.dataset.ph = '1';
+          const ph = document.createElement('div');
+          ph.className = 'snap-run-thumb-ph';
+          ph.textContent = `第${img.dataset.run || ''}次截图暂不可用`;
+          img.insertAdjacentElement('afterend', ph);
+        });
+      });
+      body.querySelectorAll('.snap-run-card').forEach((card) => {
+        const shotUrl = card.getAttribute('data-shot') || '';
+        const shareUrl = card.getAttribute('data-share') || '';
+        if (!shotUrl && !shareUrl) return;
+        card.addEventListener('click', () => {
+          if (shotUrl) openSnapZoom(shotUrl);
+          else if (shareUrl) window.open(shareUrl, '_blank', 'noopener');
+        });
+      });
       document.getElementById('detailDialog')?.showModal?.();
     }
     function findHeatSnapshot(question, modelName) {
@@ -1325,6 +1483,79 @@
       if (idx >= 0 && item.snapshots[idx]) return item.snapshots[idx];
       return item.snapshots.find(s => s.slot === modelName) || null;
     }
+    let snapZoomUserScale = 1;
+    let snapZoomFit = 1;
+    let snapZoomTx = 0;
+    let snapZoomTy = 0;
+    function applySnapZoomTransform() {
+      const img = document.getElementById('snapZoomImg');
+      const label = document.getElementById('snapZoomLabel');
+      if (!img) return;
+      const s = snapZoomFit * snapZoomUserScale;
+      img.style.transform = `translate(${snapZoomTx}px, ${snapZoomTy}px) scale(${s})`;
+      if (label) label.textContent = `${Math.round(snapZoomUserScale * 100)}%`;
+    }
+    function fitSnapZoomImage() {
+      const img = document.getElementById('snapZoomImg');
+      const vp = document.getElementById('snapZoomViewport');
+      if (!img || !vp || !img.naturalWidth) return;
+      // 按可视区宽度铺满（长截图竖着拖看），避免小黑框里缩成白卡
+      const availW = Math.max(280, vp.clientWidth - 40);
+      snapZoomFit = availW / img.naturalWidth;
+      if (snapZoomFit > 1.25) snapZoomFit = 1.25;
+      if (snapZoomFit < 0.15) snapZoomFit = 0.15;
+      snapZoomUserScale = 1;
+      snapZoomTx = 0;
+      snapZoomTy = 0;
+      applySnapZoomTransform();
+    }
+    function openSnapZoom(url) {
+      const root = document.getElementById('snapZoom');
+      const img = document.getElementById('snapZoomImg');
+      if (!root || !img || !url) return;
+      snapZoomUserScale = 1;
+      snapZoomFit = 1;
+      snapZoomTx = 0;
+      snapZoomTy = 0;
+      img.setAttribute('referrerpolicy', 'no-referrer');
+      img.onload = () => fitSnapZoomImage();
+      img.onerror = () => {
+        // 缩略图裂了大图也可能裂：给个可读提示
+        img.alt = '截图加载失败，请检查网络或改用在线预览';
+        img.style.background = '#fff';
+        img.style.padding = '40px';
+        img.style.minWidth = '280px';
+        img.style.minHeight = '120px';
+      };
+      img.src = url;
+      if (img.complete && img.naturalWidth) fitSnapZoomImage();
+      else applySnapZoomTransform();
+      // 2026-09-03 - 列表已是 dialog 顶层；放大也必须 showModal 才能盖住
+      if (typeof root.showModal === 'function') {
+        if (!root.open) root.showModal();
+      } else {
+        root.classList.add('is-open');
+      }
+    }
+    function closeSnapZoom() {
+      const root = document.getElementById('snapZoom');
+      const img = document.getElementById('snapZoomImg');
+      if (!root) return;
+      if (typeof root.close === 'function' && root.open) root.close();
+      root.classList.remove('is-open');
+      if (img) {
+        img.onload = null;
+        img.removeAttribute('src');
+        img.style.transform = '';
+      }
+      snapZoomUserScale = 1;
+      snapZoomFit = 1;
+      snapZoomTx = 0;
+      snapZoomTy = 0;
+    }
+    window.__heatFindSnap = findHeatSnapshot;
+    window.__heatOpenSnap = openSnapshotRunsDialog;
+    window.__heatSnapHasEvidence = snapHasEvidence;
     function renderHeatmap() {
       const sliceKey = 'all';
       const narrowed = sliceKey === 'all'
@@ -1356,10 +1587,9 @@
           ? `回答命中率 ${button.dataset.hit}%（补充，非主 KPI）。`
           : '';
         document.getElementById('heatDetail').textContent = `${button.dataset.question} · ${button.dataset.model}：${state}。${hitTxt}建议：${suggestion}`;
+        // 2026-09-03 - 有多 run/截图才弹卡片；无证据只更新下方说明，避免空弹窗
         const snap = findHeatSnapshot(button.dataset.question, button.dataset.model);
-        if (snap && (snap.screenshot_url || snap.share_url || snap.answer_summary)) {
-          openSnapshotDialog(snap, button.dataset.model);
-        }
+        if (snapHasEvidence(snap)) openSnapshotRunsDialog(snap, button.dataset.model);
       }));
     }
     function renderSources() {
@@ -1424,6 +1654,83 @@
     document.getElementById('dialogClose')?.addEventListener('click', () => dialog?.close());
     dialog?.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
     document.getElementById('printReport')?.addEventListener('click', () => window.print());
+    // 2026-09-03 - 截图灯箱：全屏适配宽度，拖拽平移（无双滚动条）
+    (function bindSnapZoom() {
+      const root = document.getElementById('snapZoom');
+      const vp = document.getElementById('snapZoomViewport');
+      if (!root || !vp) return;
+      const isOpen = () => !!(root.open || root.classList.contains('is-open'));
+      document.getElementById('snapZoomClose')?.addEventListener('click', closeSnapZoom);
+      document.getElementById('snapZoomIn')?.addEventListener('click', () => {
+        snapZoomUserScale = Math.min(6, snapZoomUserScale * 1.2);
+        applySnapZoomTransform();
+      });
+      document.getElementById('snapZoomOut')?.addEventListener('click', () => {
+        snapZoomUserScale = Math.max(0.4, snapZoomUserScale / 1.2);
+        applySnapZoomTransform();
+      });
+      document.getElementById('snapZoomReset')?.addEventListener('click', () => {
+        fitSnapZoomImage();
+      });
+      root.addEventListener('click', (ev) => { if (ev.target === root) closeSnapZoom(); });
+      root.addEventListener('close', () => {
+        const img = document.getElementById('snapZoomImg');
+        if (img) {
+          img.onload = null;
+          img.removeAttribute('src');
+          img.style.transform = '';
+        }
+        snapZoomUserScale = 1;
+        snapZoomFit = 1;
+        snapZoomTx = 0;
+        snapZoomTy = 0;
+      });
+      let dragging = false, dragMoved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      vp.addEventListener('mousedown', (ev) => {
+        dragging = true;
+        dragMoved = false;
+        vp.classList.add('is-dragging');
+        sx = ev.clientX; sy = ev.clientY; ox = snapZoomTx; oy = snapZoomTy;
+        ev.preventDefault();
+      });
+      window.addEventListener('mousemove', (ev) => {
+        if (!dragging) return;
+        const dx = ev.clientX - sx;
+        const dy = ev.clientY - sy;
+        if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
+        snapZoomTx = ox + dx;
+        snapZoomTy = oy + dy;
+        applySnapZoomTransform();
+      });
+      window.addEventListener('mouseup', () => {
+        dragging = false;
+        vp.classList.remove('is-dragging');
+      });
+      vp.addEventListener('click', (ev) => {
+        // 点图旁空白关闭；拖过则不关
+        if (ev.target === vp && !dragMoved) closeSnapZoom();
+      });
+      vp.addEventListener('wheel', (ev) => {
+        if (!isOpen()) return;
+        ev.preventDefault();
+        snapZoomUserScale = Math.min(6, Math.max(0.4, snapZoomUserScale * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        applySnapZoomTransform();
+      }, { passive: false });
+      vp.addEventListener('dblclick', (ev) => {
+        if (!isOpen()) return;
+        ev.preventDefault();
+        if (snapZoomUserScale === 1) {
+          snapZoomUserScale = 2;
+        } else {
+          fitSnapZoomImage();
+          return;
+        }
+        applySnapZoomTransform();
+      });
+      window.addEventListener('resize', () => {
+        if (isOpen()) fitSnapZoomImage();
+      });
+    })();
     const navLinks = Array.from(document.querySelectorAll('.side-nav a'));
     const sections = Array.from(document.querySelectorAll('main section'));
     const observer = new IntersectionObserver(entries => { const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]; if (!visible) return; navLinks.forEach(link => link.classList.toggle('active', link.getAttribute('href') === `#${visible.target.id}`)); }, { rootMargin: '-25% 0px -60% 0px', threshold: [0, .2, .5] });
@@ -1624,6 +1931,13 @@
       if (detail) {
         detail.textContent = `${button.dataset.question} · ${button.dataset.model}：${state}。${hitTxt}`;
       }
+      // 2026-09-03 - 平台切片重绑热力格时沿用多 run 弹层
+      const findSnap = window.__heatFindSnap;
+      const openSnap = window.__heatOpenSnap;
+      const hasEv = window.__heatSnapHasEvidence;
+      if (typeof findSnap !== 'function' || typeof openSnap !== 'function') return;
+      const snap = findSnap(button.dataset.question, button.dataset.model);
+      if (typeof hasEv === 'function' ? hasEv(snap) : snap) openSnap(snap, button.dataset.model);
     }));
   }
 

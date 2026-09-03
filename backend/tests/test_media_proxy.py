@@ -18,6 +18,42 @@ def test_seal_roundtrip_hides_vendor_host(monkeypatch: pytest.MonkeyPatch) -> No
     assert mps.unseal_shot_token(token) == raw
 
 
+def test_absolute_public_screenshot_hides_vendor_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
+    monkeypatch.setattr(mps.settings, "wechat_h5_base_url", "https://www.aieokj.com/h5/diagnosis/")
+    raw = "https://img.molizhishu.com/screenshots/2026/07/20/demo.png"
+    absolute = mps.public_screenshot_url_absolute(raw)
+    assert absolute is not None
+    assert absolute.startswith("https://www.aieokj.com/api/v1/media/shot/")
+    assert "molizhishu" not in absolute
+
+
+def test_proxy_snapshot_evidence_for_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
+    monkeypatch.setattr(mps.settings, "wechat_h5_base_url", "https://www.aieokj.com/h5/diagnosis/")
+    from app.services.lead_diagnosis_service import _proxy_snapshot_evidence_for_export
+
+    evid = {
+        "问法||doubao": {
+            "screenshot_url": "https://img.molizhishu.com/screenshots/a.png",
+            "page_screenshot": "https://img.molizhishu.com/screenshots/a.png",
+            "runs": [
+                {
+                    "run_no": 1,
+                    "screenshot_url": "https://img.molizhishu.com/screenshots/a.png",
+                    "share_url": "https://www.doubao.com/share/x",
+                }
+            ],
+        }
+    }
+    out = _proxy_snapshot_evidence_for_export(evid)
+    shot = out["问法||doubao"]["screenshot_url"]
+    assert "molizhishu" not in shot
+    assert shot.startswith("https://www.aieokj.com/api/v1/media/shot/")
+    assert out["问法||doubao"]["runs"][0]["share_url"] == "https://www.doubao.com/share/x"
+    assert "molizhishu" not in out["问法||doubao"]["runs"][0]["screenshot_url"]
+
+
 def test_rejects_non_allowlisted_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
     assert mps.is_allowed_shot_url("https://evil.example/x.png") is False

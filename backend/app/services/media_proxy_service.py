@@ -114,6 +114,29 @@ def public_screenshot_url(raw: str | None) -> str | None:
     return f"{SHOT_PATH_PREFIX}{seal_shot_url(text)}"
 
 
+def public_site_origin() -> str:
+    """导出 HTML 离线打开时需要绝对地址；从 H5 基址推导站点源。"""
+    from urllib.parse import urlparse
+
+    base = str(getattr(settings, "wechat_h5_base_url", None) or "https://www.aieokj.com/").strip()
+    parsed = urlparse(base)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "https://www.aieokj.com"
+
+
+def public_screenshot_url_absolute(raw: str | None) -> str | None:
+    """诊断报告 HTML 导出：代理路径补全域名，源码不出现供应商 host。"""
+    path = public_screenshot_url(raw)
+    if not path:
+        return None
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"{public_site_origin()}{path}"
+
+
 def is_proxied_shot_url(raw: str | None) -> bool:
     text = str(raw or "").strip()
     return bool(text) and (text.startswith(SHOT_PATH_PREFIX) or "/api/v1/media/shot/" in text)
