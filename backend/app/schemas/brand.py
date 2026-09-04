@@ -106,4 +106,6 @@ class BrandAssetSaveRequest(BaseModel):
     schedule_month_days: list[int] = Field(default_factory=list)
     # 2026-08-25 - Logo 随企业资料进审批 - 先传暂存，审批通过后再落库
     logo_staging_key: str | None = Field(default=None, max_length=64)
+    # 2026-09-01 - 商品卡开通（仅平台企业管理可写；客户写口忽略）
+    goods_card_enabled: bool | None = None
 

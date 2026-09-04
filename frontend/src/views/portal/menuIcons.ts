@@ -57,6 +57,7 @@ const menuCodeIconMap: Record<string, Component> = {
   'customer.workspace': LayoutDashboard,
   'customer.brand_analysis': Radar,
   'customer.realtime': Search,
+  'customer.goods_cards': Layers3,
   'customer.competitor': BarChart3,
   'customer.sources': Database,
   'customer.reports': FileBarChart,

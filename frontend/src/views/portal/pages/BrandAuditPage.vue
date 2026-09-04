@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref } from 'vue'
-import { MoreHorizontal } from '@lucide/vue'
+import { HelpCircle, MoreHorizontal } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import TenantLogoField from '../../../components/TenantLogoField.vue'
@@ -421,6 +421,23 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <label>
           <span>企业状态</span>
           <div class="readonly-status" :class="{ stopped: !enterpriseFormServiceActive }">{{ enterpriseFormServiceLabel }}</div>
+        </label>
+        <label>
+          <span>
+            商品卡
+            <el-tooltip content="开通后自动给该企业客户账号加上「商品卡」菜单；日常监测词组需勾选手机端平台才有数据" placement="top">
+              <HelpCircle :size="14" />
+            </el-tooltip>
+          </span>
+          <!-- 2026-09-01 - 与企业状态并排；字符串值避免 select 布尔回填错位 -->
+          <select
+            :value="brandForm.goods_card_enabled ? '1' : '0'"
+            :disabled="!canEditEnterpriseTab('profile')"
+            @change="brandForm.goods_card_enabled = ($event.target as HTMLSelectElement).value === '1'"
+          >
+            <option value="0">关闭</option>
+            <option value="1">开通</option>
+          </select>
         </label>
         <label v-if="canEditRegions" class="region-field form-field-full">
           <span>服务地区</span>

@@ -2,6 +2,7 @@
 export const TENANT_QUERY_SCOPED_MENUS = new Set([
   'customer.workspace',
   'customer.realtime',
+  'customer.goods_cards',
   'customer.competitor',
   'platform.competitor',
   'customer.sources',

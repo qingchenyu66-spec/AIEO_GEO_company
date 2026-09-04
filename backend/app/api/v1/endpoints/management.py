@@ -282,6 +282,8 @@ def tenant_to_dict(
         "logo_updated_at": tenant.logo_updated_at.isoformat(sep=" ", timespec="seconds")
         if tenant.logo_updated_at
         else None,
+        # 2026-09-01 - 商品卡开通状态给企业管理列表/详情
+        "goods_card_enabled": bool(getattr(tenant, "goods_card_enabled", False)),
     }
 
 
@@ -1208,6 +1210,14 @@ def management_update_tenant(
     tenant.code = code
     tenant.service_start_date = payload.service_start_date
     tenant.service_end_date = payload.service_end_date
+
+    # 2026-09-01 - 商品卡开关可随企业资料更新（平台企业管理）
+    if payload.goods_card_enabled is not None:
+        enabled = payload.goods_card_enabled is True
+        tenant.goods_card_enabled = enabled
+        from app.services.menu_permission_service import sync_goods_card_menu_for_tenant
+
+        sync_goods_card_menu_for_tenant(db, tenant_id, enabled=enabled)
     period_status = service_status_from_period(payload.service_start_date, payload.service_end_date)
     if tenant.stop_reason in {"manual", "canceled"}:
         tenant.status = False

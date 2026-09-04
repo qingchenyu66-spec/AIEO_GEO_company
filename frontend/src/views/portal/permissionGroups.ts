@@ -41,7 +41,7 @@ export function permissionGroupNote(type: IdentityType, key: string) {
 export function permissionGroupKey(menu: MenuInfo) {
   if (menu.identity_type === 'CUSTOMER') {
     if (['customer.workspace', 'customer.brand_analysis'].includes(menu.menu_code)) return 'workspace'
-    if (['customer.realtime', 'customer.links'].includes(menu.menu_code)) return 'monitor'
+    if (['customer.realtime', 'customer.goods_cards', 'customer.links'].includes(menu.menu_code)) return 'monitor'
     if (['customer.diagnosis', 'customer.competitor', 'customer.sources', 'customer.reports'].includes(menu.menu_code)) return 'analysis'
     if (menu.menu_code === 'customer.knowledge') return 'knowledge'
     return 'other'

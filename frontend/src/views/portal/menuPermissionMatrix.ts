@@ -65,6 +65,7 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   'customer.workspace': ['can_export'],
   'customer.brand_analysis': ['can_export'],
   'customer.realtime': ['can_export'],
+  'customer.goods_cards': ['can_export'],
   'customer.links': ['can_export'],
   'customer.diagnosis': ['can_export'],
   'customer.competitor': ['can_export'],

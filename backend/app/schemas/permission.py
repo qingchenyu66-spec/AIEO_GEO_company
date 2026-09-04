@@ -135,6 +135,8 @@ class TenantUpdateRequest(BaseModel):
     service_start_date: date | None = None
     service_end_date: date | None = None
     status: bool = True
+    # 2026-09-01 - 商品卡开通（平台企业管理）
+    goods_card_enabled: bool | None = None
 
 
 class TenantTransferOwnerRequest(BaseModel):

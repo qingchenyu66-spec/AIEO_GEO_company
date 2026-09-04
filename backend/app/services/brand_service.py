@@ -896,6 +896,19 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
         asset.brand_short_name = payload.brand_short_name
         asset.official_url = payload.official_url
         asset.description = payload.description
+        # 2026-09-04 - 商品卡开关仅平台可写，客户保存忽略（防自开通）
+        if (
+            payload.goods_card_enabled is not None
+            and tenant_id is not None
+            and current.identity.identity_type == "PLATFORM"
+        ):
+            tenant_row = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+            if tenant_row is not None:
+                enabled = payload.goods_card_enabled is True
+                tenant_row.goods_card_enabled = enabled
+                from app.services.menu_permission_service import sync_goods_card_menu_for_tenant
+
+                sync_goods_card_menu_for_tenant(db, tenant_id, enabled=enabled)
     if can_keywords or not asset.monitor_keywords_json:
         asset.monitor_keywords_json = _dedupe([*payload.monitor_keywords, *payload.product_keywords])
         asset.aliases_json = _dedupe([payload.brand_short_name, *payload.aliases])

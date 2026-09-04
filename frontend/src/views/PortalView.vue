@@ -63,6 +63,7 @@ const SnapshotBackfillOpsPage = defineAsyncComponent(() => import('./portal/page
 const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
 const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
+const CustomerGoodsCardsPage = defineAsyncComponent(() => import('./portal/pages/CustomerGoodsCardsPage.vue'))
 const BrandAnalysisPage = defineAsyncComponent(() => import('./portal/pages/BrandAnalysisPage.vue'))
 const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/ApprovalCenterPage.vue'))
 const AnnouncementManagePage = defineAsyncComponent(() => import('./portal/pages/AnnouncementManagePage.vue'))
@@ -158,6 +159,7 @@ const {
 const userManagementMenu = computed(() => displayMenus.value.find(item => item.menu_code === 'platform.users'))
 
 const isRealtimeMonitorPage = computed(() => activeMenuCode.value === 'customer.realtime')
+const isGoodsCardsPage = computed(() => activeMenuCode.value === 'customer.goods_cards')
 const isCompetitorPage = computed(() => ['customer.competitor', 'platform.competitor'].includes(activeMenuCode.value))
 const isSourcePage = computed(() => ['customer.sources', 'platform.sources'].includes(activeMenuCode.value))
 const isReportCenterPage = computed(() => ['customer.reports', 'platform.reports'].includes(activeMenuCode.value))
@@ -260,6 +262,7 @@ const pageSubtitle = computed(() => {
   // 2026-07-30 - 顶栏副文案全局一句像没换页 - 仅 GEO/竞品/信源/报告/知识库按页区分
   const customerPageSubtitles: Record<string, string> = {
     'customer.realtime': '按平台与问题查看监测结果与推荐排名',
+    'customer.goods_cards': '日常监测词的 AI 商品卡出卡与本品/竞品货架',
     'customer.competitor': '本品牌与竞品的提及率、首位提及与情绪对比',
     'customer.sources': '引用来源结构、官网占比与高频站点',
     'customer.reports': '预览与导出已发布的周期监测报告',
@@ -493,6 +496,7 @@ watch(effectiveTenantIdForLogo, () => {
 
     <BrandAuditPage v-else-if="isBrandAssetPage" ref="brandAuditRef" @brand-updated="onBrandUpdated" />
     <MonitorRealtimePage v-else-if="isRealtimeMonitorPage" />
+    <CustomerGoodsCardsPage v-else-if="isGoodsCardsPage" />
     <CompetitorAnalysisPage v-else-if="isCompetitorPage" />
     <SourceAnalysisPage v-else-if="isSourcePage" />
     <ReportCenterPage v-else-if="isReportCenterPage" :is-platform="isPlatform && !isPreviewActive" />

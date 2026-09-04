@@ -252,6 +252,7 @@ export interface BrandAssetResponse {
   tenant_id: number
   asset: BrandAsset | null
   competitors: BrandCompetitor[]
+  goods_card_enabled?: boolean
 }
 
 export async function getBrandAsset(tenantId?: number | null): Promise<BrandAssetResponse> {

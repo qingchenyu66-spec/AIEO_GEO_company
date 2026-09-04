@@ -110,6 +110,7 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "customer.workspace": frozenset({"can_export"}),
     "customer.brand_analysis": frozenset({"can_export"}),
     "customer.realtime": frozenset({"can_export"}),
+    "customer.goods_cards": frozenset({"can_export"}),
     "customer.links": frozenset({"can_export"}),
     "customer.diagnosis": frozenset({"can_export"}),
     "customer.competitor": frozenset({"can_export"}),
@@ -355,6 +356,13 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
     if observer_platforms_for_user_id(db, identity.user_id) is not None:
         items = [item for item in items if item.menu_code not in OBSERVER_HIDDEN_MENU_CODES]
+    # 2026-09-01 - 商品卡未开通企业侧栏不出现该菜单
+    if identity.identity_type == "CUSTOMER" and identity.tenant_id:
+        from app.models.tenant import Tenant
+
+        tenant = db.scalar(select(Tenant).where(Tenant.id == identity.tenant_id, Tenant.deleted.is_(False)))
+        if tenant is None or not bool(getattr(tenant, "goods_card_enabled", False)):
+            items = [item for item in items if item.menu_code != "customer.goods_cards"]
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
 
@@ -730,3 +738,116 @@ def require_report_access(db: Session, current) -> None:
         ("can_export", "can_create", "can_update"),
     ):
         raise ValueError("无权查看")
+
+
+def sync_goods_card_menu_for_tenant(db: Session, tenant_id: int, *, enabled: bool) -> int:
+    """开通商品卡时给该企业客户身份补「商品卡」查看权；关闭只靠企业开关过滤侧栏。
+
+    2026-09-01 - 只开开关不授菜单会导致客户侧栏空白，开通时自动补 grant。
+    2026-09-02 - 登录/me 会按职位模板覆盖身份菜单 - 职位模板也需补商品卡，否则 grant 被冲掉。
+    """
+    if not enabled:
+        return 0
+    menu = db.scalar(
+        select(Menu).where(
+            Menu.menu_code == "customer.goods_cards",
+            Menu.deleted.is_(False),
+            Menu.status.is_(True),
+        )
+    )
+    if menu is None:
+        return 0
+    identities = list(
+        db.scalars(
+            select(UserIdentity).where(
+                UserIdentity.tenant_id == tenant_id,
+                UserIdentity.identity_type == "CUSTOMER",
+                UserIdentity.deleted.is_(False),
+            )
+        )
+    )
+    added = 0
+    position_ids = {identity.position_id for identity in identities if identity.position_id}
+    for position_id in position_ids:
+        exists = db.scalar(
+            select(PositionMenu).where(
+                PositionMenu.position_id == position_id,
+                PositionMenu.menu_id == menu.id,
+            )
+        )
+        if exists is None:
+            db.add(
+                PositionMenu(
+                    position_id=position_id,
+                    menu_id=menu.id,
+                    can_create=False,
+                    can_update=False,
+                    can_delete=False,
+                    can_export=True,
+                )
+            )
+            added += 1
+        elif not grant_has_access(
+            can_create=exists.can_create,
+            can_update=exists.can_update,
+            can_delete=exists.can_delete,
+            can_export=exists.can_export,
+        ):
+            exists.can_export = True
+            added += 1
+    for identity in identities:
+        exists = db.scalar(
+            select(UserIdentityMenu).where(
+                UserIdentityMenu.identity_id == identity.id,
+                UserIdentityMenu.menu_id == menu.id,
+            )
+        )
+        if exists is None:
+            db.add(
+                UserIdentityMenu(
+                    identity_id=identity.id,
+                    menu_id=menu.id,
+                    can_create=False,
+                    can_update=False,
+                    can_delete=False,
+                    can_export=True,
+                )
+            )
+            added += 1
+        elif not grant_has_access(
+            can_create=exists.can_create,
+            can_update=exists.can_update,
+            can_delete=exists.can_delete,
+            can_export=exists.can_export,
+        ):
+            exists.can_export = True
+            added += 1
+    if added:
+        db.flush()
+    return added
+
+
+def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuInfo]:
+    """平台预览客户侧栏：合并该企业客户身份菜单（含商品卡开关过滤）。"""
+    from app.models.tenant import Tenant
+
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None:
+        return []
+    identities = list(
+        db.scalars(
+            select(UserIdentity).where(
+                UserIdentity.tenant_id == tenant_id,
+                UserIdentity.identity_type == "CUSTOMER",
+                UserIdentity.deleted.is_(False),
+            )
+        )
+    )
+    merged: dict[str, MenuInfo] = {}
+    for identity in identities:
+        for item in get_identity_menus(db, identity):
+            merged[item.menu_code] = merge_grant_flags(merged.get(item.menu_code), item)
+    items = list(merged.values())
+    items.sort(key=lambda item: (item.sort_order, item.id))
+    return items
+

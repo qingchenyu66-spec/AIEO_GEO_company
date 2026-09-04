@@ -49,6 +49,7 @@ export interface TenantInfo {
   /** 创建时：名称命中软删企业，已允许新建 */
   name_was_purged?: boolean
   has_logo?: boolean
+  goods_card_enabled?: boolean
   logo_updated_at?: string | null
 }
 

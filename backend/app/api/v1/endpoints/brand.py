@@ -8,6 +8,7 @@ from app.api.dependencies import CurrentSession, get_current_session, require_pl
 from app.api.http_errors import raise_read_endpoint_error, raise_write_endpoint_error
 from app.core.database import get_db
 from app.models.permission import Menu, UserIdentityMenu
+from app.models.tenant import Tenant
 from app.schemas.brand import BrandAssetSaveRequest, BrandWordGroupsSaveRequest, CompetitorSaveRequest
 from app.schemas.common import ApiResponse
 from app.services.brand_service import (
@@ -42,8 +43,15 @@ router = APIRouter(prefix="/brand")
 
 def _brand_asset_response(db: Session, tenant_id: int) -> dict:
     asset = get_brand_asset(db, tenant_id)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+    goods_card_enabled = bool(getattr(tenant, "goods_card_enabled", False)) if tenant else False
     if asset is None:
-        return {"tenant_id": tenant_id, "asset": None, "competitors": []}
+        return {
+            "tenant_id": tenant_id,
+            "asset": None,
+            "competitors": [],
+            "goods_card_enabled": goods_card_enabled,
+        }
     keyword_groups = editable_keyword_groups(db, tenant_id)
     brand_word_groups = list_brand_word_groups(db, tenant_id)
     competitors = list_competitors(db, tenant_id)
@@ -51,6 +59,7 @@ def _brand_asset_response(db: Session, tenant_id: int) -> dict:
         "tenant_id": tenant_id,
         "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
         "competitors": [competitor_to_dict(item) for item in competitors],
+        "goods_card_enabled": goods_card_enabled,
     }
 
 

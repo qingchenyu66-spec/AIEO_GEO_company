@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,6 +21,14 @@ class Tenant(Base):
     stopped_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("sys_user.id"), nullable=True, comment="停服操作人ID")
     logo_path: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="企业 Logo 相对路径")
     logo_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="企业 Logo 更新时间")
+    # 2026-09-01 - 商品卡进门户一期 - 按企业开通，默认关；需日常词组含手机端才有数据
+    goods_card_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+        comment="是否开通客户门户商品卡分析",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False, comment="逻辑删除")

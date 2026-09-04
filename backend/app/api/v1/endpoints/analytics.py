@@ -249,3 +249,43 @@ def source_stats(
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="analytics.source_stats")
+
+
+@router.get("/goods-cards/summary", response_model=ApiResponse[dict])
+def goods_cards_summary(
+    tenant_id: int | None = None,
+    days: int = Query(default=7, ge=1, le=90),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """商品卡分析汇总（日常 GEO 监测词；企业开通后可读）。"""
+    try:
+        from app.services.goods_card_analytics_service import build_goods_card_summary
+        from app.services.tenant_scope import resolve_and_guard_tenant_id
+
+        if current.identity.identity_type == "CUSTOMER":
+            if not has_identity_menu_permission(db, current.identity.id, "customer.goods_cards", "can_export"):
+                raise PermissionError("无权查看商品卡分析")
+            resolved = resolve_and_guard_tenant_id(db, current, tenant_id)
+        else:
+            # 平台预览：有竞品/企业管理读权即可
+            if not (
+                has_identity_menu_permission(db, current.identity.id, "platform.competitor", "can_export")
+                or has_identity_menu_permission(db, current.identity.id, "customer.competitor", "can_export")
+                or has_identity_menu_permission(db, current.identity.id, "platform.audit.list", "can_export")
+            ):
+                raise PermissionError("无权查看商品卡分析")
+            resolved = resolve_and_guard_analytics_tenant(db, current, tenant_id)
+        data = build_goods_card_summary(
+            db,
+            resolved,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return ApiResponse(data=data)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="analytics.goods_cards_summary")
+

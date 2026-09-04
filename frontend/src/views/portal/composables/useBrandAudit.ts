@@ -259,6 +259,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     tenant_stop_reason: null as TenantInfo['stop_reason'],
     service_start_date: '',
     service_end_date: '',
+    goods_card_enabled: false,
     brand_name: '',
     brand_short_name: '',
     monitor_keywords_text: '',
@@ -733,6 +734,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.tenant_stop_reason = tenant?.stop_reason || null
     brandForm.service_start_date = tenant?.service_start_date || ''
     brandForm.service_end_date = tenant?.service_end_date || ''
+    // 2026-09-01 - 商品卡默认关；仅显式 true 才算开通
+    brandForm.goods_card_enabled = tenant?.goods_card_enabled === true
     brandForm.brand_name = asset?.brand_name || asset?.company_full_name || tenant?.name || ''
     brandForm.brand_short_name = asset?.brand_short_name || ''
     brandForm.monitor_keywords_text = [...new Set([...(asset?.monitor_keywords || []), ...(asset?.product_keywords || [])])].join('\n')
@@ -786,6 +789,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       brandAsset.value = response.asset
       brandCompetitors.value = response.competitors
       fillBrandForm(response.asset, response.tenant_id)
+      if (typeof response.goods_card_enabled === 'boolean') {
+        brandForm.goods_card_enabled = response.goods_card_enabled === true
+      } else {
+        brandForm.goods_card_enabled = false
+      }
       if (!response.asset && isPlatform.value) {
         brandForm.company_full_name = tenants.value.find(item => item.id === response.tenant_id)?.name || ''
       }
@@ -1044,6 +1052,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           code: null,
           service_start_date: brandForm.service_start_date || null,
           service_end_date: brandForm.service_end_date || null,
+        goods_card_enabled: brandForm.goods_card_enabled === true,
           status: enterpriseFormServiceActive.value,
         })
         const tenantIndex = tenants.value.findIndex(item => item.id === tenant.id)
@@ -1289,6 +1298,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.brand_name = name
     brandForm.service_start_date = tenantForm.service_start_date || ''
     brandForm.service_end_date = tenantForm.service_end_date || ''
+    brandForm.goods_card_enabled = false
     tenantForm.name = ''
     tenantForm.service_start_date = ''
     tenantForm.service_end_date = ''
