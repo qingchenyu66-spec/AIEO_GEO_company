@@ -228,6 +228,7 @@ export interface BrandAssetPayload {
   schedule_month_days: number[]
   service_start_date?: string | null
   service_end_date?: string | null
+  goods_card_enabled?: boolean
   brand_word_groups?: BrandWordGroup[]
   competitors?: Array<{
     name: string

@@ -102,10 +102,14 @@ def brand_asset(
 
     asset_payload = asset_to_dict(asset, keyword_groups, brand_word_groups)
     asset_payload = scope_asset_platforms_dict(asset_payload, observer_platforms_for_session(current))
+    # 2026-09-04 - GET 也回 goods_card_enabled，否则保存后重载缺字段被前端当成关闭
+    tenant = db.scalar(select(Tenant).where(Tenant.id == resolved_tenant_id, Tenant.deleted.is_(False)))
+    goods_card_enabled = bool(getattr(tenant, "goods_card_enabled", False)) if tenant else False
     return ApiResponse(data={
         "tenant_id": resolved_tenant_id,
         "asset": asset_payload,
         "competitors": [competitor_to_dict(item) for item in competitors],
+        "goods_card_enabled": goods_card_enabled,
     })
 
 
@@ -139,14 +143,8 @@ def upsert_brand_asset(
             body=payload,
             owner_user_id=current.user.id,
         )
-        keyword_groups = editable_keyword_groups(db, asset.tenant_id)
-        brand_word_groups = list_brand_word_groups(db, asset.tenant_id)
-        competitors = list_competitors(db, asset.tenant_id)
-        return {
-            "tenant_id": asset.tenant_id,
-            "asset": asset_to_dict(asset, keyword_groups, brand_word_groups),
-            "competitors": [competitor_to_dict(item) for item in competitors],
-        }
+        # 2026-09-04 - PUT 直执回包也带开关，与 _brand_asset_response / GET 对齐
+        return _brand_asset_response(db, asset.tenant_id)
 
     try:
         body = payload.model_dump(mode="json")

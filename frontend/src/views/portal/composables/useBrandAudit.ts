@@ -789,10 +789,12 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       brandAsset.value = response.asset
       brandCompetitors.value = response.competitors
       fillBrandForm(response.asset, response.tenant_id)
+      // 2026-09-04 - 接口缺字段时勿默认关：回落到企业列表里的开通状态
       if (typeof response.goods_card_enabled === 'boolean') {
         brandForm.goods_card_enabled = response.goods_card_enabled === true
       } else {
-        brandForm.goods_card_enabled = false
+        const fromTenant = tenants.value.find(item => item.id === response.tenant_id)
+        brandForm.goods_card_enabled = fromTenant?.goods_card_enabled === true
       }
       if (!response.asset && isPlatform.value) {
         brandForm.company_full_name = tenants.value.find(item => item.id === response.tenant_id)?.name || ''
@@ -1113,6 +1115,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         schedule_month_days: [],
         service_start_date: brandForm.service_start_date || null,
         service_end_date: brandForm.service_end_date || null,
+        // 2026-09-04 - 与 updateTenant 双写，平台保存品牌资产时也带上开关
+        goods_card_enabled: brandForm.goods_card_enabled === true,
         brand_word_groups: brandWordGroups,
         competitors,
         logo_staging_key: logoStagingKey,

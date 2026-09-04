@@ -124,6 +124,20 @@ def test_goods_card_grant_survives_auth_me_heal():
         db.close()
 
 
+def test_platform_brand_asset_get_returns_goods_card_enabled():
+    # 2026-09-04 - 保存后重载依赖 GET 回传，缺字段会被前端当成关闭
+    token = _token("demo", identity_type="PLATFORM")
+    resp = client.get(
+        "/api/v1/brand/asset",
+        params={"tenant_id": 6},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert "goods_card_enabled" in data
+    assert data["goods_card_enabled"] is True
+
+
 def test_platform_preview_aidiya_goods_cards_summary():
     token = _token("demo", identity_type="PLATFORM")
     resp = client.get(
