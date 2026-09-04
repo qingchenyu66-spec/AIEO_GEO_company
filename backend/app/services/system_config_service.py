@@ -379,6 +379,9 @@ def sync_registry_from_env(db: Session, *, overwrite: bool = False) -> int:
     bootstrap_system_configs(db)
     updated = 0
     for key, meta in CONFIG_REGISTRY.items():
+        # 2026-09-04 - H5 付费诊断由后台面板改库，勿被 deploy sync_from_env 用默认值冲掉
+        if key.startswith("h5_diagnosis_"):
+            continue
         row = db.scalar(select(SystemConfig).where(SystemConfig.config_key == key))
         if row is None:
             continue
