@@ -362,7 +362,8 @@ export async function createTenant(payload: { name: string; code?: string | null
   return response.data.data
 }
 
-export async function updateTenant(tenantId: number, payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null; status: boolean }): Promise<TenantInfo> {
+// 2026-09-04 - 商品卡开关走租户更新 - payload 补 goods_card_enabled，否则 vue-tsc 拦构建
+export async function updateTenant(tenantId: number, payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null; status: boolean; goods_card_enabled?: boolean }): Promise<TenantInfo> {
   const response = await http.put(`/v1/management/tenants/${tenantId}`, payload)
   invalidateCache('/v1/management/tenants')
   return response.data.data
