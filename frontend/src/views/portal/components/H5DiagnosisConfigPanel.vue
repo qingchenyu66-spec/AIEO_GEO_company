@@ -11,6 +11,8 @@ const props = defineProps<{ canEdit: boolean }>()
 const SLOTS_PER_DAY = 3
 const MIN_RUNS = 1
 const MAX_RUNS = 90
+// 2026-09-04 - 脏平台码撑大「监测平台(N)」且格子对不上 - 只保留可选码
+const ALLOWED_PLATFORM_CODES = new Set(supportedPlatforms.map(item => item.code))
 
 const loading = ref(false)
 const saving = ref(false)
@@ -29,13 +31,25 @@ function rowByKey(key: string) {
   return rows.value.find(item => item.config_key === key)
 }
 
+function normalizePlatforms(codes: string[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of codes) {
+    const code = String(item || '').trim()
+    if (!code || seen.has(code) || !ALLOWED_PLATFORM_CODES.has(code)) continue
+    seen.add(code)
+    out.push(code)
+  }
+  return out
+}
+
 function parsePlatforms(raw: string | undefined) {
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.map(item => String(item)) : []
+    return normalizePlatforms(Array.isArray(parsed) ? parsed.map(item => String(item)) : [])
   } catch {
-    return raw.split(/[,，;；\s]+/).map(item => item.trim()).filter(Boolean)
+    return normalizePlatforms(raw.split(/[,，;；\s]+/).map(item => item.trim()).filter(Boolean))
   }
 }
 
@@ -78,7 +92,10 @@ function togglePlatform(code: string) {
 
 async function saveAll() {
   if (!props.canEdit) return
-  if (!form.value.platforms.length) {
+  // 2026-09-04 - 保存前再滤一遍，避免脏码回写 sys_config
+  const platforms = normalizePlatforms(form.value.platforms)
+  form.value.platforms = platforms
+  if (!platforms.length) {
     ElMessage.warning('请至少选择一个监测平台')
     return
   }
@@ -92,7 +109,7 @@ async function saveAll() {
       ['h5_diagnosis_price_fen', String(Math.round(Number(form.value.price_yuan) * 100))],
       ['h5_diagnosis_schedule_runs', String(runs)],
       ['h5_diagnosis_schedule_days', String(days)],
-      ['h5_diagnosis_platforms', JSON.stringify(form.value.platforms)],
+      ['h5_diagnosis_platforms', JSON.stringify(platforms)],
     ]
     for (const [key, value] of updates) {
       const row = rowByKey(key)

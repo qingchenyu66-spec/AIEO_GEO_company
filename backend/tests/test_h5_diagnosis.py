@@ -111,6 +111,20 @@ def test_h5_schedule_runs_clamp_and_days() -> None:
     assert h5_runs_to_schedule_days(4) == 2
 
 
+def test_normalize_h5_platforms_config_value_strips_dirty_codes() -> None:
+    from app.services.h5_diagnosis_service import normalize_h5_platforms_config_value, parse_platform_list
+
+    dirty = '["[doubao","deepseek]","doubao","deepseek","qianwen","kimi"]'
+    assert parse_platform_list(dirty) == ["doubao", "deepseek", "qianwen", "kimi"]
+    cleaned = normalize_h5_platforms_config_value(dirty)
+    assert parse_platform_list(cleaned) == ["doubao", "deepseek", "qianwen", "kimi"]
+    try:
+        normalize_h5_platforms_config_value('["[doubao","deepseek]"]')
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "监测平台" in str(exc)
+
+
 def test_lead_schedule_rounds_honors_h5_schedule_runs() -> None:
     from datetime import date, datetime
     from types import SimpleNamespace

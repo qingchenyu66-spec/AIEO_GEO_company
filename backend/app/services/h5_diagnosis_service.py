@@ -51,6 +51,14 @@ def parse_platform_list(raw: Any) -> list[str]:
     return filter_submittable_platforms([item for item in text_items if item])
 
 
+def normalize_h5_platforms_config_value(raw_value: str) -> str:
+    # 2026-09-04 - 脏码如 "[doubao" 会撑大后台计数 - 落库前只保留可提交平台
+    platforms = parse_platform_list(raw_value)
+    if not platforms:
+        raise ValueError("请至少选择一个可提交的监测平台")
+    return json.dumps(platforms, ensure_ascii=False)
+
+
 def _resolve_h5_schedule_runs(db: Session) -> int:
     # 2026-08-31 - 优先读监测次数；旧库仅有天数时回落 days×3
     raw_runs = get_runtime_config("h5_diagnosis_schedule_runs", db)

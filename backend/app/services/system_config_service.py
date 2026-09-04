@@ -507,6 +507,11 @@ def update_system_config(db: Session, config_id: int, raw_value: str, *, updated
     value = str(raw_value).strip()
     if not value:
         raise ValueError("配置值不能为空")
+    # 2026-09-04 - H5 平台配置信任边界：写库前滤掉非法/脏码，避免后台 (N) 与勾选不一致
+    if config.config_key == "h5_diagnosis_platforms":
+        from app.services.h5_diagnosis_service import normalize_h5_platforms_config_value
+
+        value = normalize_h5_platforms_config_value(value)
     coerce_config_value(value, meta.value_type)
     config.config_value = value
     if updated_by:
