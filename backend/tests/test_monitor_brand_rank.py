@@ -434,6 +434,33 @@ def test_line_enum_kept_when_section_local_is_inflated() -> None:
     assert min(item.rank for item in kept_six if item.rank is not None) == 2
 
 
+def test_drop_soft_rejects_suit_field_section_over_numbered_catalog() -> None:
+    """2026-09-04 - 主榜编号第3时，丢掉「适合：…」伪 section_local 第1。"""
+    from app.services.monitor_service import _drop_soft_ranks_beaten_by_structured
+
+    kept = _drop_soft_ranks_beaten_by_structured(
+        [
+            BrandRankResolution(
+                rank=1,
+                mentioned=True,
+                source="appearance",
+                confidence=0.72,
+                category="适合全屋柜体，预算中等家庭。",
+                rank_basis="section_local",
+            ),
+            BrandRankResolution(
+                rank=3,
+                mentioned=True,
+                source="appearance",
+                confidence=0.9,
+                rank_basis="numbered_subheading",
+            ),
+        ]
+    )
+    assert [item.rank for item in kept] == [3]
+    assert kept[0].rank_basis == "numbered_subheading"
+
+
 def test_line_enum_dropped_when_compact_section_is_slightly_behind() -> None:
     """紧凑类内第5被行内第4盖掉时，仍丢掉行内。"""
     from app.services.monitor_service import _drop_soft_ranks_beaten_by_structured

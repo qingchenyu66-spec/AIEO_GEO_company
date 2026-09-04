@@ -2211,3 +2211,49 @@ def test_baodecong_paren_price_tier_third() -> None:
     assert detail.rank == 3
     assert detail.rank_basis in {"numbered_subheading", "section_local"}
 
+
+def test_suit_budget_field_line_not_fake_section_local_first() -> None:
+    """2026-09-04 - 「适合：…预算…」勿伪分段把编号第3盖成第1（豆包环保板材补录）。"""
+    answer = """
+## 国产主流（家用性价比首选）
+
+### 1. 兔宝宝
+- 强项：生态板、多层板，ENF 级产品线齐全。
+- 适合：衣柜、鞋柜、儿童房柜体，家装通用。
+
+### 2. 千年舟
+- 强项：多层板、欧松板，ENF/HENF 级，性价比高。
+- 适合：全屋柜体，预算中等家庭。
+
+### 3. 大王椰
+- 强项：生态板、细木工板，HENF 高温环保等级。
+- 适合：做柜体、橱柜，看重木纹颜值的家庭。
+
+### 4. 莫干山
+- 强项：豆胶生态板，老牌大厂。
+"""
+    from app.services.monitor_service import (
+        _category_section_label,
+        _looks_like_brand_field_label_heading,
+        _tier_local_brand_token_rank,
+    )
+
+    assert _looks_like_brand_field_label_heading("适合：全屋柜体，预算中等家庭。")
+    assert _category_section_label("适合：全屋柜体，预算中等家庭。") is None
+    tier_rank, tier_title = _tier_local_brand_token_rank(answer, ["大王椰", "大王椰板材"])
+    assert not (
+        tier_rank == 1 and tier_title and _looks_like_brand_field_label_heading(str(tier_title))
+    )
+
+    item = _sub(
+        prompt="环保板材品牌哪个好",
+        answer_content=answer,
+        all_rankings_json=[],
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "环保板材品牌哪个好", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 3
+

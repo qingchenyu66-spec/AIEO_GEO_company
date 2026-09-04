@@ -4287,6 +4287,24 @@ def _is_venue_only_section_title(title: str) -> bool:
     return any(h in blob for h in _TIER_VENUE_HINTS)
 
 
+# 2026-09-04 - 品牌卡字段行（适合/强项…）勿当类内分段；「适合：…预算…」曾命中档位词「预算」
+_BRAND_FIELD_LABEL_HEAD_RE = re.compile(
+    r"^(?:适合|强项|适用|特点|优势|短板|劣势|定位|简介)"
+)
+
+
+def _looks_like_brand_field_label_heading(title: str) -> bool:
+    """「适合：全屋柜体，预算中等家庭」是说明字段，不是档位/市场分段名。"""
+    raw = re.sub(r"\*\*", "", str(title or "")).strip()
+    raw = re.sub(r"^#+\s*", "", raw).strip()
+    if not raw:
+        return False
+    if _BRAND_FIELD_LABEL_HEAD_RE.match(raw):
+        return True
+    probe = _short_tier_section_title(raw)
+    return bool(probe and _BRAND_FIELD_LABEL_HEAD_RE.match(probe))
+
+
 def _category_section_label(title: str) -> str | None:
     """S1b：结构小节类名。第N站 / 大章「一、二、」/ 档位标题；单点卖场名排除。
 
@@ -4296,6 +4314,9 @@ def _category_section_label(title: str) -> str | None:
     raw = re.sub(r"\*\*", "", str(title or "")).strip()
     raw = re.sub(r"^#+\s*", "", raw).strip()
     if not raw:
+        return None
+    # 2026-09-04 - 字段行含「预算」勿进档位标签，否则编号第3被伪类内第1盖掉
+    if _looks_like_brand_field_label_heading(raw):
         return None
     # 2026-08-17 - 长标题「方案三：全国性标杆…」先于 len>16 截断认分类，否则只吃全文出场
     fuzzy_early = _geo_fuzzy_section_label(raw)
@@ -4995,6 +5016,9 @@ def _drop_soft_ranks_beaten_by_structured(
         # 决策表/选型误开类内仍丢掉，保住主榜编号卡（高铁5）
         if has_main_catalog and basis == "section_local":
             cat = str(item.category or "")
+            # 2026-09-04 - 字段伪分段（适合/强项…）不得盖主榜编号位次
+            if _looks_like_brand_field_label_heading(cat):
+                continue
             # 2026-09-03 - 卖场/市场小节顺带点名（南京弘阳…大王椰）不得盖主榜编号第4
             if re.search(
                 r"市场|装饰城|建材城|商城|卖场|地标|集中市场|家装广场",
@@ -5773,6 +5797,11 @@ def _tier_local_brand_token_rank(
             # 2026-09-03 - 评估项「6.性价比」勿开节吞掉后面市场名单
             if _looks_like_assessment_criterion_heading(bare):
                 flush()
+                continue
+            # 2026-09-04 - 「适合：…」字段行勿开节（与 _category_section_label 双保险）
+            if _looks_like_brand_field_label_heading(label) or _looks_like_brand_field_label_heading(bare):
+                if current_title is not None:
+                    current_lines.append(raw_line)
                 continue
             flush()
             # 2026-09-03 - ### N.标题保留字面号，类内直接回 N（万唯###2=2，勿书名单点成1）
@@ -10056,7 +10085,20 @@ def recompute_subtask_rank_from_answer(
     # 先规范化榜单，再算品牌位次，避免手填/重算仍读到扁平连号
     _normalize_subtask_rankings_on_write(subtask)
     if override_mention_position is not None:
+        # 2026-09-04 - 手填/补录覆盖位次时同步 rank_resolution，避免识别元数据仍停在脏第1
+        from app.services.rank_llm_service import persist_rank_resolution
+
         subtask.mention_position = override_mention_position
+        persist_rank_resolution(
+            subtask,
+            BrandRankResolution(
+                rank=override_mention_position,
+                mentioned=True,
+                source="manual",
+                confidence=1.0,
+                rank_basis="override",
+            ),
+        )
         return
     # 批量洗数/同步补算不得冲掉补录位次；新补录解析请显式 force=True
     if not force and is_manual_snapshot_subtask(subtask):

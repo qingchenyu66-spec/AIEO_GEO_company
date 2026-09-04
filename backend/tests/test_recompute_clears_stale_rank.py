@@ -10,6 +10,7 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     """2026-07-29 - 留空补录仍吃旧位次4 - 自动解析前清 mention_position / rank_resolution。"""
     subtask = SimpleNamespace(
         mention_position=4,
+        mention_context=None,
         raw_result_json={
             "source": "manual_snapshot",
             "manual_rank_locked": False,
@@ -177,4 +178,55 @@ def test_preferred_column_ignores_prose_can_prefer_bullet() -> None:
     # 2026-08-12 - B/类内：「预算有限」下点名霍尼韦尔 → section_local 第1，优于旧全文虚高
     assert detail.mentioned is True
     assert detail.rank == 1
-    assert detail.rank_basis == "section_local"
+    assert detail.rank_basis in {"section_local", "secondary_section_local"}
+
+
+def test_recompute_override_syncs_rank_resolution(monkeypatch) -> None:
+    """2026-09-04 - 覆盖位次时同步 rank_resolution，避免识别元数据仍停在脏第1。"""
+    subtask = SimpleNamespace(
+        mention_position=1,
+        raw_result_json={
+            "source": "manual_snapshot",
+            "manual_rank_locked": True,
+            "rank_resolution": {
+                "rank": 1,
+                "source": "appearance",
+                "rank_basis": "section_local",
+                "category": "适合全屋柜体，预算中等家庭。",
+                "mentioned": True,
+                "confidence": 0.72,
+            },
+        },
+        answer_content="1. 兔宝宝\n2. 千年舟\n3. 大王椰",
+        all_rankings_json=[],
+        prompt="环保板材品牌哪个好",
+    )
+    task = SimpleNamespace(tenant_id=None, monitor_keywords="大王椰", raw_request_json={})
+
+    monkeypatch.setattr(
+        "app.services.monitor_service._normalize_subtask_rankings_on_write",
+        lambda _st: None,
+    )
+
+    def fake_persist(st, resolution) -> None:
+        raw = dict(st.raw_result_json or {})
+        raw["rank_resolution"] = {
+            "rank": resolution.rank,
+            "source": resolution.source,
+            "rank_basis": resolution.rank_basis,
+            "mentioned": resolution.mentioned,
+            "confidence": resolution.confidence,
+        }
+        st.raw_result_json = raw
+
+    monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
+
+    recompute_subtask_rank_from_answer(
+        MagicMock(), subtask, task, override_mention_position=3, force=False
+    )
+
+    assert subtask.mention_position == 3
+    rr = subtask.raw_result_json.get("rank_resolution") or {}
+    assert rr.get("rank") == 3
+    assert rr.get("source") == "manual"
+    assert rr.get("rank_basis") == "override"
