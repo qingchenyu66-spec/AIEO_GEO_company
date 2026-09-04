@@ -136,6 +136,30 @@ def _logo_staging_change_row(db: Session | None, tenant_id: int | None, body: di
     )
 
 
+def _goods_card_label(enabled: bool) -> str:
+    return "开通" if enabled else "关闭"
+
+
+def _append_goods_card_preview_row(
+    rows: list[dict[str, str]],
+    body: dict[str, Any],
+    *,
+    before_enabled: bool | None = None,
+    kind: str = "add",
+) -> None:
+    """审批对照展示商品卡开关；body 未带该字段时不写入（避免误报变更）。"""
+    # 2026-09-04 - 创建/改企业审批预览漏商品卡，审核人看不到开没开
+    if "goods_card_enabled" not in body:
+        return
+    after = _goods_card_label(body.get("goods_card_enabled") is True)
+    if before_enabled is None:
+        rows.append(_change("商品卡", after=after, kind=kind))
+        return
+    before = _goods_card_label(bool(before_enabled))
+    if before != after:
+        rows.append(_change("商品卡", before=before, after=after, kind="update"))
+
+
 def _brand_bootstrap_changes(body: dict[str, Any]) -> list[dict[str, str]]:
     """新建企业草稿：把官网、监测词、品牌词、竞品等提交内容摊开展示。"""
     # 2026-08-18 - 新建审批只写「N 平台」- 对齐改配置预览，摊开平台/模式和露出词
@@ -144,6 +168,12 @@ def _brand_bootstrap_changes(body: dict[str, Any]) -> list[dict[str, str]]:
         _change("官网 / 主站", after=str(body.get("official_url") or "").strip() or "（空）", kind="add"),
         _change("品牌说明", after=str(body.get("description") or "").strip() or "（空）", kind="add"),
     ]
+    # 新建草稿前端总会带 goods_card_enabled；缺省按关闭展示
+    _append_goods_card_preview_row(
+        rows,
+        {"goods_card_enabled": body.get("goods_card_enabled") is True},
+        kind="add",
+    )
     regions = region_display_labels(body.get("region_codes"))
     if regions and regions != "—":
         rows.append(_change("监测地区", after=regions, kind="add"))
@@ -229,6 +259,7 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
         logo_row = _logo_staging_change_row(db, tenant_id, body)
         if logo_row:
             rows.append(logo_row)
+        _append_goods_card_preview_row(rows, body, kind="add")
         return rows
 
     rows: list[dict[str, str]] = []
@@ -370,6 +401,11 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
     logo_row = _logo_staging_change_row(db, tenant_id, body)
     if logo_row:
         rows.append(logo_row)
+
+    if db is not None and tenant_id is not None:
+        tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+        before_goods = bool(getattr(tenant, "goods_card_enabled", False)) if tenant else False
+        _append_goods_card_preview_row(rows, body, before_enabled=before_goods)
 
     if not rows:
         rows.append(_change("变更说明", after="提交内容与当前生效配置一致或差异未识别", kind="info"))
