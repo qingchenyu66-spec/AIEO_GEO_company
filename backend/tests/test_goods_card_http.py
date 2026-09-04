@@ -82,6 +82,29 @@ def test_disabled_tenant_customer_no_goods_cards_menu():
     assert "customer.goods_cards" not in codes
 
 
+def test_preview_menus_http_respects_goods_card_enabled():
+    token = _token("demo", identity_type="PLATFORM")
+    headers = {"Authorization": f"Bearer {token}"}
+    enabled = client.get("/api/v1/management/tenants/6/customer-preview-menus", headers=headers)
+    assert enabled.status_code == 200, enabled.text
+    enabled_codes = {m["menu_code"] for m in enabled.json()["data"]["menus"]}
+    assert "customer.goods_cards" in enabled_codes
+
+    db = SessionLocal()
+    try:
+        disabled_tenant = db.scalar(
+            select(Tenant).where(Tenant.deleted.is_(False), Tenant.goods_card_enabled.is_(False))
+        )
+        assert disabled_tenant is not None
+        tid = disabled_tenant.id
+    finally:
+        db.close()
+    disabled = client.get(f"/api/v1/management/tenants/{tid}/customer-preview-menus", headers=headers)
+    assert disabled.status_code == 200, disabled.text
+    disabled_codes = {m["menu_code"] for m in disabled.json()["data"]["menus"]}
+    assert "customer.goods_cards" not in disabled_codes
+
+
 def test_disabled_tenant_goods_cards_summary_403():
     token = _token("jinoutuliao", identity_type="CUSTOMER")
     resp = client.get(

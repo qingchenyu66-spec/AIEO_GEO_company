@@ -36,11 +36,13 @@ import {
 import {
   CUSTOMER_PREVIEW_MENUS,
   CUSTOMER_PREVIEW_MENU_CODES,
+  buildCustomerPortalSidebarMenus,
   isCustomerPreviewActive,
   parsePreviewTenantId,
   parsePreviewTenantName,
   previewQueryFields,
 } from './portal/customerPreview'
+import { useCustomerPreviewMenus } from './portal/composables/useCustomerPreviewMenus'
 import { platformLabelMap, monitorStatusLabelMap } from './portal/portalMaps'
 import { usePortalMenu } from './portal/usePortalMenu'
 import { useMenuFavorites } from './portal/composables/useMenuFavorites'
@@ -75,7 +77,9 @@ const router = useRouter()
 const route = useRoute()
 const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
 const isPreviewActive = computed(() => isCustomerPreviewActive(route, isPlatform.value))
+const previewTenantId = computed(() => parsePreviewTenantId(route))
 const previewTenantName = computed(() => parsePreviewTenantName(route))
+const { previewCustomerMenus } = useCustomerPreviewMenus(isPreviewActive, previewTenantId)
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
 
 function userCreateRouteAllowed(menus: MenuInfo[]) {
@@ -101,7 +105,8 @@ function settingsRouteAllowed(menus: MenuInfo[]) {
 
 const allowedMenuCodes = computed(() => {
   if (isPreviewActive.value) {
-    return [...CUSTOMER_PREVIEW_MENU_CODES]
+    const codes = previewCustomerMenus.value.map(item => item.menu_code)
+    return codes.length ? codes : [...CUSTOMER_PREVIEW_MENU_CODES]
   }
   const codes = auth.allowedMenus.map(item => item.menu_code)
   const extra: string[] = []
@@ -128,8 +133,11 @@ const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') |
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => {
+  // 2026-09-04 - 预览侧栏跟企业开通状态走接口，未开通不展示商品卡
   if (isPreviewActive.value) {
-    return CUSTOMER_PREVIEW_MENUS
+    return previewCustomerMenus.value.length
+      ? buildCustomerPortalSidebarMenus(previewCustomerMenus.value)
+      : CUSTOMER_PREVIEW_MENUS
   }
   const filtered = auth.allowedMenus
     .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
@@ -394,8 +402,13 @@ function ensureActiveMenuAllowed() {
       ))
       return
     }
-    if ((CUSTOMER_PREVIEW_MENU_CODES as readonly string[]).includes(code)) return
-    navigateToMenu('customer.workspace', true)
+    const codes = previewCustomerMenus.value.map(item => item.menu_code)
+    const allowed = codes.length ? codes : [...CUSTOMER_PREVIEW_MENU_CODES]
+    if (allowed.includes(code)) return
+    navigateToMenu('customer.workspace', true, previewQueryFields(
+      parsePreviewTenantId(route)!,
+      parsePreviewTenantName(route),
+    ))
     return
   }
   const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
@@ -444,6 +457,9 @@ onMounted(refreshMenusFromServer)
 onMounted(() => {
   void loadBrandAssetData()
   void ensureTenantsForLogo()
+})
+watch(previewCustomerMenus, () => {
+  if (isPreviewActive.value) ensureActiveMenuAllowed()
 })
 watch(effectiveTenantIdForLogo, () => {
   void ensureTenantsForLogo()

@@ -265,6 +265,23 @@ export async function getTenants(): Promise<TenantInfo[]> {
   return response.data.data
 }
 
+export interface CustomerPreviewMeta {
+  menus: MenuInfo[]
+  customer_includes_today: boolean
+}
+
+export async function getTenantCustomerPreviewMenus(tenantId: number): Promise<CustomerPreviewMeta> {
+  const response = await http.get(`/v1/management/tenants/${tenantId}/customer-preview-menus`)
+  const data = response.data.data
+  if (Array.isArray(data)) {
+    return { menus: data, customer_includes_today: false }
+  }
+  return {
+    menus: (data?.menus || []) as MenuInfo[],
+    customer_includes_today: Boolean(data?.customer_includes_today),
+  }
+}
+
 export async function uploadTenantLogo(tenantId: number, file: File): Promise<{ tenant_id: number; has_logo: boolean; logo_updated_at: string | null }> {
   const form = new FormData()
   form.append('file', file)

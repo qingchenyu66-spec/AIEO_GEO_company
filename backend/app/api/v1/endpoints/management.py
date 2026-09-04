@@ -665,6 +665,32 @@ def management_tenants(
     )
 
 
+@router.get("/tenants/{tenant_id}/customer-preview-menus", response_model=ApiResponse[dict])
+def management_tenant_customer_preview_menus(
+    tenant_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """平台预览客户门户：返回该企业客户侧实际可见菜单（含商品卡开通过滤）。"""
+    # 2026-09-04 - 预览侧栏不能写死菜单，否则商品卡未开通也会出现/开通了也不出现
+    require_platform(current)
+    from app.api.http_errors import raise_read_endpoint_error
+    from app.services.menu_permission_service import get_tenant_customer_preview_menus
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    try:
+        resolved_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        menus = get_tenant_customer_preview_menus(db, resolved_id)
+    except (ValueError, PermissionError) as exc:
+        raise_read_endpoint_error(exc, context="customer_preview_menus")
+    return ApiResponse(
+        data={
+            "menus": [item.model_dump() for item in menus],
+            "customer_includes_today": False,
+        }
+    )
+
+
 @router.get("/tenants/name-check", response_model=ApiResponse[dict])
 def management_tenant_name_check(
     name: str = Query(..., min_length=2, max_length=150),

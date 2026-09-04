@@ -1,7 +1,8 @@
 import type { MenuInfo } from '../../services/auth'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
+import { hiddenCustomerMenus } from './constants'
 
-/** 客户门户预览可进入的菜单（只读）。与 menu-permission-decisions 客户完整菜单口径对齐。 */
+/** 预览加载失败时的兜底菜单（不含商品卡；商品卡仅接口按开通返回）。 */
 export const CUSTOMER_PREVIEW_MENU_CODES = [
   'customer.workspace',
   'customer.brand_analysis',
@@ -26,6 +27,13 @@ export const CUSTOMER_PREVIEW_MENUS: MenuInfo[] = [
 
 export function isCustomerPreviewMenuCode(code: string): boolean {
   return (CUSTOMER_PREVIEW_MENU_CODES as readonly string[]).includes(code)
+}
+
+/** 客户/预览侧栏过滤：商品卡是否出现由接口菜单决定，此处不写死。 */
+export function buildCustomerPortalSidebarMenus(sourceMenus: MenuInfo[]): MenuInfo[] {
+  return sourceMenus.filter(menu => (
+    !['customer.assets', ...hiddenCustomerMenus].includes(menu.menu_code)
+  ))
 }
 
 function parsePositiveTenantId(raw: unknown): number | null {

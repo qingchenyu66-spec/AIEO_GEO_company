@@ -833,7 +833,7 @@ def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuI
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     if tenant is None:
-        return []
+        raise ValueError("企业不存在")
     identities = list(
         db.scalars(
             select(UserIdentity).where(
@@ -848,6 +848,9 @@ def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuI
         for item in get_identity_menus(db, identity):
             merged[item.menu_code] = merge_grant_flags(merged.get(item.menu_code), item)
     items = list(merged.values())
+    # 2026-09-04 - 双保险：未开通企业预览侧栏绝不能露出商品卡
+    if not bool(getattr(tenant, "goods_card_enabled", False)):
+        items = [item for item in items if item.menu_code != "customer.goods_cards"]
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
 
