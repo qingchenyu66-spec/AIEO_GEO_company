@@ -2,7 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { LockKeyhole } from '@lucide/vue'
+import { Eye, EyeOff } from '@lucide/vue'
 import { changePasswordApi } from '../services/auth'
 import { notifyOperationError } from '../utils/requestError'
 import { useAuthStore } from '../stores/auth'
@@ -16,6 +16,10 @@ const form = reactive({
   newPassword: '',
   confirmPassword: '',
 })
+// 2026-09-07 - 改密页右侧锁图标误导 - 对齐登录页改为显隐眼睛
+const showOldPassword = ref(false)
+const showNewPassword = ref(false)
+const showConfirmPassword = ref(false)
 
 async function submit() {
   if (!form.oldPassword || !form.newPassword) {
@@ -82,11 +86,20 @@ async function backToPortal() {
           <input
             id="old-password"
             v-model="form.oldPassword"
-            type="password"
+            :type="showOldPassword ? 'text' : 'password'"
             autocomplete="current-password"
             :placeholder="forcedChange ? '管理员下发的初始密码' : '当前登录密码'"
           />
-          <LockKeyhole aria-hidden="true" />
+          <button
+            type="button"
+            class="auth-field-toggle"
+            :title="showOldPassword ? '隐藏密码' : '显示密码'"
+            :aria-label="showOldPassword ? '隐藏密码' : '显示密码'"
+            @click="showOldPassword = !showOldPassword"
+          >
+            <EyeOff v-if="showOldPassword" />
+            <Eye v-else />
+          </button>
         </div>
 
         <label class="auth-field-label" for="new-password">新密码</label>
@@ -94,11 +107,20 @@ async function backToPortal() {
           <input
             id="new-password"
             v-model="form.newPassword"
-            type="password"
+            :type="showNewPassword ? 'text' : 'password'"
             autocomplete="new-password"
             placeholder="至少 6 个字符"
           />
-          <LockKeyhole aria-hidden="true" />
+          <button
+            type="button"
+            class="auth-field-toggle"
+            :title="showNewPassword ? '隐藏密码' : '显示密码'"
+            :aria-label="showNewPassword ? '隐藏密码' : '显示密码'"
+            @click="showNewPassword = !showNewPassword"
+          >
+            <EyeOff v-if="showNewPassword" />
+            <Eye v-else />
+          </button>
         </div>
 
         <label class="auth-field-label" for="confirm-password">确认新密码</label>
@@ -106,11 +128,20 @@ async function backToPortal() {
           <input
             id="confirm-password"
             v-model="form.confirmPassword"
-            type="password"
+            :type="showConfirmPassword ? 'text' : 'password'"
             autocomplete="new-password"
             placeholder="再输入一次"
           />
-          <LockKeyhole aria-hidden="true" />
+          <button
+            type="button"
+            class="auth-field-toggle"
+            :title="showConfirmPassword ? '隐藏密码' : '显示密码'"
+            :aria-label="showConfirmPassword ? '隐藏密码' : '显示密码'"
+            @click="showConfirmPassword = !showConfirmPassword"
+          >
+            <EyeOff v-if="showConfirmPassword" />
+            <Eye v-else />
+          </button>
         </div>
 
         <button type="submit" class="auth-submit" style="margin-top: 22px" :disabled="loading">
