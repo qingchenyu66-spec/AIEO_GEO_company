@@ -46,6 +46,7 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.monitor.scan_due_schedules": {"queue": "submit"},
         "app.tasks.monitor.scan_due_brand_word_weekly": {"queue": "submit"},
+        "app.tasks.monitor.scan_stale_schedule_submits": {"queue": "submit"},
         "app.tasks.monitor.submit_lead_diagnosis_run": {"queue": "submit"},
         "app.tasks.monitor.finalize_lead_diagnoses": {"queue": "default"},
         "app.tasks.monitor.scan_pending_syncs": {"queue": "sync"},
@@ -78,6 +79,12 @@ celery_app.conf.update(
         "scan-due-schedules": {
             "task": "app.tasks.monitor.scan_due_schedules",
             # 7×24：按企业配置的任意 schedule_times 触发（含周末/凌晨）
+            "schedule": crontab(minute="*/5"),
+            "kwargs": {"max_prompts": settings.celery_scan_submit_max_prompts},
+        },
+        # 2026-09-07 - 死锁/异常留下的陈旧 running：窗口外也能补投或清尸
+        "scan-stale-schedule-submits": {
+            "task": "app.tasks.monitor.scan_stale_schedule_submits",
             "schedule": crontab(minute="*/5"),
             "kwargs": {"max_prompts": settings.celery_scan_submit_max_prompts},
         },

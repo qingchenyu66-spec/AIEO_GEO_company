@@ -2,13 +2,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterator
 
-from kombu.exceptions import OperationalError
+from kombu.exceptions import OperationalError as KombuOperationalError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import OperationalError as SQLOperationalError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession
 from app.core.config import settings
+from app.core.region_catalog import normalize_region_codes, region_submission_targets
 from app.models.brand import BrandAsset, BrandCompetitor
 from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorTask
 from app.models.tenant import Tenant
@@ -24,14 +26,39 @@ from app.services.molizhishu_client import MolizhishuApiError
 from app.services.molizhishu_platforms import filter_submittable_platforms
 from app.services.monitor_service import serialize_task, submit_monitor_task
 from app.services.platform_matrix_service import prepare_daily_platform_matrix_before_submit
-from app.core.region_catalog import normalize_region_codes, region_submission_targets
 
 
 DEFAULT_DAILY_WINDOW_START = time(hour=9, minute=30)
 DEFAULT_DAILY_WINDOW_END = time(hour=20, minute=30)
 SCHEDULE_RUN_SUCCESS_STATUSES = frozenset({"submitted"})
 SCHEDULE_RUN_STALE_RUNNING_MINUTES = 10
-_SCHEDULE_TRANSIENT_ERRORS = (MolizhishuApiError, TimeoutError, OperationalError)
+# 近窗漏跑自动补投；更旧的 running 只清尸，避免把月前窗口突然打出去
+SCHEDULE_RECOVER_RESUBMIT_DAYS = 14
+SCHEDULE_RECOVER_CLEANUP_DAYS = 90
+SCHEDULE_RECOVER_SCAN_LIMIT = 200
+# failed 仅对这些瞬时文案自动补投，避免配置/余额类失败每 5 分钟空转
+SCHEDULE_FAILED_RETRY_HINTS = (
+    "Deadlock",
+    "deadlock",
+    "OperationalError",
+    "Lock wait",
+    "timed out",
+    "Timeout",
+    "Connection reset",
+    "Connection refused",
+    "try restarting transaction",
+)
+# 2026-09-07 - MySQL 死锁是 SQLAlchemy OperationalError，原先只抓 kombu 导致不重试、running 留尸
+_SCHEDULE_TRANSIENT_ERRORS = (
+    MolizhishuApiError,
+    TimeoutError,
+    KombuOperationalError,
+    SQLOperationalError,
+)
+
+
+class ScheduleSubmitBusy(RuntimeError):
+    """同企业另一词组正在提交；Celery 应退避重试，勿标 failed。"""
 
 
 @dataclass(frozen=True)
@@ -51,6 +78,36 @@ def _keyword_group_suffix(group: dict[str, Any]) -> str:
 def is_brand_word_schedule_key(group_key: str) -> bool:
     """品牌词调度 key：bw* / bwonce*。"""
     return str(group_key or "").startswith("bw")
+
+
+def parse_schedule_group_key(group_key: str) -> tuple[str, str | None]:
+    """从 group_key 拆出 schedule_key 前缀与地区码。"""
+    text = str(group_key or "").strip()
+    region_code: str | None = None
+    base = text
+    if "-rg" in text:
+        base, region_part = text.rsplit("-rg", 1)
+        region_code = region_part.strip() or None
+    schedule_key = base.split("-kw", 1)[0]
+    return schedule_key, region_code
+
+
+def due_item_from_group_key(
+    *,
+    tenant_id: int,
+    group_key: str,
+    max_prompts: int = 50,
+    keyword: str | None = None,
+) -> DueScheduleGroup:
+    schedule_key, region_code = parse_schedule_group_key(group_key)
+    return DueScheduleGroup(
+        tenant_id=tenant_id,
+        schedule_key=schedule_key,
+        group_key=group_key,
+        max_prompts=max_prompts,
+        keyword=keyword,
+        region_code=region_code,
+    )
 
 
 def resolve_schedule_keyword_group(db: Session, item: DueScheduleGroup) -> dict[str, Any] | None:
@@ -239,6 +296,78 @@ def persist_schedule_group_failure(
             run.created_by = created_by
     db.commit()
     return run
+
+
+def _failed_run_is_transient(run: GeoMonitorScheduleRun) -> bool:
+    msg = str(run.error_message or "")
+    if not msg.strip():
+        # 无文案的 failed 多半是旧数据/异常中断，允许补投一次
+        return True
+    return any(hint in msg for hint in SCHEDULE_FAILED_RETRY_HINTS)
+
+
+def list_recoverable_schedule_runs(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    stale_minutes: int = SCHEDULE_RUN_STALE_RUNNING_MINUTES,
+    resubmit_days: int = SCHEDULE_RECOVER_RESUBMIT_DAYS,
+    cleanup_days: int = SCHEDULE_RECOVER_CLEANUP_DAYS,
+    limit: int = SCHEDULE_RECOVER_SCAN_LIMIT,
+) -> tuple[list[GeoMonitorScheduleRun], list[GeoMonitorScheduleRun]]:
+    """返回 (需补投, 仅清尸) 的卡死/失败调度。
+
+    补投：近 resubmit_days 内、无 task_id 的陈旧 running，或瞬时 failed。
+    清尸：更早但仍在 cleanup_days 内的陈旧 running（只标 failed，不重打月前窗口）。
+    """
+    now = now or datetime.now()
+    stale_before = now - timedelta(minutes=stale_minutes)
+    resubmit_since = now - timedelta(days=resubmit_days)
+    cleanup_since = now - timedelta(days=cleanup_days)
+
+    stale_running = list(
+        db.scalars(
+            select(GeoMonitorScheduleRun)
+            .where(
+                GeoMonitorScheduleRun.task_id.is_(None),
+                GeoMonitorScheduleRun.status == "running",
+                GeoMonitorScheduleRun.updated_at < stale_before,
+                GeoMonitorScheduleRun.created_at >= resubmit_since,
+            )
+            .order_by(GeoMonitorScheduleRun.updated_at.asc())
+            .limit(limit)
+        )
+    )
+    failed_candidates = list(
+        db.scalars(
+            select(GeoMonitorScheduleRun)
+            .where(
+                GeoMonitorScheduleRun.task_id.is_(None),
+                GeoMonitorScheduleRun.status == "failed",
+                GeoMonitorScheduleRun.updated_at < stale_before,
+                GeoMonitorScheduleRun.created_at >= resubmit_since,
+            )
+            .order_by(GeoMonitorScheduleRun.updated_at.asc())
+            .limit(limit)
+        )
+    )
+    resubmit = stale_running + [row for row in failed_candidates if _failed_run_is_transient(row)]
+    resubmit = resubmit[:limit]
+    cleanup = list(
+        db.scalars(
+            select(GeoMonitorScheduleRun)
+            .where(
+                GeoMonitorScheduleRun.task_id.is_(None),
+                GeoMonitorScheduleRun.status == "running",
+                GeoMonitorScheduleRun.updated_at < stale_before,
+                GeoMonitorScheduleRun.created_at >= cleanup_since,
+                GeoMonitorScheduleRun.created_at < resubmit_since,
+            )
+            .order_by(GeoMonitorScheduleRun.updated_at.asc())
+            .limit(limit)
+        )
+    )
+    return resubmit, cleanup
 
 
 def enumerate_due_schedule_groups(
@@ -432,23 +561,28 @@ def submit_schedule_group(
         }
 
     lock_key = f"schedule-submit:{item.tenant_id}:{item.group_key}"
-    with redis_lock(lock_key, ttl_seconds=600) as acquired:
-        if not acquired:
-            return {
-                "tenant_id": item.tenant_id,
-                "schedule_key": item.group_key,
-                "status": "skipped",
-                "message": "该调度窗口正在提交",
-            }
-        # 持锁后再读一次，堵住 enumerate→submit 之间的双过门
-        if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
-            return {
-                "tenant_id": item.tenant_id,
-                "schedule_key": item.group_key,
-                "status": "skipped",
-                "message": "该调度窗口已执行",
-            }
-        return _submit_schedule_group_locked(db, current, item, asset)
+    # 2026-09-07 - 同企业多 kw 并行会抢共享行导致死锁；企业级串行，跨企业仍并行
+    tenant_lock_key = f"schedule-submit-tenant:{item.tenant_id}"
+    with redis_lock(tenant_lock_key, ttl_seconds=600) as tenant_acquired:
+        if not tenant_acquired:
+            raise ScheduleSubmitBusy(f"企业 {item.tenant_id} 正在提交其他监测词组")
+        with redis_lock(lock_key, ttl_seconds=600) as acquired:
+            if not acquired:
+                return {
+                    "tenant_id": item.tenant_id,
+                    "schedule_key": item.group_key,
+                    "status": "skipped",
+                    "message": "该调度窗口正在提交",
+                }
+            # 持锁后再读一次，堵住 enumerate→submit 之间的双过门
+            if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
+                return {
+                    "tenant_id": item.tenant_id,
+                    "schedule_key": item.group_key,
+                    "status": "skipped",
+                    "message": "该调度窗口已执行",
+                }
+            return _submit_schedule_group_locked(db, current, item, asset)
 
 
 def _submit_schedule_group_locked(
@@ -542,7 +676,8 @@ def _submit_schedule_group_locked(
             existing_run.status = "running"
             existing_run.error_message = None
             run = existing_run
-    elif existing_run is not None and existing_run.status == "failed":
+    elif existing_run is not None:
+        # 2026-09-07 - 陈旧 running/failed 必须复用原行；再 INSERT 会撞唯一键被当成「已执行」永久漏跑
         run = existing_run
         run.status = "running"
         run.error_message = None

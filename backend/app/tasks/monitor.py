@@ -7,9 +7,10 @@ from datetime import datetime
 from typing import Any
 
 from celery.exceptions import Ignore, Retry
-from kombu.exceptions import OperationalError
+from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError as SQLOperationalError
 
 from app.celery_app import celery_app
 from app.core.celery_queue_monitor import clear_sync_live, record_beat_scan, set_sync_live
@@ -33,9 +34,12 @@ from app.services.monitor_service import (
 from app.services.platform_session import load_platform_session
 from app.services.schedule_service import (
     DueScheduleGroup,
+    ScheduleSubmitBusy,
+    due_item_from_group_key,
     enumerate_due_brand_word_weekly_groups,
     enumerate_due_schedule_groups,
     get_schedule_run,
+    list_recoverable_schedule_runs,
     persist_schedule_group_failure,
     submit_schedule_group as execute_schedule_group,
 )
@@ -117,6 +121,7 @@ def scan_due_schedules(max_prompts: int | None = None) -> dict[str, Any]:
                         "group_key": item.group_key,
                         "max_prompts": item.max_prompts,
                         "keyword": item.keyword,
+                        "region_code": item.region_code,
                     },
                 ):
                     enqueued += 1
@@ -160,6 +165,7 @@ def scan_due_brand_word_weekly(max_prompts: int | None = None) -> dict[str, Any]
                         "group_key": item.group_key,
                         "max_prompts": item.max_prompts,
                         "keyword": item.keyword,
+                        "region_code": item.region_code,
                     },
                 ):
                     enqueued += 1
@@ -179,7 +185,7 @@ def scan_due_brand_word_weekly(max_prompts: int | None = None) -> dict[str, Any]
     bind=True,
     retry_backoff=True,
     retry_backoff_max=600,
-    max_retries=3,
+    max_retries=5,
     queue="submit",
 )
 def submit_schedule_group_task(
@@ -188,6 +194,7 @@ def submit_schedule_group_task(
     group_key: str,
     max_prompts: int = 50,
     keyword: str | None = None,
+    region_code: str | None = None,
 ) -> dict[str, Any]:
     """Submit one tenant keyword group to Molizhishu."""
     if not settings.celery_enabled:
@@ -197,23 +204,41 @@ def submit_schedule_group_task(
     current = None
     try:
         current = load_platform_session(db)
-        item = DueScheduleGroup(
+        item = due_item_from_group_key(
             tenant_id=tenant_id,
-            schedule_key=group_key.split("-kw", 1)[0],
             group_key=group_key,
             max_prompts=max_prompts,
             keyword=keyword,
         )
+        if region_code:
+            item = DueScheduleGroup(
+                tenant_id=item.tenant_id,
+                schedule_key=item.schedule_key,
+                group_key=item.group_key,
+                max_prompts=item.max_prompts,
+                keyword=item.keyword,
+                region_code=region_code,
+            )
         result = execute_schedule_group(db, current, item)
         if result.get("status") == "skipped":
             raise Ignore()
         return result
     except Ignore:
         raise
+    except ScheduleSubmitBusy as exc:
+        # 2026-09-07 - 企业串行锁未抢到：退避重试，勿落 failed
+        logger.info(
+            "submit_schedule_group busy tenant=%s key=%s attempt=%s/%s",
+            tenant_id,
+            group_key,
+            self.request.retries,
+            self.max_retries,
+        )
+        raise self.retry(exc=exc, countdown=min(30, 2 ** max(self.request.retries, 0)))
     except RuntimeError as exc:
         logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
         return {"status": "skipped", "message": str(exc)}
-    except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
+    except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
             tenant_id,
@@ -239,8 +264,96 @@ def submit_schedule_group_task(
                 "message": str(exc),
             }
         raise self.retry(exc=exc)
+    except Exception as exc:
+        # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
+        created_by = current.user.id if current else None
+        try:
+            persist_schedule_group_failure(
+                db,
+                tenant_id=tenant_id,
+                group_key=group_key,
+                error_message=str(exc)[:500],
+                created_by=created_by,
+            )
+        except Exception:
+            logger.exception(
+                "persist_schedule_group_failure after unexpected error failed tenant=%s key=%s",
+                tenant_id,
+                group_key,
+            )
+        raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.monitor.scan_stale_schedule_submits", ignore_result=True)
+def scan_stale_schedule_submits(max_prompts: int | None = None) -> dict[str, Any]:
+    """回收陈旧 running / failed：近窗补投，过期只清尸。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    max_prompts = max_prompts or settings.celery_scan_submit_max_prompts
+    lock_key = _scan_lock_key("scan-stale-sched", bucket_minutes=5)
+    with redis_lock(lock_key, ttl_seconds=300) as acquired:
+        if not acquired:
+            result = {"status": "locked", "message": "已有其他进程正在回收陈旧调度"}
+            record_beat_scan("app.tasks.monitor.scan_stale_schedule_submits", result)
+            return result
+
+        db = SessionLocal()
+        enqueued = 0
+        cleaned = 0
+        skipped = 0
+        try:
+            resubmit_rows, cleanup_rows = list_recoverable_schedule_runs(db)
+            for run in cleanup_rows:
+                persist_schedule_group_failure(
+                    db,
+                    tenant_id=run.tenant_id,
+                    group_key=run.schedule_key,
+                    error_message="陈旧 running 超时清理（超出自动补投窗口）",
+                    prompt_count=run.prompt_count or 0,
+                    platform_count=run.platform_count or 0,
+                    created_by=run.created_by,
+                )
+                cleaned += 1
+            for run in resubmit_rows:
+                item = due_item_from_group_key(
+                    tenant_id=run.tenant_id,
+                    group_key=run.schedule_key,
+                    max_prompts=max_prompts,
+                )
+                if _enqueue_task(
+                    submit_schedule_group_task,
+                    task_id=_schedule_submit_task_id(item.group_key, is_retry=True),
+                    kwargs={
+                        "tenant_id": item.tenant_id,
+                        "group_key": item.group_key,
+                        "max_prompts": item.max_prompts,
+                        "keyword": item.keyword,
+                        "region_code": item.region_code,
+                    },
+                ):
+                    enqueued += 1
+                else:
+                    skipped += 1
+        finally:
+            db.close()
+
+    result = {
+        "status": "ok",
+        "enqueued": enqueued,
+        "cleaned": cleaned,
+        "skipped": skipped,
+    }
+    logger.info(
+        "scan_stale_schedule_submits enqueued=%s cleaned=%s skipped=%s",
+        enqueued,
+        cleaned,
+        skipped,
+    )
+    record_beat_scan("app.tasks.monitor.scan_stale_schedule_submits", result)
+    return result
 
 
 def _lead_submit_task_id(lead_id: int, schedule_key: str, *, is_retry: bool) -> str:
@@ -310,7 +423,7 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
         return result
     except Ignore:
         raise
-    except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
+    except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
         logger.warning(
             "submit_lead_diagnosis_run retry lead=%s key=%s attempt=%s/%s error=%s",
             lead_id,
@@ -501,7 +614,7 @@ def build_ranking_matrix_job_task(self, job_id: str) -> dict[str, Any]:
 @celery_app.task(
     name="app.tasks.monitor.sync_one_monitor_task",
     bind=True,
-    autoretry_for=(MolizhishuApiError, OperationalError, TimeoutError),
+    autoretry_for=(MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError),
     retry_backoff=True,
     retry_backoff_max=300,
     max_retries=5,
@@ -532,7 +645,7 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
         except RuntimeError as exc:
             logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, exc)
             return {"task_id": task_id, "status": "skipped", "message": str(exc)}
-        except (MolizhishuApiError, OperationalError, TimeoutError) as exc:
+        except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
             logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, exc)
             raise self.retry(exc=exc)
         finally:

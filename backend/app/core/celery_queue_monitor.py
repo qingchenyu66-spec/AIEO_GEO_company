@@ -25,6 +25,7 @@ SYNC_LIVE_KEY = "celery:sync:live"
 
 TASK_LABELS: dict[str, str] = {
     "app.tasks.monitor.scan_due_schedules": "扫描到点监测计划",
+    "app.tasks.monitor.scan_stale_schedule_submits": "回收陈旧调度提交",
     "app.tasks.monitor.submit_schedule_group": "提交监测词组",
     "app.tasks.monitor.scan_pending_syncs": "扫描待同步任务",
     "app.tasks.monitor.sync_one_monitor_task": "同步监测结果",
