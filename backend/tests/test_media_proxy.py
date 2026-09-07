@@ -70,6 +70,44 @@ def test_tampered_token_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         mps.unseal_shot_token(bad)
 
 
+def test_media_shot_endpoint_allows_anonymous_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载/转发 HTML 无登录态也能出图。"""
+    monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
+    raw = "https://img.molizhishu.com/screenshots/anon-ok.png"
+    token = mps.seal_shot_url(raw)
+
+    def _fake_fetch(url: str) -> tuple[bytes, str]:
+        assert url == raw
+        return b"\x89PNG\r\n\x1a\n", "image/png"
+
+    # 勿 monkeypatch httpx.Client：TestClient 也用同一套 httpx
+    import app.api.v1.endpoints.media as media_ep
+
+    monkeypatch.setattr(media_ep, "fetch_shot_response", _fake_fetch)
+    monkeypatch.setattr(media_ep, "unseal_shot_token", mps.unseal_shot_token)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get(f"/api/v1/media/shot/{token}")
+    assert response.status_code == 200
+    assert response.content.startswith(b"\x89PNG")
+    assert "image/png" in (response.headers.get("content-type") or "")
+
+
+def test_media_shot_endpoint_rejects_bad_token_without_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/v1/media/shot/not-a-real-token")
+    assert response.status_code == 404
+
+
 def test_fetch_blocks_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
 

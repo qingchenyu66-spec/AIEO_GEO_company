@@ -2,6 +2,7 @@
 
 ponytail: token 为 HMAC 密封的相对能力 URL（无需再查 Redis）；
 仅允许白名单 host，避免 SSRF。
+# 2026-09-07 - 导出/转发 HTML 无 Cookie：endpoint 凭 token 即可读，登录不是第二道闸
 """
 
 from __future__ import annotations

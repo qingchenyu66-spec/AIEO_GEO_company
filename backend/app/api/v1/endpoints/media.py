@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse, Response
 
-from app.api.dependencies import CurrentSession, get_current_session
 from app.services.media_proxy_service import fetch_shot_response, unseal_shot_token
 from app.services.share_page_screenshot_service import resolve_backfill_shot_path
 
@@ -13,12 +12,11 @@ router = APIRouter(prefix="/media", tags=["Media"])
 
 
 @router.get("/shot/{token}")
-def media_shot(
-    token: str,
-    current: CurrentSession = Depends(get_current_session),
-) -> Response:
-    """登录用户打开快照：服务端拉取白名单 CDN，原图流式回写。"""
-    _ = current  # 鉴权：须登录（Cookie / Bearer）；禁止匿名扫库
+def media_shot(token: str) -> Response:
+    """凭密封 token 取快照图。
+
+    2026-09-07 - 诊断 HTML 下载/转发后无登录 Cookie - token 即能力凭证（含过期+白名单），不再强制会话
+    """
     try:
         url = unseal_shot_token(token)
         body, content_type = fetch_shot_response(url)
@@ -33,19 +31,15 @@ def media_shot(
         content=body,
         media_type=content_type,
         headers={
-            "Cache-Control": "private, max-age=86400",
+            "Cache-Control": "public, max-age=86400",
             "X-Content-Type-Options": "nosniff",
         },
     )
 
 
 @router.get("/backfill-shot/{file_id}")
-def media_backfill_shot(
-    file_id: str,
-    current: CurrentSession = Depends(get_current_session),
-) -> FileResponse:
-    """补录自截图：本地落盘 PNG，登录可看。"""
-    _ = current
+def media_backfill_shot(file_id: str) -> FileResponse:
+    """补录自截图：本地落盘 PNG；file_id 不透明，与 shot token 同理可免登录转发。"""
     try:
         path = resolve_backfill_shot_path(file_id)
     except ValueError as exc:
@@ -54,7 +48,7 @@ def media_backfill_shot(
         path,
         media_type="image/png",
         headers={
-            "Cache-Control": "private, max-age=86400",
+            "Cache-Control": "public, max-age=86400",
             "X-Content-Type-Options": "nosniff",
         },
     )
