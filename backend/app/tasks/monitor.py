@@ -226,7 +226,7 @@ def submit_schedule_group_task(
     except Ignore:
         raise
     except ScheduleSubmitBusy as exc:
-        # 2026-09-07 - 企业串行锁未抢到：退避重试，勿落 failed
+        # 2026-09-07 - 企业串行锁未抢到：退避重试；耗尽则返回 busy，留给回收扫描再投，勿 Unexpected
         logger.info(
             "submit_schedule_group busy tenant=%s key=%s attempt=%s/%s",
             tenant_id,
@@ -234,7 +234,15 @@ def submit_schedule_group_task(
             self.request.retries,
             self.max_retries,
         )
-        raise self.retry(exc=exc, countdown=min(30, 2 ** max(self.request.retries, 0)))
+        if self.request.retries >= self.max_retries:
+            return {
+                "tenant_id": tenant_id,
+                "schedule_key": group_key,
+                "status": "busy",
+                "keyword": keyword,
+                "message": str(exc),
+            }
+        raise self.retry(exc=exc, countdown=min(60, 5 * (self.request.retries + 1)))
     except RuntimeError as exc:
         logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
         return {"status": "skipped", "message": str(exc)}
