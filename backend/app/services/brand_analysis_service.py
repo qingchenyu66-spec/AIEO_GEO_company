@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -55,8 +55,11 @@ BA_DESC_HARD_MAX = 16
 # Ceiling: 仍可能漏并换词大的近义；upgrade path: embedding / DeepSeek cluster.
 BA_DESC_SIMILARITY = 0.60
 # 2026-07-30 - 品牌分析首屏 ~11s - 近义合并改 bigram 候选，避免 400+ 桶 O(n²) 全比
-BA_DESC_MERGE_CANDIDATE_CAP = 32
+# 2026-09-07 - 上期+本期双次归并再拖到 ~8s - 候选帽再收，上期改精确计数
+BA_DESC_MERGE_CANDIDATE_CAP = 12
 BA_DESC_LCS_NEED = 6
+# 列表接口每组最多嵌套多少条 answers（sample_count 仍计全量）
+BA_DESC_ANSWERS_IN_LIST = 40
 _DESC_PUNCT_RE = re.compile(r"[\s、。，；：！？\"'“”‘’（）()\[\]【】《》·\-—_/\\|＋+]+")
 # 2026-07-29 - 工商/合规硬风险：归并禁与非风险并，旧数据无要点情感时回退为负面
 _RISK_DESC_RE = re.compile(
@@ -822,6 +825,7 @@ def _group_ai_descriptions(
                 sent_key = "unknown"
             label = label_of.get(sent_key, "未知")
             excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
+            # 2026-09-07 - 列表不嵌 page_screenshot，详情点开再拉子任务
             answer = {
                 "subtask_id": item.subtask_id,
                 "task_id": item.task_id,
@@ -831,7 +835,6 @@ def _group_ai_descriptions(
                 "excerpt": excerpt,
                 "sentiment": label,
                 "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-                "page_screenshot": public_screenshot_url(item.page_screenshot),
             }
             bucket = groups.get(key)
             if bucket is None:
@@ -840,18 +843,24 @@ def _group_ai_descriptions(
                     "answers": [answer],
                     "_sent_tally": {sent_key: 1},
                     "_platforms": {code} if code else set(),
+                    "_seen_subtasks": {item.subtask_id},
                 }
                 continue
-            # 同一快照多要点归到同组时，answers 不去重：样本仍计一次语义出现
-            if not any(a.get("subtask_id") == item.subtask_id for a in bucket["answers"]):
-                bucket["answers"].append(answer)
-                tally = bucket["_sent_tally"]
-                tally[sent_key] = int(tally.get(sent_key, 0)) + 1
-                if code:
-                    bucket["_platforms"].add(code)
+            seen = bucket["_seen_subtasks"]
+            if item.subtask_id in seen:
+                if len(desc) > len(str(bucket.get("description") or "")):
+                    bucket["description"] = desc
+                continue
+            seen.add(item.subtask_id)
+            bucket["answers"].append(answer)
+            tally = bucket["_sent_tally"]
+            tally[sent_key] = int(tally.get(sent_key, 0)) + 1
+            if code:
+                bucket["_platforms"].add(code)
             if len(desc) > len(str(bucket.get("description") or "")):
                 bucket["description"] = desc
 
+    # 上期环比已改精确计数；本期仍近义合并（跳过会组数暴涨、翻页变差）
     buckets = _merge_similar_description_buckets(
         list(groups.values()),
         brand_aliases=brand_aliases,
@@ -861,6 +870,7 @@ def _group_ai_descriptions(
     for bucket in buckets:
         tally: dict[str, int] = bucket.pop("_sent_tally")
         platforms: set[str] = bucket.pop("_platforms")
+        bucket.pop("_seen_subtasks", None)
         desc_text = str(bucket.get("description") or "")
         dominant = _dominant_sent_key(
             tally,
@@ -871,10 +881,13 @@ def _group_ai_descriptions(
             key=lambda row: str(row.get("updated_at") or ""),
             reverse=True,
         )
+        sample_count = len(answers)
+        if sample_count > BA_DESC_ANSWERS_IN_LIST:
+            answers = answers[:BA_DESC_ANSWERS_IN_LIST]
         rows.append({
             "description": bucket["description"],
             "sentiment": label_of.get(dominant, "未知"),
-            "sample_count": len(answers),
+            "sample_count": sample_count,
             "platforms": [
                 {"code": code, "name": platform_names.get(code) or code}
                 for code in sorted(platforms, key=lambda c: platform_names.get(c) or c)
@@ -883,6 +896,272 @@ def _group_ai_descriptions(
         })
     rows.sort(key=lambda row: (-int(row["sample_count"]), str(row["description"])))
     return rows
+
+
+# 2026-09-07 - B+ 总览：滚动等长窗口，上期可选周/月/季/年
+COMPARE_PERIOD_DAYS: dict[str, int] = {
+    "week": 7,
+    "month": 30,
+    "quarter": 90,
+    "year": 365,
+}
+COMPARE_PERIOD_LABELS: dict[str, str] = {
+    "week": "周",
+    "month": "月",
+    "quarter": "季",
+    "year": "年",
+}
+COMPARE_LOAD_LIMIT: dict[str, int] = {
+    "week": 400,
+    "month": 600,
+    "quarter": 1200,
+    "year": 2000,
+}
+# 2026-09-07 - 不做「满 N 组才环比」魔法门槛：上期空=不比；上期有数=如实比
+COMPARE_MIN_PREV_GROUPS = 1
+
+
+def resolve_brand_compare_period(raw: str | None) -> str:
+    key = str(raw or "month").strip().lower()
+    return key if key in COMPARE_PERIOD_DAYS else "month"
+
+
+def brand_compare_windows(now: datetime, compare_period: str) -> dict[str, Any]:
+    """本期 [current_start, range_end]，上期 [previous_start, current_start)。"""
+    days = COMPARE_PERIOD_DAYS[compare_period]
+    range_end = now
+    current_start = now - timedelta(days=days)
+    previous_start = now - timedelta(days=days * 2)
+    label = COMPARE_PERIOD_LABELS[compare_period]
+    return {
+        "compare_period": compare_period,
+        "compare_period_label": label,
+        "days": days,
+        "current_start": current_start,
+        "previous_start": previous_start,
+        "range_end": range_end,
+        "current_label": f"{current_start.date().isoformat()} ~ {range_end.date().isoformat()}",
+        "previous_label": f"{previous_start.date().isoformat()} ~ {current_start.date().isoformat()}",
+    }
+
+
+def _empty_sentiment_counts() -> dict[str, int]:
+    return {"正面": 0, "中性": 0, "负面": 0, "未知": 0}
+
+
+def _tally_sentiment_counts(subtasks: list[GeoMonitorSubtask]) -> dict[str, int]:
+    counts = _empty_sentiment_counts()
+    for item in subtasks:
+        label = _normalize_sentiment_label(item.sentiment)
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _tally_description_group_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """与前端情感筛选角标同口径：按 AI 描述归并组计数。"""
+    counts = _empty_sentiment_counts()
+    for row in rows:
+        label = str(row.get("sentiment") or "未知").strip() or "未知"
+        if label not in counts:
+            label = "未知"
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _tally_description_counts_exact(subtasks: list[GeoMonitorSubtask]) -> dict[str, int]:
+    """上期环比：精确描述 key → 组情感 → 计数（不做近义合并/不建 answers）。
+
+    2026-09-07 - 上期也跑完整 _group_ai_descriptions 把首屏拖到数秒 - 环比只需占比
+    """
+    label_of = {
+        "positive": "正面",
+        "neutral": "中性",
+        "negative": "负面",
+        "unknown": "未知",
+    }
+    groups: dict[str, tuple[dict[str, int], str]] = {}
+    for item in subtasks:
+        for point in _ba_description_items(item):
+            desc = str(point.get("text") or "").strip()
+            key = _normalize_description_key(desc)
+            if not key:
+                continue
+            sent_key = point.get("sentiment") or "unknown"
+            if sent_key not in SENTIMENT_KEYS:
+                sent_key = "unknown"
+            row = groups.get(key)
+            if row is None:
+                groups[key] = ({sent_key: 1}, desc)
+                continue
+            tally, prev_desc = row
+            tally[sent_key] = int(tally.get(sent_key, 0)) + 1
+            if len(desc) > len(prev_desc):
+                groups[key] = (tally, desc)
+    counts = _empty_sentiment_counts()
+    for tally, desc in groups.values():
+        dominant = _dominant_sent_key(
+            tally,
+            prefer_any_negative=_is_risk_description(desc),
+        )
+        label = label_of.get(dominant, "未知")
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _sentiment_share_pct(counts: dict[str, int]) -> dict[str, float]:
+    """正/中/负占比；分母不含未知，三段合计约 100%。"""
+    labeled = int(counts.get("正面") or 0) + int(counts.get("中性") or 0) + int(counts.get("负面") or 0)
+    if labeled <= 0:
+        return {"正面": 0.0, "中性": 0.0, "负面": 0.0}
+    return {
+        "正面": round(100.0 * int(counts.get("正面") or 0) / labeled, 1),
+        "中性": round(100.0 * int(counts.get("中性") or 0) / labeled, 1),
+        "负面": round(100.0 * int(counts.get("负面") or 0) / labeled, 1),
+    }
+
+
+def _prev_compare_insufficient(prev_groups: int, cur_groups: int) -> tuple[bool, str | None]:
+    """仅上期完全无数据时禁止环比；禁止用空上期伪造「全是上升」。"""
+    _ = cur_groups
+    if prev_groups <= 0:
+        return True, "empty"
+    return False, None
+
+
+def _description_compare_block(
+    *,
+    current_counts: dict[str, int],
+    previous_counts: dict[str, int],
+    current_share: dict[str, float],
+    previous_share: dict[str, float],
+) -> dict[str, Any]:
+    # 2026-09-07 - 比例/环比跟情感筛选同一套描述组数，不用样本条数
+    prev_groups = sum(int(previous_counts.get(k) or 0) for k in ("正面", "中性", "负面", "未知"))
+    cur_groups = sum(int(current_counts.get(k) or 0) for k in ("正面", "中性", "负面", "未知"))
+    insufficient, reason = _prev_compare_insufficient(prev_groups, cur_groups)
+    deltas: dict[str, float | None] = {
+        "正面_pt": None,
+        "中性_pt": None,
+        "负面_pt": None,
+        "group_pct": None,
+    }
+    if not insufficient:
+        deltas["正面_pt"] = round(float(current_share["正面"]) - float(previous_share["正面"]), 1)
+        deltas["中性_pt"] = round(float(current_share["中性"]) - float(previous_share["中性"]), 1)
+        deltas["负面_pt"] = round(float(current_share["负面"]) - float(previous_share["负面"]), 1)
+        deltas["group_pct"] = round(100.0 * (cur_groups - prev_groups) / prev_groups, 1)
+    return {
+        "group_count": prev_groups,
+        "description_counts": previous_counts,
+        "description_share": previous_share,
+        "deltas": deltas,
+        "insufficient": insufficient,
+        "min_groups": COMPARE_MIN_PREV_GROUPS,
+        "reason": reason,
+    }
+
+
+def _subtask_event_at(item: GeoMonitorSubtask) -> datetime | None:
+    """监测发生时间：勿用 updated_at（情感/描述补解析会刷新，上期会被掏空）。"""
+    remote = getattr(item, "remote_time", None)
+    if remote is not None:
+        try:
+            ms = int(remote)
+            if ms > 10_000_000_000:  # ms
+                return datetime.fromtimestamp(ms / 1000.0)
+            if ms > 0:
+                return datetime.fromtimestamp(ms)
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
+    task = getattr(item, "task", None)
+    created = getattr(task, "created_at", None) if task is not None else None
+    if created is not None:
+        return created
+    return getattr(item, "updated_at", None)
+
+
+def _subtask_in_window(item: GeoMonitorSubtask, start: datetime, end: datetime, *, end_exclusive: bool) -> bool:
+    ts = _subtask_event_at(item)
+    if ts is None:
+        return False
+    if ts < start:
+        return False
+    if end_exclusive:
+        return ts < end
+    return ts <= end
+
+
+def _build_platform_rows(
+    *,
+    purchased: list[str],
+    purchased_set: set[str],
+    names: dict[str, str],
+    current_subtasks: list[GeoMonitorSubtask],
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, int]]:
+    sentiment_counts = _empty_sentiment_counts()
+    platform_counts: dict[str, int] = {code: 0 for code in purchased}
+    buckets: dict[str, dict[str, list[dict[str, Any]]]] = {
+        code: {"positive": [], "neutral": [], "negative": [], "unknown": []}
+        for code in purchased
+    }
+    for item in current_subtasks:
+        code = str(item.platform or "").strip()
+        if purchased_set and code not in purchased_set:
+            continue
+        if code not in buckets:
+            buckets[code] = {"positive": [], "neutral": [], "negative": [], "unknown": []}
+            platform_counts[code] = 0
+        label = _normalize_sentiment_label(item.sentiment)
+        sentiment_counts[label] = sentiment_counts.get(label, 0) + 1
+        platform_counts[code] = platform_counts.get(code, 0) + 1
+        key = {
+            "正面": "positive",
+            "中性": "neutral",
+            "负面": "negative",
+        }.get(label, "unknown")
+        excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
+        buckets[code][key].append({
+            "subtask_id": item.subtask_id,
+            "task_id": item.task_id,
+            "prompt": item.prompt,
+            "excerpt": excerpt,
+            "sentiment": label,
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "page_screenshot": public_screenshot_url(item.page_screenshot),
+        })
+
+    resolved_purchased = purchased
+    if not resolved_purchased:
+        resolved_purchased = sort_platform_codes(
+            [code for code, count in platform_counts.items() if count > 0]
+        )
+
+    platform_rows: list[dict[str, Any]] = []
+    for code in resolved_purchased or sorted(buckets.keys()):
+        count = platform_counts.get(code, 0)
+        if count <= 0:
+            continue
+        pos = buckets.get(code, {}).get("positive") or []
+        neu = buckets.get(code, {}).get("neutral") or []
+        neg = buckets.get(code, {}).get("negative") or []
+        unk = buckets.get(code, {}).get("unknown") or []
+        labeled = len(pos) + len(neu) + len(neg)
+        share = {
+            "正面": round(100.0 * len(pos) / labeled, 1) if labeled else 0.0,
+            "中性": round(100.0 * len(neu) / labeled, 1) if labeled else 0.0,
+            "负面": round(100.0 * len(neg) / labeled, 1) if labeled else 0.0,
+        }
+        platform_rows.append({
+            "code": code,
+            "name": names.get(code) or code,
+            "sample_count": count,
+            "positive": pos,
+            "neutral": neu,
+            "negative": neg,
+            "unknown": unk,
+            "sentiment_share": share,
+        })
+    return platform_rows, sentiment_counts, platform_counts
 
 
 def _load_brand_word_subtasks(
@@ -931,6 +1210,7 @@ def _load_brand_word_subtasks(
             GeoMonitorSubtask.page_screenshot,
             GeoMonitorSubtask.sentiment,
             GeoMonitorSubtask.raw_result_json,
+            GeoMonitorSubtask.remote_time,
             GeoMonitorSubtask.updated_at,
         ),
     )
@@ -942,8 +1222,9 @@ def build_brand_analysis_dashboard(
     *,
     tenant_id: int | None = None,
     parse_sentiments: bool = False,
+    compare_period: str | None = None,
 ) -> dict[str, Any]:
-    """品牌分析专用：情感饼图 + 平台情感柱 + AI 描述归并。
+    """品牌分析：描述要点比例 + 上期环比（周/月/季/年）+ AI 描述列表。
 
     默认不在读路径调 DeepSeek；同步写路径 / 显式 parse=true 再补齐。
     """
@@ -963,16 +1244,21 @@ def build_brand_analysis_dashboard(
     purchased_set = set(purchased)
     names = _platform_name_map()
 
-    # 品牌分析实时口径：含今日，不套客户侧「截至昨日」
+    grain = resolve_brand_compare_period(compare_period)
     now = datetime.now()
-    range_end = now
-    trend_start = datetime.combine(now.date() - timedelta(days=30), time.min)
-    lookback_start = trend_start - timedelta(days=7)
+    windows = brand_compare_windows(now, grain)
+    current_start: datetime = windows["current_start"]
+    previous_start: datetime = windows["previous_start"]
+    range_end: datetime = windows["range_end"]
+    load_limit = COMPARE_LOAD_LIMIT[grain]
+
+    # 一次拉满上期起点～现在，再按窗口切开（避免 limit 截断上期）
     subtasks = _load_brand_word_subtasks(
         db,
         tenant_id=resolved,
-        lookback_start=lookback_start,
+        lookback_start=previous_start,
         range_end=range_end,
+        limit=load_limit,
     )
     if purchased_set:
         subtasks = [item for item in subtasks if item.platform in purchased_set]
@@ -1000,8 +1286,9 @@ def build_brand_analysis_dashboard(
         subtasks = _load_brand_word_subtasks(
             db,
             tenant_id=resolved,
-            lookback_start=lookback_start,
+            lookback_start=previous_start,
             range_end=range_end,
+            limit=load_limit,
         )
         if purchased_set:
             subtasks = [item for item in subtasks if item.platform in purchased_set]
@@ -1027,8 +1314,9 @@ def build_brand_analysis_dashboard(
         subtasks = _load_brand_word_subtasks(
             db,
             tenant_id=resolved,
-            lookback_start=lookback_start,
+            lookback_start=previous_start,
             range_end=range_end,
+            limit=load_limit,
         )
         if purchased_set:
             subtasks = [item for item in subtasks if item.platform in purchased_set]
@@ -1039,59 +1327,25 @@ def build_brand_analysis_dashboard(
             1 for item in subtasks if not _has_deepseek_description(item)
         )
 
-    sentiment_counts = {"正面": 0, "中性": 0, "负面": 0, "未知": 0}
-    platform_counts: dict[str, int] = {code: 0 for code in purchased}
-    buckets: dict[str, dict[str, list[dict[str, Any]]]] = {
-        code: {"positive": [], "neutral": [], "negative": [], "unknown": []}
-        for code in purchased
-    }
+    current_subtasks = [
+        item for item in subtasks
+        if _subtask_in_window(item, current_start, range_end, end_exclusive=False)
+    ]
+    previous_subtasks = [
+        item for item in subtasks
+        if _subtask_in_window(item, previous_start, current_start, end_exclusive=True)
+    ]
 
-    for item in subtasks:
-        code = str(item.platform or "").strip()
-        if purchased_set and code not in purchased_set:
-            continue
-        if code not in buckets:
-            buckets[code] = {"positive": [], "neutral": [], "negative": [], "unknown": []}
-            platform_counts[code] = 0
-        label = _normalize_sentiment_label(item.sentiment)
-        sentiment_counts[label] = sentiment_counts.get(label, 0) + 1
-        platform_counts[code] = platform_counts.get(code, 0) + 1
-        key = {
-            "正面": "positive",
-            "中性": "neutral",
-            "负面": "negative",
-        }.get(label, "unknown")
-        excerpt = _answer_excerpt(item.mention_context or _subtask_answer_plaintext(item), 160)
-        buckets[code][key].append({
-            "subtask_id": item.subtask_id,
-            "task_id": item.task_id,
-            "prompt": item.prompt,
-            "excerpt": excerpt,
-            "sentiment": label,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            "page_screenshot": public_screenshot_url(item.page_screenshot),
-        })
-
+    platform_rows, sentiment_counts, platform_counts = _build_platform_rows(
+        purchased=purchased,
+        purchased_set=purchased_set,
+        names=names,
+        current_subtasks=current_subtasks,
+    )
     if not purchased:
         purchased = sort_platform_codes(
             [code for code, count in platform_counts.items() if count > 0]
         )
-
-    # 列表只含有样本的已购/配置平台；已购全集在 purchased_platforms
-    platform_rows: list[dict[str, Any]] = []
-    for code in purchased or sorted(buckets.keys()):
-        count = platform_counts.get(code, 0)
-        if count <= 0:
-            continue
-        platform_rows.append({
-            "code": code,
-            "name": names.get(code) or code,
-            "sample_count": count,
-            "positive": buckets.get(code, {}).get("positive") or [],
-            "neutral": buckets.get(code, {}).get("neutral") or [],
-            "negative": buckets.get(code, {}).get("negative") or [],
-            "unknown": buckets.get(code, {}).get("unknown") or [],
-        })
 
     base_pie = [
         {"name": "正面", "value": sentiment_counts["正面"]},
@@ -1117,23 +1371,41 @@ def build_brand_analysis_dashboard(
         str(asset.company_full_name) if asset and asset.company_full_name else None,
     )
     ai_descriptions = _group_ai_descriptions(
-        subtasks,
+        current_subtasks,
         platform_names=names,
         brand_aliases=aliases,
     )
+    # 2026-09-07 - 上期只算占比，不做近义归并/嵌套 answers
+    prev_description_counts = _tally_description_counts_exact(previous_subtasks)
+    description_counts = _tally_description_group_counts(ai_descriptions)
+    description_share = _sentiment_share_pct(description_counts)
+    prev_description_share = _sentiment_share_pct(prev_description_counts)
+    description_compare = _description_compare_block(
+        current_counts=description_counts,
+        previous_counts=prev_description_counts,
+        current_share=description_share,
+        previous_share=prev_description_share,
+    )
 
-    period_label = f"{trend_start.date().isoformat()} ~ {range_end.date().isoformat()}"
+    sample_count = sum(platform_counts.values())
     return {
         "tenant_id": resolved,
         "brand_name": brand_name,
         "company_name": asset.company_full_name if asset else brand_name,
-        "period_label": period_label,
+        "period_label": windows["current_label"],
+        "compare_period": grain,
+        "compare_period_label": windows["compare_period_label"],
+        "previous_period_label": windows["previous_label"],
         "purchased_platforms": purchased,
-        "sample_count": sum(platform_counts.values()),
+        "sample_count": sample_count,
         "sentiment_counts": sentiment_counts,
         "sentiment_pie": base_pie,
         "platform_pie": platform_pie,
         "platforms": platform_rows,
+        # 2026-09-07 - 比例跟情感筛选：描述归并组数，不是样本条数
+        "description_counts": description_counts,
+        "description_share": description_share,
+        "description_compare": description_compare,
         "ai_descriptions": ai_descriptions,
         "parse": parse_meta,
         "generated_at": now.isoformat(timespec="seconds"),

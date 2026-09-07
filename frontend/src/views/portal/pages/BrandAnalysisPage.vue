@@ -1,23 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { RefreshCw, ChevronLeft, ChevronRight, HelpCircle } from '@lucide/vue'
-import { ElDialog, ElTooltip } from 'element-plus'
-import type { ECharts } from 'echarts/core'
+import { RefreshCw, ChevronLeft, ChevronRight, HelpCircle, Download } from '@lucide/vue'
+import { ElDialog, ElTooltip, ElMessage } from 'element-plus'
 import { withRetry } from '../../../composables/useRetry'
 import { getBrandAsset, type BrandAsset } from '../../../services/brand'
 import {
+  downloadBrandAnalysisPdf,
   getBrandAnalysis,
   getMonitorSubtask,
   type BrandAnalysisAiDescription,
   type BrandAnalysisAnswer,
   type BrandAnalysisDashboard,
-  type BrandAnalysisPlatformBlock,
+  type BrandComparePeriod,
   type MonitorSubtask,
 } from '../../../services/monitor'
 import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
-import { loadEchartsRuntime } from '../../../utils/echartsLoader'
 import { useAuthStore } from '../../../stores/auth'
 import { parseAnswerBlocks } from '../answerBlocks'
 import { parsePreviewTenantId } from '../customerPreview'
@@ -40,10 +39,16 @@ const localBrandAsset = ref<BrandAsset | null>(null)
 const localLoading = ref(false)
 const loadError = ref('')
 const updateTime = ref('')
-const sentimentChartEl = ref<HTMLElement | null>(null)
-const platformChartEl = ref<HTMLElement | null>(null)
-let sentimentChart: ECharts | null = null
-let platformChart: ECharts | null = null
+// 2026-09-07 - B+：环比窗口可选周/月/季/年；比例跟描述筛选数
+const comparePeriod = ref<BrandComparePeriod>('month')
+const exporting = ref(false)
+
+const canExport = computed(() => {
+  const menus = auth.allowedMenus || []
+  const row = menus.find(m => m.menu_code === 'customer.brand_analysis')
+  if (row) return Boolean(row.can_export)
+  return auth.session?.identity?.identity_type === 'PLATFORM'
+})
 
 const snapshotVisible = ref(false)
 const snapshotLoading = ref(false)
@@ -75,256 +80,64 @@ const brandName = computed(() => (
   || '监测品牌'
 ))
 
+const comparePeriodOptions: Array<{ value: BrandComparePeriod; label: string }> = [
+  { value: 'week', label: '周' },
+  { value: 'month', label: '月' },
+  { value: 'quarter', label: '季' },
+  { value: 'year', label: '年' },
+]
+
+const overviewShare = computed(() => {
+  const share = dashboard.value?.description_share || {}
+  return {
+    正面: Number(share['正面'] || 0),
+    中性: Number(share['中性'] || 0),
+    负面: Number(share['负面'] || 0),
+  }
+})
+
 function resolveTenantId() {
   const isPlatform = auth.session?.identity?.identity_type === 'PLATFORM'
   if (isPlatform) return parsePreviewTenantId(route) ?? undefined
   return undefined
 }
 
-async function ensureCharts() {
-  const runtime = await loadEchartsRuntime('portal')
-  await nextTick()
-  if (sentimentChartEl.value) {
-    sentimentChart = runtime.getInstanceByDom(sentimentChartEl.value) || runtime.init(sentimentChartEl.value)
-  }
-  if (platformChartEl.value) {
-    platformChart = runtime.getInstanceByDom(platformChartEl.value) || runtime.init(platformChartEl.value)
-  }
+function formatPtDelta(value: number | null | undefined) {
+  if (value == null || Number.isNaN(Number(value))) return '—'
+  const n = Number(value)
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(1)} pt`
 }
 
-const SENTIMENT_ORDER = ['正面', '中性', '负面', '未知'] as const
-/** 对齐工作台 success / muted / danger */
-const SENTIMENT_COLOR: Record<string, string> = {
-  正面: '#16a34a',
-  中性: '#94a3b8',
-  负面: '#dc2626',
-  未知: '#cbd5e1',
+function deltaTone(value: number | null | undefined, lowerIsBetter = false) {
+  if (value == null || Number.isNaN(Number(value))) return 'muted'
+  const n = Number(value)
+  if (Math.abs(n) < 0.05) return 'muted'
+  const upIsGood = !lowerIsBetter
+  if (n > 0) return upIsGood ? 'ok' : 'bad'
+  return upIsGood ? 'bad' : 'ok'
 }
 
-function sentimentDonutOption(data: Array<{ name: string; value: number }>) {
-  const filtered = SENTIMENT_ORDER
-    .map(name => ({ name, value: data.find(item => item.name === name)?.value || 0 }))
-    .filter(item => item.value > 0)
-  const total = filtered.reduce((sum, item) => sum + item.value, 0)
-  return {
-    animation: false,
-    color: filtered.map(item => SENTIMENT_COLOR[item.name] || '#cbd5e1'),
-    tooltip: {
-      trigger: 'item',
-      backgroundColor: 'rgba(15, 23, 42, 0.92)',
-      borderWidth: 0,
-      padding: [8, 12],
-      textStyle: { color: '#fff', fontSize: 12 },
-      formatter: (params: { name: string; value: number; percent: number; marker: string }) => (
-        params.marker + params.name + '<br/>' + params.value + ' 条 · ' + params.percent + '%'
-      ),
-    },
-    legend: {
-      bottom: 0,
-      left: 'center',
-      itemWidth: 8,
-      itemHeight: 8,
-      itemGap: 18,
-      icon: 'circle',
-      textStyle: { color: '#64748b', fontSize: 12 },
-      formatter: (name: string) => {
-        const row = filtered.find(item => item.name === name)
-        if (!row || !total) return name
-        return name + ' ' + row.value
-      },
-    },
-    series: [{
-      type: 'pie',
-      radius: ['46%', '70%'],
-      center: ['50%', '44%'],
-      padAngle: 1.2,
-      minAngle: 4,
-      itemStyle: {
-        borderRadius: 5,
-        borderColor: '#fff',
-        borderWidth: 2,
-      },
-      label: { show: false },
-      labelLine: { show: false },
-      data: total
-        ? filtered
-        : [{ name: '暂无', value: 1, itemStyle: { color: '#e2e8f0' } }],
-      emphasis: {
-        scale: true,
-        scaleSize: 6,
-        itemStyle: { shadowBlur: 10, shadowColor: 'rgba(15, 23, 42, 0.1)' },
-      },
-    }],
-    graphic: total
-      ? [
-          {
-            type: 'text',
-            left: 'center',
-            top: '36%',
-            style: {
-              text: String(total),
-              fill: '#0f172a',
-              fontSize: 26,
-              fontWeight: 700,
-              textAlign: 'center',
-            },
-          },
-          {
-            type: 'text',
-            left: 'center',
-            top: '48%',
-            style: {
-              text: '样本',
-              fill: '#94a3b8',
-              fontSize: 12,
-              textAlign: 'center',
-            },
-          },
-        ]
-      : [],
-  }
+function compareDeltaClass(value: number | null | undefined, lowerIsBetter = false) {
+  const tone = deltaTone(value, lowerIsBetter)
+  if (tone === 'ok') return 'up'
+  if (tone === 'bad') return 'down'
+  return 'is-muted'
 }
 
-function platformSentimentBarOption(platforms: BrandAnalysisPlatformBlock[]) {
-  const rows = platforms
-    .map(platform => {
-      const positive = (platform.positive || []).length
-      const neutral = (platform.neutral || []).length
-      const negative = (platform.negative || []).length
-      const total = positive + neutral + negative
-      return {
-        name: platform.name,
-        positive,
-        neutral,
-        negative,
-        total,
-        pPos: total ? (positive / total) * 100 : 0,
-        pNeu: total ? (neutral / total) * 100 : 0,
-        pNeg: total ? (negative / total) * 100 : 0,
-      }
-    })
-    .filter(item => item.total > 0)
-    .sort((a, b) => b.negative - a.negative || b.positive - a.positive || a.name.localeCompare(b.name, 'zh'))
-
-  const names = rows.map(item => item.name).reverse()
-  const pos = rows.map(item => Number(item.pPos.toFixed(1))).reverse()
-  const neu = rows.map(item => Number(item.pNeu.toFixed(1))).reverse()
-  const neg = rows.map(item => Number(item.pNeg.toFixed(1))).reverse()
-  const counts = Object.fromEntries(rows.map(item => [item.name, item]))
-
-  return {
-    animation: false,
-    grid: { left: 108, right: 20, top: 40, bottom: 4 },
-    legend: {
-      top: 0,
-      right: 0,
-      itemWidth: 8,
-      itemHeight: 8,
-      itemGap: 14,
-      icon: 'circle',
-      textStyle: { color: '#64748b', fontSize: 12 },
-      data: ['负面', '中性', '正面'],
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(37, 99, 235, 0.06)' } },
-      backgroundColor: 'rgba(15, 23, 42, 0.92)',
-      borderWidth: 0,
-      padding: [8, 12],
-      textStyle: { color: '#fff', fontSize: 12 },
-      formatter: (params: Array<{ axisValue: string }>) => {
-        const list = Array.isArray(params) ? params : []
-        const name = String(list[0]?.axisValue || '')
-        const row = counts[name]
-        if (!row) return name
-        return [
-          name,
-          '负面 ' + row.negative + ' 条',
-          '中性 ' + row.neutral + ' 条',
-          '正面 ' + row.positive + ' 条',
-        ].join('<br/>')
-      },
-    },
-    xAxis: {
-      type: 'value',
-      max: 100,
-      min: 0,
-      axisLabel: { show: false },
-      splitLine: { show: false },
-      axisLine: { show: false },
-      axisTick: { show: false },
-    },
-    yAxis: {
-      type: 'category',
-      data: names.length ? names : ['暂无'],
-      axisLabel: {
-        color: '#334155',
-        fontSize: 12,
-        fontWeight: 500,
-        width: 96,
-        overflow: 'truncate',
-      },
-      axisLine: { show: false },
-      axisTick: { show: false },
-    },
-    series: [
-      {
-        name: '负面',
-        type: 'bar',
-        stack: 'pct',
-        data: names.length ? neg : [0],
-        barWidth: 14,
-        barCategoryGap: '36%',
-        cursor: 'pointer',
-        itemStyle: { color: SENTIMENT_COLOR['负面'], borderRadius: [7, 0, 0, 7] },
-      },
-      {
-        name: '中性',
-        type: 'bar',
-        stack: 'pct',
-        data: names.length ? neu : [0],
-        barWidth: 14,
-        cursor: 'pointer',
-        itemStyle: { color: SENTIMENT_COLOR['中性'] },
-      },
-      {
-        name: '正面',
-        type: 'bar',
-        stack: 'pct',
-        data: names.length ? pos : [0],
-        barWidth: 14,
-        cursor: 'pointer',
-        itemStyle: {
-          color: SENTIMENT_COLOR['正面'],
-          borderRadius: [0, 7, 7, 0],
-        },
-      },
-    ],
-  }
-}
-
-function bindPlatformChartClick() {
-  if (!platformChart) return
-  // 2026-08-04 - 平台情感色块点击打开该平台×情感全部快照列表
-  platformChart.off('click')
-  platformChart.on('click', (params: { componentType?: string; seriesName?: string; name?: string }) => {
-    if (params.componentType !== 'series') return
-    const sentiment = String(params.seriesName || '')
-    const platformName = String(params.name || '')
-    if (!sentiment || !platformName || platformName === '暂无') return
-    openPlatformSentimentSnaps(platformName, sentiment)
-  })
-}
-
-async function renderCharts() {
-  if (!dashboard.value) return
-  await ensureCharts()
-  sentimentChart?.setOption(sentimentDonutOption(dashboard.value.sentiment_pie || []), true)
-  platformChart?.setOption(platformSentimentBarOption(dashboard.value.platforms || []), true)
-  bindPlatformChartClick()
-  await nextTick()
-  sentimentChart?.resize()
-  platformChart?.resize()
+function platformShare(
+  platform: { sentiment_share?: Record<string, number>; positive?: unknown[]; neutral?: unknown[]; negative?: unknown[] },
+  key: '正面' | '中性' | '负面',
+) {
+  const share = platform.sentiment_share
+  if (share && share[key] != null) return Number(share[key] || 0)
+  const pos = (platform.positive || []).length
+  const neu = (platform.neutral || []).length
+  const neg = (platform.negative || []).length
+  const labeled = pos + neu + neg
+  if (!labeled) return 0
+  const map = { 正面: pos, 中性: neu, 负面: neg }
+  return Math.round((1000 * map[key]) / labeled) / 10
 }
 
 async function loadPageData() {
@@ -332,25 +145,31 @@ async function loadPageData() {
   loadError.value = ''
   try {
     const tenantId = resolveTenantId()
-    // 先快读（不调 DeepSeek），有待解析再后台补一轮
-    dashboard.value = await withRetry(() => getBrandAnalysis({ tenant_id: tenantId, parse: false }))
+    dashboard.value = await withRetry(() => getBrandAnalysis({
+      tenant_id: tenantId,
+      parse: false,
+      compare_period: comparePeriod.value,
+    }))
     if (selfLoaded.value) {
       const assetTenantId = dashboard.value?.tenant_id ?? tenantId ?? null
       const response = await withRetry(() => getBrandAsset(assetTenantId))
       localBrandAsset.value = response.asset
     }
-    await renderCharts()
     const pending =
       Number(dashboard.value?.parse?.pending_left || 0) +
       Number(dashboard.value?.parse?.description_pending_left || 0)
     if (pending > 0) {
-      void getBrandAnalysis({ tenant_id: tenantId, parse: true })
-        .then(async (data) => {
+      const grain = comparePeriod.value
+      void getBrandAnalysis({
+        tenant_id: tenantId,
+        parse: true,
+        compare_period: grain,
+      })
+        .then((data) => {
+          if (comparePeriod.value !== grain) return
           dashboard.value = data
-          await renderCharts()
           const descErrs = data.parse?.description_errors || []
           const sentErrs = data.parse?.errors || []
-          // 2026-07-28 - 补解析失败曾被静默吞掉，页面一直停在旧「1 组」
           if (descErrs.length || sentErrs.length || data.parse?.error) {
             notifyOperationError(
               new Error(String(data.parse?.error || descErrs[0] || sentErrs[0] || '补解析失败')),
@@ -374,6 +193,23 @@ async function handleRefresh() {
   await loadPageData()
   emit('refresh')
   stampNow()
+}
+
+async function handleExportPdf() {
+  // 2026-09-07 - D1：导出维度=页面当前 comparePeriod，不另开选择
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const filename = await downloadBrandAnalysisPdf({
+      tenant_id: resolveTenantId(),
+      compare_period: comparePeriod.value,
+    })
+    ElMessage.success(`已导出 ${filename}`)
+  } catch (error: unknown) {
+    notifyOperationError(error, '导出口碑快照失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function openAnswer(row: BrandAnalysisAnswer) {
@@ -415,7 +251,6 @@ function openPlatformSentimentSnaps(platformName: string, sentimentLabel: string
   if (!bucketKey) return
   const answers = platform[bucketKey] || []
   if (!answers.length) return
-  // 复用「关联快照」弹层：展示该平台该情感下全部回答快照
   activeGroup.value = {
     description: `${platform.name} · ${sentimentLabel}（${answers.length} 条）`,
     sentiment: sentimentLabel,
@@ -441,11 +276,6 @@ const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?
 const snapshotSourceTracks = computed(() =>
   buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
 )
-
-function sentimentCount(label: string) {
-  const counts = dashboard.value?.sentiment_counts || {}
-  return Number(counts[label] || 0)
-}
 
 function sentimentTone(label: string | undefined) {
   if (label === '正面') return 'ok'
@@ -483,7 +313,6 @@ const filteredDescriptions = computed(() => {
   })
 })
 
-/** 筛选条数字与 AI 描述「组」对齐（多样本一快照多要点后，不能再用样本数当筛选角标） */
 const descriptionFilterCounts = computed(() => {
   const rows = dashboard.value?.ai_descriptions || []
   const platform = platformFilter.value
@@ -525,39 +354,49 @@ const pagedDescriptions = computed(() => {
   return filteredDescriptions.value.slice(start, start + DESC_PAGE_SIZE)
 })
 
-function onResize() {
-  sentimentChart?.resize()
-  platformChart?.resize()
-}
+const platformRowsSorted = computed(() => {
+  const rows = [...(dashboard.value?.platforms || [])]
+  // 2026-09-07 - Brandwatch 渠道图按样本量排；同分再比负面占比
+  return rows.sort((a, b) => {
+    const vol = (b.sample_count || 0) - (a.sample_count || 0)
+    if (vol) return vol
+    return platformShare(b, '负面') - platformShare(a, '负面')
+  })
+})
 
 watch(dashboard, () => {
   platformFilter.value = 'all'
   descPage.value = 1
-  void renderCharts()
 })
 
 watch([sentimentFilter, platformFilter], () => {
   descPage.value = 1
 })
 
-onMounted(() => {
+watch(comparePeriod, () => {
   void loadPageData()
-  window.addEventListener('resize', onResize)
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
-  sentimentChart?.dispose()
-  platformChart?.dispose()
-  sentimentChart = null
-  platformChart = null
+onMounted(() => {
+  void loadPageData()
 })
 </script>
+
 
 <template>
   <section class="brand-analysis-page">
     <Teleport to="#portal-page-head-extra" defer>
       <div class="ba-head-actions">
+        <button
+          v-if="canExport"
+          type="button"
+          class="ws-board-btn"
+          :disabled="effectiveLoading || exporting || !dashboard"
+          @click="handleExportPdf"
+        >
+          <Download :size="16" />
+          {{ exporting ? '导出中…' : '导出 PDF' }}
+        </button>
         <button type="button" class="ws-board-btn" :disabled="effectiveLoading" @click="handleRefresh">
           <RefreshCw :size="16" :class="{ 'ba-spin': effectiveLoading }" />
           刷新
@@ -572,56 +411,141 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else-if="dashboard">
-      <article class="ws-board-card ws-board-profile-strip ba-profile">
-        <div class="ws-board-profile-strip-top">
-          <div class="ws-board-profile-strip-main">
-            <h2 class="ws-board-profile-name">{{ brandName }}</h2>
-            <p class="ws-board-profile-brand">
-              {{ dashboard.period_label || '—' }}
-              · 已购 {{ dashboard.purchased_platforms?.length || 0 }} 平台
-            </p>
+      <!-- 2026-09-07 - Brandwatch 式：结论卡 + 独立「平台情感构成」100% 堆叠条 -->
+      <div class="ws-board-insight-row ba-insight-row">
+        <article class="ws-board-card ws-board-conclusion-card ba-summary">
+          <!-- 2026-09-07 - 副文案过长把样本挤到下一行 - 标题行只留品牌+样本，周期单独一行 -->
+          <div class="ws-board-conclusion-head ba-summary-top">
+            <div class="ws-board-conclusion-title-wrap">
+              <h2 class="ws-board-conclusion-title ba-summary-name">{{ brandName }}</h2>
+              <p class="ws-board-conclusion-sub">
+                {{ dashboard.period_label || '—' }}
+                · {{ dashboard.purchased_platforms?.length || 0 }} 个平台
+              </p>
+            </div>
+            <div class="ws-board-conclusion-head-aside ba-summary-aside">
+              <span class="ws-board-conclusion-badge is-calm">样本 {{ dashboard.sample_count ?? 0 }}</span>
+            </div>
           </div>
-          <span class="ws-board-profile-status">样本 {{ dashboard.sample_count ?? 0 }}</span>
-        </div>
-        <div class="ba-profile-meta">
-          <div class="ws-board-profile-meta-item">
-            <span class="ws-board-profile-meta-label">正面</span>
-            <span class="ws-board-profile-meta-value">{{ sentimentCount('正面') }}</span>
+          <div class="ba-summary-period" role="region" aria-label="环比窗口">
+            <div class="ws-board-tabs">
+              <button
+                v-for="option in comparePeriodOptions"
+                :key="option.value"
+                type="button"
+                class="ws-board-tab"
+                :class="{ active: comparePeriod === option.value }"
+                @click="comparePeriod = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
           </div>
-          <div class="ws-board-profile-meta-item">
-            <span class="ws-board-profile-meta-label">中性</span>
-            <span class="ws-board-profile-meta-value">{{ sentimentCount('中性') }}</span>
-          </div>
-          <div class="ws-board-profile-meta-item">
-            <span class="ws-board-profile-meta-label">负面</span>
-            <span class="ws-board-profile-meta-value">{{ sentimentCount('负面') }}</span>
-          </div>
-        </div>
-      </article>
 
-      <div class="ws-board-hero-row ba-charts">
-        <article class="ws-board-card ba-chart-card">
-          <div class="ws-board-card-head">
-            <div class="ws-board-card-title" style="margin:0">情感分布</div>
+          <div class="ws-board-conclusion-metrics ba-summary-kpis">
+            <div class="ws-board-conclusion-metric ba-kpi is-ok">
+              <div class="ws-board-conclusion-metric-label">正面</div>
+              <div class="ws-board-conclusion-metric-value">{{ overviewShare['正面'].toFixed(1) }}%</div>
+              <div
+                v-if="!dashboard.description_compare?.insufficient"
+                class="ws-board-conclusion-metric-delta"
+                :class="compareDeltaClass(dashboard.description_compare?.deltas?.['正面_pt'])"
+              >{{ formatPtDelta(dashboard.description_compare?.deltas?.['正面_pt']) }}</div>
+              <div v-else class="ws-board-conclusion-metric-delta is-muted">—</div>
+            </div>
+            <div class="ws-board-conclusion-metric ba-kpi is-mid">
+              <div class="ws-board-conclusion-metric-label">中性</div>
+              <div class="ws-board-conclusion-metric-value">{{ overviewShare['中性'].toFixed(1) }}%</div>
+              <div
+                v-if="!dashboard.description_compare?.insufficient"
+                class="ws-board-conclusion-metric-delta"
+                :class="compareDeltaClass(dashboard.description_compare?.deltas?.['中性_pt'])"
+              >{{ formatPtDelta(dashboard.description_compare?.deltas?.['中性_pt']) }}</div>
+              <div v-else class="ws-board-conclusion-metric-delta is-muted">—</div>
+            </div>
+            <div class="ws-board-conclusion-metric ba-kpi is-bad">
+              <div class="ws-board-conclusion-metric-label">负面</div>
+              <div class="ws-board-conclusion-metric-value">{{ overviewShare['负面'].toFixed(1) }}%</div>
+              <div
+                v-if="!dashboard.description_compare?.insufficient"
+                class="ws-board-conclusion-metric-delta"
+                :class="compareDeltaClass(dashboard.description_compare?.deltas?.['负面_pt'], true)"
+              >{{ formatPtDelta(dashboard.description_compare?.deltas?.['负面_pt']) }}</div>
+              <div v-else class="ws-board-conclusion-metric-delta is-muted">—</div>
+            </div>
           </div>
-          <div ref="sentimentChartEl" class="ba-chart-el" />
+
+          <div class="ba-share-track" aria-hidden="true">
+            <i v-if="overviewShare['正面'] > 0" class="is-ok" :style="{ flexGrow: overviewShare['正面'] }" />
+            <i v-if="overviewShare['中性'] > 0" class="is-mid" :style="{ flexGrow: overviewShare['中性'] }" />
+            <i v-if="overviewShare['负面'] > 0" class="is-bad" :style="{ flexGrow: overviewShare['负面'] }" />
+          </div>
         </article>
-        <article class="ws-board-card ba-chart-card">
+
+        <article class="ws-board-card ba-platform-card">
           <div class="ws-board-card-head">
-            <div class="ws-board-card-title" style="margin:0">平台情感</div>
+            <div class="ws-board-card-title" style="margin:0">平台情感构成</div>
+            <div class="ba-stack-legend" aria-hidden="true">
+              <span class="is-ok">正面</span>
+              <span class="is-mid">中性</span>
+              <span class="is-bad">负面</span>
+            </div>
           </div>
-          <div ref="platformChartEl" class="ba-chart-el" />
+          <p v-if="!platformRowsSorted.length" class="ws-board-mini-empty">暂无平台样本</p>
+          <div v-else class="ba-stack-list">
+            <div
+              v-for="platform in platformRowsSorted"
+              :key="platform.code"
+              class="ba-stack-row"
+            >
+              <div class="ba-stack-name">{{ platform.name }}</div>
+              <div class="ba-stack-bar" role="img" :aria-label="`${platform.name} 正${platformShare(platform, '正面')}% 中${platformShare(platform, '中性')}% 负${platformShare(platform, '负面')}%`">
+                <button
+                  v-if="platformShare(platform, '正面') > 0"
+                  type="button"
+                  class="seg is-ok"
+                  :style="{ width: `${platformShare(platform, '正面')}%` }"
+                  :disabled="!(platform.positive || []).length"
+                  :title="`正面 ${platformShare(platform, '正面')}%`"
+                  @click="openPlatformSentimentSnaps(platform.name, '正面')"
+                >
+                  <em v-if="platformShare(platform, '正面') >= 14">{{ platformShare(platform, '正面').toFixed(0) }}%</em>
+                </button>
+                <button
+                  v-if="platformShare(platform, '中性') > 0"
+                  type="button"
+                  class="seg is-mid"
+                  :style="{ width: `${platformShare(platform, '中性')}%` }"
+                  :disabled="!(platform.neutral || []).length"
+                  :title="`中性 ${platformShare(platform, '中性')}%`"
+                  @click="openPlatformSentimentSnaps(platform.name, '中性')"
+                >
+                  <em v-if="platformShare(platform, '中性') >= 14">{{ platformShare(platform, '中性').toFixed(0) }}%</em>
+                </button>
+                <button
+                  v-if="platformShare(platform, '负面') > 0"
+                  type="button"
+                  class="seg is-bad"
+                  :style="{ width: `${platformShare(platform, '负面')}%` }"
+                  :disabled="!(platform.negative || []).length"
+                  :title="`负面 ${platformShare(platform, '负面')}%`"
+                  @click="openPlatformSentimentSnaps(platform.name, '负面')"
+                >
+                  <em v-if="platformShare(platform, '负面') >= 14">{{ platformShare(platform, '负面').toFixed(0) }}%</em>
+                </button>
+              </div>
+            </div>
+          </div>
         </article>
       </div>
 
       <div class="ba-filter-bar">
         <span class="ba-filter-label">
           情感筛选
-          <!-- 2026-08-04 - 上方样本数与筛选角标口径不同，加问号说明 -->
           <ElTooltip
             placement="top"
             :show-after="200"
-            content="上方「样本」与情感分布图按监测子任务计（一条回答=1）。此处角标按 AI 描述要点计：一条回答可拆出多条要点，故「全部」常大于样本数。"
+            content="角标按 AI 描述归并组数计；右上「样本」是监测回答条数，一条回答可拆出多组，故「全部」常大于样本数。"
           >
             <button type="button" class="ba-filter-help" aria-label="情感筛选数字说明">
               <HelpCircle :size="14" />
@@ -874,30 +798,182 @@ onBeforeUnmount(() => {
   to { transform: rotate(360deg); }
 }
 
-.ba-profile {
-  margin-bottom: 20px;
-}
-
-.ba-profile-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.ba-charts {
-  margin-bottom: 20px;
-}
-
-.ba-chart-card {
+.ba-summary {
   margin-bottom: 0;
   height: 100%;
+}
+
+.ba-summary-top {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.ba-summary-name {
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+
+.ba-summary-aside {
+  flex-shrink: 0;
+  align-items: flex-end;
+}
+
+.ba-summary-period {
+  margin: 10px 0 12px;
+}
+
+.ba-summary-kpis {
+  margin: 0;
+}
+
+/* 情感色落在指标格上，避免裸数字飘在空里 */
+.ba-kpi.is-ok {
+  background: linear-gradient(180deg, #ecfdf5 0%, #f8fafc 100%);
+  border-color: #d1fae5;
+}
+
+.ba-kpi.is-ok .ws-board-conclusion-metric-value {
+  color: #15803d;
+}
+
+.ba-kpi.is-mid {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: #e2e8f0;
+}
+
+.ba-kpi.is-mid .ws-board-conclusion-metric-value {
+  color: #334155;
+}
+
+.ba-kpi.is-bad {
+  background: linear-gradient(180deg, #fef2f2 0%, #f8fafc 100%);
+  border-color: #fecaca;
+}
+
+.ba-kpi.is-bad .ws-board-conclusion-metric-value {
+  color: #b91c1c;
+}
+
+.ba-share-track {
+  display: flex;
+  gap: 4px;
+  height: 8px;
+  margin: 2px 0 0;
+}
+
+.ba-share-track > i {
+  display: block;
+  min-width: 0;
+  border-radius: 999px;
+}
+
+.ba-share-track .is-ok { background: #22c55e; }
+.ba-share-track .is-mid { background: #94a3b8; }
+.ba-share-track .is-bad { background: #ef4444; }
+
+.ba-platform-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 18px 18px 16px !important;
+}
+
+.ba-stack-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.ba-stack-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ba-stack-legend > span::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.ba-stack-legend .is-ok::before { background: #22c55e; }
+.ba-stack-legend .is-mid::before { background: #94a3b8; }
+.ba-stack-legend .is-bad::before { background: #ef4444; }
+
+.ba-stack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  justify-content: center;
+}
+
+.ba-stack-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.ba-stack-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ba-stack-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #f1f5f9;
+}
+
+.ba-stack-bar .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  min-width: 0;
   box-sizing: border-box;
 }
 
-.ba-chart-el {
-  width: 100%;
-  height: 300px;
+.ba-stack-bar .seg:disabled {
+  cursor: default;
 }
+
+.ba-stack-bar .seg:not(:disabled):hover {
+  filter: brightness(0.95);
+}
+
+.ba-stack-bar .seg em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
+  line-height: 1;
+}
+
+.ba-stack-bar .is-ok { background: #22c55e; }
+.ba-stack-bar .is-mid { background: #94a3b8; }
+.ba-stack-bar .is-mid em { color: #f8fafc; }
+.ba-stack-bar .is-bad { background: #ef4444; }
 
 .ba-filter-bar {
   display: flex;
@@ -1168,16 +1244,9 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
-  .ba-profile-meta {
-    grid-template-columns: 1fr;
-  }
-
-  .ba-charts {
-    grid-template-columns: 1fr;
-  }
-
-  .ba-chart-el {
-    height: 260px;
+  .ba-stack-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 8px;
   }
 }
 </style>

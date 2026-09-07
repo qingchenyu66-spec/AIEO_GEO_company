@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
@@ -439,11 +440,15 @@ def monitor_workspace_brief(
 def monitor_brand_analysis(
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
     parse: bool = Query(default=False, description="是否对未解析样本调用 DeepSeek；默认否，避免读路径堵接口"),
+    compare_period: str = Query(
+        default="month",
+        description="环比窗口：week/month/quarter/year（滚动等长上期）",
+    ),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """品牌分析专用看板：情感/平台饼图 + 分平台正中负回答（仅 brand_word 任务）。"""
-    from app.services.brand_analysis_service import build_brand_analysis_dashboard
+    """品牌分析看板：描述要点比例/环比 + 分平台样本 + AI 描述。"""
+    from app.services.brand_analysis_service import build_brand_analysis_dashboard, resolve_brand_compare_period
     from app.services.tenant_scope import resolve_customer_preview_tenant_id
 
     resolved_tenant_id: int | None = tenant_id
@@ -467,10 +472,65 @@ def monitor_brand_analysis(
             current,
             tenant_id=resolved_tenant_id,
             parse_sentiments=parse,
+            compare_period=resolve_brand_compare_period(compare_period),
         )
         return ApiResponse(data=data)
     except Exception as exc:
         raise_read_endpoint_error(exc, context="monitor.brand_analysis")
+
+
+@router.get("/brand-analysis/export")
+def monitor_brand_analysis_export(
+    tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
+    compare_period: str = Query(
+        default="month",
+        description="D1：与页面当前环比窗口一致 week/month/quarter/year",
+    ),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> Response:
+    """2026-09-07 - D1：导出跟页面当前周期，B1 口碑快照 PDF。"""
+    from app.services.brand_analysis_export_service import (
+        content_disposition_attachment,
+        export_brand_analysis_snapshot_pdf,
+    )
+    from app.services.brand_analysis_service import resolve_brand_compare_period
+    from app.services.tenant_scope import resolve_customer_preview_tenant_id
+
+    resolved_tenant_id: int | None = tenant_id
+    if current.identity.identity_type == "CUSTOMER":
+        if current.identity.tenant_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持客户企业账号")
+        resolved_tenant_id = current.identity.tenant_id
+    elif current.identity.identity_type == "PLATFORM":
+        try:
+            resolved_tenant_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权导出品牌分析")
+
+    try:
+        pdf_bytes, filename = export_brand_analysis_snapshot_pdf(
+            db,
+            current,
+            tenant_id=resolved_tenant_id,
+            compare_period=resolve_brand_compare_period(compare_period),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.brand_analysis_export")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
+    )
 
 
 @router.get("/inclusion-snapshots", response_model=ApiResponse[dict])

@@ -686,6 +686,7 @@ export interface BrandAnalysisPlatformBlock {
   neutral: BrandAnalysisAnswer[]
   negative: BrandAnalysisAnswer[]
   unknown?: BrandAnalysisAnswer[]
+  sentiment_share?: Record<string, number>
 }
 
 export interface BrandAnalysisPieSlice {
@@ -702,14 +703,31 @@ export interface BrandAnalysisAiDescription {
   answers: BrandAnalysisAnswer[]
 }
 
+export type BrandComparePeriod = 'week' | 'month' | 'quarter' | 'year'
+
 export interface BrandAnalysisDashboard {
   tenant_id: number
   brand_name: string
   company_name?: string
   period_label: string
+  compare_period?: BrandComparePeriod
+  compare_period_label?: string
+  previous_period_label?: string
   purchased_platforms: string[]
   sample_count: number
   sentiment_counts: Record<string, number>
+  /** 与情感筛选同口径：描述归并组数 */
+  description_counts?: Record<string, number>
+  description_share?: Record<string, number>
+  description_compare?: {
+    group_count: number
+    description_counts: Record<string, number>
+    description_share: Record<string, number>
+    deltas: Record<string, number | null>
+    insufficient: boolean
+    min_groups: number
+    reason?: 'empty' | 'sparse' | null
+  }
   sentiment_pie: BrandAnalysisPieSlice[]
   platform_pie: BrandAnalysisPieSlice[]
   platforms: BrandAnalysisPlatformBlock[]
@@ -727,13 +745,14 @@ export interface BrandAnalysisDashboard {
 }
 
 export async function getBrandAnalysis(
-  params?: { tenant_id?: number; parse?: boolean },
+  params?: { tenant_id?: number; parse?: boolean; compare_period?: BrandComparePeriod },
   options?: { timeout?: number },
 ): Promise<BrandAnalysisDashboard> {
   const response = await http.get('/v1/monitor/brand-analysis', {
     params: {
       tenant_id: params?.tenant_id,
       parse: params?.parse ?? false,
+      compare_period: params?.compare_period ?? 'month',
       // 2026-07-28 - 避免中间层/浏览器把旧「1 组」响应当缓存
       _ts: Date.now(),
     },
@@ -741,6 +760,63 @@ export async function getBrandAnalysis(
     headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
   } as GeoHttpRequestConfig)
   return response.data.data as BrandAnalysisDashboard
+}
+
+function parseDownloadFilename(contentDisposition: string | undefined, fallback: string): string {
+  const raw = String(contentDisposition || '')
+  const utfMatch = raw.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1])
+    } catch {
+      return utfMatch[1]
+    }
+  }
+  const plainMatch = raw.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || fallback
+}
+
+/** D1：导出跟页面当前周/月/季/年，下载品牌口碑快照 PDF */
+export async function downloadBrandAnalysisPdf(params?: {
+  tenant_id?: number
+  compare_period?: BrandComparePeriod
+}): Promise<string> {
+  const response = await http.get('/v1/monitor/brand-analysis/export', {
+    params: {
+      tenant_id: params?.tenant_id,
+      compare_period: params?.compare_period ?? 'month',
+      _ts: Date.now(),
+    },
+    responseType: 'blob',
+    timeout: 180_000,
+    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  } as GeoHttpRequestConfig)
+  const contentType = String(response.headers['content-type'] || 'application/pdf')
+  if (contentType.includes('application/json')) {
+    const text = await (response.data as Blob).text()
+    let detail = '导出失败'
+    try {
+      const parsed = JSON.parse(text) as { detail?: string; message?: string }
+      detail = String(parsed.detail || parsed.message || detail)
+    } catch {
+      detail = text.slice(0, 200) || detail
+    }
+    throw new Error(detail)
+  }
+  const filename = parseDownloadFilename(
+    response.headers['content-disposition'],
+    '品牌口碑快照.pdf',
+  )
+  const blob = response.data instanceof Blob
+    ? response.data
+    : new Blob([response.data], { type: contentType })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+  return filename
 }
 
 export interface InclusionSnapshotsQuery {
