@@ -342,9 +342,10 @@ def validate_cockpit_html_export(
     brand: str,
     filter_mode: str,
 ) -> list[str]:
-    """出厂校验：禁静态旧客户/旧行业污染；无获客分母禁 null→0 文案。
+    """出厂校验：只硬拦「旧客户壳」残留；行业词跟本单内容走，不再因机场/高铁等直接 400。
 
     2026-08-13 - 客户单 HTML 禁 JS 也不得露出旧客户/旧行业壳
+    2026-09-07 - 拿掉 industry_pollution 硬失败：真户外/场景诊断也会写高铁等词，拦了不合理
     """
     issues: list[str] = []
     brand_s = str(brand or "").strip()
@@ -353,10 +354,7 @@ def validate_cockpit_html_export(
     # 2026-08-20 - 模板曾写死 imtcmkj；非该客户报告禁残留旧官网
     if "艾迪亚" not in brand_s and "imtcmkj" in html.lower():
         issues.append("shell_pollution:imtcmkj")
-    if filter_mode != "scene":
-        for term in ("机场", "高铁", "电梯", "户外广告"):
-            if term in html:
-                issues.append(f"industry_pollution:{term}")
+    _ = filter_mode  # 场景/意图轴仍影响版式；行业词是否出现由问法分类决定，不在此黑名单拦截
 
     cockpit = None
     m = re.search(r"const __COCKPIT__ = (\{.*?\});\s*\n", html, flags=re.S)
@@ -2802,7 +2800,8 @@ def _build_portfolio_dimension(
         section = {
             "nav_label": "场景矩阵",
             "title": "场景矩阵：按本次问法命中的场景承接 AI 选型",
-            "subtitle": f"本次命中场景：{hit_names}。未出现的机场/高铁/LED 等不展示。",
+            # 2026-09-07 - 勿写机场/高铁等到 HTML：非 scene 校验会 industry_pollution 直接 400
+            "subtitle": f"本次命中场景：{hit_names}。未命中的场景类型不展示。",
             "intro_title": "从媒介认知，升级为场景解决方案认知",
             "intro_body": f"{brand}应把能力放进真实采购问法，并提供可引用的案例与边界说明。",
         }
@@ -2811,7 +2810,8 @@ def _build_portfolio_dimension(
             "nav_label": "问法意图矩阵",
             "title": "问法意图矩阵：用通用意图卡承接 AI 决策",
             # 2026-08-21 - 禁「选型标准」；六卡口径对齐换皮版-G（推荐/竞品对标/排名/口碑/GEO/认知）
-            "subtitle": "本单无电梯/机场/高铁/LED 等固定场景词，以推荐/竞品对标/排名/口碑/GEO/认知六卡稳定版式。",
+            # 2026-09-07 - 去掉电梯/机场/高铁字面：意图轴校验禁这些词，写进副标题会预览 400
+            "subtitle": "本单无固定场景词，以推荐/竞品对标/排名/口碑/GEO/认知六卡稳定版式。",
             "intro_title": "从品牌名出现，升级为采购意图承接",
             "intro_body": f"{brand}应在非品牌词获客与品牌防守问法中，分别补齐推荐理由、对比口径与口碑证据。",
         }
@@ -3875,11 +3875,10 @@ def build_diagnosis_cockpit_context(
         ),
     }
 
-    # 2026-08-13 - 意图轴报告禁残留户外行业词（全文字黑名单）
-    if filter_mode != "scene":
-        banned = ["机场", "高铁", "电梯", "户外广告"]
-        if "艾迪亚" not in brand:
-            banned.append("艾迪亚")
+    # 2026-08-13 - 非本品报告禁残留「艾迪亚」壳文案（行业词不再整词替换，避免真场景诊断被改坏）
+    # 2026-09-07 - 去掉机场/高铁/电梯黑名单替换：内容应按问法生成，不能为防污染误伤正样本
+    if "艾迪亚" not in brand:
+        banned = ["艾迪亚"]
 
         def _clean_text(text: str) -> str:
             out = str(text or "")
