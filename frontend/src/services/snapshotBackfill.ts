@@ -230,14 +230,39 @@ export async function submitSnapshotBackfill(
     mention_position?: number | null
     sentiment?: string | null
     reference_urls?: string[]
+    reuse_from_subtask_id?: string | null
   },
-): Promise<{ subtask: MonitorSubtask; parse_async?: boolean }> {
+): Promise<{ subtask: MonitorSubtask; parse_async?: boolean; reuse_history?: boolean }> {
   const response = await http.post(`/v1/monitor/subtasks/${subtaskId}/snapshot-backfill`, payload, {
     timeout: 30000,
   })
   invalidateCache('/v1/monitor')
   invalidateCache('/v1/brand/asset')
   return response.data.data
+}
+
+export interface SnapshotBackfillHistoryCandidate {
+  subtask_id: string
+  task_id: string
+  platform: string
+  prompt: string
+  mention_position?: number | null
+  updated_at?: string | null
+  schedule_label?: string | null
+  schedule_window_key?: string | null
+  region_label?: string | null
+  has_screenshot?: boolean
+  answer_excerpt?: string
+  sample_chars?: number
+}
+
+export async function listSnapshotBackfillHistoryCandidates(
+  subtaskId: string,
+): Promise<SnapshotBackfillHistoryCandidate[]> {
+  const response = await http.get(
+    `/v1/monitor/subtasks/${subtaskId}/snapshot-backfill/history-candidates`,
+  )
+  return response.data.data?.items || []
 }
 
 const BACKFILL_PARSE_POLL_MS = 2000

@@ -69,13 +69,15 @@ class MonitorTaskDetail(BaseModel):
 
 
 class SnapshotBackfillRequest(BaseModel):
-    """快照补录：分享链接可选；无链接时可只改排名（沿用原快照）；有链接则解析正文覆盖。"""
+    """快照补录：分享链接可选；无链接时可只改排名；或指定历史成功场次复用。"""
 
     snapshot_url: str | None = Field(default=None, max_length=1000)
     answer_content: str | None = Field(default=None, max_length=200000)
     mention_position: int | None = Field(default=None, ge=1, le=100)
     sentiment: str | None = Field(default=None, max_length=32)
     reference_urls: list[str] = Field(default_factory=list, max_length=20)
+    # 2026-09-07 - 方案 A：同词同平台历史成功场次复用；客户侧无标，库内 _ops_reuse_from 留源
+    reuse_from_subtask_id: str | None = Field(default=None, max_length=64)
 
 
 class SnapshotBackfillGapSubtaskRequest(BaseModel):

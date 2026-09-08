@@ -50,6 +50,7 @@ from app.services.snapshot_backfill_service import (
     dismiss_snapshot_backfill_batch,
     dismiss_snapshot_backfill_slots,
     ensure_gap_backfill_subtask,
+    list_snapshot_backfill_history_candidates,
     list_snapshot_backfill_matrix,
     list_snapshot_backfill_page,
     undismiss_snapshot_backfill,
@@ -824,6 +825,28 @@ def monitor_snapshot_backfill_gap_subtask(
     return ApiResponse(data={"subtask": display, "item": ops_meta})
 
 
+@router.get("/subtasks/{subtask_id}/snapshot-backfill/history-candidates", response_model=ApiResponse[dict])
+def monitor_subtask_snapshot_backfill_history_candidates(
+    subtask_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """同词同平台历史成功场次，供运营选用复用。"""
+    require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
+    try:
+        require_snapshot_backfill_permission(db, current, "can_update")
+        items = list_snapshot_backfill_history_candidates(
+            db, subtask_id=subtask_id, current=current
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="monitor.snapshot_backfill_history_candidates")
+    return ApiResponse(data={"items": items})
+
+
 @router.post("/subtasks/{subtask_id}/snapshot-backfill", response_model=ApiResponse[dict])
 def monitor_subtask_snapshot_backfill(
     subtask_id: str,
@@ -831,7 +854,7 @@ def monitor_subtask_snapshot_backfill(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """运营补录：有分享链接则解析覆盖；无链接时可只改排名（沿用原快照）。"""
+    """运营补录：分享链接解析 / 只改排名 / 历史成功场次复用。"""
     require_platform(current, detail=_MONITOR_PLATFORM_DETAIL)
     try:
         require_snapshot_backfill_permission(db, current, "can_update")
@@ -847,6 +870,7 @@ def monitor_subtask_snapshot_backfill(
             mention_position=payload.mention_position,
             sentiment=payload.sentiment,
             reference_urls=payload.reference_urls,
+            reuse_from_subtask_id=payload.reuse_from_subtask_id,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 from collections import defaultdict
@@ -10,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from sqlalchemy import and_, false, func, or_, select, update
+from sqlalchemy import and_, case, false, func, or_, select, text, update
 from sqlalchemy import insert as sa_insert
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -146,7 +147,96 @@ _PENDING_PARSE_KEYS = (
     "_pending_parse_job_id",
     "_pending_previous_source",
     "backfill_parse_enqueue",
+    # 2026-09-07 - 分享页打开超时自动重试计数 - 成功/最终失败一并清掉
+    "_backfill_timeout_retries",
 )
+
+# 2026-09-07 - 超时失败自动重试上限（不含首次）
+_BACKFILL_SHARE_OPEN_TIMEOUT_MAX_RETRIES = 1
+
+
+def _is_share_page_open_timeout_error(message: str | None) -> bool:
+    text = str(message or "").strip()
+    return "分享页打开超时" in text
+
+
+def _try_requeue_share_open_timeout_retry(
+    db: Session,
+    subtask: GeoMonitorSubtask,
+    *,
+    parse_job_id: str,
+    err_text: str,
+) -> dict[str, Any] | None:
+    """分享页打开超时：保持 pending、刷新 watchdog 时钟、同 job 再入队一次。
+
+    2026-09-07 - 勿在同任务内连开两次 Playwright（会顶 soft/hard limit）；改二次入队。
+    """
+    if not _is_share_page_open_timeout_error(err_text):
+        return None
+    locked = db.scalar(
+        select(GeoMonitorSubtask)
+        .where(GeoMonitorSubtask.subtask_id == subtask.subtask_id)
+        .with_for_update()
+    )
+    if locked is None:
+        return None
+    subtask = locked
+    raw = dict(subtask.raw_result_json or {})
+    if str(raw.get("backfill_parse_status") or "").lower() != "pending":
+        return None
+    if str(raw.get("_pending_parse_job_id") or "") != str(parse_job_id or ""):
+        return None
+    try:
+        retries = int(raw.get("_backfill_timeout_retries") or 0)
+    except (TypeError, ValueError):
+        retries = 0
+    if retries >= _BACKFILL_SHARE_OPEN_TIMEOUT_MAX_RETRIES:
+        return None
+    raw["_backfill_timeout_retries"] = retries + 1
+    # 刷新起始时间，避免首次 120s + 排队 + 二次解析被 300s watchdog 误杀
+    raw["_pending_parse_started_at"] = datetime.now(UTC).isoformat()
+    raw["backfill_parse_error"] = None
+    raw["backfill_parse_enqueue"] = "timeout_retry"
+    subtask.raw_result_json = raw
+    db.commit()
+    try:
+        mode = enqueue_backfill_parse(subtask_id=subtask.subtask_id, parse_job_id=parse_job_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "backfill timeout retry enqueue failed subtask_id=%s job_id=%s err=%r",
+            subtask.subtask_id,
+            parse_job_id,
+            exc,
+        )
+        detail = str(exc).strip() or type(exc).__name__
+        _mark_backfill_parse_failed(
+            db,
+            subtask,
+            f"超时重试入队失败：{detail}"[:240],
+            parse_job_id=parse_job_id,
+        )
+        return {
+            "status": "failed",
+            "subtask_id": subtask.subtask_id,
+            "error": f"超时重试入队失败：{detail}"[:240],
+        }
+    db.refresh(subtask)
+    raw2 = dict(subtask.raw_result_json or {})
+    raw2["backfill_parse_enqueue"] = mode
+    subtask.raw_result_json = raw2
+    db.commit()
+    logger.warning(
+        "async backfill parse timeout retry queued subtask_id=%s job_id=%s attempt=%s",
+        subtask.subtask_id,
+        parse_job_id,
+        retries + 1,
+    )
+    return {
+        "status": "retrying",
+        "subtask_id": subtask.subtask_id,
+        "attempt": retries + 1,
+        "error": err_text[:240],
+    }
 
 _SNAPSHOT_HOST_HINTS: dict[str, set[str]] = {
     "doubao.com": {"doubao", "doubao_mobile"},
@@ -1459,6 +1549,12 @@ def run_async_backfill_parse(
         db.rollback()
         db.refresh(subtask)
         err_text = str(exc).strip() or repr(exc)
+        # 2026-09-07 - 分享页打开超时先自动重试 1 次，再落 failed
+        retried = _try_requeue_share_open_timeout_retry(
+            db, subtask, parse_job_id=job_id, err_text=err_text
+        )
+        if retried is not None:
+            return retried
         _mark_backfill_parse_failed(db, subtask, err_text, parse_job_id=job_id)
         logger.warning(
             "async backfill parse failed subtask_id=%s type=%s err=%r",
@@ -1471,6 +1567,11 @@ def run_async_backfill_parse(
         db.rollback()
         db.refresh(subtask)
         err_text = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
+        retried = _try_requeue_share_open_timeout_retry(
+            db, subtask, parse_job_id=job_id, err_text=err_text
+        )
+        if retried is not None:
+            return retried
         _mark_backfill_parse_failed(db, subtask, err_text, parse_job_id=job_id)
         logger.exception(
             "async backfill parse crashed subtask_id=%s type=%s err=%r",
@@ -1479,6 +1580,279 @@ def run_async_backfill_parse(
             exc,
         )
         return {"status": "failed", "subtask_id": subtask_id, "error": err_text[:240]}
+
+
+_REUSE_HISTORY_CANDIDATE_LIMIT = 30
+
+
+def _raw_is_reuse_history(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return isinstance(raw.get("_ops_reuse_from"), dict)
+
+
+def _reuse_history_exclude_clause(*, dialect: str):
+    """排除 raw._ops_reuse_from；按方言走 JSON 路径，避免拉整段 raw/正文。"""
+    # ponytail: 列表只筛「非复用链」；upgrade path: 生成列/索引
+    if dialect == "sqlite":
+        return text("json_extract(geo_monitor_subtask.raw_result_json, '$._ops_reuse_from') IS NULL")
+    return text("JSON_CONTAINS_PATH(geo_monitor_subtask.raw_result_json, 'one', '$._ops_reuse_from') = 0")
+
+
+def list_snapshot_backfill_history_candidates(
+    db: Session,
+    *,
+    subtask_id: str,
+    current: CurrentSession,
+    limit: int = _REUSE_HISTORY_CANDIDATE_LIMIT,
+) -> list[dict[str, Any]]:
+    """同企业、同平台码、同问法的历史成功场次（有正文）；排除自身与「复用链」源。
+
+    2026-09-07 - PC/手机平台码分开：doubao 不可见 doubao_mobile 历史
+    2026-09-07 - 候选列表太慢：只取轻字段 + 正文截断，不做排期/品牌二次查询
+    """
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可查看历史补录候选")
+    target = get_monitor_subtask(db, subtask_id, current)
+    task = get_monitor_task(db, target.task_id, current)
+    prompt = (target.prompt or "").strip()
+    platform = (target.platform or "").strip()
+    if not prompt or not platform:
+        return []
+    cap = max(1, min(int(limit or _REUSE_HISTORY_CANDIDATE_LIMIT), 50))
+
+    answer_excerpt_col = func.substr(GeoMonitorSubtask.answer_content, 1, 160).label("answer_excerpt")
+    answer_len_col = func.length(GeoMonitorSubtask.answer_content).label("sample_chars")
+    has_shot_col = case(
+        (
+            and_(
+                GeoMonitorSubtask.page_screenshot.is_not(None),
+                GeoMonitorSubtask.page_screenshot != "",
+            ),
+            True,
+        ),
+        else_=False,
+    ).label("has_screenshot")
+
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind is not None else "mysql"
+    stmt = (
+        select(
+            GeoMonitorSubtask.subtask_id,
+            GeoMonitorSubtask.task_id,
+            GeoMonitorSubtask.platform,
+            GeoMonitorSubtask.prompt,
+            GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.updated_at,
+            answer_excerpt_col,
+            answer_len_col,
+            has_shot_col,
+        )
+        .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
+        .where(
+            GeoMonitorSubtask.platform == platform,
+            GeoMonitorSubtask.prompt == prompt,
+            GeoMonitorSubtask.subtask_id != target.subtask_id,
+            GeoMonitorSubtask.answer_content.is_not(None),
+            GeoMonitorSubtask.answer_content != "",
+            _reuse_history_exclude_clause(dialect=dialect),
+        )
+        .order_by(GeoMonitorSubtask.updated_at.desc())
+        .limit(cap)
+    )
+    if task.tenant_id is None:
+        stmt = stmt.where(GeoMonitorTask.tenant_id.is_(None))
+    else:
+        stmt = stmt.where(GeoMonitorTask.tenant_id == task.tenant_id)
+
+    rows: list[dict[str, Any]] = []
+    for row in db.execute(stmt).all():
+        updated = row.updated_at
+        excerpt = str(row.answer_excerpt or "").strip()
+        rows.append({
+            "subtask_id": row.subtask_id,
+            "task_id": row.task_id,
+            "platform": row.platform,
+            "prompt": row.prompt,
+            "mention_position": row.mention_position,
+            "updated_at": updated.isoformat() if updated else None,
+            # 列表不再二次查排期；前端用 updated_at 作主标签即可
+            "schedule_label": None,
+            "schedule_window_key": None,
+            "region_label": None,
+            "has_screenshot": bool(row.has_screenshot),
+            "answer_excerpt": excerpt_sensitive_text(excerpt, limit=120) if excerpt else "",
+            "sample_chars": int(row.sample_chars or 0),
+        })
+    return rows
+
+
+def apply_snapshot_backfill_reuse_history(
+    db: Session,
+    *,
+    subtask_id: str,
+    source_subtask_id: str,
+    current: CurrentSession,
+    mention_position: int | None = None,
+) -> dict[str, Any]:
+    """把历史成功场次正文/截图/信源拷到目标格；客户侧当本场真实，库内留 _ops_reuse_from。"""
+    if current.identity.identity_type != "PLATFORM":
+        raise PermissionError("仅平台运营端可执行快照补录")
+    source_id = str(source_subtask_id or "").strip()
+    if not source_id:
+        raise ValueError("请选择历史成功场次")
+    if source_id == subtask_id:
+        raise ValueError("不能选用当前场次自身")
+
+    subtask = get_monitor_subtask(db, subtask_id, current)
+    task = get_monitor_task(db, subtask.task_id, current)
+    if subtask_inflight_blocks_snapshot_backfill(subtask):
+        raise ValueError("该场次监测尚未结束，请等抓取完成或失败后再补录")
+
+    source = get_monitor_subtask(db, source_id, current)
+    source_task = get_monitor_task(db, source.task_id, current)
+    if (source.platform or "").strip() != (subtask.platform or "").strip():
+        raise ValueError("历史场次平台不一致")
+    if (source.prompt or "").strip() != (subtask.prompt or "").strip():
+        raise ValueError("历史场次监测问题不一致")
+    if source_task.tenant_id != task.tenant_id:
+        raise ValueError("历史场次不属于同一企业")
+    content = (source.answer_content or "").strip()
+    if not content:
+        raise ValueError("所选历史场次无正文，无法复用")
+    source_raw = source.raw_result_json if isinstance(source.raw_result_json, dict) else {}
+    if _raw_is_reuse_history(source_raw):
+        raise ValueError("不能再选用「历史复用」产生的场次，请选原始成功场次")
+
+    previous_stat_date = None
+    if task.tenant_id:
+        from app.services.monitor_stats_service import _detect_stat_date
+
+        schedule_run = schedule_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        lead_run = lead_diagnosis_runs_for_tasks(db, [task.task_id]).get(task.task_id)
+        asset = get_brand_asset(db, task.tenant_id)
+        previous_stat_date = _detect_stat_date(
+            subtask,
+            task,
+            schedule_run=schedule_run,
+            lead_run=lead_run,
+            asset=asset,
+        )
+
+    previous_answer = subtask.answer_content
+    previous_raw = dict(subtask.raw_result_json or {})
+    previous_source = previous_raw.get("source")
+    before_snap = build_before_backfill_snapshot(subtask)
+    clear_subtask_backfill_dismiss(subtask)
+
+    subtask.answer_content = content
+    subtask.page_screenshot = (source.page_screenshot or "").strip() or None
+    subtask.error_message = None
+    subtask.status = "completed"
+    subtask.mention_context = source.mention_context
+    subtask.reference_list_json = copy.deepcopy(source.reference_list_json)
+    subtask.citation_list_json = copy.deepcopy(source.citation_list_json)
+    subtask.sentiment = source.sentiment
+    subtask.recommended_questions_json = copy.deepcopy(source.recommended_questions_json)
+    # 2026-09-08 - 复用须带源榜单/竞品；勿只用正文重抽把源结构化榜冲掉
+    subtask.competitor_rankings_json = copy.deepcopy(source.competitor_rankings_json)
+    subtask.all_rankings_json = copy.deepcopy(source.all_rankings_json)
+
+    override_rank = mention_position if mention_position is not None else source.mention_position
+    recompute_subtask_rank_from_answer(
+        db,
+        subtask,
+        task,
+        override_mention_position=override_rank,
+        force=override_rank is None,
+    )
+
+    source_ctx = build_backfill_notification_context(db, source, source_task)
+    reuse_meta = {
+        "source_subtask_id": source.subtask_id,
+        "source_task_id": source.task_id,
+        "source_updated_at": source.updated_at.isoformat() if source.updated_at else None,
+        "source_schedule_label": source_ctx.get("schedule_label"),
+        "source_schedule_window_key": source_ctx.get("schedule_window_key"),
+        "source_mention_position": source.mention_position,
+        "copied_at": datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
+        "operator_user_id": current.user.id,
+    }
+    manual_meta = {
+        "source": "manual_snapshot",
+        "operator_user_id": current.user.id,
+        "replaced": bool(previous_answer),
+        "manual_rank_locked": True,
+        "before_backfill": before_snap,
+        "screenshot_pending": False,
+        "screenshot_ok": bool(subtask.page_screenshot),
+        "_ops_reuse_from": reuse_meta,
+    }
+    if previous_answer:
+        manual_meta["replaced_previous_source"] = previous_source
+        manual_meta["replaced_previous_answer_preview"] = excerpt_sensitive_text(
+            previous_answer, limit=80
+        )
+    raw = dict(subtask.raw_result_json or previous_raw or {})
+    raw.update(manual_meta)
+    for key in _PENDING_PARSE_KEYS:
+        raw.pop(key, None)
+    subtask.raw_result_json = raw
+
+    _reconcile_task_progress(task)
+    task.failed_items = sum(
+        1 for item in (task.subtasks or []) if item.status in {"failed", "stopped"} and not item.answer_content
+    )
+    task.completed_items = sum(1 for item in (task.subtasks or []) if item.answer_content)
+
+    src_label = str(source_ctx.get("schedule_label") or source.updated_at or source.subtask_id)
+    write_operation_log(
+        db,
+        current,
+        "历史复用补录",
+        (
+            _snapshot_backfill_log_description(db, subtask, task, action_type="历史复用补录")
+            + f" · 源场次 {src_label}（{source.subtask_id}）"
+        ),
+        target_module="快照补录",
+        tenant_id=task.tenant_id,
+        risk_level="关注",
+    )
+
+    db.flush()
+    run = db.scalar(select(LeadDiagnosisRun).where(LeadDiagnosisRun.task_id == task.task_id))
+    if run is not None and run.status == "failed" and (task.completed_items or 0) > 0:
+        run.status = "completed"
+        run.error_message = None
+    db.commit()
+
+    from app.services.monitor_stats_service import refresh_stats_after_subtask_backfill
+    from app.services.monitor_service import invalidate_monitor_summary_cache
+
+    if task.tenant_id:
+        refresh_stats_after_subtask_backfill(
+            db,
+            task=task,
+            subtask=subtask,
+            previous_stat_date=previous_stat_date,
+        )
+        db.commit()
+        invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+    else:
+        invalidate_monitor_summary_cache(bust_overview=True)
+    resolve_subtask_backfill_notification(db, subtask.subtask_id)
+    _bust_snapshot_backfill_matrix_cache()
+
+    from app.services.lead_diagnosis_service import refresh_lead_diagnosis_after_backfill
+
+    refresh_lead_diagnosis_after_backfill(db, task.task_id)
+
+    db.refresh(subtask)
+    db.refresh(task)
+    out = _pack_backfill_apply_response(db, subtask, task)
+    out["reuse_history"] = True
+    out["ops_reuse_from"] = reuse_meta
+    return out
 
 
 def apply_snapshot_backfill(
@@ -1491,7 +1865,17 @@ def apply_snapshot_backfill(
     mention_position: int | None = None,
     sentiment: str | None = None,
     reference_urls: list[str] | None = None,
+    reuse_from_subtask_id: str | None = None,
 ) -> dict[str, Any]:
+    # 2026-09-07 - 历史复用与贴链接/只改排名互斥，优先走复用
+    if str(reuse_from_subtask_id or "").strip():
+        return apply_snapshot_backfill_reuse_history(
+            db,
+            subtask_id=subtask_id,
+            source_subtask_id=str(reuse_from_subtask_id).strip(),
+            current=current,
+            mention_position=mention_position,
+        )
     if current.identity.identity_type != "PLATFORM":
         raise PermissionError("仅平台运营端可执行快照补录")
 

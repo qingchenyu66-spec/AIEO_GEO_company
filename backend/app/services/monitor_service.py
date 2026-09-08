@@ -2183,6 +2183,13 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
     pending = raw.get("screenshot_pending")
     shot_ok = raw.get("screenshot_ok")
+    # 2026-09-07 - 历史复用来源仅库内/操作日志；客户侧 raw_result 不外泄
+    raw_out: dict[str, Any] | None
+    if isinstance(subtask.raw_result_json, dict):
+        raw_out = dict(subtask.raw_result_json)
+        raw_out.pop("_ops_reuse_from", None)
+    else:
+        raw_out = subtask.raw_result_json
     return {
         "subtask_id": subtask.subtask_id,
         "task_id": subtask.task_id,
@@ -2202,7 +2209,7 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
         "competitor_rankings": subtask.competitor_rankings_json or [],
         "all_rankings": subtask.all_rankings_json or [],
         "amount": float(subtask.amount) if subtask.amount is not None else None,
-        "raw_result": subtask.raw_result_json,
+        "raw_result": raw_out,
         "updated_at": subtask.updated_at.isoformat() if subtask.updated_at else None,
         # 2026-08-07 - 异步截图未完成时勿显示「暂无快照请填 URL」
         "screenshot_pending": bool(pending) if pending is not None else False,

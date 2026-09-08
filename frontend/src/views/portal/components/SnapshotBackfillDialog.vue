@@ -2,7 +2,11 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { MonitorSubtask } from '../../../services/monitor'
-import { submitSnapshotBackfill } from '../../../services/snapshotBackfill'
+import {
+  listSnapshotBackfillHistoryCandidates,
+  submitSnapshotBackfill,
+  type SnapshotBackfillHistoryCandidate,
+} from '../../../services/snapshotBackfill'
 import { notifyOperationError } from '../../../utils/requestError'
 import { isProxiedScreenshotUrl } from '../../../utils/safeUrl'
 import { platformLabelMap } from '../portalMaps'
@@ -20,8 +24,14 @@ const emit = defineEmits<{
   'parse-queued': [subtask: MonitorSubtask]
 }>()
 
+type BackfillMode = 'link' | 'history'
+
 const submitting = ref(false)
 const urlInputRef = ref<HTMLInputElement | null>(null)
+const mode = ref<BackfillMode>('link')
+const historyLoading = ref(false)
+const historyItems = ref<SnapshotBackfillHistoryCandidate[]>([])
+const selectedHistoryId = ref('')
 const form = reactive({
   snapshot_url: '',
   mention_position: '' as string | number,
@@ -58,11 +68,30 @@ function readShareUrlFromInput(): string {
 
 const hasShareUrl = computed(() => isSharePageUrl(form.snapshot_url))
 
+async function loadHistoryCandidates() {
+  if (!props.subtask?.subtask_id) return
+  historyLoading.value = true
+  try {
+    historyItems.value = await listSnapshotBackfillHistoryCandidates(props.subtask.subtask_id)
+    if (!historyItems.value.some(item => item.subtask_id === selectedHistoryId.value)) {
+      selectedHistoryId.value = historyItems.value[0]?.subtask_id || ''
+    }
+  } catch (error: unknown) {
+    historyItems.value = []
+    selectedHistoryId.value = ''
+    notifyOperationError(error, '加载历史场次失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
 
 watch(
   () => props.visible,
-  (open) => {
+  async (open) => {
     if (!open) return
+    mode.value = 'link'
+    selectedHistoryId.value = ''
+    historyItems.value = []
     const shot = props.subtask?.page_screenshot || ''
     // 已有模力结果时链接留空便于只改排名；截图 CDN/代理图永不预填进分享链接
     if (hasMolResult.value || isProxiedScreenshotUrl(shot)) {
@@ -79,8 +108,37 @@ watch(
   },
 )
 
+watch(mode, (next) => {
+  if (next === 'history' && props.visible) {
+    void loadHistoryCandidates()
+  }
+})
+
 async function handleSubmit() {
   if (!props.subtask?.subtask_id || submitting.value) return
+
+  if (mode.value === 'history') {
+    if (!selectedHistoryId.value) {
+      notifyOperationError(new Error('请选择一条历史成功场次'), '快照补录失败')
+      return
+    }
+    submitting.value = true
+    try {
+      const rank = parseSnapshotBackfillMentionPosition(form.mention_position)
+      const result = await submitSnapshotBackfill(props.subtask.subtask_id, {
+        reuse_from_subtask_id: selectedHistoryId.value,
+        mention_position: rank,
+      })
+      dialogVisible.value = false
+      emit('success', result.subtask)
+    } catch (error: unknown) {
+      notifyOperationError(error, '快照补录失败')
+    } finally {
+      submitting.value = false
+    }
+    return
+  }
+
   await nextTick()
   const url = readShareUrlFromInput()
   if (url !== form.snapshot_url.trim()) {
@@ -131,50 +189,107 @@ async function handleSubmit() {
     class="snapshot-backfill-dialog"
     destroy-on-close
   >
-    <p v-if="subtask" class="snapshot-backfill-intro">
-      可粘贴分享链接解析并<strong>覆盖</strong>正文与信源；不填链接时仅改排名，快照沿用原值。有链接时排名可选手填，留空则按正文自动解析。
-    </p>
-    <p v-if="hasExistingAnswer && hasShareUrl" class="snapshot-backfill-warn">当前子任务已有抓取内容，填写链接提交后将用本次解析结果完全替换。</p>
+    <div class="snapshot-backfill-modes" role="tablist" aria-label="补录方式">
+      <button
+        type="button"
+        class="snapshot-backfill-mode"
+        :class="{ active: mode === 'link' }"
+        @click="mode = 'link'"
+      >
+        分享链接
+      </button>
+      <button
+        type="button"
+        class="snapshot-backfill-mode"
+        :class="{ active: mode === 'history' }"
+        @click="mode = 'history'"
+      >
+        选用历史
+      </button>
+    </div>
+
     <p v-if="subtask" class="snapshot-backfill-prompt">监测问题：{{ subtask.prompt }}</p>
 
-    <form class="form-grid password-grid snapshot-backfill-form" @submit.prevent="handleSubmit">
-      <label class="form-field-full">
-        <span>分享链接（可选）</span>
-        <!-- 2026-08-21 - 不用 type=url：粘贴后未失焦就提交时部分浏览器/v-model 不同步，请求丢了链接却报无快照 -->
-        <input
-          ref="urlInputRef"
-          v-model="form.snapshot_url"
-          type="text"
-          inputmode="url"
-          autocomplete="off"
-          placeholder="https://www.doubao.com/thread/... 或其它平台分享页链接"
-          @change="form.snapshot_url = ($event.target as HTMLInputElement).value"
+    <template v-if="mode === 'link'">
+      <p class="snapshot-backfill-intro">
+        可粘贴分享链接解析并<strong>覆盖</strong>正文与信源；不填链接时仅改排名，快照沿用原值。有链接时排名可选手填，留空则按正文自动解析。
+      </p>
+      <p v-if="hasExistingAnswer && hasShareUrl" class="snapshot-backfill-warn">当前子任务已有抓取内容，填写链接提交后将用本次解析结果完全替换。</p>
+
+      <form class="form-grid password-grid snapshot-backfill-form" @submit.prevent="handleSubmit">
+        <label class="form-field-full">
+          <span>分享链接（可选）</span>
+          <!-- 2026-08-21 - 不用 type=url：粘贴后未失焦就提交时部分浏览器/v-model 不同步，请求丢了链接却报无快照 -->
+          <input
+            ref="urlInputRef"
+            v-model="form.snapshot_url"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            placeholder="https://www.doubao.com/thread/... 或其它平台分享页链接"
+            @change="form.snapshot_url = ($event.target as HTMLInputElement).value"
+          >
+        </label>
+        <label>
+          <span>{{
+            hasShareUrl
+              ? '品牌排名（可选，清空则自动解析）'
+              : hasMolResult
+                ? '品牌排名（不填链接时必填）'
+                : '品牌排名（须先有模力结果，或粘贴分享链接）'
+          }}</span>
+          <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
+        </label>
+      </form>
+    </template>
+
+    <template v-else>
+      <p v-if="historyLoading" class="snapshot-backfill-intro">加载历史场次…</p>
+      <p v-else-if="!historyItems.length" class="snapshot-backfill-intro">暂无同词同平台的历史成功场次</p>
+      <div v-else class="snapshot-history-list" role="listbox" aria-label="历史成功场次">
+        <label
+          v-for="item in historyItems"
+          :key="item.subtask_id"
+          class="snapshot-history-item"
+          :class="{ active: selectedHistoryId === item.subtask_id }"
         >
-      </label>
-      <label>
-        <span>{{
-          hasShareUrl
-            ? '品牌排名（可选，清空则自动解析）'
-            : hasMolResult
-              ? '品牌排名（不填链接时必填）'
-              : '品牌排名（须先有模力结果，或粘贴分享链接）'
-        }}</span>
+          <input
+            v-model="selectedHistoryId"
+            type="radio"
+            name="snapshot-history"
+            :value="item.subtask_id"
+          >
+          <span class="snapshot-history-body">
+            <strong>{{ item.schedule_label || item.updated_at || item.subtask_id }}</strong>
+            <em>
+              排名 {{ item.mention_position ?? '—' }}
+              · {{ item.sample_chars }} 字
+              <template v-if="item.has_screenshot"> · 含截图</template>
+            </em>
+            <small v-if="item.answer_excerpt">{{ item.answer_excerpt }}</small>
+          </span>
+        </label>
+      </div>
+      <label v-if="historyItems.length" class="snapshot-history-rank">
+        <span>品牌排名（可选，留空用历史场次原排名）</span>
         <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
       </label>
-    </form>
+    </template>
 
     <template #footer>
       <button type="button" class="plain-btn" @click="dialogVisible = false">取消</button>
       <button
         type="button"
         class="primary-btn"
-        :disabled="submitting"
+        :disabled="submitting || (mode === 'history' && (!selectedHistoryId || historyLoading))"
         @click="handleSubmit"
       >
         {{
           submitting
             ? '提交中…'
-            : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录'
+            : mode === 'history'
+              ? '选用并补录'
+              : hasShareUrl && hasExistingAnswer ? '提交并覆盖' : '提交补录'
         }}
       </button>
     </template>
@@ -182,6 +297,29 @@ async function handleSubmit() {
 </template>
 
 <style scoped>
+.snapshot-backfill-modes {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.snapshot-backfill-mode {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.snapshot-backfill-mode.active {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
 .snapshot-backfill-intro {
   margin: 0 0 10px;
   color: #475569;
@@ -201,5 +339,69 @@ async function handleSubmit() {
   color: #9a3412;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.snapshot-history-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  margin: 0 0 12px;
+}
+
+.snapshot-history-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.snapshot-history-item.active {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.snapshot-history-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.snapshot-history-body strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.snapshot-history-body em {
+  font-style: normal;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.snapshot-history-body small {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.snapshot-history-rank {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.snapshot-history-rank input {
+  width: 100%;
+  box-sizing: border-box;
 }
 </style>
