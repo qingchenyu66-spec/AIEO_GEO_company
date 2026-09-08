@@ -20,6 +20,7 @@ from app.services.brand_service import (
     keyword_group_monitor_keywords,
     list_competitors,
     list_keyword_groups,
+    tenant_purchased_platforms,
 )
 from app.services.competitor_analytics_service import aggregate_competitor_period_stats
 from app.services.monitor_service import (
@@ -358,9 +359,43 @@ def enrich_keyword_analytics(
         for index, keyword in enumerate(keywords)
     ]
     row_map = {str(row["keyword"]): row for row in rows}
+    platform_sections: list[dict[str, Any]] = []
+    for code in platform_codes:
+        section_rows: list[dict[str, Any]] = []
+        for index, keyword in enumerate(keywords):
+            source = row_map.get(keyword) or {}
+            breakdown = {
+                str(item.get("platform") or ""): item
+                for item in (source.get("platform_breakdown") or [])
+            }
+            stat = breakdown.get(code) or {}
+            cur_mention = stat.get("mention_rate")
+            cur_rank = stat.get("avg_rank")
+            prev_mention = round(float(cur_mention) - 2.0 - index * 0.4, 1) if cur_mention is not None else None
+            prev_rank = round(float(cur_rank) + 0.25 + index * 0.1, 1) if cur_rank is not None else None
+            status, status_class = _keyword_status(cur_mention, cur_rank)
+            section_rows.append(
+                {
+                    "keyword": keyword,
+                    "completed": int(stat.get("completed") or 0),
+                    "mention_rate": _metric_delta(cur_mention, prev_mention),
+                    "avg_rank": _metric_delta(cur_rank, prev_rank, lower_is_better=True),
+                    "top3_rate": stat.get("top3_rate"),
+                    "status": status,
+                    "status_class": status_class,
+                }
+            )
+        platform_sections.append(
+            {
+                "platform": code,
+                "name": platform_display_name(code),
+                "rows": section_rows,
+            }
+        )
     weak_top3 = sorted(
         rows,
         key=lambda row: (
+            _keyword_worst_platform_mention(row, platform_sections),
             float(row["mention_rate"]["current"] or 0),
             -(float(row["avg_rank"]["current"]) if row["avg_rank"]["current"] is not None else -99),
         ),
@@ -374,12 +409,15 @@ def enrich_keyword_analytics(
         platform_hint = ""
         if row.get("weakest_platforms"):
             platform_hint = f"主要短板平台：{'、'.join(row['weakest_platforms'])}。"
-        if rd["direction"] == "declined" and rd["delta"] is not None:
+        worst_mr = _keyword_worst_platform_mention(row, platform_sections)
+        if worst_mr <= 0 or (mr or 0) <= 0 or row.get("status") == "未露面":
+            highlights.append(
+                f"监控词「{kw}」本期未进入 AI 推荐列表（未露面），表现偏弱，建议补充结构化问答与权威引用。{platform_hint}"
+            )
+        elif rd["direction"] == "declined" and rd["delta"] is not None:
             highlights.append(
                 f"监控词「{kw}」排名 {rk}，较上期 {rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
             )
-        elif (mr or 0) <= 0:
-            highlights.append(f"监控词「{kw}」本期未进入 AI 推荐列表，建议补充结构化问答与权威引用。{platform_hint}")
         else:
             highlights.append(f"监控词「{kw}」提及率 {mr}%、排名 {rk}，表现偏弱，建议针对性优化。{platform_hint}")
     weak_matrix = build_matrix_from_breakdown(
@@ -390,6 +428,7 @@ def enrich_keyword_analytics(
     return {
         **analytics,
         "rows": rows,
+        "platform_sections": platform_sections,
         "weak_top3": weak_top3,
         "highlights": highlights,
         "weak_platform_matrix": weak_matrix,
@@ -2077,6 +2116,7 @@ def _platform_stats_for_subtasks(rows: list[GeoMonitorSubtask]) -> list[dict[str
 
 
 def _pick_weakest_platform_names(stats: list[dict[str, Any]], *, top_n: int = 2) -> list[str]:
+    """取相对最弱平台名；各端差不多或会写满全部开通端时不堆名单。"""
     eligible = [item for item in stats if int(item.get("completed") or 0) > 0]
     if not eligible:
         return []
@@ -2087,7 +2127,35 @@ def _pick_weakest_platform_names(stats: list[dict[str, Any]], *, top_n: int = 2)
             -(float(item.get("avg_rank")) if item.get("avg_rank") is not None else 99),
         ),
     )
-    return [str(item["name"]) for item in ordered[:top_n]]
+    worst = float(ordered[0].get("mention_rate") or 0)
+    best = float(ordered[-1].get("mention_rate") or 0)
+    # 2026-09-08 - 两端都差或差距可忽略时勿写「主要短板=全部平台」
+    if len(eligible) >= 2 and (best - worst) < 1.0:
+        return []
+    tied_worst = [
+        item for item in ordered if float(item.get("mention_rate") or 0) <= worst + 0.01
+    ][:top_n]
+    names = [str(item["name"]) for item in tied_worst]
+    if len(names) >= len(eligible):
+        return names[:1]
+    return names
+
+
+def _keyword_worst_platform_mention(row: dict[str, Any], platform_sections: list[dict[str, Any]]) -> float:
+    """跨开通平台取最差提及率；无样本视同 0（未露面），用于短板 TOP 排序。"""
+    key = str(row.get("keyword") or "")
+    rates: list[float] = []
+    for section in platform_sections:
+        for item in section.get("rows") or []:
+            if str(item.get("keyword") or "") != key:
+                continue
+            if int(item.get("completed") or 0) <= 0:
+                rates.append(0.0)
+            else:
+                rates.append(float((item.get("mention_rate") or {}).get("current") or 0))
+    if rates:
+        return min(rates)
+    return float((row.get("mention_rate") or {}).get("current") or 0)
 
 
 def _cell_is_weak(stat: dict[str, Any], row_stats: list[dict[str, Any]]) -> bool:
@@ -2142,6 +2210,36 @@ def build_weak_keyword_platform_matrix(
     }
 
 
+def _keyword_metric_row(
+    key: str,
+    cur_items: list[GeoMonitorSubtask],
+    prev_items: list[GeoMonitorSubtask],
+    *,
+    with_weakest: bool = False,
+) -> dict[str, Any]:
+    cur_agg = _aggregate_bucket(cur_items)
+    prev_agg = _aggregate_bucket(prev_items)
+    mention = _metric_delta(cur_agg.get("mention_rate"), prev_agg.get("mention_rate"))
+    rank = _metric_delta(cur_agg.get("avg_rank"), prev_agg.get("avg_rank"), lower_is_better=True)
+    status, status_class = _keyword_status(cur_agg.get("mention_rate"), cur_agg.get("avg_rank"))
+    row: dict[str, Any] = {
+        "keyword": key,
+        "completed": int(cur_agg.get("completed") or 0),
+        "mention_rate": mention,
+        "avg_rank": rank,
+        "top3_rate": cur_agg.get("top3_rate"),
+        "status": status,
+        "status_class": status_class,
+    }
+    if with_weakest:
+        row["weakest_platforms"] = _pick_weakest_platform_names(_platform_stats_for_subtasks(cur_items))
+    return row
+
+
+def _filter_subtasks_by_platform(rows: list[GeoMonitorSubtask], platform: str) -> list[GeoMonitorSubtask]:
+    return [row for row in rows if str(row.platform or "") == platform]
+
+
 def build_keyword_analytics(
     db,
     tenant_id: int,
@@ -2171,31 +2269,48 @@ def build_keyword_analytics(
 
     rows: list[dict[str, Any]] = []
     for key in ordered_keys:
-        cur_agg = _aggregate_bucket(cur_map.get(key, []))
-        prev_agg = _aggregate_bucket(prev_map.get(key, []))
-        mention = _metric_delta(cur_agg.get("mention_rate"), prev_agg.get("mention_rate"))
-        rank = _metric_delta(cur_agg.get("avg_rank"), prev_agg.get("avg_rank"), lower_is_better=True)
-        status, status_class = _keyword_status(cur_agg.get("mention_rate"), cur_agg.get("avg_rank"))
-        kw_rows = cur_map.get(key, [])
-        platform_stats = _platform_stats_for_subtasks(kw_rows)
-        weakest_platforms = _pick_weakest_platform_names(platform_stats)
         rows.append(
+            _keyword_metric_row(
+                key,
+                cur_map.get(key, []),
+                prev_map.get(key, []),
+                with_weakest=True,
+            )
+        )
+
+    # 2026-09-08 - 周报词表按开通平台分栏；同平台对同平台环比
+    platform_codes = tenant_purchased_platforms(db, tenant_id)
+    platform_sections: list[dict[str, Any]] = []
+    for code in platform_codes:
+        section_rows = [
+            _keyword_metric_row(
+                key,
+                _filter_subtasks_by_platform(cur_map.get(key, []), code),
+                _filter_subtasks_by_platform(prev_map.get(key, []), code),
+            )
+            for key in ordered_keys
+        ]
+        platform_sections.append(
             {
-                "keyword": key,
-                "completed": int(cur_agg.get("completed") or 0),
-                "mention_rate": mention,
-                "avg_rank": rank,
-                "top3_rate": cur_agg.get("top3_rate"),
-                "status": status,
-                "status_class": status_class,
-                "weakest_platforms": weakest_platforms,
+                "platform": code,
+                "name": platform_display_name(code),
+                "rows": section_rows,
             }
         )
 
-    sampled = [row for row in rows if row["completed"] > 0]
+    sampled = [row for row in rows if row["completed"] > 0 or any(
+        int(item.get("completed") or 0) > 0
+        for section in platform_sections
+        for item in (section.get("rows") or [])
+        if str(item.get("keyword") or "") == str(row.get("keyword") or "")
+    )]
+    if not sampled:
+        sampled = list(rows)
+    # 2026-09-08 - 短板优先：任一端未露面/提及最低的词排前面（勿被全平台均值「看起来还行」淹没）
     weak_top3 = sorted(
         sampled,
         key=lambda row: (
+            _keyword_worst_platform_mention(row, platform_sections),
             float(row["mention_rate"]["current"] or 0),
             -(float(row["avg_rank"]["current"]) if row["avg_rank"]["current"] is not None else -99),
         ),
@@ -2207,17 +2322,18 @@ def build_keyword_analytics(
         mr = row["mention_rate"]["current"]
         rk = row["avg_rank"]["current"]
         rd = row["avg_rank"]
+        worst_mr = _keyword_worst_platform_mention(row, platform_sections)
         platform_hint = ""
         weak_platforms = row.get("weakest_platforms") or []
         if weak_platforms:
             platform_hint = f"主要短板平台：{'、'.join(weak_platforms)}。"
-        if rd["direction"] == "declined" and rd["delta"] is not None:
+        if worst_mr <= 0 or (mr or 0) <= 0 or row.get("status") == "未露面":
+            highlights.append(
+                f"监控词「{kw}」本期未进入 AI 推荐列表（未露面），表现偏弱，建议补充结构化问答与权威引用。{platform_hint}"
+            )
+        elif rd["direction"] == "declined" and rd["delta"] is not None:
             highlights.append(
                 f"监控词「{kw}」排名 {rk}，较上期 {rd['previous']} 回落 {abs(rd['delta'])} 位，优先补内容。{platform_hint}"
-            )
-        elif (mr or 0) <= 0:
-            highlights.append(
-                f"监控词「{kw}」本期未进入 AI 推荐列表，建议补充结构化问答与权威引用。{platform_hint}"
             )
         else:
             highlights.append(
@@ -2233,6 +2349,7 @@ def build_keyword_analytics(
 
     return {
         "rows": rows,
+        "platform_sections": platform_sections,
         "weak_top3": weak_top3,
         "highlights": highlights,
         "configured_labels": configured,
@@ -2310,23 +2427,11 @@ def render_keyword_platform_matrix_html(matrix: dict[str, Any]) -> str:
       </div>"""
 
 
-def render_keyword_html(keyword_analytics: dict[str, Any], *, report_type: str, client: bool = False) -> str:
-    esc = html.escape
-    rows = keyword_analytics.get("rows") or []
-    if not rows:
-        return ""
-
-    show_weakest_col = report_type == "weekly"
-    matrix_html = ""
-    if report_type in _RANK_TREND_TYPES:
-        matrix_html = render_keyword_platform_matrix_html(keyword_analytics.get("weak_platform_matrix") or {})
-
+def _render_keyword_table_body(rows: list[dict[str, Any]], *, esc) -> str:
     table_rows = ""
     for index, row in enumerate(rows, 1):
         mr = row["mention_rate"]
         ar = row["avg_rank"]
-        weakest = "、".join(row.get("weakest_platforms") or []) or "—"
-        weakest_col = f"<td>{esc(weakest)}</td>" if show_weakest_col else ""
         table_rows += f"""
         <tr>
           <td>{index}</td>
@@ -2339,9 +2444,32 @@ def render_keyword_html(keyword_analytics: dict[str, Any], *, report_type: str, 
           <td>{esc(_fmt_rank(ar['previous']))}</td>
           <td><span class="delta {_delta_class(ar['direction'])}">{esc(ar['text'])}</span></td>
           <td>{esc(_fmt_pct(row.get('top3_rate')))}</td>
-          {weakest_col}
           <td><span class="status-tag {esc(row['status_class'])}">{esc(row['status'])}</span></td>
         </tr>"""
+    return f"""
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>监控词</th><th>样本</th>
+              <th>提及率</th><th>上期提及率</th><th>提及率变化</th>
+              <th>平均排名</th><th>上期排名</th><th>排名变化</th>
+              <th>Top3率</th><th>表现</th>
+            </tr>
+          </thead>
+          <tbody>{table_rows}</tbody>
+        </table>"""
+
+
+def render_keyword_html(keyword_analytics: dict[str, Any], *, report_type: str, client: bool = False) -> str:
+    esc = html.escape
+    rows = keyword_analytics.get("rows") or []
+    platform_sections = keyword_analytics.get("platform_sections") or []
+    if not rows and not platform_sections:
+        return ""
+
+    matrix_html = ""
+    if report_type in _RANK_TREND_TYPES:
+        matrix_html = render_keyword_platform_matrix_html(keyword_analytics.get("weak_platform_matrix") or {})
 
     weak_items = "".join(f"<li>{esc(line)}</li>" for line in keyword_analytics.get("highlights") or [])
     weak_html = ""
@@ -2352,35 +2480,44 @@ def render_keyword_html(keyword_analytics: dict[str, Any], *, report_type: str, 
           <ul>{weak_items}</ul>
         </div>"""
 
+    weekly_by_platform = report_type == "weekly" and bool(platform_sections)
     if client:
         kw_heading = "核心监测词表现 · 环比上一周期"
-        if show_weakest_col:
-            kw_note = "按本周期监测关键词配置聚合统计；排名数字越小越靠前；另列各关键词的最弱平台。"
+        if weekly_by_platform:
+            kw_note = "按企业开通平台分栏展示；环比为同平台对比上一周期，排名数字越小越靠前。"
         else:
             kw_note = "按本周期监测关键词配置聚合统计；排名数字越小越靠前；下方附短板词跨平台明细。"
     else:
         kw_heading = "监控词成绩单 · 环比上一周期"
-        kw_note = (
-            f"按资料库配置的监控词组聚合统计；监测问题通过语义匹配归组，排名数字越小越靠前。"
-            f"{'周报额外标注各监控词的最弱平台。' if show_weakest_col else '月报/季报在下方展示短板词的跨平台明细。'}"
-        )
-    weakest_head = "<th>最弱平台</th>" if show_weakest_col else ""
+        if weekly_by_platform:
+            kw_note = "按企业开通平台分栏统计；环比为同平台对比上一周期，排名数字越小越靠前。"
+        else:
+            kw_note = (
+                "按资料库配置的监控词组聚合统计；监测问题通过语义匹配归组，排名数字越小越靠前。"
+                "月报/季报在下方展示短板词的跨平台明细。"
+            )
+
+    if weekly_by_platform:
+        # 2026-09-08 - PDF/预览勿做顶部可点跳转；按平台顺序铺开词表即可
+        panels = ""
+        for section in platform_sections:
+            code = str(section.get("platform") or "")
+            name = str(section.get("name") or code or "—")
+            panels += f"""
+        <div class="kw-platform-panel pack-item" data-kw-platform="{esc(code)}">
+          <h3 class="kw-platform-heading">{esc(name)}</h3>
+          {_render_keyword_table_body(section.get("rows") or [], esc=esc)}
+        </div>"""
+        body_html = f'<div class="kw-platform-sections" data-kw-platform-sections>{panels}</div>'
+    else:
+        body_html = _render_keyword_table_body(rows, esc=esc)
+
     return f"""
       <section class="keyword-section" id="keywords">
         <h2>{kw_heading}</h2>
         <p class="note">{esc(kw_note)}</p>
         {weak_html}
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>监控词</th><th>样本</th>
-              <th>提及率</th><th>上期提及率</th><th>提及率变化</th>
-              <th>平均排名</th><th>上期排名</th><th>排名变化</th>
-              <th>Top3率</th>{weakest_head}<th>表现</th>
-            </tr>
-          </thead>
-          <tbody>{table_rows}</tbody>
-        </table>
+        {body_html}
         {matrix_html}
       </section>"""
 

@@ -258,7 +258,37 @@ def render_period_deck_docx_from_bundle(bundle: dict[str, Any]) -> bytes:
         _add_table(document, ["时间", "样本数", "提及率", "平均排名", "Top3率"], trend_rows)
 
     kw_rows_data = keyword_analytics.get("rows") or []
-    if kw_rows_data:
+    platform_sections = keyword_analytics.get("platform_sections") or []
+    if report_type == "weekly" and platform_sections:
+        _section_title(document, f"核心监测词表现 · 环比{prev_scope}")
+        _note(document, "按企业开通平台分栏统计；环比为同平台对比上一周期，排名数字越小越靠前。")
+        for line in keyword_analytics.get("highlights") or []:
+            _note(document, f"• {line}")
+        headers = ["#", "监控词", "样本", "提及率", "上期提及率", "提及变化", "平均排名", "上期排名", "排名变化", "Top3率", "表现"]
+        for section in platform_sections:
+            _section_title(document, str(section.get("name") or section.get("platform") or "平台"))
+            kw_rows = []
+            for idx, row in enumerate(section.get("rows") or [], 1):
+                mr = row.get("mention_rate") or {}
+                ar = row.get("avg_rank") or {}
+                kw_rows.append(
+                    [
+                        str(idx),
+                        str(row.get("keyword") or "—"),
+                        str(row.get("completed") or 0),
+                        _fmt_pct(mr.get("current")),
+                        _fmt_pct(mr.get("previous")),
+                        str(mr.get("text") or "—"),
+                        _fmt_rank(ar.get("current")),
+                        _fmt_rank(ar.get("previous")),
+                        str(ar.get("text") or "—"),
+                        _fmt_pct(row.get("top3_rate")),
+                        str(row.get("status") or "—"),
+                    ]
+                )
+            if kw_rows:
+                _add_table(document, headers, kw_rows)
+    elif kw_rows_data:
         _section_title(document, f"核心监测词表现 · 环比{prev_scope}")
         _note(document, "按本周期监测关键词配置聚合统计；排名数字越小越靠前。")
         for line in keyword_analytics.get("highlights") or []:
@@ -283,11 +313,6 @@ def render_period_deck_docx_from_bundle(bundle: dict[str, Any]) -> bytes:
                 ]
             )
         headers = ["#", "监控词", "样本", "提及率", "上期提及率", "提及变化", "平均排名", "上期排名", "排名变化", "Top3率", "表现"]
-        if report_type == "weekly":
-            headers.insert(-1, "最弱平台")
-            for i, row in enumerate(kw_rows_data):
-                weak = "、".join(row.get("weakest_platforms") or []) or "—"
-                kw_rows[i].insert(-1, weak)
         _add_table(document, headers, kw_rows)
 
         matrix = keyword_analytics.get("weak_platform_matrix") or {}

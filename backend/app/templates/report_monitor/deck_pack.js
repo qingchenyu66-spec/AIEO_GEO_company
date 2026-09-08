@@ -32,6 +32,36 @@
   }
   document.documentElement.dataset.geoDeckPacked = "1";
 
+  // 2026-09-08 - 周报词表按平台顺序铺开；各端表提升为 pack-body 直属 pack-item 便于拆页
+  document.querySelectorAll("[data-kw-platform-sections]").forEach((root) => {
+    const hostItem = root.closest(".pack-item");
+    const body = root.closest(".pack-body");
+    if (!hostItem || !body) return;
+    const insertBefore = hostItem.nextSibling;
+    const moveNodes = [];
+    root.querySelectorAll(":scope > .kw-platform-panel").forEach((node) => {
+      node.classList.add("pack-item");
+      moveNodes.push(node);
+    });
+    moveNodes.forEach((node) => {
+      body.insertBefore(node, insertBefore);
+    });
+    root.remove();
+    if (!hostItem.querySelector(".kw-weak, table, .note, p, h3, ul, ol")) {
+      const leftover = (hostItem.textContent || "").trim();
+      if (!leftover) hostItem.remove();
+    }
+  });
+
+  function kwPlatformKey(el) {
+    if (!el) return "";
+    const fromAttr = (el.getAttribute?.("data-kw-platform") || "").trim();
+    if (fromAttr) return fromAttr;
+    const nested = el.querySelector?.("[data-kw-platform]");
+    if (nested) return (nested.getAttribute("data-kw-platform") || "").trim();
+    return (el.querySelector?.(".kw-platform-heading")?.textContent || "").trim();
+  }
+
   // 必须 ≤ .light-content/.dark-content 的 max-height，否则拆页后仍会被 overflow:hidden 裁切
   // 2026-07-28 - 正文 top 拉到 350 后可视高约 980，与 CSS 对齐
   const BODY_MAX = 960;
@@ -455,7 +485,8 @@
 
       const wrap = document.createElement("div");
       wrap.className = "pack-item ranking-unit";
-      if (slide.dataset.mergeGroup !== "tail") {
+      // 2026-09-08 - keywords 续页勿插「（续）」标题，避免空续页
+      if (slide.dataset.mergeGroup !== "tail" && slide.dataset.mergeGroup !== "keywords") {
         const cont = document.createElement("div");
         cont.className = "block-title";
         cont.textContent = "（续）";
@@ -630,6 +661,8 @@
         fragSep.appendChild(headWrap);
         const tableWrap = document.createElement("div");
         tableWrap.className = "pack-item ranking-unit";
+        const sepPlat = (item.getAttribute("data-kw-platform") || "").trim();
+        if (sepPlat) tableWrap.setAttribute("data-kw-platform", sepPlat);
         tableWrap.appendChild(table.cloneNode(true));
         fragSep.appendChild(tableWrap);
         item.replaceWith(fragSep);
@@ -684,14 +717,20 @@
       if (groups.length <= 1) return;
 
       const frag = document.createDocumentFragment();
+      const platCode = (item.getAttribute("data-kw-platform") || "").trim();
       groups.forEach((group, gIdx) => {
         const wrap = document.createElement("div");
         wrap.className = "pack-item ranking-unit";
+        if (platCode) wrap.setAttribute("data-kw-platform", platCode);
         if (gIdx === 0) {
           prefixEls.forEach((el) => wrap.appendChild(el));
-        } else if (slide && slide.dataset.mergeGroup !== "tail") {
+        } else if (
+          slide &&
+          slide.dataset.mergeGroup !== "tail" &&
+          slide.dataset.mergeGroup !== "keywords"
+        ) {
           // 2026-08-06 - 优化建议勿插入「（续）」block-title
-          // 2026-08-07 - explode 内误用未定义 slide（字号加大后才踩中）- 改为 body.closest
+          // 2026-09-08 - 周报词表分平台后「（续）」易单独占页；多页靠 renumber (1/n)
           const cont = document.createElement("div");
           cont.className = "block-title";
           cont.textContent = "（续）";
@@ -755,6 +794,10 @@
         const tableA = a.querySelector("table");
         const tableB = b.querySelector("table");
         if (!tableA || !tableB || !tableA.tBodies[0] || !tableB.tBodies[0]) continue;
+        // 2026-09-08 - 不同平台词表禁止拼成一张总表
+        const platA = kwPlatformKey(a);
+        const platB = kwPlatformKey(b);
+        if (platA && platB && platA !== platB) continue;
         // 2026-08-06 - 定制优化各节误并表（三/四混页）- 仅同 opt-section-title 可合
         const secA = optSectionTitle(a);
         const secB = optSectionTitle(b);
@@ -936,12 +979,17 @@
         let appendedViaTable = false;
         const optA = optSectionTitle(bodyA);
         const optB = optSectionTitle(bodyB);
+        // 2026-09-08 - 周报分平台词表：同标题「核心监测词表现」勿把各端行拼成总表
+        const kwPlatA = kwPlatformKey(bodyA);
+        const kwPlatB = kwPlatformKey(bodyB);
+        const blockKwTableMerge = Boolean(kwPlatA && kwPlatB && kwPlatA !== kwPlatB);
         if (
           sameSection &&
           tableA &&
           tableB &&
           tableA.tBodies[0] &&
-          tableB.tBodies[0]
+          tableB.tBodies[0] &&
+          !blockKwTableMerge
         ) {
           // 2026-08-06 - tail 外层同「优化建议」误把四节表行并进三节
           if (optA && optB && optA !== optB) {
@@ -1039,6 +1087,33 @@
     });
   }
 
+  function pruneEmptyKeywordSlides() {
+    // 2026-09-08 - 去掉仅含「（续）」/空表的关键词页，避免单独占一页
+    document.querySelectorAll('.slide[data-merge-group="keywords"]').forEach((slide) => {
+      const body = bodyEl(slide);
+      if (!body) return;
+      Array.from(body.querySelectorAll(":scope > .pack-item")).forEach((item) => {
+        if (item.querySelector(".kw-weak, .kw-platform-tabs")) return;
+        const rows = item.querySelectorAll("tbody tr").length;
+        const hasTable = !!item.querySelector("table");
+        const contOnly =
+          rows === 0 &&
+          /续/.test(item.querySelector(".block-title")?.textContent || "") &&
+          !item.querySelector(".kw-platform-heading");
+        if ((hasTable && rows === 0) || contOnly) {
+          item.remove();
+        }
+      });
+      const meaningful =
+        body.querySelectorAll("tbody tr").length > 0 ||
+        body.querySelectorAll(".kw-weak li").length > 0 ||
+        !!body.querySelector(".kw-platform-heading");
+      if (!meaningful) {
+        slide.remove();
+      }
+    });
+  }
+
   Array.from(document.querySelectorAll(".slide[data-pack]")).forEach((slide) => packSlide(slide));
   mergeSparse();
   Array.from(document.querySelectorAll(".slide .pack-body, .slide .dark-content, .slide .light-content")).forEach(
@@ -1050,6 +1125,7 @@
   // 先软缩（有下限）；仍裁切则整行剥续页
   const softFit = fitSoftOverflows();
   const peeled = fixRemainingOverflow();
+  pruneEmptyKeywordSlides();
   renumberPackedTitles();
   mergeTitleSubtitle();
   fitSlideTitles();

@@ -5,8 +5,6 @@ import {
   Download,
   FileBarChart,
   FileText,
-  FileType,
-  Printer,
   RefreshCw,
 } from '@lucide/vue'
 import { ElOption, ElSelect } from 'element-plus'
@@ -58,7 +56,6 @@ const {
   previewHtmlUrl,
   loadReports,
   selectReport,
-  printReport,
   exportReport,
 } = useReportCenter({
   isPlatform: () => props.isPlatform,
@@ -228,18 +225,6 @@ function diagnosisTitleText(title: string | null | undefined) {
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : 'PDF' }}
             </button>
-            <button v-if="canExportReport && usesHtmlTemplatePreview" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
-              <FileText />
-              HTML
-            </button>
-            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
-              <FileType />
-              Word
-            </button>
-            <button type="button" class="filter-reset-btn tiny-btn" @click="printReport">
-              <Printer />
-              打印
-            </button>
           </div>
         </div>
 
@@ -261,18 +246,6 @@ function diagnosisTitleText(title: string | null | undefined) {
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
-            </button>
-            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('html')">
-              <FileText />
-              导出 HTML
-            </button>
-            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
-              <FileType />
-              导出 Word
-            </button>
-            <button type="button" class="filter-reset-btn tiny-btn" @click="printReport">
-              <Printer />
-              打印报告
             </button>
           </div>
         </div>
@@ -421,14 +394,6 @@ function diagnosisTitleText(title: string | null | undefined) {
             <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
-            </button>
-            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('docx')">
-              <FileType />
-              导出 Word
-            </button>
-            <button type="button" class="filter-reset-btn tiny-btn" @click="printReport">
-              <Printer />
-              打印报告
             </button>
             <a
               v-if="externalLink(reportDetail.report_url)"

@@ -1935,6 +1935,15 @@ table thead th {
     color: #0b3a6e;
 }
 
+/* 2026-09-08 - 周报核心监测词：按开通平台顺序分栏（无顶部跳转） */
+.kw-platform-heading {
+    margin: 0 0 12px;
+}
+
+.kw-platform-panel {
+    margin-bottom: 8px;
+}
+
 .conclusion-list {
     margin: 0;
     padding-left: 36px;

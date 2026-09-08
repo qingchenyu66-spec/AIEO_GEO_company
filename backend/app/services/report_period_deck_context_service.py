@@ -41,7 +41,9 @@ from app.services.report_premium_font_service import build_font_face_css
 # 2026-07-29 - v20：竞品趋势放大字号+裁空周；信源 1 标对 1 柱
 # 2026-07-29 - v21：信源结论外置防压扁叠标
 # 2026-07-29 - v22：信源 TOP 改 HTML 条形榜（全文+渐变柱）
-PERIOD_DECK_PIPELINE = "monitor-deck-v22"
+# 2026-09-08 - v23：周报词表分平台后禁止 pack 拼成总表
+# 2026-09-08 - v24：短板未露面优先；禁空「续」页；短板平台勿写满全端
+PERIOD_DECK_PIPELINE = "monitor-deck-v24"
 
 
 def _esc(value: Any) -> str:
