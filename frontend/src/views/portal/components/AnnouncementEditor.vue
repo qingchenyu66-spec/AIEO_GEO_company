@@ -67,6 +67,39 @@ function run(cmd: string, value?: string) {
   emitHtml()
 }
 
+// 2026-09-08 - 点工具栏取色/下拉会失焦清选区，颜色看似「没反应」- mousedown 先记下再恢复
+let savedRange: Range | null = null
+
+function captureSelection() {
+  const el = editorRef.value
+  const sel = window.getSelection()
+  if (!el || !sel?.rangeCount) return
+  const range = sel.getRangeAt(0)
+  if (!el.contains(range.commonAncestorContainer)) return
+  try {
+    savedRange = range.cloneRange()
+  } catch {
+    savedRange = null
+  }
+}
+
+function restoreSavedSelection(): Range | null {
+  const el = editorRef.value
+  const sel = window.getSelection()
+  if (!el || !sel) return null
+  el.focus()
+  if (savedRange) {
+    try {
+      sel.removeAllRanges()
+      sel.addRange(savedRange)
+      return savedRange.cloneRange()
+    } catch {
+      /* fall through */
+    }
+  }
+  return ensureSelectionInEditor()
+}
+
 function ensureSelectionInEditor(): Range | null {
   const el = editorRef.value
   if (!el) return null
@@ -86,7 +119,7 @@ function ensureSelectionInEditor(): Range | null {
 /** 用 span + 白名单 style 包选区；比 execCommand fontSize(1-7) 可控 */
 function applyInlineStyle(cssText: string) {
   const el = editorRef.value
-  const range = ensureSelectionInEditor()
+  const range = restoreSavedSelection()
   const sel = window.getSelection()
   if (!el || !range || !sel) return
 
@@ -114,6 +147,43 @@ function applyInlineStyle(cssText: string) {
     sel.removeAllRanges()
     sel.addRange(wrapped)
   }
+  savedRange = null
+  emitHtml()
+}
+
+const PAINT_TAGS = new Set(['P', 'DIV', 'SPAN', 'TD', 'TH', 'LI', 'H1', 'H2', 'H3', 'H4'])
+
+/** 字色/底色：优先改选区内已有节点的内联样式（覆盖粘贴深色块），否则再包 span */
+function applyPaintStyle(kind: 'color' | 'background-color', value: string) {
+  const el = editorRef.value
+  const range = restoreSavedSelection()
+  if (!el || !range || !value) return
+
+  if (range.collapsed) {
+    applyInlineStyle(`${kind}: ${value}`)
+    return
+  }
+
+  const hit: HTMLElement[] = []
+  el.querySelectorAll('p,div,span,td,th,li,h1,h2,h3,h4').forEach((node) => {
+    const he = node as HTMLElement
+    if (!PAINT_TAGS.has(he.tagName)) return
+    try {
+      if (range.intersectsNode(he)) hit.push(he)
+    } catch {
+      /* ignore */
+    }
+  })
+
+  if (!hit.length) {
+    applyInlineStyle(`${kind}: ${value}`)
+    return
+  }
+
+  for (const he of hit) {
+    he.style.setProperty(kind, value)
+  }
+  savedRange = null
   emitHtml()
 }
 
@@ -129,17 +199,16 @@ function onFontSizeChange() {
   applyInlineStyle(`font-size: ${value}`)
 }
 
-/** 2026-09-08 - 公告缺文字色/底色控件，粘贴深色稿难改 - 工具栏取色走白名单 style */
 function onTextColorChange() {
   const value = textColor.value
   if (!value) return
-  applyInlineStyle(`color: ${value}`)
+  applyPaintStyle('color', value)
 }
 
 function onBgColorChange() {
   const value = bgColor.value
   if (!value) return
-  applyInlineStyle(`background-color: ${value}`)
+  applyPaintStyle('background-color', value)
 }
 
 function insertTable() {
@@ -344,19 +413,31 @@ onBeforeUnmount(() => {
   <div class="announcement-editor" :class="{ 'is-dragging': dragging, 'is-uploading': uploading }">
     <div class="announcement-editor-toolbar">
       <div class="toolbar-group">
-        <select v-model="fontFamily" class="toolbar-select" title="字体" @change="onFontFamilyChange">
+        <select
+          v-model="fontFamily"
+          class="toolbar-select"
+          title="字体"
+          @mousedown="captureSelection"
+          @change="onFontFamilyChange"
+        >
           <option v-for="item in FONT_FAMILIES" :key="item.label" :value="item.value">{{ item.label }}</option>
         </select>
-        <select v-model="fontSize" class="toolbar-select toolbar-select-size" title="字号" @change="onFontSizeChange">
+        <select
+          v-model="fontSize"
+          class="toolbar-select toolbar-select-size"
+          title="字号"
+          @mousedown="captureSelection"
+          @change="onFontSizeChange"
+        >
           <option v-for="item in FONT_SIZES" :key="item.label" :value="item.value">{{ item.label }}</option>
         </select>
-        <label class="toolbar-color" title="文字颜色">
+        <label class="toolbar-color" title="文字颜色" @mousedown="captureSelection">
           字色
-          <input v-model="textColor" type="color" @change="onTextColorChange">
+          <input v-model="textColor" type="color" @mousedown="captureSelection" @change="onTextColorChange">
         </label>
-        <label class="toolbar-color" title="背景颜色">
+        <label class="toolbar-color" title="背景颜色" @mousedown="captureSelection">
           底色
-          <input v-model="bgColor" type="color" @change="onBgColorChange">
+          <input v-model="bgColor" type="color" @mousedown="captureSelection" @change="onBgColorChange">
         </label>
         <button type="button" title="加粗" @click="run('bold')"><b>B</b></button>
         <button type="button" @click="run('insertUnorderedList')">• 列表</button>
