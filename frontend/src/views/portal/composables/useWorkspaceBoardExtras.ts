@@ -27,6 +27,14 @@ export type KeywordPlatformHeatmap = {
   source: 'matrix' | 'snapshots' | 'light'
 }
 
+/** 工作台词×平台热力：深底用白字。ECharts heatmap 的 label.color 回调常不生效，须打在每个 data 点上。 */
+export function mentionHeatLabelColor(score: number): string {
+  if (score < 0) return '#94a3b8'
+  // visualMap: #e2e8f0→#1e3a8a，约 45+ 进入 #60a5fa/#2563eb 段，黑字对比不足
+  if (score >= 45) return '#ffffff'
+  return '#1e3a8a'
+}
+
 export function formatBoardDateOnly(value?: string | null) {
   if (!value) return '—'
   const text = String(value).trim()
@@ -451,8 +459,10 @@ export function useKeywordPlatformHeatmapChart(
         // heat-wrap 有 overflow:auto；position:top 在首行会被裁成一条白边
         appendTo: 'body',
         extraCssText: 'z-index:40;max-width:280px;white-space:normal;',
-        formatter: (params: { data: [number, number, number] }) => {
-          const [xIndex, yIndex] = params.data
+        formatter: (params: { data: [number, number, number] | { value: [number, number, number] } }) => {
+          const point = Array.isArray(params.data) ? params.data : params.data?.value
+          if (!point) return '—'
+          const [xIndex, yIndex] = point
           const platform = payload.platformLabels[xIndex] || '—'
           const keyword = payload.keywords[yIndex] || '—'
           const raw = payload.data.find(item => item[0] === xIndex && item[1] === yIndex)
@@ -495,25 +505,25 @@ export function useKeywordPlatformHeatmapChart(
       },
       series: [{
         type: 'heatmap',
-        data: payload.data.map(item => (
-          item[2] < 0 ? [item[0], item[1], 0] : item
-        )),
+        // 2026-09-08 - 深色格黑字看不清：label.color 回调被 ECharts 忽略，字色写在每个点上
+        data: payload.data.map(item => {
+          const score = item[2]
+          return {
+            value: score < 0 ? [item[0], item[1], 0] : item,
+            label: { color: mentionHeatLabelColor(score) },
+          }
+        }),
         label: {
           show: payload.keywords.length <= 80,
-          formatter: (params: { data: [number, number, number] }) => {
-            const raw = payload.data.find(item => item[0] === params.data[0] && item[1] === params.data[1])
+          formatter: (params: { data: { value: [number, number, number] } }) => {
+            const point = params.data?.value
+            if (!point) return '—'
+            const raw = payload.data.find(item => item[0] === point[0] && item[1] === point[1])
             if (!raw || raw[2] < 0) return '—'
             return `${raw[2]}`
           },
           fontSize: 12,
           fontWeight: 700,
-          color: (params: { data: [number, number, number] }) => {
-            const raw = payload.data.find(item => item[0] === params.data[0] && item[1] === params.data[1])
-            const value = raw?.[2]
-            if (value == null || value < 0) return '#94a3b8'
-            if (value >= 50) return '#fff'
-            return '#1e3a8a'
-          },
         },
         // 2026-08-17 - 热力悬停 emphasis 会丢掉格子数字/字色 - 禁用 emphasis，靠 tooltip
         emphasis: { disabled: true },

@@ -969,12 +969,20 @@ export type MatrixHeatDataItem = {
   value: [number, number, number]
   dayKey: string
   prompt: string
+  label?: { color: string }
 }
 
 export function heatPointRank(data: MatrixHeatDataItem | [number, number, number] | undefined) {
   if (!data) return -1
   if (Array.isArray(data)) return data[2]
   return data.value?.[2] ?? -1
+}
+
+function heatRankLabelColor(rank: number): string {
+  if (rank < 0) return '#8aa0ba'
+  if (rank === 1) return '#fff'
+  if (rank <= 3) return '#0a5c42'
+  return '#9a6200'
 }
 
 /** 热力横轴日期：只用 dayKey，去掉后端「N次均值」后缀；轴上用 MM-DD 减挤。 */
@@ -1007,10 +1015,13 @@ export function buildMatrixHeatOption(
   dayKeys.forEach((dayKey, xIndex) => {
     slice.columns.forEach((column, yIndex) => {
       const value = resolveColumnRank(slice.rows, column, dayKey)
+      const rank = value == null ? -1 : value
       data.push({
-        value: [xIndex, yIndex, value == null ? -1 : value],
+        value: [xIndex, yIndex, rank],
         dayKey,
         prompt: column.prompt,
+        // 2026-09-08 - heatmap label.color 回调常不生效，字色打在点上
+        label: { color: heatRankLabelColor(rank) },
       })
     })
   })
@@ -1071,13 +1082,6 @@ export function buildMatrixHeatOption(
         ),
         fontSize: 12,
         fontWeight: 800,
-        color: (params: { data: MatrixHeatDataItem }) => {
-          const value = heatPointRank(params.data)
-          if (value < 0) return '#8aa0ba'
-          if (value === 1) return '#fff'
-          if (value <= 3) return '#0a5c42'
-          return '#9a6200'
-        },
       },
       itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 3 },
       // ponytail: 热力悬停 emphasis 会清掉格子数字；禁用后 tooltip 仍可用
