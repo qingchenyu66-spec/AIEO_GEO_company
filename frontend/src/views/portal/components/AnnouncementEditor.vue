@@ -14,6 +14,8 @@ const dragging = ref(false)
 const uploading = ref(false)
 const fontFamily = ref('')
 const fontSize = ref('')
+const textColor = ref('#0f172a')
+const bgColor = ref('#f1f5f9')
 
 const FONT_FAMILIES = [
   { label: '默认字体', value: '' },
@@ -125,6 +127,34 @@ function onFontSizeChange() {
   const value = fontSize.value
   if (!value) return
   applyInlineStyle(`font-size: ${value}`)
+}
+
+/** 2026-09-08 - 公告缺文字色/底色控件，粘贴深色稿难改 - 工具栏取色走白名单 style */
+function onTextColorChange() {
+  const value = textColor.value
+  if (!value) return
+  applyInlineStyle(`color: ${value}`)
+}
+
+function onBgColorChange() {
+  const value = bgColor.value
+  if (!value) return
+  applyInlineStyle(`background-color: ${value}`)
+}
+
+function insertTable() {
+  const colsRaw = window.prompt('表格列数（1～8）', '2')
+  if (colsRaw == null) return
+  const rowsRaw = window.prompt('数据行数（不含表头，1～20）', '3')
+  if (rowsRaw == null) return
+  const cols = Math.min(8, Math.max(1, Number.parseInt(colsRaw, 10) || 2))
+  const rows = Math.min(20, Math.max(1, Number.parseInt(rowsRaw, 10) || 3))
+  const ths = Array.from({ length: cols }, (_, i) => `<th>列${i + 1}</th>`).join('')
+  const emptyRow = `<tr>${Array.from({ length: cols }, () => '<td><br></td>').join('')}</tr>`
+  const body = Array.from({ length: rows }, () => emptyRow).join('')
+  insertHtml(
+    `<table style="width: 100%; border-collapse: collapse"><thead><tr>${ths}</tr></thead><tbody>${body}</tbody></table><p><br></p>`,
+  )
 }
 
 function insertHtml(snippet: string) {
@@ -320,9 +350,18 @@ onBeforeUnmount(() => {
         <select v-model="fontSize" class="toolbar-select toolbar-select-size" title="字号" @change="onFontSizeChange">
           <option v-for="item in FONT_SIZES" :key="item.label" :value="item.value">{{ item.label }}</option>
         </select>
+        <label class="toolbar-color" title="文字颜色">
+          字色
+          <input v-model="textColor" type="color" @change="onTextColorChange">
+        </label>
+        <label class="toolbar-color" title="背景颜色">
+          底色
+          <input v-model="bgColor" type="color" @change="onBgColorChange">
+        </label>
         <button type="button" title="加粗" @click="run('bold')"><b>B</b></button>
         <button type="button" @click="run('insertUnorderedList')">• 列表</button>
         <button type="button" @click="run('insertOrderedList')">1. 编号</button>
+        <button type="button" @click="insertTable">表格</button>
         <button type="button" @click="insertLink">链接</button>
       </div>
       <div class="toolbar-group">
@@ -404,8 +443,29 @@ onBeforeUnmount(() => {
 .toolbar-select-size {
   max-width: 72px;
 }
+.toolbar-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #d0d7e2;
+  background: #fff;
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #334155;
+  cursor: pointer;
+}
+.toolbar-color input[type='color'] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
 .announcement-editor-toolbar button:hover,
-.toolbar-file:hover {
+.toolbar-file:hover,
+.toolbar-color:hover {
   border-color: #93c5fd;
   color: #1d4ed8;
 }
@@ -433,6 +493,23 @@ onBeforeUnmount(() => {
 }
 .announcement-editor-body :deep(a) {
   color: #2563eb;
+}
+.announcement-editor-body :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.announcement-editor-body :deep(th),
+.announcement-editor-body :deep(td) {
+  border: 1px solid #cbd5e1;
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+.announcement-editor-body :deep(th) {
+  background: #f1f5f9;
+  font-weight: 600;
 }
 .drop-hint {
   position: absolute;

@@ -152,6 +152,24 @@ defineExpose({ reload: loadNext })
   margin: 0 0 10px;
   padding-left: 1.25rem;
 }
+.announcement-modal-body :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 14px;
+  font-size: 13px;
+}
+.announcement-modal-body :deep(th),
+.announcement-modal-body :deep(td) {
+  border: 1px solid #cbd5e1;
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+.announcement-modal-body :deep(th) {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #0f172a;
+}
 .announcement-modal-footer {
   display: flex;
   align-items: center;

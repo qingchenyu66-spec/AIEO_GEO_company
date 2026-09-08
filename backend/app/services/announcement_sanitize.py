@@ -29,6 +29,14 @@ _ALLOWED_TAGS = frozenset(
         "h4",
         "blockquote",
         "hr",
+        # 2026-09-08 - 公告对照表：放行基础表格，禁 script/事件
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
     }
 )
 _VOID = frozenset({"br", "img", "hr"})
@@ -38,17 +46,27 @@ _ALLOWED_ATTRS: dict[str, frozenset[str]] = {
     "p": frozenset({"style"}),
     "span": frozenset({"style"}),
     "div": frozenset({"style"}),
+    "th": frozenset({"style", "colspan", "rowspan"}),
+    "td": frozenset({"style", "colspan", "rowspan"}),
+    "table": frozenset({"style"}),
 }
 # 仅放行排版相关声明；禁止 url()/expression/行为属性渗入
+# 2026-09-08 - 补文字色已有；放行 background-color（hex/rgb），仍禁 url()
 _SAFE_STYLE = re.compile(
     r"^(?:"
     r"color\s*:\s*#[0-9a-fA-F]{3,8}"
     r"|color\s*:\s*rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"
+    r"|background-color\s*:\s*#[0-9a-fA-F]{3,8}"
+    r"|background-color\s*:\s*rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"
     r"|font-weight\s*:\s*(?:normal|bold|[1-9]00)"
     r"|font-style\s*:\s*(?:normal|italic)"
     r"|text-decoration\s*:\s*(?:none|underline|line-through)"
     r"|font-size\s*:\s*\d{1,3}(?:\.\d+)?(?:px|pt|em|rem)"
     r"|font-family\s*:\s*[a-zA-Z0-9\s,\-\"']+"
+    r"|width\s*:\s*\d{1,3}(?:\.\d+)?%"
+    r"|border-collapse\s*:\s*collapse"
+    r"|text-align\s*:\s*(?:left|right|center|justify)"
+    r"|padding\s*:\s*\d{1,3}(?:\.\d+)?px(?:\s+\d{1,3}(?:\.\d+)?px){0,3}"
     r")\s*;?$",
     re.I,
 )
@@ -108,8 +126,16 @@ class _Sanitizer(HTMLParser):
             elif name == "target":
                 if raw in {"_blank", "_self"}:
                     cleaned.append(f'{name}="{raw}"')
+            elif name in {"colspan", "rowspan"}:
+                # 2026-09-08 - 表格跨行跨列仅允许 1～50 整数
+                try:
+                    n = int(str(raw).strip())
+                except ValueError:
+                    continue
+                if 1 <= n <= 50:
+                    cleaned.append(f'{name}="{n}"')
             else:
-                cleaned.append(f'{name}="{raw}"')
+                cleaned.append(f'{name}="{escape(str(raw), quote=True)}"')
         attr_s = (" " + " ".join(cleaned)) if cleaned else ""
         if tag in _VOID:
             self._out.append(f"<{tag}{attr_s}>")
