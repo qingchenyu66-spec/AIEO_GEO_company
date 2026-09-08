@@ -497,6 +497,8 @@ onMounted(refreshMenusFromServer)
 onMounted(() => {
   void loadBrandAssetData()
   void ensureTenantsForLogo()
+  // 2026-09-08 - 进门户就拉平台默认 Logo；此前只在系统配置保存后刷新，整页刷新侧栏会回退内置标
+  void refreshPlatformDefaultLogo()
 })
 watch(previewCustomerMenus, () => {
   if (isPreviewActive.value) ensureActiveMenuAllowed()
