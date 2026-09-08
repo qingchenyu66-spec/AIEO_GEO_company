@@ -15,7 +15,42 @@ const uploading = ref(false)
 const fontFamily = ref('')
 const fontSize = ref('')
 const textColor = ref('#0f172a')
-const bgColor = ref('#f1f5f9')
+const bgColor = ref('#fff2cc')
+const paintPanel = ref<'color' | 'background-color' | null>(null)
+const moreColorInput = ref<HTMLInputElement | null>(null)
+
+/** Office 风格主题色 + 标准色（点一下即上色，免系统取色器） */
+const THEME_COLORS = [
+  '#ffffff',
+  '#000000',
+  '#e7e6e6',
+  '#44546a',
+  '#4472c4',
+  '#ed7d31',
+  '#a5a5a5',
+  '#ffc000',
+  '#5b9bd5',
+  '#70ad47',
+] as const
+const THEME_SHADES = [
+  ['#f2f2f2', '#7f7f7f', '#d0cece', '#d6dce4', '#d6dce5', '#fce4d6', '#ededed', '#fff2cc', '#ddebf7', '#e2efda'],
+  ['#d8d8d8', '#595959', '#aeaaaa', '#adb9ca', '#b4c6e7', '#f8cbad', '#dbdbdb', '#ffe699', '#bdd7ee', '#c6e0b4'],
+  ['#bfbfbf', '#3f3f3f', '#757070', '#8496b0', '#8ea9db', '#f4b183', '#c9c9c9', '#ffd966', '#9bc2e6', '#a9d08e'],
+  ['#a5a5a5', '#262626', '#3a3838', '#323f4f', '#2f5496', '#c55a11', '#7b7b7b', '#bf8f00', '#2e75b6', '#548235'],
+  ['#7f7f7f', '#0c0c0c', '#171616', '#222a35', '#1f3864', '#833c0c', '#3f3f3f', '#806000', '#1e4e79', '#375623'],
+] as const
+const STANDARD_COLORS = [
+  '#c00000',
+  '#ff0000',
+  '#ffc000',
+  '#ffff00',
+  '#92d050',
+  '#00b050',
+  '#00b0f0',
+  '#0070c0',
+  '#002060',
+  '#7030a0',
+] as const
 
 const FONT_FAMILIES = [
   { label: '默认字体', value: '' },
@@ -152,18 +187,9 @@ function applyInlineStyle(cssText: string) {
 }
 
 const PAINT_TAGS = new Set(['P', 'DIV', 'SPAN', 'TD', 'TH', 'LI', 'H1', 'H2', 'H3', 'H4'])
+const BLOCK_PAINT_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4'])
 
-/** 字色/底色：优先改选区内已有节点的内联样式（覆盖粘贴深色块），否则再包 span */
-function applyPaintStyle(kind: 'color' | 'background-color', value: string) {
-  const el = editorRef.value
-  const range = restoreSavedSelection()
-  if (!el || !range || !value) return
-
-  if (range.collapsed) {
-    applyInlineStyle(`${kind}: ${value}`)
-    return
-  }
-
+function collectPaintHits(range: Range, el: HTMLElement): HTMLElement[] {
   const hit: HTMLElement[] = []
   el.querySelectorAll('p,div,span,td,th,li,h1,h2,h3,h4').forEach((node) => {
     const he = node as HTMLElement
@@ -174,14 +200,50 @@ function applyPaintStyle(kind: 'color' | 'background-color', value: string) {
       /* ignore */
     }
   })
+  return hit
+}
 
-  if (!hit.length) {
-    applyInlineStyle(`${kind}: ${value}`)
+/** 字色改选区节点；底色按荧光笔（先清块级底，再 span 高亮），避免整行白条 */
+function applyPaintStyle(kind: 'color' | 'background-color', value: string, opts?: { clear?: boolean }) {
+  const el = editorRef.value
+  const range = restoreSavedSelection()
+  if (!el || !range) return
+
+  if (kind === 'background-color') {
+    if (!range.collapsed) {
+      for (const he of collectPaintHits(range, el)) {
+        if (BLOCK_PAINT_TAGS.has(he.tagName)) {
+          he.style.removeProperty('background-color')
+        } else if (opts?.clear) {
+          he.style.removeProperty('background-color')
+        }
+      }
+    }
+    if (opts?.clear) {
+      savedRange = null
+      emitHtml()
+      return
+    }
+    if (!value) return
+    bgColor.value = value
+    applyInlineStyle(`background-color: ${value}`)
     return
   }
 
+  if (!value) return
+  textColor.value = value
+  if (range.collapsed) {
+    applyInlineStyle(`color: ${value}`)
+    return
+  }
+
+  const hit = collectPaintHits(range, el)
+  if (!hit.length) {
+    applyInlineStyle(`color: ${value}`)
+    return
+  }
   for (const he of hit) {
-    he.style.setProperty(kind, value)
+    he.style.setProperty('color', value)
   }
   savedRange = null
   emitHtml()
@@ -199,17 +261,56 @@ function onFontSizeChange() {
   applyInlineStyle(`font-size: ${value}`)
 }
 
-function onTextColorChange() {
-  const value = textColor.value
-  if (!value) return
-  applyPaintStyle('color', value)
+function openPaintPanel(kind: 'color' | 'background-color') {
+  captureSelection()
+  paintPanel.value = paintPanel.value === kind ? null : kind
 }
 
-function onBgColorChange() {
-  const value = bgColor.value
-  if (!value) return
-  applyPaintStyle('background-color', value)
+function pickPaintColor(color: string) {
+  const kind = paintPanel.value
+  if (!kind) return
+  applyPaintStyle(kind, color)
+  paintPanel.value = null
 }
+
+function clearBackgroundPaint() {
+  paintPanel.value = 'background-color'
+  applyPaintStyle('background-color', '', { clear: true })
+  paintPanel.value = null
+}
+
+function openMoreColor() {
+  captureSelection()
+  moreColorInput.value?.click()
+}
+
+function onMoreColorInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  const value = input.value
+  if (!value || !paintPanel.value) return
+  pickPaintColor(value)
+}
+
+function onDocPointerDown(event: PointerEvent) {
+  const target = event.target as Node | null
+  const root = editorRef.value?.closest('.announcement-editor')
+  if (!paintPanel.value || !root || !target) return
+  const panel = root.querySelector('.paint-panel')
+  const triggers = root.querySelectorAll('.paint-trigger')
+  if (panel?.contains(target)) return
+  for (const t of triggers) {
+    if (t.contains(target)) return
+  }
+  paintPanel.value = null
+}
+
+watch(paintPanel, (open) => {
+  if (open) {
+    document.addEventListener('pointerdown', onDocPointerDown, true)
+  } else {
+    document.removeEventListener('pointerdown', onDocPointerDown, true)
+  }
+})
 
 function insertTable() {
   const colsRaw = window.prompt('表格列数（1～8）', '2')
@@ -405,6 +506,7 @@ async function onDrop(event: DragEvent) {
 }
 
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
   /* blob URLs 随页面生命周期即可；不做全局 revoke，避免编辑中图挂掉 */
 })
 </script>
@@ -431,14 +533,118 @@ onBeforeUnmount(() => {
         >
           <option v-for="item in FONT_SIZES" :key="item.label" :value="item.value">{{ item.label }}</option>
         </select>
-        <label class="toolbar-color" title="文字颜色" @mousedown="captureSelection">
-          字色
-          <input v-model="textColor" type="color" @mousedown="captureSelection" @change="onTextColorChange">
-        </label>
-        <label class="toolbar-color" title="背景颜色" @mousedown="captureSelection">
-          底色
-          <input v-model="bgColor" type="color" @mousedown="captureSelection" @change="onBgColorChange">
-        </label>
+
+        <div class="paint-wrap">
+          <button
+            type="button"
+            class="paint-trigger"
+            title="字体颜色"
+            @mousedown="captureSelection"
+            @click="openPaintPanel('color')"
+          >
+            <span class="paint-letter">A</span>
+            <span class="paint-bar" :style="{ background: textColor }" />
+            字色
+          </button>
+          <div v-if="paintPanel === 'color'" class="paint-panel" @mousedown.prevent>
+            <div class="paint-caption">主题颜色</div>
+            <div class="paint-row">
+              <button
+                v-for="c in THEME_COLORS"
+                :key="`t-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <div v-for="(row, ri) in THEME_SHADES" :key="`shade-${ri}`" class="paint-row">
+              <button
+                v-for="c in row"
+                :key="`s-${ri}-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <div class="paint-caption">标准色</div>
+            <div class="paint-row">
+              <button
+                v-for="c in STANDARD_COLORS"
+                :key="`std-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <button type="button" class="paint-more" @click="openMoreColor">更多颜色…</button>
+          </div>
+        </div>
+
+        <div class="paint-wrap">
+          <button
+            type="button"
+            class="paint-trigger"
+            title="底纹 / 高亮"
+            @mousedown="captureSelection"
+            @click="openPaintPanel('background-color')"
+          >
+            <span class="paint-letter paint-letter-bg">ab</span>
+            <span class="paint-bar" :style="{ background: bgColor }" />
+            底色
+          </button>
+          <div v-if="paintPanel === 'background-color'" class="paint-panel" @mousedown.prevent>
+            <button type="button" class="paint-clear" @click="clearBackgroundPaint">无填充</button>
+            <div class="paint-caption">主题颜色</div>
+            <div class="paint-row">
+              <button
+                v-for="c in THEME_COLORS"
+                :key="`bt-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <div v-for="(row, ri) in THEME_SHADES" :key="`bshade-${ri}`" class="paint-row">
+              <button
+                v-for="c in row"
+                :key="`bs-${ri}-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <div class="paint-caption">标准色</div>
+            <div class="paint-row">
+              <button
+                v-for="c in STANDARD_COLORS"
+                :key="`bstd-${c}`"
+                type="button"
+                class="paint-swatch"
+                :style="{ background: c }"
+                :title="c"
+                @click="pickPaintColor(c)"
+              />
+            </div>
+            <button type="button" class="paint-more" @click="openMoreColor">更多颜色…</button>
+          </div>
+        </div>
+        <input
+          ref="moreColorInput"
+          type="color"
+          class="paint-more-native"
+          @change="onMoreColorInput"
+        >
+
         <button type="button" title="加粗" @click="run('bold')"><b>B</b></button>
         <button type="button" @click="run('insertUnorderedList')">• 列表</button>
         <button type="button" @click="run('insertOrderedList')">1. 编号</button>
@@ -524,29 +730,102 @@ onBeforeUnmount(() => {
 .toolbar-select-size {
   max-width: 72px;
 }
-.toolbar-color {
+.paint-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.paint-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  min-height: 30px;
+}
+.paint-letter {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  color: #0f172a;
+}
+.paint-letter-bg {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 2px;
+  border-radius: 2px;
+  background: #fff2cc;
+}
+.paint-bar {
+  width: 16px;
+  height: 4px;
+  border-radius: 1px;
+  border: 1px solid #cbd5e1;
+}
+.paint-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 232px;
+  padding: 10px;
   border: 1px solid #d0d7e2;
+  border-radius: 10px;
   background: #fff;
-  border-radius: 8px;
-  padding: 3px 8px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+.paint-caption {
+  margin: 6px 0 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+.paint-caption:first-child {
+  margin-top: 0;
+}
+.paint-row {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  margin-bottom: 2px;
+}
+.paint-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.paint-swatch:hover {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+  border-color: #2563eb;
+}
+.paint-clear,
+.paint-more {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid #d0d7e2;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 6px 8px;
   font-size: 12px;
   color: #334155;
   cursor: pointer;
+  text-align: left;
 }
-.toolbar-color input[type='color'] {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
+.paint-clear:hover,
+.paint-more:hover {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+.paint-more-native {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 .announcement-editor-toolbar button:hover,
 .toolbar-file:hover,
-.toolbar-color:hover {
+.paint-trigger:hover {
   border-color: #93c5fd;
   color: #1d4ed8;
 }
