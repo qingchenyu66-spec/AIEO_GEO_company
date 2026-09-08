@@ -36,6 +36,30 @@
   gap: 8px 10px;
 }
 
+.sb-purpose-tabs {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid #d8e7f6;
+  border-radius: 10px;
+  background: #f5f9ff;
+  gap: 2px;
+}
+.sb-purpose-tabs button {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sb-purpose-tabs button.on {
+  background: #fff;
+  color: #236bd1;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
 .snapshot-backfill-toolbar select,
 .snapshot-backfill-toolbar input[type='date'],
 .snapshot-backfill-toolbar .snapshot-backfill-keyword-input {

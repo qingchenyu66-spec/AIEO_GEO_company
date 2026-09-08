@@ -61,6 +61,7 @@ const tenantFilter = ref<number | ''>('')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
 const sourceFilter = ref<'' | 'tenant_monitor' | 'lead_diagnosis'>('')
+const purposeFilter = ref<'geo' | 'brand_word'>('geo')
 const platformFilter = ref('')
 const keywordGroupFilter = ref('')
 const keywordFilter = ref('')
@@ -231,7 +232,11 @@ async function loadTenantKeywordGroups() {
   try {
     const asset = await getBrandAsset(Number(tenantFilter.value))
     tenantMonitoredPlatforms.value = [...(asset.asset?.monitored_platforms || [])]
-    keywordGroupOptions.value = (asset.asset?.keyword_groups || []).filter(
+    // 2026-09-08 - 品牌词轨用品牌词组筛选
+    const groups = purposeFilter.value === 'brand_word'
+      ? (asset.asset?.brand_word_groups || [])
+      : (asset.asset?.keyword_groups || [])
+    keywordGroupOptions.value = groups.filter(
       (group: BrandKeywordGroup) => group.status && (group.monitor_keyword || (group.monitor_keywords || []).length),
     )
   } catch {
@@ -267,6 +272,7 @@ async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
       platform: platformFilter.value || undefined,
       keyword: keywordFilter.value.trim() || undefined,
       keyword_group: keywordGroupFilter.value || undefined,
+      purpose: purposeFilter.value,
       skip_cache: options?.skipCache || undefined,
     }, { signal: controller.signal })
     if (seq !== listRequestSeq) return
@@ -1347,6 +1353,7 @@ function resetFilters() {
   filterDateFrom.value = range.from
   filterDateTo.value = range.to
   sourceFilter.value = ''
+  purposeFilter.value = 'geo'
   platformFilter.value = ''
   keywordGroupFilter.value = ''
   keywordFilter.value = ''
@@ -1444,6 +1451,15 @@ watch(todoOnly, () => {
   ensureActivePlatform()
 })
 
+watch(purposeFilter, () => {
+  if (filterBootstrapping) return
+  // 2026-09-08 - 切品牌词轨时清掉售前来源
+  if (purposeFilter.value === 'brand_word' && sourceFilter.value === 'lead_diagnosis') {
+    sourceFilter.value = ''
+  }
+  void loadTenantKeywordGroups().then(() => loadMatrix())
+})
+
 watch(
   [filterDateFrom, filterDateTo, sourceFilter, platformFilter, keywordGroupFilter, keywordFilter],
   () => {
@@ -1463,6 +1479,18 @@ watch(
   <section v-else class="snapshot-backfill-page sb-skin">
     <div class="snapshot-backfill-toolbar">
       <div class="snapshot-backfill-toolbar-inner">
+        <div class="sb-purpose-tabs" title="补录分轨">
+          <button
+            type="button"
+            :class="{ on: purposeFilter === 'geo' }"
+            @click="purposeFilter = 'geo'"
+          >日常监测</button>
+          <button
+            type="button"
+            :class="{ on: purposeFilter === 'brand_word' }"
+            @click="purposeFilter = 'brand_word'"
+          >品牌词</button>
+        </div>
         <select v-model="tenantFilter" title="企业">
           <option value="">全部企业</option>
           <option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">
@@ -1474,8 +1502,8 @@ watch(
         <input v-model="filterDateTo" type="date" title="结束日期">
         <select v-model="sourceFilter" title="来源">
           <option value="">全部来源</option>
-          <option value="tenant_monitor">GEO 监测</option>
-          <option value="lead_diagnosis">售前诊断</option>
+          <option value="tenant_monitor">{{ purposeFilter === 'brand_word' ? '品牌词监测' : 'GEO 监测' }}</option>
+          <option v-if="purposeFilter === 'geo'" value="lead_diagnosis">售前诊断</option>
         </select>
         <select v-model="platformFilter" title="平台">
           <option value="">全部平台</option>
@@ -1487,9 +1515,9 @@ watch(
           v-model="keywordGroupFilter"
           class="snapshot-backfill-group-select"
           :disabled="!keywordGroupOptions.length"
-          :title="tenantFilter ? '词组' : '请先选择企业'"
+          :title="tenantFilter ? (purposeFilter === 'brand_word' ? '品牌词组' : '词组') : '请先选择企业'"
         >
-          <option value="">{{ tenantFilter ? '全部词组' : '先选企业' }}</option>
+          <option value="">{{ tenantFilter ? (purposeFilter === 'brand_word' ? '全部品牌词组' : '全部词组') : '先选企业' }}</option>
           <option
             v-for="(group, index) in keywordGroupOptions"
             :key="keywordGroupSelectValue(group, index)"
@@ -1503,9 +1531,9 @@ watch(
           v-model="keywordFilter"
           class="snapshot-backfill-keyword-input"
           :disabled="!monitorKeywordOptions.length"
-          :title="tenantFilter ? '监测词' : '请先选择企业'"
+          :title="tenantFilter ? (purposeFilter === 'brand_word' ? '品牌词' : '监测词') : '请先选择企业'"
         >
-          <option value="">{{ tenantFilter ? '全部监测词' : '先选企业' }}</option>
+          <option value="">{{ tenantFilter ? (purposeFilter === 'brand_word' ? '全部品牌词' : '全部监测词') : '先选企业' }}</option>
           <option v-for="keyword in monitorKeywordOptions" :key="keyword" :value="keyword">
             {{ keyword }}
           </option>

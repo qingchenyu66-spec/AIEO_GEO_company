@@ -26,6 +26,7 @@ from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMoni
 from app.models.tenant import Tenant
 from app.services.brand_service import (
     active_keyword_groups,
+    brand_word_group_to_dict,
     get_brand_asset,
     keyword_group_display_label,
     keyword_group_monitor_keywords,
@@ -33,6 +34,7 @@ from app.services.brand_service import (
     keyword_group_platforms,
     keyword_group_primary_keyword,
     keyword_group_to_dict,
+    list_brand_word_groups,
     list_keyword_groups,
     tenant_purchased_platforms,
 )
@@ -83,6 +85,69 @@ _BACKFILL_PARSE_RETRY_STALE_SECONDS = 180
 _BACKFILL_PARSE_WATCHDOG_SECONDS = 300
 # 兼容旧名
 _BACKFILL_PARSE_PENDING_STALE_SECONDS = _BACKFILL_PARSE_RETRY_STALE_SECONDS
+
+
+def _normalize_backfill_purpose(purpose: str | None) -> str:
+    value = str(purpose or "geo").strip().lower()
+    return value if value in {"geo", "brand_word"} else "geo"
+
+
+def _task_backfill_purpose(task: GeoMonitorTask | None) -> str:
+    if task is None:
+        return "geo"
+    return _normalize_backfill_purpose(getattr(task, "purpose", None))
+
+
+def _group_cache_key(tenant_id: int, purpose: str) -> str:
+    return f"{int(tenant_id)}:{_normalize_backfill_purpose(purpose)}"
+
+
+def _ensure_backfill_groups_cached(
+    db: Session,
+    tenant_id: int,
+    purpose: str,
+    orm_cache: dict[str, list],
+    dict_cache: dict[str, list[dict[str, Any]]],
+) -> tuple[list, list[dict[str, Any]]]:
+    """按轨加载词组：geo=监测词组；brand_word=品牌词组。"""
+    key = _group_cache_key(tenant_id, purpose)
+    if key in orm_cache and key in dict_cache:
+        return orm_cache[key], dict_cache[key]
+    lane = _normalize_backfill_purpose(purpose)
+    try:
+        if lane == "brand_word":
+            orm_groups = list(list_brand_word_groups(db, tenant_id))
+            dict_groups = [
+                brand_word_group_to_dict(item)
+                for item in orm_groups
+                if item.status and keyword_group_monitor_keywords(item)
+            ]
+        else:
+            orm_groups = list(list_keyword_groups(db, tenant_id))
+            dict_groups = [
+                keyword_group_to_dict(item)
+                for item in orm_groups
+                if item.status and item.monitor_keyword
+            ]
+    except Exception:
+        orm_groups = []
+        dict_groups = []
+    orm_cache[key] = orm_groups
+    dict_cache[key] = dict_groups
+    return orm_groups, dict_groups
+
+
+def _parse_brand_word_after_backfill(db: Session, task: GeoMonitorTask) -> None:
+    # 2026-09-08 - 品牌词补录后补跑情感/描述，否则品牌分析半截
+    if _task_backfill_purpose(task) != "brand_word":
+        return
+    try:
+        from app.services.brand_analysis_service import parse_sentiments_after_brand_word_sync
+
+        parse_sentiments_after_brand_word_sync(db, task)
+        db.commit()
+    except Exception:
+        logger.exception("brand_word parse after backfill failed task_id=%s", task.task_id)
 
 
 def _backfill_parse_age_seconds(raw: dict[str, Any]) -> float | None:
@@ -278,7 +343,13 @@ def validate_snapshot_url(url: str, *, platform: str | None = None) -> str:
 
 def _brand_terms_for_task(db: Session, task: GeoMonitorTask, asset: BrandAsset | None) -> list[str]:
     groups = (
-        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+        _ensure_backfill_groups_cached(
+            db,
+            int(task.tenant_id),
+            _task_backfill_purpose(task),
+            {},
+            {},
+        )[1]
         if task.tenant_id
         else []
     )
@@ -896,7 +967,13 @@ def _pack_backfill_apply_response(
 ) -> dict[str, Any]:
     asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
     groups = (
-        [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+        _ensure_backfill_groups_cached(
+            db,
+            int(task.tenant_id),
+            _task_backfill_purpose(task),
+            {},
+            {},
+        )[1]
         if task.tenant_id
         else []
     )
@@ -1098,6 +1175,7 @@ def _apply_share_fetched_backfill(
         )
         db.commit()
         invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+        _parse_brand_word_after_backfill(db, task)
     else:
         invalidate_monitor_summary_cache(bust_overview=True)
     resolve_subtask_backfill_notification(db, subtask.subtask_id)
@@ -1655,6 +1733,8 @@ def list_snapshot_backfill_history_candidates(
             GeoMonitorSubtask.subtask_id != target.subtask_id,
             GeoMonitorSubtask.answer_content.is_not(None),
             GeoMonitorSubtask.answer_content != "",
+            # 2026-09-08 - 历史复用按 purpose 隔离，避免日常/品牌词串快照
+            GeoMonitorTask.purpose == _task_backfill_purpose(task),
             _reuse_history_exclude_clause(dialect=dialect),
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
@@ -1838,6 +1918,7 @@ def apply_snapshot_backfill_reuse_history(
         )
         db.commit()
         invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+        _parse_brand_word_after_backfill(db, task)
     else:
         invalidate_monitor_summary_cache(bust_overview=True)
     resolve_subtask_backfill_notification(db, subtask.subtask_id)
@@ -1978,6 +2059,7 @@ def apply_snapshot_backfill(
             )
             db.commit()
             invalidate_monitor_summary_cache(task.tenant_id, bust_overview=True)
+            _parse_brand_word_after_backfill(db, task)
         else:
             invalidate_monitor_summary_cache(bust_overview=True)
         resolve_subtask_backfill_notification(db, subtask.subtask_id)
@@ -1991,7 +2073,13 @@ def apply_snapshot_backfill(
         db.refresh(task)
         asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
         groups = (
-            [keyword_group_to_dict(item) for item in list_keyword_groups(db, task.tenant_id)]
+            _ensure_backfill_groups_cached(
+                db,
+                int(task.tenant_id),
+                _task_backfill_purpose(task),
+                {},
+                {},
+            )[1]
             if task.tenant_id
             else []
         )
@@ -2129,7 +2217,13 @@ def _snapshot_backfill_log_description(
     keyword_group = None
     if task.tenant_id:
         try:
-            groups = list_keyword_groups(db, task.tenant_id)
+            groups, _ = _ensure_backfill_groups_cached(
+                db,
+                int(task.tenant_id),
+                _task_backfill_purpose(task),
+                {},
+                {},
+            )
             matched = _resolve_prompt_keyword_group(subtask.prompt or "", groups)
             if matched is not None:
                 keyword_group = keyword_group_display_label(matched)
@@ -2600,8 +2694,8 @@ def build_snapshot_backfill_item(
     *,
     schedule_runs_map: dict[str, GeoMonitorScheduleRun] | None = None,
     lead_runs_map: dict[str, LeadDiagnosisRun] | None = None,
-    keyword_groups_cache: dict[int, list] | None = None,
-    keyword_group_dict_cache: dict[int, list[dict[str, Any]]] | None = None,
+    keyword_groups_cache: dict[str, list] | None = None,
+    keyword_group_dict_cache: dict[str, list[dict[str, Any]]] | None = None,
     brand_asset_cache: dict[int, BrandAsset | None] | None = None,
     tenant_name: str | None = None,
     lead_ctx: dict[str, Any] | None = None,
@@ -2628,19 +2722,13 @@ def build_snapshot_backfill_item(
     )
 
     if task.tenant_id:
-        if task.tenant_id not in keyword_groups_cache:
-            try:
-                orm_groups = list_keyword_groups(db, task.tenant_id)
-            except Exception:
-                orm_groups = []
-            keyword_groups_cache[task.tenant_id] = orm_groups
-            keyword_group_dict_cache[task.tenant_id] = [
-                keyword_group_to_dict(item)
-                for item in orm_groups
-                if item.status and item.monitor_keyword
-            ]
-        keyword_group_rows = keyword_groups_cache[task.tenant_id]
-        keyword_group_dicts = keyword_group_dict_cache[task.tenant_id]
+        keyword_group_rows, keyword_group_dicts = _ensure_backfill_groups_cached(
+            db,
+            int(task.tenant_id),
+            _task_backfill_purpose(task),
+            keyword_groups_cache,
+            keyword_group_dict_cache,
+        )
     else:
         keyword_group_rows = []
         keyword_group_dicts = []
@@ -2814,6 +2902,7 @@ def list_snapshot_backfill_page(
     platform: str | None = None,
     keyword: str | None = None,
     keyword_group: str | None = None,
+    purpose: str | None = "geo",
     pending_only: bool = False,
     offset: int = 0,
     limit: int = 50,
@@ -2825,11 +2914,13 @@ def list_snapshot_backfill_page(
     include_summary=False 时尽早凑齐本页后停止扫描，供首屏轻量加载；
     汇总请另请求 include_summary=True（可走短缓存）。
     light=True：矩阵专用，跳过完整 item serialize，位次仍走与详情同款展示读路径。
+    purpose=geo|brand_word：分轨；品牌词不做漏跑空格（矩阵侧跳过）。
     """
     platform_code = str(platform or "").strip()
     keyword_text = str(keyword or "").strip()
     keyword_group_filter = str(keyword_group or "").strip()
     source_filter = str(source or "").strip()
+    purpose_lane = _normalize_backfill_purpose(purpose)
 
     # 2026-07-28 - 补录支持日期区间 - 单日参数兼容映射到 from/to
     range_from = detect_date_from
@@ -2839,13 +2930,18 @@ def list_snapshot_backfill_page(
     if range_from is not None and range_to is not None and range_from > range_to:
         range_from, range_to = range_to, range_from
 
+    # 2026-09-08 - 方案 B：按轨过滤；geo 仍含售前无 tenant；品牌词仅 brand_word
+    if purpose_lane == "brand_word":
+        purpose_clause = GeoMonitorTask.purpose == "brand_word"
+    else:
+        purpose_clause = or_(GeoMonitorTask.purpose == "geo", GeoMonitorTask.tenant_id.is_(None))
+
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .where(
             GeoMonitorTask.deleted.is_(False),
-            # 品牌词不进补录运营台；售前无 tenant 的 lead 任务仍可进
-            or_(GeoMonitorTask.purpose == "geo", GeoMonitorTask.tenant_id.is_(None)),
+            purpose_clause,
         )
         .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorSubtask.updated_at.desc())
     )
@@ -3000,8 +3096,8 @@ def list_snapshot_backfill_page(
                 for row in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids_in_page)))
             }
 
-    keyword_groups_cache: dict[int, list] = {}
-    keyword_group_dict_cache: dict[int, list[dict[str, Any]]] = {}
+    keyword_groups_cache: dict[str, list] = {}
+    keyword_group_dict_cache: dict[str, list[dict[str, Any]]] = {}
     brand_asset_cache: dict[int, BrandAsset | None] = {}
     lead_cache: dict[int, LeadDiagnosis] = {}
     # 2026-09-02 - 矩阵展示位次要对账 - 同页复用结构化榜 normalize，避免千级重复规范化
@@ -3023,26 +3119,21 @@ def list_snapshot_backfill_page(
 
         keyword_group_rows: list = []
         keyword_group_dicts: list[dict[str, Any]] = []
-        # 2026-09-02 - 矩阵位次对齐详情 - light 也要品牌词组，否则匹配词空、对账/门禁与详情不一致
+        # 2026-09-02 - 矩阵位次对齐详情 - light 也要词组，否则匹配词空、对账/门禁与详情不一致
+        # 2026-09-08 - 按任务 purpose 取监测词组或品牌词组
         if task.tenant_id:
-            if task.tenant_id not in keyword_groups_cache:
-                try:
-                    orm_groups = list_keyword_groups(db, task.tenant_id)
-                except Exception:
-                    orm_groups = []
-                keyword_groups_cache[task.tenant_id] = orm_groups
-                keyword_group_dict_cache[task.tenant_id] = [
-                    keyword_group_to_dict(item)
-                    for item in orm_groups
-                    if item.status and item.monitor_keyword
-                ]
+            keyword_group_rows, keyword_group_dicts = _ensure_backfill_groups_cached(
+                db,
+                int(task.tenant_id),
+                _task_backfill_purpose(task),
+                keyword_groups_cache,
+                keyword_group_dict_cache,
+            )
             if task.tenant_id not in brand_asset_cache:
                 try:
                     brand_asset_cache[task.tenant_id] = get_brand_asset(db, task.tenant_id)
                 except Exception:
                     brand_asset_cache[task.tenant_id] = None
-            keyword_group_rows = keyword_groups_cache[task.tenant_id]
-            keyword_group_dicts = keyword_group_dict_cache[task.tenant_id]
 
         if not _matches_keyword_group_filter(
             subtask,
@@ -3130,6 +3221,7 @@ def list_snapshot_backfill_matrix(
     platform: str | None = None,
     keyword: str | None = None,
     keyword_group: str | None = None,
+    purpose: str | None = "geo",
 ) -> dict[str, Any]:
     """词×日热力：格内为日三次均值；红点=均值>阈值或算不出均值。"""
     today = date.today()
@@ -3141,6 +3233,7 @@ def list_snapshot_backfill_matrix(
     if (d1 - d0).days > 30:
         d0 = d1 - timedelta(days=30)
 
+    purpose_lane = _normalize_backfill_purpose(purpose)
     payload = list_snapshot_backfill_page(
         db,
         tenant_id=tenant_id,
@@ -3152,6 +3245,7 @@ def list_snapshot_backfill_matrix(
         platform=platform,
         keyword=keyword,
         keyword_group=keyword_group,
+        purpose=purpose_lane,
         pending_only=False,
         offset=0,
         limit=4000,
@@ -3288,7 +3382,12 @@ def list_snapshot_backfill_matrix(
 
     source_filter = str(source or "").strip()
     # 2026-08-03 - 到期漏跑日无子任务 - 单企业矩阵补期望调度缺口格
-    if tenant_id is not None and source_filter != "lead_diagnosis":
+    # 2026-09-08 - 品牌词轨不做日场次空格（方案 B）；仅展示已有 brand_word 场次
+    if (
+        tenant_id is not None
+        and source_filter != "lead_diagnosis"
+        and purpose_lane == "geo"
+    ):
         _merge_gap_cells_into_matrix(
             db,
             tenant_id=int(tenant_id),

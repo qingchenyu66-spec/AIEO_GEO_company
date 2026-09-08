@@ -603,6 +603,7 @@ def monitor_snapshot_backfill_pending(
     platform: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
     keyword_group: str | None = Query(default=None),
+    purpose: str = Query(default="geo", pattern="^(geo|brand_word)$"),
     pending_only: bool = Query(default=False),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
@@ -660,12 +661,13 @@ def monitor_snapshot_backfill_pending(
                 str(platform or ""),
                 str(keyword or ""),
                 str(keyword_group or ""),
+                str(purpose),
                 str(pending_only),
                 str(offset),
                 str(limit),
             ]
         )
-        cache_key = f"snapshot_backfill:sum:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+        cache_key = f"snapshot_backfill:sum:v2:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
         cached = get_json_cache(cache_key)
         if isinstance(cached, dict) and "items" in cached and "summary" in cached:
             return ApiResponse(data=SnapshotBackfillListResponse.model_validate(cached))
@@ -682,6 +684,7 @@ def monitor_snapshot_backfill_pending(
         platform=platform,
         keyword=keyword,
         keyword_group=keyword_group,
+        purpose=purpose,
         pending_only=pending_only,
         offset=offset,
         limit=limit,
@@ -704,6 +707,7 @@ def monitor_snapshot_backfill_matrix(
     platform: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
     keyword_group: str | None = Query(default=None),
+    purpose: str = Query(default="geo", pattern="^(geo|brand_word)$"),
     # 2026-08-04 - 忽略后矩阵缓存仍返回旧缺口 - 写后刷新可跳过短缓存
     skip_cache: bool = Query(default=False),
     current: CurrentSession = Depends(get_current_session),
@@ -745,6 +749,7 @@ def monitor_snapshot_backfill_matrix(
     import hashlib
 
     # 2026-07-28 - 矩阵首屏慢 - 短缓存；忽略走本地更新不依赖此缓存即时一致
+    # 2026-09-08 - 缓存键含 purpose，日常/品牌词分轨
     raw = "|".join(
         [
             str(tenant_id or ""),
@@ -755,9 +760,10 @@ def monitor_snapshot_backfill_matrix(
             str(platform or ""),
             str(keyword or ""),
             str(keyword_group or ""),
+            str(purpose),
         ]
     )
-    cache_key = f"snapshot_backfill:mtx:v6:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
+    cache_key = f"snapshot_backfill:mtx:v7:{hashlib.sha1(raw.encode()).hexdigest()[:24]}"
     if not skip_cache:
         cached = get_json_cache(cache_key)
         if isinstance(cached, dict) and "cells" in cached:
@@ -774,6 +780,7 @@ def monitor_snapshot_backfill_matrix(
         platform=platform,
         keyword=keyword,
         keyword_group=keyword_group,
+        purpose=purpose,
     )
     set_json_cache(cache_key, data, ttl_seconds=30)
     return ApiResponse(data=data)

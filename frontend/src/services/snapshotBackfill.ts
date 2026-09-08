@@ -50,6 +50,7 @@ export interface SnapshotBackfillQuery {
   platform?: string
   keyword?: string
   keyword_group?: string
+  purpose?: 'geo' | 'brand_word'
   pending_only?: boolean
   offset?: number
   limit?: number
@@ -166,6 +167,7 @@ export async function getPendingSnapshotBackfills(
       platform: query.platform || undefined,
       keyword: query.keyword || undefined,
       keyword_group: query.keyword_group || undefined,
+      purpose: query.purpose || undefined,
       include_summary: query.include_summary,
     },
   })
@@ -205,6 +207,7 @@ export async function getSnapshotBackfillMatrix(
       platform: query.platform || undefined,
       keyword: query.keyword || undefined,
       keyword_group: query.keyword_group || undefined,
+      purpose: query.purpose || undefined,
       skip_cache: query.skip_cache || undefined,
     },
   })
