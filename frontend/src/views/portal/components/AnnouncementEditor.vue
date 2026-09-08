@@ -186,12 +186,12 @@ function applyInlineStyle(cssText: string) {
   emitHtml()
 }
 
-const PAINT_TAGS = new Set(['P', 'DIV', 'SPAN', 'TD', 'TH', 'LI', 'H1', 'H2', 'H3', 'H4'])
-const BLOCK_PAINT_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4'])
+const PAINT_TAGS = new Set(['P', 'DIV', 'SPAN', 'TD', 'TH', 'LI', 'OL', 'UL', 'H1', 'H2', 'H3', 'H4'])
+const BLOCK_PAINT_TAGS = new Set(['P', 'DIV', 'LI', 'OL', 'UL', 'H1', 'H2', 'H3', 'H4'])
 
 function collectPaintHits(range: Range, el: HTMLElement): HTMLElement[] {
   const hit: HTMLElement[] = []
-  el.querySelectorAll('p,div,span,td,th,li,h1,h2,h3,h4').forEach((node) => {
+  el.querySelectorAll('p,div,span,td,th,li,ol,ul,h1,h2,h3,h4').forEach((node) => {
     const he = node as HTMLElement
     if (!PAINT_TAGS.has(he.tagName)) return
     try {
@@ -203,20 +203,52 @@ function collectPaintHits(range: Range, el: HTMLElement): HTMLElement[] {
   return hit
 }
 
-/** 字色改选区节点；底色按荧光笔（先清块级底，再 span 高亮），避免整行白条 */
+/** 选中列表任一段时，整份 ol/ul 的 li 一起改，避免只清中间、上下黑条还在 */
+function expandPaintHits(hits: HTMLElement[]): HTMLElement[] {
+  const out = new Set<HTMLElement>(hits)
+  for (const he of hits) {
+    const list = he.closest('ol, ul') as HTMLElement | null
+    if (!list) continue
+    out.add(list)
+    list.querySelectorAll('li').forEach((li) => out.add(li as HTMLElement))
+  }
+  return [...out]
+}
+
+/** 清粘贴深色条：background 简写、底色、描边/阴影都要去掉，单清 background-color 不够 */
+function stripBlockChrome(he: HTMLElement) {
+  const props = [
+    'background',
+    'background-color',
+    'background-image',
+    'border',
+    'border-color',
+    'border-top',
+    'border-right',
+    'border-bottom',
+    'border-left',
+    'border-width',
+    'border-style',
+    'outline',
+    'box-shadow',
+  ]
+  for (const prop of props) {
+    he.style.removeProperty(prop)
+  }
+}
+
+/** 字色改选区节点；底色按荧光笔；列表黑条与选区一起清/设 */
 function applyPaintStyle(kind: 'color' | 'background-color', value: string, opts?: { clear?: boolean }) {
   const el = editorRef.value
   const range = restoreSavedSelection()
   if (!el || !range) return
 
+  const hits = range.collapsed ? [] : expandPaintHits(collectPaintHits(range, el))
+
   if (kind === 'background-color') {
-    if (!range.collapsed) {
-      for (const he of collectPaintHits(range, el)) {
-        if (BLOCK_PAINT_TAGS.has(he.tagName)) {
-          he.style.removeProperty('background-color')
-        } else if (opts?.clear) {
-          he.style.removeProperty('background-color')
-        }
+    for (const he of hits) {
+      if (BLOCK_PAINT_TAGS.has(he.tagName) || opts?.clear) {
+        stripBlockChrome(he)
       }
     }
     if (opts?.clear) {
@@ -226,23 +258,24 @@ function applyPaintStyle(kind: 'color' | 'background-color', value: string, opts
     }
     if (!value) return
     bgColor.value = value
+    // 块级底（含列表黑条）已清；再给选中文字上荧光笔
     applyInlineStyle(`background-color: ${value}`)
     return
   }
 
   if (!value) return
   textColor.value = value
-  if (range.collapsed) {
+  // 改字色时一并拆掉选区里的深色底/黑边，否则浅字深底仍看不见
+  for (const he of hits) {
+    if (BLOCK_PAINT_TAGS.has(he.tagName)) {
+      stripBlockChrome(he)
+    }
+  }
+  if (range.collapsed || !hits.length) {
     applyInlineStyle(`color: ${value}`)
     return
   }
-
-  const hit = collectPaintHits(range, el)
-  if (!hit.length) {
-    applyInlineStyle(`color: ${value}`)
-    return
-  }
-  for (const he of hit) {
+  for (const he of hits) {
     he.style.setProperty('color', value)
   }
   savedRange = null
