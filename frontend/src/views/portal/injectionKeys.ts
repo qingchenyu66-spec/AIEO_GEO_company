@@ -10,3 +10,4 @@ export const PortalNavigateKey: InjectionKey<(menuCode: string, replace?: boolea
 export const ApprovalPendingRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('approval-pending-refresh')
 export const PlatformBrandLogoTenantKey: InjectionKey<import('vue').Ref<number | null>> = Symbol('platform-brand-logo-tenant')
 export const PlatformTenantsRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('platform-tenants-refresh')
+export const PlatformDefaultLogoRefreshKey: InjectionKey<() => void | Promise<void>> = Symbol('platform-default-logo-refresh')

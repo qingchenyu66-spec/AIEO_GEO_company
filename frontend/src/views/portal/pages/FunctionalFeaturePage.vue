@@ -33,6 +33,7 @@ import {
 } from '../constants'
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import H5DiagnosisConfigPanel from '../components/H5DiagnosisConfigPanel.vue'
+import PlatformBrandLogoPanel from '../components/PlatformBrandLogoPanel.vue'
 import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
@@ -61,11 +62,12 @@ const {
   recentSubtasks,
 } = analytics
 
-type SettingsCategory = 'secrets' | 'h5_diagnosis' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
+type SettingsCategory = 'secrets' | 'h5_diagnosis' | 'brand' | 'schedule' | 'cache_queue' | 'notification' | 'menu'
 
 const SETTINGS_MENU_BY_CATEGORY: Record<SettingsCategory, string> = {
   secrets: SETTINGS_SECRETS_MENU,
   h5_diagnosis: SETTINGS_SCHEDULE_MENU,
+  brand: SETTINGS_MENU,
   schedule: SETTINGS_SCHEDULE_MENU,
   cache_queue: SETTINGS_CACHE_QUEUE_MENU,
   notification: SETTINGS_NOTIFICATION_MENU,
@@ -83,6 +85,10 @@ function canAccessSettingsCategory(key: SettingsCategory) {
   if (key === 'h5_diagnosis') {
     return menuHasAccess(SETTINGS_MENU) || menuHasAccess(SETTINGS_SCHEDULE_MENU)
   }
+  // 2026-09-07 - 平台默认 Logo：有系统配置父菜单即可（与上传接口 can_update 对齐）
+  if (key === 'brand') {
+    return menuHasAccess(SETTINGS_MENU)
+  }
   const childCode = SETTINGS_MENU_BY_CATEGORY[key]
   if (menuHasAccess(childCode)) return true
   // 有任意配置子权限时，仅按子项授权；无子项时兼容旧的父菜单整页授权
@@ -97,6 +103,7 @@ const settingsTabs = computed(() => {
   const all: Array<{ key: SettingsCategory; title: string; desc: string }> = [
     { key: 'secrets', title: '接口密钥', desc: '监测服务、DeepSeek 等敏感配置，保存后立即生效' },
     { key: 'h5_diagnosis', title: 'H5 付费诊断', desc: '微信体验价、监测平台、监测次数' },
+    { key: 'brand', title: '平台 Logo', desc: '运营端默认侧栏图标，可恢复内置标' },
     { key: 'schedule', title: '调度策略', desc: '监测容差、接口限速、Celery 扫描与同步参数' },
     { key: 'cache_queue', title: '缓存与队列', desc: 'Redis / Celery 连接与队列预警阈值' },
     { key: 'notification', title: '通知规则', desc: '补录谁收、客户即将到期天数/职位、弱排名阈值' },
@@ -113,7 +120,7 @@ watch(settingsTabs, (tabs) => {
 }, { immediate: true })
 
 const filteredConfigRows = computed(() => {
-  if (settingsCategory.value === 'menu' || settingsCategory.value === 'h5_diagnosis') return []
+  if (settingsCategory.value === 'menu' || settingsCategory.value === 'h5_diagnosis' || settingsCategory.value === 'brand') return []
   const rows = systemConfigRows.value.filter(row => (row.category || row.scope) === settingsCategory.value)
   if (settingsCategory.value === 'schedule') {
     return rows.filter(row => !String(row.config_key || '').startsWith('h5_diagnosis_'))
@@ -123,6 +130,10 @@ const filteredConfigRows = computed(() => {
 
 const canEditH5DiagnosisSettings = computed(() => auth.allowedMenus.some(menu => (
   (menu.menu_code === SETTINGS_SCHEDULE_MENU || menu.menu_code === SETTINGS_MENU) && menu.can_update
+)))
+
+const canEditPlatformBrandLogo = computed(() => auth.allowedMenus.some(menu => (
+  menu.menu_code === SETTINGS_MENU && menu.can_update
 )))
 
 function switchSettingsCategory(key: SettingsCategory) {
@@ -776,6 +787,10 @@ onUnmounted(() => {
 
           <div v-else-if="settingsCategory === 'h5_diagnosis'" class="h5-settings-wrap">
             <H5DiagnosisConfigPanel :can-edit="canEditH5DiagnosisSettings" />
+          </div>
+
+          <div v-else-if="settingsCategory === 'brand'" class="h5-settings-wrap">
+            <PlatformBrandLogoPanel :can-edit="canEditPlatformBrandLogo" />
           </div>
 
           <div v-else-if="settingsCategory === 'schedule'" class="schedule-settings-wrap">

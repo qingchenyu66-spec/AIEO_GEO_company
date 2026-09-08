@@ -89,7 +89,15 @@ from app.services.permission_service import (
     list_roles_by_identity_type,
 )
 from app.services.tenant_scope import ensure_sales_tenant_access, is_platform_admin_identity, sales_owned_tenant_ids
-from app.services.tenant_logo_service import resolve_tenant_logo_path, save_tenant_logo, tenant_logo_media_type
+from app.services.tenant_logo_service import (
+    clear_platform_logo,
+    resolve_platform_logo_path,
+    resolve_tenant_logo_path,
+    save_platform_logo,
+    save_tenant_logo,
+    serialize_platform_logo_meta,
+    tenant_logo_media_type,
+)
 from app.services.approval_service import can_review_approvals, queue_or_run
 
 router = APIRouter(prefix="/management")
@@ -1339,6 +1347,78 @@ def management_get_tenant_logo(
         media_type=tenant_logo_media_type(file_path),
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+
+@router.get("/platform-brand/logo/meta", response_model=ApiResponse[dict])
+def management_platform_logo_meta() -> ApiResponse[dict]:
+    """平台默认 Logo 元信息（公开，供侧栏/登录/页签兜底）。"""
+    # 2026-09-07 - 平台默认 Logo 后台可改 - meta 免登便于登录页与 favicon
+    return ApiResponse(data=serialize_platform_logo_meta())
+
+
+@router.get("/platform-brand/logo")
+def management_get_platform_logo() -> FileResponse:
+    """读取平台默认 Logo（公开）。"""
+    try:
+        file_path = resolve_platform_logo_path()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FileResponse(
+        path=file_path,
+        media_type=tenant_logo_media_type(file_path),
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.post("/platform-brand/logo", response_model=ApiResponse[dict])
+async def management_upload_platform_logo(
+    file: UploadFile = File(...),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """上传平台默认 Logo（系统配置权限）。"""
+    require_platform(current)
+    require_system_config_access(db, current, for_update=True)
+    try:
+        data = await save_platform_logo(file)
+        write_management_log(
+            db,
+            current,
+            "平台默认 Logo",
+            "上传平台默认 Logo",
+            target_module="系统配置",
+            risk_level="关注",
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Logo 上传失败：{exc}") from exc
+    return ApiResponse(data=data)
+
+
+@router.delete("/platform-brand/logo", response_model=ApiResponse[dict])
+def management_clear_platform_logo(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """恢复平台默认 Logo 为内置亦智标（删除自定义文件）。"""
+    require_platform(current)
+    require_system_config_access(db, current, for_update=True)
+    data = clear_platform_logo()
+    write_management_log(
+        db,
+        current,
+        "平台默认 Logo",
+        "恢复平台默认 Logo 为内置标",
+        target_module="系统配置",
+        risk_level="关注",
+    )
+    db.commit()
+    return ApiResponse(data=data)
 
 
 @router.get("/tenant-sales-owners", response_model=ApiResponse[list[dict]])

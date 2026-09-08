@@ -295,6 +295,31 @@ export function tenantLogoUrl(tenantId: number, logoUpdatedAt?: string | null): 
   return `/api/v1/management/tenants/${tenantId}/logo${query}`
 }
 
+
+export type PlatformLogoMeta = { has_logo: boolean; logo_updated_at: string | null }
+
+export async function getPlatformLogoMeta(): Promise<PlatformLogoMeta> {
+  const response = await http.get('/v1/management/platform-brand/logo/meta')
+  return response.data.data as PlatformLogoMeta
+}
+
+export function platformLogoUrl(logoUpdatedAt?: string | null): string {
+  const query = logoUpdatedAt ? `?v=${encodeURIComponent(logoUpdatedAt)}` : ''
+  return `/api/v1/management/platform-brand/logo${query}`
+}
+
+export async function uploadPlatformLogo(file: File): Promise<PlatformLogoMeta> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await http.post('/v1/management/platform-brand/logo', form)
+  return response.data.data as PlatformLogoMeta
+}
+
+export async function clearPlatformLogo(): Promise<PlatformLogoMeta> {
+  const response = await http.delete('/v1/management/platform-brand/logo')
+  return response.data.data as PlatformLogoMeta
+}
+
 export async function getOperationLogs(): Promise<OperationLogRecord[]> {
   const response = await http.get('/v1/management/operation-logs')
   return response.data.data

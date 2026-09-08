@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceFullscreen } from '../composables/useWorkspaceFullscreen'
 import type { MenuInfo } from '../services/auth'
-import { getTenants, tenantLogoUrl } from '../services/management'
+import { getTenants, getPlatformLogoMeta, platformLogoUrl, tenantLogoUrl, type PlatformLogoMeta } from '../services/management'
 import {
   getBrandAsset,
   type BrandAsset, type BrandCompetitor,
@@ -14,7 +14,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey, PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey, PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey, PlatformDefaultLogoRefreshKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -317,21 +317,61 @@ async function ensureTenantsForLogo() {
 
 provide(PlatformTenantsRefreshKey, ensureTenantsForLogo)
 
+const platformLogoMeta = ref<PlatformLogoMeta>({ has_logo: false, logo_updated_at: null })
+
+async function refreshPlatformDefaultLogo() {
+  try {
+    platformLogoMeta.value = await getPlatformLogoMeta()
+  } catch {
+    platformLogoMeta.value = { has_logo: false, logo_updated_at: null }
+  }
+}
+
+provide(PlatformDefaultLogoRefreshKey, refreshPlatformDefaultLogo)
+
+const DEFAULT_FAVICON = '/logo-icon-32.png'
+
+function applyDocumentFavicon(href: string) {
+  // 2026-09-07 - 页签图标跟当前侧栏同源：企业 > 平台默认 > 内置
+  let link = document.querySelector<HTMLLinkElement>("link[rel='icon']")
+  if (!link) {
+    link = document.createElement('link')
+    link.rel = 'icon'
+    document.head.appendChild(link)
+  }
+  link.type = 'image/png'
+  link.href = href
+}
+
 const brandLogoSrc = computed(() => {
   const tenantId = effectiveTenantIdForLogo.value
-  if (!tenantId) return undefined
-  if (!isPlatform.value) {
-    if (!auth.session?.identity?.tenant_has_logo) return undefined
-    return tenantLogoUrl(tenantId, auth.session.identity.tenant_logo_updated_at)
+  if (tenantId) {
+    if (!isPlatform.value) {
+      if (auth.session?.identity?.tenant_has_logo) {
+        return tenantLogoUrl(tenantId, auth.session.identity.tenant_logo_updated_at)
+      }
+    } else {
+      const tenant = tenants.value.find(item => item.id === tenantId)
+      if (tenant?.has_logo) return tenantLogoUrl(tenantId, tenant.logo_updated_at)
+      // 2026-08-24 - 品牌审核编辑页无 query.tenant_id，刚上传后列表可能未刷新，仍尝试拉取
+      if (platformBrandLogoTenantId.value === tenantId) {
+        return tenantLogoUrl(tenantId, tenant?.logo_updated_at)
+      }
+    }
   }
-  const tenant = tenants.value.find(item => item.id === tenantId)
-  if (tenant?.has_logo) return tenantLogoUrl(tenantId, tenant.logo_updated_at)
-  // 2026-08-24 - 品牌审核编辑页无 query.tenant_id，刚上传后列表可能未刷新，仍尝试拉取
-  if (platformBrandLogoTenantId.value === tenantId) {
-    return tenantLogoUrl(tenantId, tenant?.logo_updated_at)
+  if (platformLogoMeta.value.has_logo) {
+    return platformLogoUrl(platformLogoMeta.value.logo_updated_at)
   }
   return undefined
 })
+
+watch(
+  brandLogoSrc,
+  src => {
+    applyDocumentFavicon(src || DEFAULT_FAVICON)
+  },
+  { immediate: true },
+)
 
 function shouldPrefetchBrandAsset() {
   // Brand audit / realtime load their own asset. Reports & admin pages must not hit /brand/asset.

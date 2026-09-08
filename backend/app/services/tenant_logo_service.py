@@ -20,6 +20,8 @@ ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_FILE_SIZE = 2 * 1024 * 1024
 STORAGE_ROOT = Path(__file__).resolve().parents[2] / "storage" / "tenant-logos"
 STAGING_ROOT = Path(__file__).resolve().parents[2] / "storage" / "logo-staging"
+# 2026-09-07 - 平台默认 Logo 与企业 Logo 同仓，专用目录名避开数字 tenant_id
+PLATFORM_LOGO_DIR = "_platform"
 STAGING_KEY_RE = re.compile(r"^[a-f0-9]{32}$")
 
 MEDIA_TYPES = {
@@ -33,6 +35,56 @@ MEDIA_TYPES = {
 def tenant_logo_media_type(path: Path) -> str:
     return MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
+
+def _validate_logo_upload_name(upload: UploadFile) -> str:
+    original_name = Path(upload.filename or "").name.strip()
+    if not original_name:
+        raise ValueError("文件名不能为空")
+    file_ext = Path(original_name).suffix.lower()
+    if file_ext not in ALLOWED_EXT:
+        raise ValueError("Logo 仅支持 png/jpg/webp")
+    return file_ext
+
+
+async def _write_logo_file(target: Path, upload: UploadFile) -> None:
+    """共享落盘：企业 / 平台默认 / staging 同一套体积与空文件校验。"""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    file_size = 0
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 256)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > MAX_FILE_SIZE:
+                    raise ValueError("Logo 不能超过 2MB")
+                out.write(chunk)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    if file_size == 0:
+        target.unlink(missing_ok=True)
+        raise ValueError("不能上传空文件")
+
+
+def _find_logo_in_dir(directory: Path) -> Path | None:
+    if not directory.is_dir():
+        return None
+    for ext in ALLOWED_EXT:
+        candidate = directory / f"logo{ext}"
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _clear_logo_dir(directory: Path, *, keep_ext: str | None = None) -> None:
+    if not directory.is_dir():
+        return
+    for ext in ALLOWED_EXT:
+        if keep_ext and ext == keep_ext:
+            continue
+        (directory / f"logo{ext}").unlink(missing_ok=True)
 
 def _safe_logo_path(tenant: Tenant) -> Path:
     if not tenant.logo_path:
@@ -48,14 +100,7 @@ def _safe_logo_path(tenant: Tenant) -> Path:
 
 def _find_disk_logo(tenant_id: int) -> Path | None:
     """磁盘上已有 logo 文件但库内 logo_path 为空时兜底（审批回滚等会留下孤儿文件）。"""
-    tenant_dir = STORAGE_ROOT / str(int(tenant_id))
-    if not tenant_dir.is_dir():
-        return None
-    for ext in ALLOWED_EXT:
-        candidate = tenant_dir / f"logo{ext}"
-        if candidate.is_file():
-            return candidate
-    return None
+    return _find_logo_in_dir(STORAGE_ROOT / str(int(tenant_id)))
 
 
 def backfill_tenant_logo_path_if_missing(db: Session, tenant: Tenant) -> tuple[Path | None, bool]:
@@ -100,41 +145,19 @@ async def save_tenant_logo(
     if tenant is None or tenant.deleted:
         raise ValueError("企业不存在")
 
-    original_name = Path(upload.filename or "").name.strip()
-    if not original_name:
-        raise ValueError("文件名不能为空")
-    file_ext = Path(original_name).suffix.lower()
-    if file_ext not in ALLOWED_EXT:
-        raise ValueError("Logo 仅支持 png/jpg/webp")
-
+    file_ext = _validate_logo_upload_name(upload)
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     stored_rel = f"{tenant_id}/logo{file_ext}"
     target = STORAGE_ROOT / stored_rel
     # 2026-08-24 - Logo 上传 500 - mkdir 只建了 tenant-logos，未建 {tenant_id} 子目录
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    file_size = 0
-    try:
-        with target.open("wb") as out:
-            while True:
-                chunk = await upload.read(1024 * 256)
-                if not chunk:
-                    break
-                file_size += len(chunk)
-                if file_size > MAX_FILE_SIZE:
-                    raise ValueError("Logo 不能超过 2MB")
-                out.write(chunk)
-    except Exception:
-        target.unlink(missing_ok=True)
-        raise
-    if file_size == 0:
-        target.unlink(missing_ok=True)
-        raise ValueError("不能上传空文件")
+    await _write_logo_file(target, upload)
 
     if tenant.logo_path and tenant.logo_path != stored_rel:
         old = (STORAGE_ROOT / tenant.logo_path).resolve()
         if old.is_file():
             old.unlink(missing_ok=True)
+    else:
+        _clear_logo_dir(target.parent, keep_ext=file_ext)
 
     # 2026-08-24 - 企业侧栏 Logo - 存相对路径，GET 走鉴权流式返回
     now = datetime.now()
@@ -142,6 +165,40 @@ async def save_tenant_logo(
     tenant.logo_updated_at = now
     db.flush()
     return {"tenant_id": tenant_id, **serialize_tenant_logo_meta(tenant)}
+
+
+def serialize_platform_logo_meta() -> dict:
+    path = _find_logo_in_dir(STORAGE_ROOT / PLATFORM_LOGO_DIR)
+    if path is None:
+        return {"has_logo": False, "logo_updated_at": None}
+    return {
+        "has_logo": True,
+        "logo_updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(sep=" ", timespec="seconds"),
+    }
+
+
+def resolve_platform_logo_path() -> Path:
+    path = _find_logo_in_dir(STORAGE_ROOT / PLATFORM_LOGO_DIR)
+    if path is None:
+        raise ValueError("尚未配置平台默认 Logo")
+    root = STORAGE_ROOT.resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("非法文件路径")
+    return path
+
+
+async def save_platform_logo(upload: UploadFile) -> dict:
+    """平台默认 Logo：与企业同一目录规范，目录固定为 _platform。"""
+    file_ext = _validate_logo_upload_name(upload)
+    target = STORAGE_ROOT / PLATFORM_LOGO_DIR / f"logo{file_ext}"
+    await _write_logo_file(target, upload)
+    _clear_logo_dir(target.parent, keep_ext=file_ext)
+    return serialize_platform_logo_meta()
+
+
+def clear_platform_logo() -> dict:
+    _clear_logo_dir(STORAGE_ROOT / PLATFORM_LOGO_DIR)
+    return serialize_platform_logo_meta()
 
 
 def resolve_tenant_logo_path(
@@ -218,35 +275,16 @@ def resolve_logo_staging_path(
 
 async def save_logo_staging(current: CurrentSession, upload: UploadFile) -> dict:
     """销售提交审批前暂存 Logo，审批通过后再落到企业目录。"""
+    file_ext = _validate_logo_upload_name(upload)
     original_name = Path(upload.filename or "").name.strip()
-    if not original_name:
-        raise ValueError("文件名不能为空")
-    file_ext = Path(original_name).suffix.lower()
-    if file_ext not in ALLOWED_EXT:
-        raise ValueError("Logo 仅支持 png/jpg/webp")
-
     staging_key = uuid.uuid4().hex
     directory = _staging_dir(current.user.id, staging_key)
-    directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"logo{file_ext}"
-
-    file_size = 0
     try:
-        with target.open("wb") as out:
-            while True:
-                chunk = await upload.read(1024 * 256)
-                if not chunk:
-                    break
-                file_size += len(chunk)
-                if file_size > MAX_FILE_SIZE:
-                    raise ValueError("Logo 不能超过 2MB")
-                out.write(chunk)
+        await _write_logo_file(target, upload)
     except Exception:
         shutil.rmtree(directory, ignore_errors=True)
         raise
-    if file_size == 0:
-        shutil.rmtree(directory, ignore_errors=True)
-        raise ValueError("不能上传空文件")
     return {"staging_key": staging_key, "filename": original_name}
 
 
