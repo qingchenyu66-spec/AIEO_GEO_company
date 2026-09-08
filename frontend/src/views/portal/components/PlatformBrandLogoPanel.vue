@@ -35,7 +35,7 @@ async function loadMeta() {
   try {
     meta.value = await getPlatformLogoMeta()
   } catch (error) {
-    ElMessage.error(extractErrorDetail(error, '加载平台 Logo 失败'))
+    ElMessage.error(extractErrorDetail(error) || '加载平台 Logo 失败')
   } finally {
     loading.value = false
   }
@@ -74,7 +74,7 @@ async function saveUpload() {
     await afterChanged(next)
     ElMessage.success('平台默认 Logo 已更新')
   } catch (error) {
-    ElMessage.error(extractErrorDetail(error, '上传失败'))
+    ElMessage.error(extractErrorDetail(error) || '上传失败')
   } finally {
     saving.value = false
   }
@@ -98,7 +98,7 @@ async function restoreDefault() {
     await afterChanged(next)
     ElMessage.success('已恢复内置默认标')
   } catch (error) {
-    ElMessage.error(extractErrorDetail(error, '恢复失败'))
+    ElMessage.error(extractErrorDetail(error) || '恢复失败')
   } finally {
     saving.value = false
   }
