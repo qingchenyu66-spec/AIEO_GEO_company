@@ -29,6 +29,7 @@ import {
   keywordGroupSelectValue,
   platformSelectionCodes,
   type BrandKeywordGroup,
+  type BrandWordGroup,
 } from '../../../services/brand'
 import { useAuthStore } from '../../../stores/auth'
 import { notifyOperationError } from '../../../utils/requestError'
@@ -65,7 +66,7 @@ const purposeFilter = ref<'geo' | 'brand_word'>('geo')
 const platformFilter = ref('')
 const keywordGroupFilter = ref('')
 const keywordFilter = ref('')
-const keywordGroupOptions = ref<BrandKeywordGroup[]>([])
+const keywordGroupOptions = ref<Array<BrandKeywordGroup | BrandWordGroup>>([])
 const tenantMonitoredPlatforms = ref<string[]>([])
 const todoOnly = ref(true)
 // 2026-09-01 - 默认日常补录单表；打开才左右对照（词列共用）
@@ -237,7 +238,9 @@ async function loadTenantKeywordGroups() {
       ? (asset.asset?.brand_word_groups || [])
       : (asset.asset?.keyword_groups || [])
     keywordGroupOptions.value = groups.filter(
-      (group: BrandKeywordGroup) => group.status && (group.monitor_keyword || (group.monitor_keywords || []).length),
+      (group: BrandKeywordGroup | BrandWordGroup) => Boolean(
+        group.status && (group.monitor_keyword || (group.monitor_keywords || []).length),
+      ),
     )
   } catch {
     keywordGroupOptions.value = []

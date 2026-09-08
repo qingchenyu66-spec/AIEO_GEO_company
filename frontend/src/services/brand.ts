@@ -103,11 +103,11 @@ export function defaultKeywordGroupName(index: number) {
   return `词组 ${index + 1}`
 }
 
-export function keywordGroupDisplayName(group: BrandKeywordGroup, index = group.sort_order ?? 0) {
+export function keywordGroupDisplayName(group: BrandKeywordGroup | BrandWordGroup, index = group.sort_order ?? 0) {
   return (group.name || '').trim() || defaultKeywordGroupName(index)
 }
 
-export function keywordGroupSelectValue(group: BrandKeywordGroup, index = group.sort_order ?? 0): string {
+export function keywordGroupSelectValue(group: BrandKeywordGroup | BrandWordGroup, index = group.sort_order ?? 0): string {
   if (group.id != null) return `id:${group.id}`
   return `idx:${index}`
 }
@@ -177,12 +177,14 @@ export function formatKeywordGroupLabel(group: BrandKeywordGroup, index = group.
 }
 
 /** Full hint for select tooltip: monitor + exposure terms. */
-export function formatKeywordGroupDetailHint(group: BrandKeywordGroup): string {
+export function formatKeywordGroupDetailHint(group: BrandKeywordGroup | BrandWordGroup): string {
   const keywords = keywordGroupMonitorKeywords(group)
-  const exposure = (group.exposure_terms || []).map(term => term.trim()).filter(Boolean)
+  const exposure = ('exposure_terms' in group ? group.exposure_terms || [] : [])
+    .map(term => term.trim())
+    .filter(Boolean)
   const platforms = platformSelectionCodes(group.platforms || [])
   const parts: string[] = []
-  if (keywords.length) parts.push(`监测词：${keywords.join('、')}`)
+  if (keywords.length) parts.push(`${'exposure_terms' in group ? '监测词' : '品牌词'}：${keywords.join('、')}`)
   if (exposure.length) parts.push(`露出词：${exposure.join('、')}`)
   if (platforms.length) parts.push(`平台：${platforms.join('、')}`)
   return parts.join(' · ')
