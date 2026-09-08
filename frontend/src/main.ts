@@ -15,6 +15,9 @@ import './styles/workspace-board.css'
 import './styles/monitor-realtime.css'
 import App from './App.vue'
 import router from './router'
+import { applyPlatformFaviconFromServer } from './utils/platformFavicon'
+
+void applyPlatformFaviconFromServer()
 
 const app = createApp(App)
 

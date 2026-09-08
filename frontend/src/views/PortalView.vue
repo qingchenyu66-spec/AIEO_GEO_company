@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth'
 import { useWorkspaceFullscreen } from '../composables/useWorkspaceFullscreen'
 import type { MenuInfo } from '../services/auth'
 import { getTenants, getPlatformLogoMeta, platformLogoUrl, tenantLogoUrl, type PlatformLogoMeta } from '../services/management'
+import { applyDocumentFavicon, DEFAULT_FAVICON } from '../utils/platformFavicon'
 import {
   getBrandAsset,
   type BrandAsset, type BrandCompetitor,
@@ -328,20 +329,6 @@ async function refreshPlatformDefaultLogo() {
 }
 
 provide(PlatformDefaultLogoRefreshKey, refreshPlatformDefaultLogo)
-
-const DEFAULT_FAVICON = '/logo-icon-32.png'
-
-function applyDocumentFavicon(href: string) {
-  // 2026-09-07 - 页签图标跟当前侧栏同源：企业 > 平台默认 > 内置
-  let link = document.querySelector<HTMLLinkElement>("link[rel='icon']")
-  if (!link) {
-    link = document.createElement('link')
-    link.rel = 'icon'
-    document.head.appendChild(link)
-  }
-  link.type = 'image/png'
-  link.href = href
-}
 
 const brandLogoSrc = computed(() => {
   const tenantId = effectiveTenantIdForLogo.value
