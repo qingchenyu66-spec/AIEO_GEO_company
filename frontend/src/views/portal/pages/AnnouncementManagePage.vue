@@ -266,7 +266,14 @@ onMounted(async () => {
       </table>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑公告' : '新建公告'" width="760px" destroy-on-close>
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId ? '编辑公告' : '新建公告'"
+      width="760px"
+      destroy-on-close
+      class="announcement-edit-dialog"
+      align-center
+    >
       <form class="announcement-form" @submit.prevent="save">
         <label class="announcement-field">
           <span class="field-label">标题</span>
@@ -467,5 +474,20 @@ onMounted(async () => {
   .announcement-row {
     grid-template-columns: 1fr;
   }
+}
+</style>
+
+<style>
+/* 2026-09-08 - 公告编辑弹窗限高，避免长文把受众/保存顶出视口 */
+.announcement-edit-dialog.el-dialog {
+  margin-top: 4vh !important;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+.announcement-edit-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  overflow: auto;
+  max-height: calc(92vh - 130px);
 }
 </style>
