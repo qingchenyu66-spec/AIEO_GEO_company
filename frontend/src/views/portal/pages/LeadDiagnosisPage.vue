@@ -865,7 +865,15 @@ onUnmounted(() => {
                       <template v-if="!configEditing">
                         <div>
                           <strong>抓取时间点</strong>
-                          <span v-if="configScheduleDisplaySlots.length">{{ configScheduleDisplaySlots.join('、') }}</span>
+                          <div v-if="configScheduleDisplaySlots.length" class="lead-config-field-value">
+                            <div class="lead-config-schedule-chips">
+                              <span
+                                v-for="slot in configScheduleDisplaySlots"
+                                :key="slot"
+                                class="lead-config-schedule-chip"
+                              >{{ slot }}</span>
+                            </div>
+                          </div>
                           <span v-else class="lead-config-muted">未填写</span>
                         </div>
                         <div>

@@ -929,7 +929,8 @@
   gap: 10px;
 }
 
-.lead-config-list div {
+/* 2026-09-09 - 仅直接子行两列；勿命中平台徽章/时间点等嵌套 div，否则第二平台名被挤没 */
+.lead-config-list > div {
   display: grid;
   grid-template-columns: 110px 1fr;
   gap: 12px;
@@ -941,7 +942,7 @@
   line-height: 1.6;
 }
 
-.lead-config-list strong {
+.lead-config-list > div > strong {
   color: #6a7f9a;
 }
 
@@ -1028,6 +1029,35 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.lead-config-platform-badges .platform-badge {
+  padding: 4px 10px 4px 6px;
+  border: 1px solid #d8e7f6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.lead-config-schedule-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lead-config-schedule-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid #d8e7f6;
+  border-radius: 999px;
+  background: #fff;
+  color: #17395f;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .lead-config-muted {
@@ -1398,7 +1428,7 @@
     grid-template-columns: 1fr 1fr;
   }
 
-  .lead-config-list div {
+  .lead-config-list > div {
     grid-template-columns: 1fr;
   }
 }
