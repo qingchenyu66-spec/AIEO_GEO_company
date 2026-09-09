@@ -89,6 +89,8 @@ const {
   platformLabelMap,
   formatDateTime,
   formatLeadCreator,
+  formatLeadSourceLabel,
+  isH5PaidLeadSource,
   filledPromptCount,
   promptQuality,
   generateBalancedPrompts,
@@ -458,7 +460,7 @@ onUnmounted(() => {
               <span class="lead-badge" :class="item.status">{{ statusLabels[item.status] }}</span>
             </div>
             <p>诊断日期 {{ item.diagnosis_date }}</p>
-            <p v-if="item.creator" class="lead-rail-creator">创建人 {{ formatLeadCreator(item.creator) }}</p>
+            <p v-if="item.creator || item.lead_context?.source" class="lead-rail-creator">创建人 {{ formatLeadCreator(item.creator, { source: item.lead_context?.source }) }}</p>
             <div class="lead-rail-progress">
               <i v-for="(state, idx) in listProgress(item)" :key="idx" :class="state" />
             </div>
@@ -500,7 +502,7 @@ onUnmounted(() => {
               <h2>{{ detail?.brand_name }}</h2>
               <small>
                 诊断日期 {{ detail?.diagnosis_date }}
-                <template v-if="detail?.creator"> · 创建人 {{ formatLeadCreator(detail.creator) }}</template>
+                <template v-if="detail?.creator || detail?.lead_context?.source"> · 创建人 {{ formatLeadCreator(detail.creator, { source: detail.lead_context?.source }) }}</template>
               </small>
             </div>
             <div class="lead-detail-actions">
@@ -826,7 +828,7 @@ onUnmounted(() => {
                       <div><strong>行业</strong><span>{{ displayOrEmpty(detail.lead_context?.industry) }}</span></div>
                       <div><strong>产品焦点</strong><span>{{ displayOrEmpty(detail.lead_context?.product_focus) }}</span></div>
                       <div><strong>采购场景</strong><span>{{ displayOrEmpty(detail.lead_context?.purchase_scenario) }}</span></div>
-                      <div><strong>来源备注</strong><span>{{ displayOrEmpty(detail.lead_context?.source) }}</span></div>
+                      <div><strong>来源备注</strong><span>{{ displayOrEmpty(formatLeadSourceLabel(detail.lead_context?.source)) }}</span></div>
                       <div><strong>竞品</strong><span>{{ displayOrEmpty((detail.competitors || []).join('、')) }}</span></div>
                     </div>
                   </div>
@@ -949,8 +951,8 @@ onUnmounted(() => {
                   </button>
                   <div v-show="configSectionOpen.meta" class="lead-config-block-body">
                     <div class="lead-config-list">
-                      <div><strong>创建人</strong><span>{{ detail.creator ? formatLeadCreator(detail.creator) : '未填写' }}</span></div>
-                      <div><strong>登录账号</strong><span>{{ displayOrEmpty(detail.creator?.username) }}</span></div>
+                      <div><strong>创建人</strong><span>{{ (detail.creator || detail.lead_context?.source) ? formatLeadCreator(detail.creator, { source: detail.lead_context?.source }) : '未填写' }}</span></div>
+                      <div><strong>登录账号</strong><span>{{ isH5PaidLeadSource(detail.lead_context?.source) ? '—' : displayOrEmpty(detail.creator?.username) }}</span></div>
                       <div><strong>创建时间</strong><span>{{ displayOrEmpty(formatDateTime(detail.created_at)) }}</span></div>
                       <div><strong>更新时间</strong><span>{{ displayOrEmpty(formatDateTime(detail.updated_at)) }}</span></div>
                       <div><strong>诊断日期</strong><span>{{ displayOrEmpty(detail.diagnosis_date) }}</span></div>

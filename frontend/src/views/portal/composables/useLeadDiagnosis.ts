@@ -34,9 +34,27 @@ import { supportedPlatforms } from '../platformMeta'
 import { formatDateTime } from '../portalUtils'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 
+/** 库内来源 code → 运营可读文案；未映射则原样展示 */
+export const LEAD_SOURCE_LABELS: Record<string, string> = {
+  h5_paid_diagnosis: 'H5 付费诊断',
+}
+
+export function formatLeadSourceLabel(source?: string | null) {
+  const raw = String(source || '').trim()
+  if (!raw) return ''
+  return LEAD_SOURCE_LABELS[raw] || raw
+}
+
+export function isH5PaidLeadSource(source?: string | null) {
+  return String(source || '').trim() === 'h5_paid_diagnosis'
+}
+
 export function formatLeadCreator(
   creator?: { display_name?: string | null; username?: string | null } | null,
+  options?: { source?: string | null },
 ) {
+  // H5 回调建单会挂到平台会话用户（常为 demo），展示上归因「自助下单」
+  if (isH5PaidLeadSource(options?.source)) return 'H5 自助下单'
   if (!creator?.display_name) return '—'
   const name = creator.display_name.trim()
   const username = (creator.username || '').trim()
@@ -1210,6 +1228,8 @@ export function useLeadDiagnosis() {
     platformLabelMap,
     formatDateTime,
     formatLeadCreator,
+    formatLeadSourceLabel,
+    isH5PaidLeadSource,
     filledPromptCount,
     scheduleTimeline,
     schedulePlanSummary,
