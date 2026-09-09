@@ -187,129 +187,149 @@ function matrixRoundHeaderSummary(group: MatrixDrawerRoundGroup) {
   <section class="monitor-page realtime-monitor-page">
     <header class="realtime-sticky-bar">
       <div class="realtime-sticky-inner">
-        <div v-if="isCustomerView" class="realtime-date-filter">
-          <div class="realtime-date-presets">
-            <button
-              v-for="option in customerDatePresetOptions"
-              :key="option.value"
-              type="button"
-              :class="{ active: datePreset === option.value }"
-              @click="applyDatePreset(option.value)"
-            >
-              {{ option.label }}
-            </button>
+        <div class="realtime-sticky-row realtime-sticky-primary">
+          <div class="realtime-sticky-primary-left">
+            <div v-if="isCustomerView" class="realtime-date-filter">
+              <div class="realtime-date-presets">
+                <button
+                  v-for="option in customerDatePresetOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: datePreset === option.value }"
+                  @click="applyDatePreset(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+              <span
+                v-if="datePreset !== 'custom' && customerTrendPeriodLabel"
+                class="realtime-date-range-chip"
+                :title="`${filters.startDate} ~ ${filters.endDate}`"
+              >{{ customerTrendPeriodLabel }}</span>
+              <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
+                <input
+                  v-model="filters.startDate"
+                  type="date"
+                  :max="filters.endDate"
+                  @change="onCustomDateChange"
+                >
+                <span>至</span>
+                <input
+                  v-model="filters.endDate"
+                  type="date"
+                  :min="filters.startDate"
+                  :max="customerTrendMaxDate"
+                  @change="onCustomDateChange"
+                >
+              </div>
+            </div>
+            <template v-else>
+              <div class="realtime-date-presets">
+                <button type="button" :class="{ active: datePreset === '7d' }" @click="applyDatePreset('7d')">近 7 天</button>
+                <button type="button" :class="{ active: datePreset === '30d' }" @click="applyDatePreset('30d')">近 30 天</button>
+                <button type="button" :class="{ active: datePreset === 'custom' }" @click="datePreset = 'custom'">自定义</button>
+              </div>
+              <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
+                <input v-model="filters.startDate" type="date" @change="onCustomDateChange">
+                <span>至</span>
+                <input v-model="filters.endDate" type="date" @change="onCustomDateChange">
+              </div>
+            </template>
           </div>
-          <span
-            v-if="datePreset !== 'custom' && customerTrendPeriodLabel"
-            class="realtime-date-range-chip"
-            :title="`${filters.startDate} ~ ${filters.endDate}`"
-          >{{ customerTrendPeriodLabel }}</span>
-          <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
-            <input
-              v-model="filters.startDate"
-              type="date"
-              :max="filters.endDate"
-              @change="onCustomDateChange"
-            >
-            <span>至</span>
-            <input
-              v-model="filters.endDate"
-              type="date"
-              :min="filters.startDate"
-              :max="customerTrendMaxDate"
-              @change="onCustomDateChange"
-            >
+          <div class="realtime-sticky-primary-right">
+            <div class="realtime-view-toggle">
+              <button type="button" :class="{ active: viewMode === 'matrix' }" @click="switchViewMode('matrix')">排名矩阵</button>
+              <button type="button" :class="{ active: viewMode === 'list' }" @click="switchViewMode('list')">逐条列表</button>
+            </div>
+            <div class="realtime-sticky-actions">
+              <span v-if="isLoading" class="realtime-loading-dot">更新中</span>
+              <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
+              <button type="button" class="filter-reset-btn tiny-btn" :disabled="isLoading" @click="refreshCurrentView">
+                <RefreshCw />
+                刷新
+              </button>
+              <button
+                type="button"
+                class="primary-btn small-btn"
+                :disabled="!rankingMatrixView?.rows.length"
+                @click="exportMatrixCsv"
+              >
+                <Download />
+                导出矩阵
+              </button>
+            </div>
           </div>
         </div>
-        <template v-else>
-          <div class="realtime-date-presets">
-            <button type="button" :class="{ active: datePreset === '7d' }" @click="applyDatePreset('7d')">近 7 天</button>
-            <button type="button" :class="{ active: datePreset === '30d' }" @click="applyDatePreset('30d')">近 30 天</button>
-            <button type="button" :class="{ active: datePreset === 'custom' }" @click="datePreset = 'custom'">自定义</button>
+        <div class="realtime-sticky-secondary">
+          <div class="realtime-sticky-filters">
+            <label class="realtime-filter-field">
+              <span>平台</span>
+              <select v-model="filters.platform">
+                <option value="">全部平台</option>
+                <option v-for="platform in platformOptions" :key="platform" :value="platform">
+                  {{ platformLabelMap[platform] || platform }}
+                </option>
+              </select>
+            </label>
+            <label class="realtime-filter-field">
+              <span>词组</span>
+              <select v-model="filters.keywordGroup" class="monitor-group-select" title="按监测词组筛选">
+                <option value="">全部词组</option>
+                <option
+                  v-for="(group, groupIndex) in monitorGroupOptions"
+                  :key="`group-${group.id ?? group.sort_order}-${group.name || group.monitor_keyword}`"
+                  :value="keywordGroupSelectValue(group, groupIndex)"
+                  :title="formatKeywordGroupDetailHint(group)"
+                >
+                  {{ keywordGroupFilterValue(group, groupIndex) }}
+                </option>
+              </select>
+            </label>
+            <label class="realtime-filter-field">
+              <span>监控词</span>
+              <select v-model="filters.monitorKeyword" class="monitor-keyword-select" title="按监测问题筛选">
+                <option value="">全部监控词</option>
+                <option
+                  v-for="keyword in monitorKeywordOptions"
+                  :key="`monitor-kw-${keyword}`"
+                  :value="keyword"
+                >
+                  {{ keyword }}
+                </option>
+              </select>
+            </label>
+            <label class="realtime-filter-field">
+              <span>露出词</span>
+              <select v-model="filters.exposureTerm" class="monitor-exposure-select" title="按露出词筛选">
+                <option value="">全部露出词</option>
+                <option v-for="term in exposureTermOptions" :key="`exposure-${term}`" :value="term">
+                  {{ term }}
+                </option>
+              </select>
+            </label>
+            <label v-if="viewMode === 'list'" class="realtime-filter-field">
+              <span>轮次</span>
+              <select v-model="filters.scheduleWindowKey">
+                <option value="">全部轮次</option>
+                <option
+                  v-for="item in scheduleRoundOptions"
+                  :key="item.schedule_window_key"
+                  :value="item.schedule_window_key"
+                >
+                  {{ item.schedule_label }}
+                </option>
+              </select>
+            </label>
+            <label v-if="viewMode === 'matrix'" class="realtime-retired-toggle">
+              <input v-model="filters.includeRetiredKeywords" type="checkbox">
+              含已下线词
+            </label>
           </div>
-          <div v-if="datePreset === 'custom'" class="realtime-custom-dates">
-            <input v-model="filters.startDate" type="date" @change="onCustomDateChange">
-            <span>至</span>
-            <input v-model="filters.endDate" type="date" @change="onCustomDateChange">
+          <div class="realtime-filter-meta" :title="`日期 ${matrixFilterSummary.date} · 平台 ${matrixFilterSummary.platform}`">
+            <span class="realtime-meta-chip">{{ matrixFilterSummary.columnCount }} 词</span>
+            <span class="realtime-meta-chip">{{ matrixFilterSummary.dayCount }} 天</span>
+            <span class="realtime-meta-chip muted">{{ matrixFilterSummary.platform }}</span>
           </div>
-        </template>
-        <div class="realtime-sticky-filters">
-          <select v-model="filters.platform">
-            <option value="">全部平台</option>
-            <option v-for="platform in platformOptions" :key="platform" :value="platform">
-              {{ platformLabelMap[platform] || platform }}
-            </option>
-          </select>
-          <select v-model="filters.keywordGroup" class="monitor-group-select" title="按监测词组筛选">
-            <option value="">全部词组</option>
-            <option
-              v-for="(group, groupIndex) in monitorGroupOptions"
-              :key="`group-${group.id ?? group.sort_order}-${group.name || group.monitor_keyword}`"
-              :value="keywordGroupSelectValue(group, groupIndex)"
-              :title="formatKeywordGroupDetailHint(group)"
-            >
-              {{ keywordGroupFilterValue(group, groupIndex) }}
-            </option>
-          </select>
-          <select v-model="filters.monitorKeyword" class="monitor-keyword-select" title="按监测问题筛选">
-            <option value="">全部监控词</option>
-            <option
-              v-for="keyword in monitorKeywordOptions"
-              :key="`monitor-kw-${keyword}`"
-              :value="keyword"
-            >
-              {{ keyword }}
-            </option>
-          </select>
-          <select v-model="filters.exposureTerm" class="monitor-exposure-select" title="按露出词筛选">
-            <option value="">全部露出词</option>
-            <option v-for="term in exposureTermOptions" :key="`exposure-${term}`" :value="term">
-              {{ term }}
-            </option>
-          </select>
-          <label v-if="viewMode === 'matrix'" class="realtime-retired-toggle">
-            <input v-model="filters.includeRetiredKeywords" type="checkbox">
-            含已下线词
-          </label>
-          <select v-if="viewMode === 'list'" v-model="filters.scheduleWindowKey">
-            <option value="">全部轮次</option>
-            <option
-              v-for="item in scheduleRoundOptions"
-              :key="item.schedule_window_key"
-              :value="item.schedule_window_key"
-            >
-              {{ item.schedule_label }}
-            </option>
-          </select>
-        </div>
-        <div class="realtime-view-toggle">
-          <button type="button" :class="{ active: viewMode === 'matrix' }" @click="switchViewMode('matrix')">排名矩阵</button>
-          <button type="button" :class="{ active: viewMode === 'list' }" @click="switchViewMode('list')">逐条列表</button>
-        </div>
-        <div class="realtime-sticky-actions">
-          <span v-if="isLoading" class="realtime-loading-dot">更新中</span>
-          <button type="button" class="filter-reset-btn tiny-btn" @click="resetFilters">重置</button>
-          <button type="button" class="filter-reset-btn tiny-btn" :disabled="isLoading" @click="refreshCurrentView">
-            <RefreshCw />
-            刷新
-          </button>
-          <button
-            type="button"
-            class="primary-btn small-btn"
-            :disabled="!rankingMatrixView?.rows.length"
-            @click="exportMatrixCsv"
-          >
-            <Download />
-            导出矩阵
-          </button>
-        </div>
-        <div class="realtime-filter-summary">
-          日期 <b>{{ matrixFilterSummary.date }}</b>
-          · 平台 <b>{{ matrixFilterSummary.platform }}</b>
-          · 词组 <b>{{ matrixFilterSummary.group }}</b>
-          · 监测词 <b>{{ matrixFilterSummary.monitorKeyword }}</b>
-          · 露出词 <b>{{ matrixFilterSummary.exposureTerm }}</b>
-          · 结果 <b>{{ matrixFilterSummary.columnCount }}</b> 词 · <b>{{ matrixFilterSummary.dayCount }}</b> 天
         </div>
       </div>
     </header>
