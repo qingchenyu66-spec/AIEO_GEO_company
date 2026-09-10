@@ -88,6 +88,30 @@ def test_h5_result_unlock_by_phone_tail(monkeypatch) -> None:
     assert result.json()["data"]["brand_name"] == "结果页品牌"
 
 
+def test_h5_result_unlock_by_full_phone(monkeypatch) -> None:
+    phone = "13900139099"
+    data = _create_paid_order(monkeypatch, phone=phone, openid="pytest-openid-result-phone")
+    out_trade_no = data["out_trade_no"]
+    client.cookies.clear()
+    monkeypatch.setattr(settings, "wechat_pay_dev_mode", False)
+
+    bad = client.post("/api/v1/h5/diagnosis/result/unlock", json={"contact_phone": "13800000000"})
+    assert bad.status_code == 400
+
+    ok = client.post("/api/v1/h5/diagnosis/result/unlock", json={"contact_phone": phone})
+    assert ok.status_code == 200, ok.text
+    body = ok.json()["data"]
+    assert body["out_trade_no"] == out_trade_no
+    assert body["access_token"]
+
+    result = client.get(
+        f"/api/v1/h5/diagnosis/orders/{out_trade_no}/result",
+        params={"t": body["access_token"]},
+    )
+    assert result.status_code == 200
+    assert result.json()["data"]["brand_name"] == "结果页品牌"
+
+
 def test_notify_h5_ready_sms_idempotent_skip_when_disabled(monkeypatch) -> None:
     data = _create_paid_order(monkeypatch, phone="13900139111", openid="pytest-openid-result-sms")
     lead_id = data["lead_diagnosis_id"]

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -99,7 +100,7 @@ def assert_h5_result_access(
     if len(tail) == 4 and phone.endswith(tail):
         return
 
-    raise PermissionError("无权查看该诊断结果，请使用短信链接或手机号后四位验证")
+    raise PermissionError("无权查看该诊断结果，请使用下单手机号验证")
 
 
 def unlock_h5_result_by_phone_tail(
@@ -110,6 +111,32 @@ def unlock_h5_result_by_phone_tail(
 ) -> dict[str, Any]:
     order = _order_by_out_trade_no(db, out_trade_no)
     assert_h5_result_access(db, order, phone_tail=phone_tail)
+    token = ensure_h5_result_access_token(db, order)
+    return {
+        "out_trade_no": order.out_trade_no,
+        "access_token": token,
+        "result_url": build_h5_result_page_url(out_trade_no=order.out_trade_no, token=token),
+        "expires_at": order.result_token_expires_at.isoformat(sep=" ", timespec="seconds")
+        if order.result_token_expires_at
+        else None,
+    }
+
+
+def unlock_h5_result_by_phone(db: Session, *, contact_phone: str) -> dict[str, Any]:
+    """用完整下单手机号解锁：取该号最近一笔已支付订单。"""
+    phone = str(contact_phone or "").strip()
+    if not re.fullmatch(r"1\d{10}", phone):
+        raise ValueError("请填写正确的11位手机号")
+    order = db.scalar(
+        select(H5DiagnosisOrder)
+        .where(
+            H5DiagnosisOrder.contact_phone == phone,
+            H5DiagnosisOrder.status == "paid",
+        )
+        .order_by(H5DiagnosisOrder.id.desc())
+    )
+    if order is None:
+        raise ValueError("未找到该手机号的已支付诊断订单")
     token = ensure_h5_result_access_token(db, order)
     return {
         "out_trade_no": order.out_trade_no,

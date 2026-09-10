@@ -164,6 +164,15 @@ export async function unlockH5DiagnosisResult(
   return unwrap(resp)
 }
 
+export async function unlockH5DiagnosisResultByPhone(
+  contactPhone: string,
+): Promise<{ out_trade_no: string; access_token: string; result_url: string }> {
+  const resp = await http.post('/v1/h5/diagnosis/result/unlock', {
+    contact_phone: contactPhone,
+  })
+  return unwrap(resp)
+}
+
 export type H5DiagnosisAdminOrder = {
   id: number
   out_trade_no: string

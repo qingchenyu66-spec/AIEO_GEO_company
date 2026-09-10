@@ -51,6 +51,7 @@ class H5DiagnosisOrderCreateRequest(BaseModel):
 
 class H5ResultUnlockRequest(BaseModel):
     # 2026-09-01 - 结果页无短信链时用手机号后四位换 token
+    # 2026-09-10 - 保留兼容；主路径改为整机号解锁
     phone_tail: str = Field(min_length=4, max_length=4)
 
     @field_validator("phone_tail")
@@ -59,4 +60,18 @@ class H5ResultUnlockRequest(BaseModel):
         text = str(value or "").strip()
         if not text.isdigit() or len(text) != 4:
             raise ValueError("请填写手机号后四位")
+        return text
+
+
+class H5ResultUnlockByPhoneRequest(BaseModel):
+    """结果页：用下单完整手机号换取最近一笔已支付订单的访问 token。"""
+
+    contact_phone: str = Field(min_length=11, max_length=20)
+
+    @field_validator("contact_phone")
+    @classmethod
+    def normalize_phone(cls, value: object) -> str:
+        text = str(value or "").strip()
+        if not text.isdigit() or len(text) != 11 or not text.startswith("1"):
+            raise ValueError("请填写正确的11位手机号")
         return text

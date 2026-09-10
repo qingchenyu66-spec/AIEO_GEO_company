@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   fetchH5DiagnosisResult,
-  unlockH5DiagnosisResult,
+  unlockH5DiagnosisResultByPhone,
   type H5DiagnosisResult,
 } from '../../services/h5Diagnosis'
 
@@ -14,17 +14,11 @@ const loading = ref(true)
 const unlocking = ref(false)
 const errorText = ref('')
 const needUnlock = ref(false)
-const needOrderEntry = ref(false)
-const phoneTail = ref('')
-const orderInput = ref('')
+const phoneInput = ref('')
 const result = ref<H5DiagnosisResult | null>(null)
 let pollTimer: number | null = null
 
-const outTradeNo = computed(() => {
-  const fromQuery = String(route.query.out_trade_no || '').trim()
-  if (fromQuery) return fromQuery
-  return orderInput.value.trim()
-})
+const outTradeNo = computed(() => String(route.query.out_trade_no || '').trim())
 const tokenFromQuery = computed(() => String(route.query.t || '').trim())
 
 const progressPercent = computed(() => result.value?.progress.percent ?? 0)
@@ -45,14 +39,11 @@ function stopPolling() {
 
 async function loadResult() {
   if (!outTradeNo.value) {
-    // 2026-09-01 - 短信只能写死结果页 URL，用户需自行填订单号
-    needOrderEntry.value = true
     needUnlock.value = true
     errorText.value = ''
     loading.value = false
     return
   }
-  needOrderEntry.value = !String(route.query.out_trade_no || '').trim()
   loading.value = true
   errorText.value = ''
   try {
@@ -67,7 +58,7 @@ async function loadResult() {
     }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : '加载失败'
-    if (/无权|过期|后四位|未支付|没有权限/.test(msg)) {
+    if (/无权|过期|手机号|未支付|没有权限/.test(msg)) {
       needUnlock.value = true
       errorText.value = msg
       stopPolling()
@@ -87,27 +78,20 @@ function startPolling() {
 }
 
 async function unlock() {
-  const orderNo = outTradeNo.value
-  if (!orderNo) {
-    errorText.value = '请填写短信中的订单号'
-    return
-  }
-  const tail = phoneTail.value.trim()
-  if (!/^\d{4}$/.test(tail)) {
-    errorText.value = '请填写手机号后四位'
+  const phone = phoneInput.value.trim()
+  if (!/^1\d{10}$/.test(phone)) {
+    errorText.value = '请填写下单时的11位手机号'
     return
   }
   unlocking.value = true
   errorText.value = ''
   try {
-    await unlockH5DiagnosisResult(orderNo, tail)
+    const data = await unlockH5DiagnosisResultByPhone(phone)
     needUnlock.value = false
-    if (!String(route.query.out_trade_no || '').trim()) {
-      await router.replace({
-        path: '/h5/diagnosis/result',
-        query: { out_trade_no: orderNo },
-      })
-    }
+    await router.replace({
+      path: '/h5/diagnosis/result',
+      query: { out_trade_no: data.out_trade_no },
+    })
     await loadResult()
   } catch (error: unknown) {
     errorText.value = error instanceof Error ? error.message : '验证失败'
@@ -145,13 +129,15 @@ onUnmounted(stopPolling)
 
       <div v-if="needUnlock" class="card unlock">
         <p class="section-title">验证后查看</p>
-        <label v-if="needOrderEntry || !String(route.query.out_trade_no || '').trim()" class="field">
-          <span>订单号</span>
-          <input v-model="orderInput" placeholder="短信里的订单号" autocomplete="off" />
-        </label>
         <label class="field">
-          <span>手机号后四位</span>
-          <input v-model="phoneTail" maxlength="4" inputmode="numeric" placeholder="后四位" />
+          <span>下单手机号</span>
+          <input
+            v-model="phoneInput"
+            maxlength="11"
+            inputmode="numeric"
+            placeholder="请输入11位手机号"
+            autocomplete="tel"
+          />
         </label>
         <button type="button" class="primary" :disabled="unlocking" @click="unlock">
           {{ unlocking ? '验证中…' : '查看结果' }}
@@ -221,28 +207,27 @@ onUnmounted(stopPolling)
 .orb-a {
   width: 220px;
   height: 220px;
-  top: -60px;
-  right: -40px;
-  background: rgba(59, 130, 246, 0.18);
+  top: -80px;
+  right: -60px;
+  background: rgba(37, 99, 235, 0.18);
 }
 .orb-b {
   width: 180px;
   height: 180px;
   bottom: 10%;
-  left: -50px;
+  left: -70px;
   background: rgba(14, 165, 233, 0.12);
 }
 .shell {
   position: relative;
   z-index: 1;
-  width: min(640px, 100%);
+  max-width: 480px;
   margin: 0 auto;
-  display: grid;
-  gap: 14px;
 }
-.hero { display: grid; gap: 10px; }
+.hero {
+  margin-bottom: 14px;
+}
 .back {
-  justify-self: start;
   border: none;
   background: transparent;
   color: #64748b;
@@ -250,55 +235,88 @@ onUnmounted(stopPolling)
   font-size: 14px;
   cursor: pointer;
 }
-h1 {
-  margin: 0;
-  font-size: clamp(22px, 5vw, 28px);
-  font-weight: 780;
+.hero h1 {
+  margin: 10px 0 0;
+  font-size: 26px;
   color: #0f172a;
 }
 .banner {
-  margin: 0;
-  padding: 12px 14px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
   border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13px;
 }
-.error { background: #fef2f2; color: #b91c1c; }
-.warn { background: #fff7ed; color: #c2410c; }
-.hint { background: #fff; color: #64748b; border: 1px solid #e2e8f0; }
+.banner.hint { background: #eef2ff; color: #3730a3; }
+.banner.warn { background: #fff7ed; color: #c2410c; }
+.banner.error { background: #fef2f2; color: #b91c1c; }
 .card {
-  display: grid;
-  gap: 14px;
-  padding: 18px 16px;
+  background: #fff;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+  padding: 18px 16px 20px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
 }
+.section-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #475569;
+}
+.field input {
+  min-height: 42px;
+  border: 1px solid #dbe4f2;
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 15px;
+}
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+.primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.primary.link { margin-top: 14px; }
 .brand-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  flex-wrap: wrap;
 }
 .brand-row strong { font-size: 18px; color: #0f172a; }
 .tag {
-  font-size: 12px;
-  padding: 2px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: #eff6ff;
   color: #2563eb;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 700;
 }
-.muted { margin: 0; color: #64748b; font-size: 13px; line-height: 1.5; }
-.progress-block { display: grid; gap: 8px; }
+.muted { margin: 8px 0 0; color: #64748b; font-size: 13px; }
+.progress-block { margin-top: 16px; }
 .progress-head {
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  color: #334155;
+  color: #475569;
 }
 .bar {
+  margin-top: 8px;
   height: 8px;
   border-radius: 999px;
   background: #e2e8f0;
@@ -307,65 +325,29 @@ h1 {
 .bar i {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #3b82f6, #0ea5e9);
+  background: linear-gradient(90deg, #2563eb, #0ea5e9);
 }
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+  margin-top: 16px;
 }
 .kpi {
-  padding: 10px 8px;
-  border-radius: 12px;
   background: #f8fafc;
-  display: grid;
-  gap: 4px;
+  border-radius: 12px;
+  padding: 10px 8px;
   text-align: center;
 }
-.kpi span { font-size: 12px; color: #64748b; }
-.kpi strong { font-size: 16px; color: #0f172a; }
-.headline { margin: 0; font-size: 15px; color: #0f172a; line-height: 1.5; }
+.kpi span { display: block; font-size: 12px; color: #64748b; }
+.kpi strong { display: block; margin-top: 4px; font-size: 18px; color: #0f172a; }
+.headline { margin: 14px 0 8px; font-size: 15px; font-weight: 650; color: #0f172a; }
 .bullets {
   margin: 0;
   padding-left: 18px;
   color: #334155;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.55;
 }
-.primary {
-  border: none;
-  border-radius: 12px;
-  background: #2563eb;
-  color: #fff;
-  font-weight: 650;
-  cursor: pointer;
-  padding: 10px 14px;
-}
-.primary:disabled { opacity: 0.6; cursor: not-allowed; }
-.link {
-  display: inline-flex;
-  justify-content: center;
-  text-decoration: none;
-  text-align: center;
-}
-.unlock { gap: 12px; }
-.unlock .field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: #475569;
-}
-.unlock input {
-  border: 1px solid #cbd5e1;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 16px;
-}
-.section-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-}
-.wait { padding: 4px 0 0; }
+.wait { margin-top: 14px; }
 </style>

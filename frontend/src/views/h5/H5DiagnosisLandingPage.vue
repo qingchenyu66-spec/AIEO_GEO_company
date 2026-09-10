@@ -131,7 +131,7 @@ async function goObserverDemo() {
         <span class="logo-text">GEO Monitor</span>
       </div>
       <div class="top-actions">
-        <button type="button" class="top-link" @click="goResult">查看报告</button>
+        <button type="button" class="top-report" @click="goResult">查看报告</button>
         <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
           {{ priceText }} 体检
         </button>
@@ -155,9 +155,6 @@ async function goObserverDemo() {
       <div class="hero-actions">
         <button type="button" class="btn-primary" :disabled="loading || !config?.enabled" @click="goApply">
           {{ config?.enabled ? `体验价 ${priceText} 看清可见度` : '活动暂未开放' }}
-        </button>
-        <button type="button" class="btn-ghost" @click="goResult">
-          已付款？查看报告
         </button>
         <button
           v-if="showObserverDemo"
@@ -236,9 +233,6 @@ async function goObserverDemo() {
       <button type="button" class="btn-primary wide" :disabled="loading || !config?.enabled" @click="goApply">
         {{ config?.enabled ? '立即开始品牌可见度体检' : '活动暂未开放' }}
       </button>
-      <button type="button" class="btn-ghost wide result-entry" @click="goResult">
-        短信提示已完成？点此查看报告
-      </button>
     </section>
 
     <footer class="cta-bar">
@@ -312,7 +306,17 @@ async function goObserverDemo() {
 .top-actions {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+}
+.top-report {
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
 }
 .top-link {
   border: none;

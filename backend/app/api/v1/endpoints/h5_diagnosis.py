@@ -15,7 +15,11 @@ from app.api.dependencies import CurrentSession, get_current_session
 from app.core.config import settings
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
-from app.schemas.h5_diagnosis import H5DiagnosisOrderCreateRequest, H5ResultUnlockRequest
+from app.schemas.h5_diagnosis import (
+    H5DiagnosisOrderCreateRequest,
+    H5ResultUnlockByPhoneRequest,
+    H5ResultUnlockRequest,
+)
 from app.services.h5_diagnosis_service import (
     _H5_OPENID_COOKIE,
     create_h5_diagnosis_order,
@@ -31,6 +35,7 @@ from app.services.h5_result_service import (
     build_h5_result_report_html,
     get_h5_diagnosis_result,
     result_cookie_name,
+    unlock_h5_result_by_phone,
     unlock_h5_result_by_phone_tail,
 )
 from app.services.alipay_pay_service import verify_notify_signature
@@ -230,6 +235,32 @@ def order_result(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.post("/result/unlock", response_model=ApiResponse[dict])
+def unlock_result_by_phone(
+    payload: H5ResultUnlockByPhoneRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """结果页主路径：完整下单手机号 → 最近一笔已支付订单 token。"""
+    try:
+        data = unlock_h5_result_by_phone(db, contact_phone=payload.contact_phone)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    token = str(data.get("access_token") or "")
+    if token:
+        response.set_cookie(
+            result_cookie_name(),
+            token,
+            httponly=True,
+            secure=settings.auth_cookie_secure,
+            samesite=settings.auth_cookie_samesite,
+            max_age=86400 * max(1, int(settings.h5_result_token_days or 30)),
+        )
     return ApiResponse(data=data)
 
 
