@@ -286,7 +286,10 @@ onUnmounted(stopPolling)
 
     <div class="shell">
       <header class="hero">
-        <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
+        <div class="hero-nav">
+          <button type="button" class="back" @click="router.push('/h5/diagnosis')">← 返回</button>
+          <button type="button" class="result-link" @click="router.push('/h5/diagnosis/result')">查看报告</button>
+        </div>
         <div class="hero-main">
           <span class="price-pill">¥{{ config?.price_yuan ?? '—' }}</span>
           <h1>AI 可见度诊断</h1>
@@ -460,6 +463,21 @@ onUnmounted(stopPolling)
   cursor: pointer;
 }
 .back:hover { color: #2563eb; }
+.hero-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.result-link {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
 .hero-main {
   display: flex;
   align-items: center;

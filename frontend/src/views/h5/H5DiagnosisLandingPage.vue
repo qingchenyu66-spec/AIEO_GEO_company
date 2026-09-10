@@ -96,6 +96,11 @@ function goApply() {
   router.push('/h5/diagnosis/apply')
 }
 
+function goResult() {
+  // 短信无链时：从落地页进入结果页，再填订单号 + 手机后四位
+  router.push('/h5/diagnosis/result')
+}
+
 async function goObserverDemo() {
   // 2026-09-01 - 一键体验观察号，不展示密码
   if (demoLoading.value) return
@@ -125,9 +130,12 @@ async function goObserverDemo() {
       <div class="logo">
         <span class="logo-text">GEO Monitor</span>
       </div>
-      <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
-        {{ priceText }} 体检
-      </button>
+      <div class="top-actions">
+        <button type="button" class="top-link" @click="goResult">查看报告</button>
+        <button type="button" class="top-cta" :disabled="loading || !config?.enabled" @click="goApply">
+          {{ priceText }} 体检
+        </button>
+      </div>
     </header>
 
     <section class="hero">
@@ -147,6 +155,9 @@ async function goObserverDemo() {
       <div class="hero-actions">
         <button type="button" class="btn-primary" :disabled="loading || !config?.enabled" @click="goApply">
           {{ config?.enabled ? `体验价 ${priceText} 看清可见度` : '活动暂未开放' }}
+        </button>
+        <button type="button" class="btn-ghost" @click="goResult">
+          已付款？查看报告
         </button>
         <button
           v-if="showObserverDemo"
@@ -225,6 +236,9 @@ async function goObserverDemo() {
       <button type="button" class="btn-primary wide" :disabled="loading || !config?.enabled" @click="goApply">
         {{ config?.enabled ? '立即开始品牌可见度体检' : '活动暂未开放' }}
       </button>
+      <button type="button" class="btn-ghost wide result-entry" @click="goResult">
+        短信提示已完成？点此查看报告
+      </button>
     </section>
 
     <footer class="cta-bar">
@@ -294,6 +308,20 @@ async function goObserverDemo() {
   font-size: 13px;
   font-weight: 600;
   padding: 0;
+}
+.top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.top-link {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
 }
 .top-cta:disabled {
   opacity: 0.5;
@@ -376,6 +404,13 @@ async function goObserverDemo() {
   color: #334155;
   background: rgba(255, 255, 255, 0.9);
   cursor: pointer;
+}
+.btn-ghost.wide {
+  width: 100%;
+  max-width: 300px;
+}
+.btn-ghost.result-entry {
+  margin-top: 10px;
 }
 .btn-ghost:disabled {
   opacity: 0.55;
