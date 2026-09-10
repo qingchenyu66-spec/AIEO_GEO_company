@@ -55,24 +55,28 @@ def test_result_from_html_accepts_doubao_ssr_probe() -> None:
 
 def test_fetch_share_page_prefers_http(monkeypatch) -> None:
     fake = SharePageFetchResult(
-        answer_content="x" * 100,
+        answer_content=(
+            "1. AniShort（八九点）\n核心：协同短剧\n"
+            "2. TapNow\n核心：节点画布\n"
+            "3. Pixmax\n核心：算力聚合\n"
+        ),
         references=[],
-        title="t",
+        title="Miora同类平台工具",
         source_host="www.doubao.com",
     )
     monkeypatch.setattr(
         "app.services.share_page_fetch_service._try_http_fetch",
-        lambda url, host: fake,
+        lambda url, host, prompt=None: fake,
     )
     out = fetch_share_page("https://www.doubao.com/thread/abc1234567890")
     assert out.answer_content == fake.answer_content
-    assert out.title == "t"
+    assert out.title == "Miora同类平台工具"
 
 
 def test_try_fast_fetch_returns_none_when_needs_browser(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.share_page_fetch_service._try_http_fetch",
-        lambda url, host: SharePageFetchResult(
+        lambda url, host, prompt=None: SharePageFetchResult(
             answer_content="x" * 100,
             references=[],
             title="t",
@@ -214,3 +218,119 @@ def test_qianwen_web_source_parser_and_share_ids() -> None:
     assert "挑选DHA" in extracted
     assert len(extracted) >= 80
     assert "淘宝网" not in extracted
+
+
+def test_doubao_chrome_shell_is_not_ready() -> None:
+    from app.services.share_page_fetch_service import doubao_answer_ready
+
+    chrome = "豆包 - 你的 AI 智能助手\n\n-->"
+    assert doubao_answer_ready(chrome, title="豆包 - 你的 AI 智能助手") is False
+    assert (
+        _result_from_html(
+            f"<html><body>{chrome}</body></html>",
+            host="doubao.com",
+            title="豆包 - 你的 AI 智能助手",
+            body_text=chrome,
+        )
+        is None
+    )
+
+
+def test_doubao_numbered_answer_is_ready() -> None:
+    from app.services.share_page_fetch_service import doubao_answer_ready
+
+    answer = (
+        "1. AniShort (八九点) 【最对标 Miora】\n"
+        "核心：多智能体、导演台、批量剧集\n"
+        "2. TapNow\n核心：节点画布\n"
+        "3. Pixmax\n核心：算力聚合\n"
+    )
+    assert doubao_answer_ready(answer, title="Miora同类平台工具", prompt="Miora类似的平台工具") is True
+    hit = _result_from_html(
+        f"<html><body>{answer}</body></html>",
+        host="www.doubao.com",
+        title="Miora同类平台工具",
+        body_text=answer,
+        prompt="Miora类似的平台工具",
+    )
+    assert hit is not None
+    assert "AniShort" in hit.answer_content
+
+
+def test_try_fast_fetch_skips_doubao_chrome(monkeypatch) -> None:
+    chrome = SharePageFetchResult(
+        answer_content="豆包 - 你的 AI 智能助手\n\n-->",
+        references=[],
+        title="豆包 - 你的 AI 智能助手",
+        source_host="www.doubao.com",
+    )
+    monkeypatch.setattr(
+        "app.services.share_page_fetch_service._try_http_fetch",
+        lambda url, host, prompt=None: chrome,
+    )
+    assert try_fast_fetch_share_page("https://www.doubao.com/thread/x0TKPSu1KeDROn4cM") is None
+
+
+def test_doubao_browser_chrome_raises(monkeypatch) -> None:
+    from app.services import share_page_fetch_service as svc
+    from app.services.share_page_fetch_service import share_page_unusable_message
+
+    monkeypatch.setattr(svc, "_DOUBAO_ANSWER_WAIT_SECONDS", 0.05)
+
+    class _FakePage:
+        def goto(self, *a, **k):
+            return None
+
+        def inner_text(self, *a, **k):
+            return "豆包 - 你的 AI 智能助手\n\n-->"
+
+        def wait_for_timeout(self, *a, **k):
+            return None
+
+        def title(self):
+            return "豆包 - 你的 AI 智能助手"
+
+        def content(self):
+            return "<html><body>豆包 - 你的 AI 智能助手\n\n--></body></html>"
+
+    class _FakeContext:
+        def new_page(self):
+            return _FakePage()
+
+        def close(self):
+            return None
+
+    class _FakeBrowser:
+        def new_context(self, **kwargs):
+            return _FakeContext()
+
+        def close(self):
+            return None
+
+    class _FakeChromium:
+        @staticmethod
+        def launch(headless=True):
+            return _FakeBrowser()
+
+    class _FakePw:
+        chromium = _FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    import playwright.sync_api as pw
+
+    monkeypatch.setattr(pw, "sync_playwright", lambda: _FakePw())
+    monkeypatch.setattr(svc, "_expand_citation_panels", lambda page: None)
+    monkeypatch.setattr(
+        "app.services.share_page_screenshot_service.capture_share_page_screenshot_from_page",
+        lambda page, url, subtask_id=None: "/api/v1/media/backfill-shot/x.png",
+    )
+    try:
+        svc.fetch_share_page_browser_combined("https://www.doubao.com/thread/abc", subtask_id="st-chrome")
+        raise AssertionError("expected chrome shell to fail")
+    except ValueError as exc:
+        assert str(exc) == share_page_unusable_message()

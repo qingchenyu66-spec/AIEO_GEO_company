@@ -106,6 +106,25 @@ _UI_NOISE_PHRASES = (
     "下载 App",
     "和元宝的对话",
     "和元宝继续聊",
+    "和豆包的对话",
+    "和豆包继续聊",
+    "豆包 - 你的 AI 智能助手",
+    "你的 AI 智能助手",
+    "AI 生成可能有误",
+    "注意核实",
+)
+
+_DOUBAO_ANSWER_WAIT_SECONDS = 15.0
+_DEFAULT_ANSWER_WAIT_SECONDS = 2.5
+_PROMPT_STOPWORDS = frozenset({
+    "类似", "同类", "的", "平台", "工具", "有哪些", "哪些", "推荐", "介绍",
+    "一下", "怎么", "如何", "什么", "哪个", "好用", "对比",
+})
+_DOUBAO_CHROME_LINE_RE = re.compile(
+    r"搜索\s*\d+\s*个关键词|参考\s*\d+\s*篇资料|AI\s*生成可能有误|注意核实"
+)
+_ANSWER_STRUCTURE_RE = re.compile(
+    r"(?m)^\s*(?:#{1,3}\s+\S|\d+\s*[\.、．]|[一二三四五六七八九十]+、)"
 )
 
 
@@ -125,6 +144,106 @@ def _normalize_host(url: str) -> str:
     except Exception:
         return ""
     return host[4:] if host.startswith("www.") else host
+
+
+def _is_doubao_host(host: str) -> bool:
+    host_l = (host or "").lower()
+    return host_l == "doubao.com" or host_l.endswith(".doubao.com")
+
+
+def share_page_unusable_message() -> str:
+    return "分享页未展开回答，请确认链接可公开访问后重试"
+
+
+def _prompt_match_needles(prompt: str | None) -> list[str]:
+    text = str(prompt or "").strip()
+    if not text:
+        return []
+    needles: list[str] = []
+    seen: set[str] = set()
+
+    def add(token: str) -> None:
+        value = token.strip()
+        if len(value) < 2 or value in _PROMPT_STOPWORDS or value.lower() in seen:
+            return
+        seen.add(value.lower())
+        needles.append(value)
+
+    for match in re.finditer(r"[A-Za-z][A-Za-z0-9+\-]{1,}", text):
+        add(match.group(0))
+    for match in re.finditer(r"[\u4e00-\u9fff]{2,8}", text):
+        add(match.group(0))
+    return needles
+
+
+def _doubao_effective_answer(text: str) -> str:
+    cleaned = _clean_answer_text(text)
+    lines: list[str] = []
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line or line in {"-->", "→"}:
+            continue
+        if _DOUBAO_CHROME_LINE_RE.search(line) and len(line) < 40:
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines).strip()
+
+
+def doubao_answer_ready(
+    text: str,
+    *,
+    title: str | None = None,
+    prompt: str | None = None,
+) -> bool:
+    """豆包分享页是否已展开成可计位的回答（壳页不算）。"""
+    effective = _doubao_effective_answer(text)
+    title_text = str(title or "").strip()
+    if title_text and any(marker in title_text for marker in ("豆包 - 你的 AI 智能助手", "你的 AI 智能助手")):
+        if len(effective) < 80:
+            return False
+    if len(effective) < 80:
+        return False
+    if _looks_like_share_error_page(effective):
+        return False
+    needles = _prompt_match_needles(prompt)
+    if needles and any(needle.lower() in effective.lower() for needle in needles):
+        return True
+    if _ANSWER_STRUCTURE_RE.search(effective):
+        return True
+    paragraphs = [part for part in re.split(r"\n\s*\n", effective) if len(part.strip()) >= 20]
+    if len(paragraphs) >= 2 and len(effective) >= 120:
+        return True
+    return len(effective) >= 200
+
+
+def _wait_for_share_body(
+    page: Any,
+    *,
+    host: str,
+    prompt: str | None = None,
+    wait_budget: float | None = None,
+) -> tuple[str, str | None]:
+    import time
+
+    doubao = _is_doubao_host(host)
+    budget = float(wait_budget) if wait_budget is not None else (
+        _DOUBAO_ANSWER_WAIT_SECONDS if doubao else _DEFAULT_ANSWER_WAIT_SECONDS
+    )
+    deadline = time.monotonic() + max(0.2, budget)
+    body_text = ""
+    title = None
+    while True:
+        body_text = page.inner_text("body") or ""
+        title = (page.title() or "").strip() or None
+        if doubao:
+            if doubao_answer_ready(body_text, title=title, prompt=prompt):
+                break
+        elif len(_clean_answer_text(body_text)) >= 80:
+            break
+        if time.monotonic() >= deadline:
+            break
+        page.wait_for_timeout(200)
+    return body_text, title
 
 
 def _peel_escapes(text: str, *, rounds: int = 12) -> str:
@@ -617,9 +736,12 @@ def _result_from_html(
     host: str,
     title: str | None = None,
     body_text: str = "",
+    prompt: str | None = None,
 ) -> SharePageFetchResult | None:
     answer = _extract_answer_from_html(page_html, body_text)
     if _looks_like_share_error_page(answer) or len(answer) < 20:
+        return None
+    if _is_doubao_host(host) and not doubao_answer_ready(answer, title=title, prompt=prompt):
         return None
     claimed = _claimed_material_count(body_text) or _claimed_material_count(page_html)
     return SharePageFetchResult(
@@ -631,7 +753,7 @@ def _result_from_html(
     )
 
 
-def _try_http_fetch(url: str, host: str) -> SharePageFetchResult | None:
+def _try_http_fetch(url: str, host: str, *, prompt: str | None = None) -> SharePageFetchResult | None:
     """SSR 站（豆包 thread 等）优先裸 HTTP，避免起浏览器拖垮提交。"""
     try:
         import httpx
@@ -649,7 +771,7 @@ def _try_http_fetch(url: str, host: str) -> SharePageFetchResult | None:
         page_html = resp.text or ""
         title_m = re.search(r"<title[^>]*>([^<]+)</title>", page_html, flags=re.I)
         title = html.unescape(title_m.group(1)).strip() if title_m else None
-        return _result_from_html(page_html, host=host, title=title or None)
+        return _result_from_html(page_html, host=host, title=title or None, prompt=prompt)
     except Exception as exc:  # noqa: BLE001
         logger.info("share page http fetch skipped host=%s err=%s", host, exc)
         return None
@@ -719,7 +841,7 @@ def _expand_citation_panels(page: Any) -> None:
         pass
 
 
-def try_fast_fetch_share_page(url: str) -> SharePageFetchResult | None:
+def try_fast_fetch_share_page(url: str, *, prompt: str | None = None) -> SharePageFetchResult | None:
     """HTTP/API 快路径；需 Playwright 时返回 None（由 Celery Worker 异步解析）。"""
     value = str(url or "").strip()
     if not value.startswith(("http://", "https://")):
@@ -736,13 +858,17 @@ def try_fast_fetch_share_page(url: str) -> SharePageFetchResult | None:
             qianwen_api_refs = list(api_hit.references or [])
             qianwen_api_title = api_hit.title
 
-    http_hit = _try_http_fetch(value, host)
+    http_hit = _try_http_fetch(value, host, prompt=prompt)
     if http_hit is not None and _http_refs_enough(http_hit, host):
         if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
             http_hit.references = qianwen_api_refs
             http_hit.claimed_refs = len(qianwen_api_refs)
             if qianwen_api_title and not http_hit.title:
                 http_hit.title = qianwen_api_title
+        if _is_doubao_host(host) and not doubao_answer_ready(
+            http_hit.answer_content, title=http_hit.title, prompt=prompt
+        ):
+            return None
         return http_hit
     return None
 
@@ -756,13 +882,12 @@ def fetch_share_page_browser_combined(
     *,
     subtask_id: str | None = None,
     timeout_ms: int = 120000,
+    prompt: str | None = None,
 ) -> tuple[SharePageFetchResult, str | None]:
     """一次 Playwright：解析正文/信源 + 截图（G）。
 
     2026-09-02 - 严格 G：即使千问 API 已命中也要开浏览器截图，禁止无截图提前返回。
     """
-    import time
-
     from app.services.share_page_screenshot_service import capture_share_page_screenshot_from_page
 
     value = str(url or "").strip()
@@ -814,21 +939,17 @@ def fetch_share_page_browser_combined(
                     )
                 page = context.new_page()
                 page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-                body_text = ""
-                # API 已有正文时缩短等待，优先截图
-                wait_budget = 1.0 if qianwen_api_hit is not None else 2.5
-                deadline = time.monotonic() + wait_budget
-                while True:
-                    body_text = page.inner_text("body") or ""
-                    if len(_clean_answer_text(body_text)) >= 80:
-                        break
-                    if time.monotonic() >= deadline:
-                        break
-                    page.wait_for_timeout(200)
+                wait_budget = 1.0 if qianwen_api_hit is not None else None
+                body_text, title = _wait_for_share_body(
+                    page, host=host, prompt=prompt, wait_budget=wait_budget
+                )
                 _expand_citation_panels(page)
-                title = (page.title() or "").strip() or None
+                body_text = page.inner_text("body") or body_text
+                title = (page.title() or "").strip() or title
                 page_html = page.content() or ""
-                result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
+                result = _result_from_html(
+                    page_html, host=host, title=title, body_text=body_text, prompt=prompt
+                )
                 if result is not None and qianwen_api_refs and not _refs_quality_ok(result.references, page_host=host):
                     result.references = qianwen_api_refs
                     result.claimed_refs = len(qianwen_api_refs)
@@ -850,9 +971,15 @@ def fetch_share_page_browser_combined(
                     result = qianwen_api_hit
                 if result is None:
                     answer = _extract_answer_from_html(page_html, body_text)
+                    if _is_doubao_host(host):
+                        raise ValueError(share_page_unusable_message())
                     if _looks_like_share_error_page(answer):
                         raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
                     raise ValueError("未能从分享页解析到回答正文，请确认链接可公开访问")
+                if _is_doubao_host(host) and not doubao_answer_ready(
+                    result.answer_content, title=result.title, prompt=prompt
+                ):
+                    raise ValueError(share_page_unusable_message())
                 # 浏览器正文过短时优先用 API 正文
                 if (
                     qianwen_api_hit is not None
@@ -885,10 +1012,13 @@ def fetch_share_page_browser_combined(
     return result, shot_path
 
 
-def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResult:
+def fetch_share_page(
+    url: str,
+    *,
+    timeout_ms: int = 60000,
+    prompt: str | None = None,
+) -> SharePageFetchResult:
     """抓取分享页正文 + 信源；优先 HTTP，SPA/弱信源再 Playwright。"""
-    import time
-
     value = str(url or "").strip()
     if not value.startswith(("http://", "https://")):
         raise ValueError("分享链接无效")
@@ -907,14 +1037,18 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
 
     # 2026-08-07 - 补录「提交中」卡十几秒 - 截图已异步，正文仍同步 Playwright；SSR 先走 HTTP
     # 2026-08-14 - 非豆包若 HTTP 信源质量差/条数低于「参考了N篇」，继续 Playwright 点开引用面板再抽
-    http_hit = _try_http_fetch(value, host)
+    http_hit = _try_http_fetch(value, host, prompt=prompt)
     if http_hit is not None and _http_refs_enough(http_hit, host):
         if qianwen_api_refs and not _refs_quality_ok(http_hit.references, page_host=host):
             http_hit.references = qianwen_api_refs
             http_hit.claimed_refs = len(qianwen_api_refs)
             if qianwen_api_title and not http_hit.title:
                 http_hit.title = qianwen_api_title
-        return http_hit
+        if not (
+            _is_doubao_host(host)
+            and not doubao_answer_ready(http_hit.answer_content, title=http_hit.title, prompt=prompt)
+        ):
+            return http_hit
 
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -934,18 +1068,10 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
                     viewport={"width": 1280, "height": 900},
                 )
                 page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-                # 正文够长即停，最多再等约 2.5s
-                body_text = ""
-                deadline = time.monotonic() + 2.5
-                while True:
-                    body_text = page.inner_text("body") or ""
-                    if len(_clean_answer_text(body_text)) >= 80:
-                        break
-                    if time.monotonic() >= deadline:
-                        break
-                    page.wait_for_timeout(200)
+                body_text, title = _wait_for_share_body(page, host=host, prompt=prompt)
                 _expand_citation_panels(page)
-                title = (page.title() or "").strip() or None
+                body_text = page.inner_text("body") or body_text
+                title = (page.title() or "").strip() or title
                 page_html = page.content() or ""
             finally:
                 browser.close()
@@ -959,7 +1085,9 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
             raise ValueError(_playwright_timeout_message(value)) from exc
         raise ValueError(f"分享页解析失败：{exc}") from exc
 
-    result = _result_from_html(page_html, host=host, title=title, body_text=body_text)
+    result = _result_from_html(
+        page_html, host=host, title=title, body_text=body_text, prompt=prompt
+    )
     if result is not None and qianwen_api_refs and not _refs_quality_ok(result.references, page_host=host):
         result.references = qianwen_api_refs
         result.claimed_refs = len(qianwen_api_refs)
@@ -984,8 +1112,14 @@ def fetch_share_page(url: str, *, timeout_ms: int = 60000) -> SharePageFetchResu
             http_hit.claimed_refs = len(qianwen_api_refs)
         return http_hit
     if result is None:
+        if _is_doubao_host(host):
+            raise ValueError(share_page_unusable_message())
         answer = _extract_answer_from_html(page_html, body_text)
         if _looks_like_share_error_page(answer):
             raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
         raise ValueError("未能从分享页解析到回答正文，请确认链接可公开访问")
+    if _is_doubao_host(host) and not doubao_answer_ready(
+        result.answer_content, title=result.title, prompt=prompt
+    ):
+        raise ValueError(share_page_unusable_message())
     return result

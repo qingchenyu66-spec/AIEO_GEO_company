@@ -77,7 +77,7 @@ def test_slow_share_url_queues_async_parse(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
-        lambda url: None,
+        lambda url, **kwargs: None,
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.get_brand_asset",
@@ -193,7 +193,7 @@ def test_orphan_pending_allows_retry(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
-        lambda url: None,
+        lambda url, **kwargs: None,
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.get_brand_asset",
@@ -261,7 +261,7 @@ def test_celery_enqueue_failure_clears_pending(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.try_fast_fetch_share_page",
-        lambda url: None,
+        lambda url, **kwargs: None,
     )
     monkeypatch.setattr(
         "app.services.snapshot_backfill_service.get_brand_asset",
@@ -321,7 +321,7 @@ def test_run_async_backfill_parse_applies_combined_result(db_session, monkeypatc
     db_session.add(task)
     db_session.commit()
 
-    def _combined(url: str, *, subtask_id: str | None = None, timeout_ms: int = 120000):
+    def _combined(url: str, *, subtask_id: str | None = None, timeout_ms: int = 120000, prompt: str | None = None):
         return (
             SharePageFetchResult(
                 answer_content="1. 品牌A\n2. 竞品B",
@@ -432,7 +432,7 @@ def test_run_async_skips_when_parse_job_superseded(db_session, monkeypatch) -> N
     db_session.add(task)
     db_session.commit()
 
-    def _combined(url: str, *, subtask_id: str | None = None, timeout_ms: int = 120000):
+    def _combined(url: str, *, subtask_id: str | None = None, timeout_ms: int = 120000, prompt: str | None = None):
         # 模拟解析期间用户重提换了 job
         db_session.refresh(subtask)
         raw = dict(subtask.raw_result_json or {})
@@ -587,7 +587,7 @@ def test_post_apply_new_pending_not_wiped_by_ok_commit(db_session, monkeypatch) 
 
     monkeypatch.setattr(
         "app.services.share_page_fetch_service.fetch_share_page_browser_combined",
-        lambda url, *, subtask_id=None, timeout_ms=120000: (
+        lambda url, *, subtask_id=None, timeout_ms=120000, prompt=None: (
             SharePageFetchResult(
                 answer_content="1. 品牌A\n正文",
                 references=[],

@@ -1576,7 +1576,9 @@ def run_async_backfill_parse(
     current = _operator_session_from_raw(db, raw)
 
     try:
-        fetched, shot_path = fetch_share_page_browser_combined(url, subtask_id=subtask_id)
+        fetched, shot_path = fetch_share_page_browser_combined(
+            url, subtask_id=subtask_id, prompt=getattr(subtask, "prompt", None)
+        )
         # 2026-09-02 - Playwright 后再认一次 job - 超时重提后旧任务不得写回
         db.refresh(subtask)
         if not _owns_backfill_parse_job(subtask, job_id):
@@ -2108,7 +2110,7 @@ def apply_snapshot_backfill(
     url = validate_snapshot_url(url_raw, platform=subtask.platform)
     content_manual = (answer_content or "").strip()
     try:
-        fast = try_fast_fetch_share_page(url)
+        fast = try_fast_fetch_share_page(url, prompt=getattr(subtask, "prompt", None))
     except ValueError:
         if not content_manual:
             raise
