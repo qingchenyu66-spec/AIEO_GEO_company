@@ -155,6 +155,15 @@ def _recompute_customer_ledger_balances(db: Session, tenant_id: int) -> dict[int
     return balances
 
 
+def _group_field(item: Any, name: str, default: Any = None) -> Any:
+    """品牌词组字段：兼容 pydantic 对象与 dict；勿对空列表再 .get()。"""
+    if isinstance(item, dict):
+        return item.get(name, default)
+    if hasattr(item, name):
+        return getattr(item, name)
+    return default
+
+
 def estimate_brand_words_immediate_credits(
     db: Session,
     tenant: Tenant,
@@ -168,20 +177,18 @@ def estimate_brand_words_immediate_credits(
     total = Decimal("0")
     group_count = 0
     for item in groups or []:
-        run_now = bool(getattr(item, "run_immediately", False) if hasattr(item, "run_immediately") else item.get("run_immediately"))
-        status = bool(getattr(item, "status", True) if hasattr(item, "status") else item.get("status", True))
+        run_now = bool(_group_field(item, "run_immediately", False))
+        status = bool(_group_field(item, "status", True))
         if not run_now or not status:
             continue
-        platforms = normalize_platform_selections(
-            getattr(item, "platforms", None) or item.get("platforms") or []
-        )
+        platforms = normalize_platform_selections(_group_field(item, "platforms", None) or [])
         if not platforms:
             continue
-        keywords = getattr(item, "monitor_keywords", None) or item.get("monitor_keywords") or []
-        if not keywords and getattr(item, "monitor_keyword", None):
-            keywords = [item.monitor_keyword]
-        if not keywords and item.get("monitor_keyword"):
-            keywords = [item.get("monitor_keyword")]
+        keywords = _group_field(item, "monitor_keywords", None) or []
+        if not keywords:
+            single = _group_field(item, "monitor_keyword", None)
+            if single:
+                keywords = [single]
         prompt_count = len([k for k in keywords if str(k or "").strip()])
         if prompt_count <= 0:
             continue
@@ -830,10 +837,11 @@ def release_reserve(
     amount: Decimal | None = None,
     reason: str | None = None,
     detail_json: dict | None = None,
-) -> None:
+) -> bool:
+    """释放预扣。无匹配 reserve / 无可释余额时返回 False。"""
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
     if tenant is None:
-        return
+        return False
     rows = list(
         db.scalars(
             select(TenantCreditLedger).where(
@@ -844,7 +852,7 @@ def release_reserve(
         )
     )
     if not rows:
-        return
+        return False
     release_amount = amount
     ref_left = ref_reserve_remaining(db, tenant_id, ref_id)
     if release_amount is None:
@@ -852,13 +860,13 @@ def release_reserve(
         # 2026-09-09 - remaining≤0 说明本 ref 已结清/已释放，禁止用「历史 reserve 总额」兜底偷邻批
         release_amount = ref_left
         if release_amount <= 0:
-            return
+            return False
     else:
         # 2026-09-09 - 显式 amount（按格份额）也不得超过本 ref 剩余，防偷邻批
         release_amount = min(Decimal(str(release_amount)), ref_left)
     release_amount = min(release_amount, Decimal(str(tenant.credit_reserved or 0)))
     if release_amount <= 0:
-        return
+        return False
     tenant.credit_reserved = Decimal(str(tenant.credit_reserved or 0)) - release_amount
     db.add(
         TenantCreditLedger(
@@ -874,6 +882,7 @@ def release_reserve(
         )
     )
     db.flush()
+    return True
 
 
 def settle_credits(
@@ -982,14 +991,20 @@ def finalize_schedule_submit(
 
 
 def resolve_schedule_credit_reserve_ref(db: Session, task: Any) -> str | None:
-    """从任务 meta 或调度记录解析本批预扣 ref（一般为 group_key）。"""
+    """从任务 meta 解析预扣 ref；无 meta 时仅当 schedule_key 仍有开放预扣才兜底。
+
+    2026-09-11 - M3：勿用裸 schedule_key 给托管期任务造 batch_ref，避免切 credit 后追溯扣费。
+    """
     raw = task.raw_request_json if isinstance(getattr(task, "raw_request_json", None), dict) else {}
     meta = raw.get("_geo_credit") if isinstance(raw.get("_geo_credit"), dict) else {}
     ref = str(meta.get("reserve_ref") or "").strip()
     if ref:
         return ref[:64]
+    if str(meta.get("billing_mode") or "").strip().lower() == "hosted":
+        return None
     task_id = str(getattr(task, "task_id", "") or "").strip()
-    if not task_id:
+    tenant_id = getattr(task, "tenant_id", None)
+    if not task_id or not tenant_id:
         return None
     from app.models.monitor import GeoMonitorScheduleRun
 
@@ -997,7 +1012,9 @@ def resolve_schedule_credit_reserve_ref(db: Session, task: Any) -> str | None:
         select(GeoMonitorScheduleRun).where(GeoMonitorScheduleRun.task_id == task_id).limit(1)
     )
     if run and run.schedule_key:
-        return str(run.schedule_key)[:64]
+        sk = str(run.schedule_key)[:64]
+        if has_open_credit_reserve(db, int(tenant_id), sk):
+            return sk
     return None
 
 
@@ -1118,6 +1135,18 @@ def finalize_monitor_cell_credit(
     # 2026-09-09 - 切回托管后：本批仍有开放预扣则继续结清，避免白跑/TTL 误释
     if not is_credit_tenant(tenant) and not has_open_credit_reserve(db, tenant.id, batch_ref):
         return False
+    # 2026-09-11 - M3：credit 下若本 ref 从未有过预扣（如托管期 schedule_key 兜底），不追溯扣费；
+    # 正常清尾后晚到格仍可补扣（历史有 reserve 流水即可）
+    if is_credit_tenant(tenant) and not has_open_credit_reserve(db, tenant.id, batch_ref):
+        had_reserve = db.scalar(
+            select(TenantCreditLedger.id).where(
+                TenantCreditLedger.tenant_id == tenant.id,
+                TenantCreditLedger.ref_id == batch_ref,
+                TenantCreditLedger.entry_type == "reserve",
+            ).limit(1)
+        )
+        if had_reserve is None:
+            return False
     if batch_force_closed(db, tenant.id, batch_ref):
         # 运营整批释放后不再补扣
         _claim_cell_credit_finalize_safe(

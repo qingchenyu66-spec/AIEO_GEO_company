@@ -823,3 +823,62 @@ def test_finalize_after_switch_to_hosted_with_open_reserve(db):
     db.refresh(tenant)
     assert tenant.credit_balance == Decimal("9")
     assert tenant.credit_reserved == Decimal("0")
+
+
+def test_finalize_without_open_reserve_does_not_charge(db):
+    """M3：无开放预扣时即使当前是 credit、batch_ref 像 schedule_key，也不追溯扣费。"""
+    from types import SimpleNamespace
+
+    from app.services.credit_service import finalize_monitor_cell_credit
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("10"))
+    origin = SimpleNamespace(
+        subtask_id="st-m3",
+        platform="doubao",
+        prompt="词M3",
+        status="completed",
+        amount=Decimal("0.1"),
+        auto_retry_status=None,
+        auto_retry_count=0,
+        answer_content="ok",
+        error_message=None,
+        raw_result_json=None,
+    )
+    assert finalize_monitor_cell_credit(db, tenant, origin=origin, batch_ref="hosted-schedule-key") is False
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("10")
+
+
+def test_estimate_brand_words_empty_platforms_on_pydantic_object(db):
+    """空 platforms 默认列表不得再走 .get() 导致 500。"""
+    from types import SimpleNamespace
+
+    from pydantic import BaseModel, Field
+
+    from app.services.credit_service import estimate_brand_words_immediate_credits
+
+    class G(BaseModel):
+        run_immediately: bool = True
+        status: bool = True
+        platforms: list = Field(default_factory=list)
+        monitor_keywords: list[str] = Field(default_factory=lambda: ["词A"])
+
+    tenant = _seed_credit_tenant(db)
+    asset = SimpleNamespace(region_codes_json=["110000"])
+    out = estimate_brand_words_immediate_credits(db, tenant, asset, [G()])
+    assert out["credits"] == 0
+    assert out["group_count"] == 0
+    out2 = estimate_brand_words_immediate_credits(
+        db,
+        tenant,
+        asset,
+        [{"run_immediately": True, "status": True, "platforms": [], "monitor_keywords": ["词B"]}],
+    )
+    assert out2["group_count"] == 0
+    out3 = estimate_brand_words_immediate_credits(
+        db,
+        tenant,
+        asset,
+        [SimpleNamespace(run_immediately=True, status=True, platforms=[], monitor_keywords=["词C"])],
+    )
+    assert out3["group_count"] == 0

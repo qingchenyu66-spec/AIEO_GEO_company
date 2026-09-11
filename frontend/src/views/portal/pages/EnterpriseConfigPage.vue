@@ -57,6 +57,7 @@ const ledgerDetailLoading = ref(false)
 const ledgerDetailRowId = ref<number | null>(null)
 
 const memberFormVisible = ref(false)
+const memberSaving = ref(false)
 const editingMember = ref<EnterpriseMemberItem | null>(null)
 const memberForm = ref({
   display_name: '',
@@ -343,6 +344,7 @@ function openMemberForm(row?: EnterpriseMemberItem) {
 }
 
 async function submitMemberForm() {
+  if (memberSaving.value) return
   const password = String(memberForm.value.password || '')
   if (!editingMember.value) {
     if (!String(memberForm.value.username || '').trim()) {
@@ -358,6 +360,7 @@ async function submitMemberForm() {
     ElMessage.warning('重置密码至少 8 位')
     return
   }
+  memberSaving.value = true
   try {
     if (editingMember.value) {
       await updateEnterpriseMember(editingMember.value.identity_id, {
@@ -376,6 +379,8 @@ async function submitMemberForm() {
     await loadTab()
   } catch (error) {
     ElMessage.error(extractErrorDetail(error, '保存失败'))
+  } finally {
+    memberSaving.value = false
   }
 }
 
@@ -531,7 +536,9 @@ watch(visibleTabs, () => ensureAllowedTab())
           <label class="check"><input v-model="memberForm.status" type="checkbox" />启用</label>
           <template #footer>
             <button type="button" class="btn-secondary" @click="memberFormVisible = false">取消</button>
-            <button type="button" class="btn-primary" @click="submitMemberForm">保存</button>
+            <button type="button" class="btn-primary" :disabled="memberSaving" @click="submitMemberForm">
+              {{ memberSaving ? '保存中…' : '保存' }}
+            </button>
           </template>
         </el-dialog>
       </div>

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime
 from decimal import Decimal
+from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -52,6 +54,19 @@ router = APIRouter(prefix="/management/credit")
 # 2026-08-28 - 算力运营页合并侧栏后，运营页读/写兼容 credit_ops_board 与旧 tenant_credit 授权
 _CREDIT_OPS_READ_MENUS = ("platform.credit_ops_board", "platform.tenant_credit")
 _CREDIT_OPS_WRITE_MENUS = ("platform.credit_ops_board", "platform.tenant_credit")
+
+
+def _csv_row(cells: list[object]) -> str:
+    """CSV 一行：全字段引号包裹，公式注入前缀加撇号。"""
+    out: list[str] = []
+    for cell in cells:
+        text = "" if cell is None else str(cell)
+        if text and text[0] in ("=", "+", "-", "@"):
+            text = "'" + text
+        out.append(text)
+    buf = StringIO()
+    csv.writer(buf, lineterminator="\n").writerow(out)
+    return buf.getvalue()
 
 
 def guard_sales_tenant(db: Session, current: CurrentSession, tenant_id: int) -> None:
@@ -318,13 +333,36 @@ def credit_platform_ledger_export(
     }
 
     def _iter():
-        yield "id,tenant_id,tenant_name,amount,balance_after,entry_type,reason,window_key,platform_code,keyword,created_at\n"
+        yield _csv_row(
+            [
+                "id",
+                "tenant_id",
+                "tenant_name",
+                "amount",
+                "balance_after",
+                "entry_type",
+                "reason",
+                "window_key",
+                "platform_code",
+                "keyword",
+                "created_at",
+            ]
+        )
         for row in rows:
-            reason = (row.reason or "").replace('"', '""')
-            name = (tenant_map.get(row.tenant_id) or "").replace('"', '""')
-            yield (
-                f'{row.id},{row.tenant_id},"{name}",{row.amount},{row.balance_after},{row.entry_type},'
-                f'"{reason}",{row.window_key or ""},{row.platform_code or ""},{row.keyword or ""},{row.created_at}\n'
+            yield _csv_row(
+                [
+                    row.id,
+                    row.tenant_id,
+                    tenant_map.get(row.tenant_id) or "",
+                    row.amount,
+                    row.balance_after,
+                    row.entry_type,
+                    row.reason or "",
+                    row.window_key or "",
+                    row.platform_code or "",
+                    row.keyword or "",
+                    row.created_at,
+                ]
             )
 
     fname = f"credit-ledger-{tenant_id or 'all'}.csv"
@@ -526,7 +564,15 @@ def credit_release_reserve(
     require_platform(current)
     _require_any_menu(db, current, _CREDIT_OPS_WRITE_MENUS, "can_update")
     guard_sales_tenant(db, current, payload.tenant_id)
-    release_reserve(db, tenant_id=payload.tenant_id, ref_id=payload.ref_id, reason=payload.reason or "运营手工释放", detail_json={"batch_force_closed": True})
+    released = release_reserve(
+        db,
+        tenant_id=payload.tenant_id,
+        ref_id=payload.ref_id,
+        reason=payload.reason or "运营手工释放",
+        detail_json={"batch_force_closed": True},
+    )
+    if not released:
+        raise HTTPException(status_code=404, detail="未找到可释放的预扣记录")
     db.commit()
     return ApiResponse(data={"released": True})
 
@@ -699,12 +745,32 @@ def credit_tenant_ledger_export(
     )
 
     def _iter():
-        yield "id,amount,balance_after,entry_type,reason,window_key,platform_code,keyword,created_at\n"
+        yield _csv_row(
+            [
+                "id",
+                "amount",
+                "balance_after",
+                "entry_type",
+                "reason",
+                "window_key",
+                "platform_code",
+                "keyword",
+                "created_at",
+            ]
+        )
         for row in rows:
-            reason = (row.reason or "").replace('"', '""')
-            yield (
-                f'{row.id},{row.amount},{row.balance_after},{row.entry_type},"{reason}",'
-                f'{row.window_key or ""},{row.platform_code or ""},{row.keyword or ""},{row.created_at}\n'
+            yield _csv_row(
+                [
+                    row.id,
+                    row.amount,
+                    row.balance_after,
+                    row.entry_type,
+                    row.reason or "",
+                    row.window_key or "",
+                    row.platform_code or "",
+                    row.keyword or "",
+                    row.created_at,
+                ]
             )
 
     return StreamingResponse(_iter(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=credit-ledger-{tenant_id}.csv"})

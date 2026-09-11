@@ -108,7 +108,8 @@ def test_tenant_credit_ledger_exclude_internal_param():
 
 
 def _patch_credit_ops_only_permission(monkeypatch, *, can_update: bool) -> None:
-    from app.services import menu_permission_service as mps
+    # endpoint 从 credit_management 模块绑定导入，须打在该模块上的引用
+    import app.api.v1.endpoints.credit_management as credit_ep
 
     def fake(_db, _identity_id, menu_code, action="can_export"):
         if menu_code == "platform.credit_ops_board" and action == "can_export":
@@ -117,7 +118,7 @@ def _patch_credit_ops_only_permission(monkeypatch, *, can_update: bool) -> None:
             return True
         return False
 
-    monkeypatch.setattr(mps, "has_identity_menu_permission", fake)
+    monkeypatch.setattr(credit_ep, "has_identity_menu_permission", fake)
 
 
 def test_credit_ops_board_only_can_read_tenant_ops_endpoints(monkeypatch):

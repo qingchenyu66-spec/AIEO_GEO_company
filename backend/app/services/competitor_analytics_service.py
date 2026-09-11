@@ -20,7 +20,11 @@ from app.services.brand_service import (
     list_competitors,
 )
 from app.services.lead_diagnosis_analytics import names_match as _strict_entity_names_match
-from app.services.monitor_service import customer_display_cutoff, customer_display_date_range
+from app.services.monitor_service import (
+    customer_display_cutoff,
+    customer_display_cutoff_for_tenant,
+    customer_display_date_range,
+)
 from app.services.tenant_scope import resolve_and_guard_analytics_tenant
 from app.core.platform_order import sort_platform_items
 from app.services.brand_analysis_service import (
@@ -323,8 +327,15 @@ def resolve_analytics_date_range(
     days: int = 30,
     start_date: date | None = None,
     end_date: date | None = None,
+    db: Session | None = None,
+    tenant_id: int | None = None,
 ) -> tuple[datetime, datetime]:
     if current.identity.identity_type == "CUSTOMER":
+        cutoff = None
+        if db is not None:
+            tid = tenant_id or current.identity.tenant_id
+            if tid is not None:
+                cutoff = customer_display_cutoff_for_tenant(db, int(tid))
         start_at = datetime.combine(start_date, time.min) if start_date else None
         end_at = datetime.combine(end_date, time.max) if end_date else None
         if start_at is not None or end_at is not None:
@@ -332,8 +343,9 @@ def resolve_analytics_date_range(
                 start_at=start_at,
                 end_at=end_at,
                 default_lookback_days=30,
+                cutoff=cutoff,
             )
-        range_end = customer_display_cutoff()
+        range_end = cutoff if cutoff is not None else customer_display_cutoff()
         range_start = datetime.combine(
             range_end.date() - timedelta(days=max(1, min(days, 365)) - 1),
             time.min,
@@ -402,6 +414,8 @@ def build_competitor_compare_summary(
         days=days,
         start_date=start_date,
         end_date=end_date,
+        db=db,
+        tenant_id=resolved_tenant_id,
     )
     platform_filters = _parse_platform_filters(platform, platforms)
     prompt_filter = str(prompt or "").strip()

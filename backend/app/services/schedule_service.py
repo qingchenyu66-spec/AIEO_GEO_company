@@ -762,14 +762,23 @@ def _submit_schedule_group_locked(
         )
         task = submit_monitor_task(db, payload, current, auto_commit=False)
         # 2026-09-07 - 提交成功只保留预扣；把 reserve_ref 打进任务，方便同步后按格 settle
+        # 2026-09-11 - 始终打 billing_mode，便于 settle 识别托管期提交
+        raw = dict(task.raw_request_json) if isinstance(task.raw_request_json, dict) else {}
+        credit_meta = raw.get("_geo_credit") if isinstance(raw.get("_geo_credit"), dict) else {}
+        credit_meta = dict(credit_meta)
+        credit_meta["billing_mode"] = (
+            str(getattr(tenant, "billing_mode", None) or "hosted") if tenant is not None else "hosted"
+        )
         if gate.reserved_credits and gate.reserve_ref:
-            raw = dict(task.raw_request_json) if isinstance(task.raw_request_json, dict) else {}
-            raw["_geo_credit"] = {
-                "reserve_ref": str(gate.reserve_ref)[:64],
-                "window_key": str(item.schedule_key or item.group_key)[:32],
-                "reserved_credits": float(gate.reserved_credits),
-            }
-            task.raw_request_json = raw
+            credit_meta.update(
+                {
+                    "reserve_ref": str(gate.reserve_ref)[:64],
+                    "window_key": str(item.schedule_key or item.group_key)[:32],
+                    "reserved_credits": float(gate.reserved_credits),
+                }
+            )
+        raw["_geo_credit"] = credit_meta
+        task.raw_request_json = raw
         run.task_id = task.task_id
         run.status = "submitted"
         _release_credit_reserve("submitted")

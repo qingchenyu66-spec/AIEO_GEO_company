@@ -341,10 +341,11 @@ def customer_display_date_range(
     start_at: datetime | None = None,
     end_at: datetime | None = None,
     default_lookback_days: int | None = 7,
+    cutoff: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    """客户可见区间：结束不晚于昨日；起始默认近 default_lookback_days 天，None 表示不限起始。"""
-    cutoff = customer_display_cutoff(now)
-    range_end = min(end_at, cutoff) if end_at else cutoff
+    """客户可见区间：默认截至昨日；传入 cutoff（算力含今日）时按该截止。"""
+    range_cutoff = cutoff if cutoff is not None else customer_display_cutoff(now)
+    range_end = min(end_at, range_cutoff) if end_at else range_cutoff
     if start_at is not None:
         range_start = start_at
     elif default_lookback_days is not None:
@@ -365,10 +366,24 @@ def resolve_monitor_date_range(
     end_at: datetime | None = None,
     *,
     customer_like: bool = False,
+    db: Session | None = None,
+    tenant_id: int | None = None,
 ) -> tuple[datetime, datetime]:
-    """客户身份截止昨日且不含今日；平台运营可按参数或默认近 7 日。"""
+    """客户身份默认截至昨日；算力自助含今日。平台运营可按参数或默认近 7 日。"""
     if current.identity.identity_type == "CUSTOMER" or customer_like:
-        return customer_display_date_range(start_at=start_at, end_at=end_at, default_lookback_days=7)
+        cutoff = None
+        if db is not None:
+            tid = tenant_id
+            if tid is None and current.identity.identity_type == "CUSTOMER":
+                tid = current.identity.tenant_id
+            if tid is not None:
+                cutoff = customer_display_cutoff_for_tenant(db, int(tid))
+        return customer_display_date_range(
+            start_at=start_at,
+            end_at=end_at,
+            default_lookback_days=7,
+            cutoff=cutoff,
+        )
     now = datetime.now()
     range_start = start_at or (now - timedelta(days=7))
     range_end = end_at or now
@@ -397,6 +412,9 @@ def filter_customer_visible_subtasks(
     assets_by_tenant: dict[int, BrandAsset | None] = {
         tenant_id: get_brand_asset(db, tenant_id) for tenant_id in tenant_ids
     }
+    cutoff_by_tenant = {
+        tenant_id: customer_display_cutoff_for_tenant(db, tenant_id, now) for tenant_id in tenant_ids
+    }
     schedule_ctx_by_task: dict[str, dict[str, Any]] = {}
     visible: list[GeoMonitorSubtask] = []
     for item in subtasks:
@@ -412,7 +430,10 @@ def filter_customer_visible_subtasks(
                 asset,
                 lead_runs_map,
             )
-        if customer_subtask_visible(item, now, task=task, schedule_ctx=schedule_ctx_by_task[task_id]):
+        tenant_cutoff = cutoff_by_tenant.get(task.tenant_id) if task.tenant_id else None
+        if customer_subtask_visible(
+            item, now, task=task, schedule_ctx=schedule_ctx_by_task[task_id], cutoff=tenant_cutoff
+        ):
             visible.append(item)
     return visible
 
@@ -1299,7 +1320,15 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
             "window_key": datetime.now().strftime("%Y%m%d-%H%M")[:32],
             "reserved_credits": float(credit_gate.reserved_credits or 0),
             "submit_channel": "manual_monitor",
+            "billing_mode": str(getattr(tenant, "billing_mode", None) or "credit"),
         }
+    else:
+        # 2026-09-11 - 无预扣也打模式戳，避免切模式后被 schedule_key 兜底追溯
+        request_body = dict(request_body)
+        existing = request_body.get("_geo_credit") if isinstance(request_body.get("_geo_credit"), dict) else {}
+        meta = dict(existing)
+        meta.setdefault("billing_mode", str(getattr(tenant, "billing_mode", None) or "hosted"))
+        request_body["_geo_credit"] = meta
 
     task = GeoMonitorTask(
         task_id=task_id,
@@ -2039,10 +2068,17 @@ def monitor_summary(
         )
 
     today = datetime.now().date()
-    trend_end_day = customer_display_cutoff().date() if customer_like else today
+    if customer_like and scoped_customer_tenant is not None:
+        trend_end_day = customer_display_cutoff_for_tenant(db, scoped_customer_tenant).date()
+        trend_offsets = range(6, -1, -1) if credit_customer_includes_today(db, scoped_customer_tenant) else range(7, 0, -1)
+    elif customer_like:
+        trend_end_day = customer_display_cutoff().date()
+        trend_offsets = range(7, 0, -1)
+    else:
+        trend_end_day = today
+        trend_offsets = range(6, -1, -1)
     day_labels = []
     daily_trend = []
-    trend_offsets = range(7, 0, -1) if customer_like else range(6, -1, -1)
     stat_trend = aggregate_daily_mention_trend(
         db,
         tenant_ids=summary_tenant_ids or None,
@@ -2151,7 +2187,12 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
             asset,
             lead_diagnosis_runs_for_tasks(db, [task.task_id]),
         )
-        if not customer_subtask_visible(subtask, task=task, schedule_ctx=schedule_ctx):
+        if not customer_subtask_visible(
+            subtask,
+            task=task,
+            schedule_ctx=schedule_ctx,
+            cutoff=customer_display_cutoff_for_tenant(db, task.tenant_id) if task.tenant_id else None,
+        ):
             raise ValueError("子任务不存在或无权访问")
     return subtask
 
@@ -7618,7 +7659,12 @@ def ranking_matrix(
         or (current.identity.identity_type == "PLATFORM" and tenant_id is not None)
     )
     range_start, range_end = resolve_monitor_date_range(
-        current, start_at, end_at, customer_like=customer_like,
+        current,
+        start_at,
+        end_at,
+        customer_like=customer_like,
+        db=db,
+        tenant_id=resolved_tenant_id,
     )
 
     asset = get_brand_asset(db, resolved_tenant_id)
@@ -7974,16 +8020,17 @@ def customer_subtask_visible(
     *,
     task: GeoMonitorTask | None = None,
     schedule_ctx: dict[str, Any] | None = None,
+    cutoff: datetime | None = None,
 ) -> bool:
-    """客户侧是否可见：只认监测业务日 ≤ 昨日。禁止用 updated_at（补录会把库时间刷到今天）。"""
-    cutoff = customer_display_cutoff(now)
+    """客户侧是否可见：监测业务日 ≤ 截止日（托管昨日 / 算力含今日）。禁止用 updated_at 当闸门。"""
+    range_cutoff = cutoff if cutoff is not None else customer_display_cutoff(now)
     if task is None:
-        return bool(subtask.updated_at and subtask.updated_at <= cutoff)
+        return bool(subtask.updated_at and subtask.updated_at <= range_cutoff)
     detect_dt = _subtask_detect_datetime(subtask, task, schedule_ctx)
     if detect_dt is not None:
-        return detect_dt <= cutoff
+        return detect_dt <= range_cutoff
     # ponytail: 无业务日上下文时才回退 updated_at；有业务日绝不用改库时间当闸门。
-    return bool(subtask.updated_at and subtask.updated_at <= cutoff)
+    return bool(subtask.updated_at and subtask.updated_at <= range_cutoff)
 
 
 def invalidate_monitor_summary_cache(
@@ -8008,11 +8055,14 @@ def filter_subtasks_for_customer(
     db: Session | None = None,
 ) -> list[GeoMonitorSubtask]:
     schedule_ctx: dict[str, Any] | None = None
+    tenant_cutoff: datetime | None = None
     if task is not None and db is not None:
         schedule_runs_map = schedule_runs_for_tasks(db, [task.task_id])
         lead_runs_map = lead_diagnosis_runs_for_tasks(db, [task.task_id])
         asset = get_brand_asset(db, task.tenant_id) if task.tenant_id else None
         schedule_ctx = _resolve_subtask_schedule_context(task, schedule_runs_map, asset, lead_runs_map)
+        if task.tenant_id:
+            tenant_cutoff = customer_display_cutoff_for_tenant(db, task.tenant_id, now)
     return [
         item
         for item in subtasks
@@ -8021,6 +8071,7 @@ def filter_subtasks_for_customer(
             now,
             task=task or getattr(item, "task", None),
             schedule_ctx=schedule_ctx,
+            cutoff=tenant_cutoff,
         )
     ]
 
@@ -8932,13 +8983,14 @@ def list_inclusion_snapshots(
     )
 
     tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
-    range_end = customer_display_cutoff()
+    range_end = customer_display_cutoff_for_tenant(db, tenant_id)
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None
     trend_start, trend_end = customer_display_date_range(
         start_at=start_at,
         end_at=end_at,
         default_lookback_days=7 if not start_at and not end_at else None,
+        cutoff=range_end,
     )
     page = max(1, int(page or 1))
     limit = max(1, min(50, int(limit or 10)))
@@ -9630,13 +9682,14 @@ def workspace_brief(
     else:
         tenant_id = _resolve_workspace_brief_tenant_id(current, tenant_id)
 
-    range_end = customer_display_cutoff()
+    range_end = customer_display_cutoff_for_tenant(db, tenant_id)
     start_at = datetime.combine(start_date, time.min) if start_date else None
     end_at = datetime.combine(end_date, time.max) if end_date else None
     trend_start, trend_end = customer_display_date_range(
         start_at=start_at,
         end_at=end_at,
         default_lookback_days=7 if not start_at and not end_at else None,
+        cutoff=range_end,
     )
 
     asset = get_brand_asset(db, tenant_id)

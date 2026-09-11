@@ -273,14 +273,14 @@ def enterprise_brand_words_save(
     _require_menu(db, current, "customer.enterprise_monitor", "can_update")
     tenant_id = resolve_and_guard_tenant_id(db, current, payload.tenant_id)
     _require_credit_tenant(db, tenant_id)
-    if get_brand_asset(db, tenant_id) is None:
-        raise ValueError("请先保存企业资料，再配置品牌词")
-    # 2026-08-28 - 立即跑须先确认 - 勿先 commit run_immediately 再拦
-    if not payload.confirm_immediate:
-        for group in payload.groups or []:
-            if group.status and getattr(group, "run_immediately", False):
-                raise ValueError("勾选立即跑一轮时请确认预估")
     try:
+        if get_brand_asset(db, tenant_id) is None:
+            raise ValueError("请先保存企业资料，再配置品牌词")
+        # 2026-08-28 - 立即跑须先确认 - 勿先 commit run_immediately 再拦
+        if not payload.confirm_immediate:
+            for group in payload.groups or []:
+                if group.status and getattr(group, "run_immediately", False):
+                    raise ValueError("勾选立即跑一轮时请确认预估")
         asset, submit_rows = save_brand_word_groups(db, payload, current, respect_run_immediately=True)
         submitted = []
         for item in enumerate_brand_word_once_groups(

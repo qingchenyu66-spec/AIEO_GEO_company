@@ -1,5 +1,5 @@
 """算力自助：平台白名单会话口径 + 当天数据 cutoff。"""
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -116,6 +116,28 @@ def test_hosted_customer_display_cutoff_stops_at_yesterday(db: Session):
     assert credit_customer_includes_today(db, tenant.id) is False
     cutoff = customer_display_cutoff_for_tenant(db, tenant.id, now)
     assert cutoff.date().isoformat() == "2026-08-26"
+
+
+def test_resolve_monitor_date_range_credit_keeps_today(db: Session):
+    """前端传今日时，算力客户后端不得再截到昨日。"""
+    from types import SimpleNamespace
+
+    from app.services.monitor_service import resolve_monitor_date_range
+
+    suffix = uuid4().hex[:8]
+    tenant = Tenant(name="c", code=f"CREDIT_RANGE_{suffix}", billing_mode=BILLING_MODE_CREDIT)
+    db.add(tenant)
+    db.flush()
+    current = SimpleNamespace(
+        identity=SimpleNamespace(identity_type="CUSTOMER", tenant_id=tenant.id),
+    )
+    today = datetime.now().date()
+    start = datetime.combine(today - timedelta(days=6), time.min)
+    end = datetime.combine(today, time.max)
+    _start, range_end = resolve_monitor_date_range(
+        current, start, end, customer_like=True, db=db, tenant_id=tenant.id
+    )
+    assert range_end.date() == today
 
 
 def test_tenant_today_credit_deduct(db: Session):

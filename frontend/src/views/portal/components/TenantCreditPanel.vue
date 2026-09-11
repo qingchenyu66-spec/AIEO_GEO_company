@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getBillingModeHistory,
   getTenantCredit,
@@ -106,6 +106,11 @@ async function loadOpenReserves() {
 }
 
 async function submitReleaseReserve(refId: string) {
+  try {
+    await ElMessageBox.confirm(`确定释放预扣 ${refId}？释放后不可恢复。`, '释放预扣', { type: 'warning' })
+  } catch {
+    return
+  }
   releasingRef.value = refId
   try {
     await releaseCreditReserve(props.tenantId, refId, '运营手工释放预扣')
