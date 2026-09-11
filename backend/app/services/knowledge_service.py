@@ -229,7 +229,11 @@ def resolve_knowledge_preview_pdf(db: Session, current: CurrentSession, file_id:
 
     record, source_path = resolve_knowledge_file_path(db, current, file_id)
     try:
-        preview_path = ensure_knowledge_preview_pdf(source_path, record.file_ext)
+        preview_path = ensure_knowledge_preview_pdf(
+            source_path,
+            record.file_ext,
+            title=record.original_name,
+        )
     except KnowledgePreviewPdfError as exc:
         raise ValueError(str(exc)) from exc
     return record, preview_path

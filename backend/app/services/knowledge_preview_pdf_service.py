@@ -38,19 +38,85 @@ def resolve_soffice_binary() -> str | None:
     return None
 
 
-def ensure_knowledge_preview_pdf(source_path: Path, file_ext: str | None) -> Path:
-    """返回可内嵌预览的 PDF 路径；PDF 原文件直接返回，其它类型写入旁路缓存。"""
+def _preview_title(title: str | None, source_path: Path) -> str:
+    value = (title or "").strip() or source_path.name
+    return value[:180]
+
+
+def _read_pdf_title(pdf_path: Path) -> str | None:
+    try:
+        from pypdf import PdfReader
+
+        meta = PdfReader(str(pdf_path)).metadata
+    except Exception:
+        return None
+    if meta is None:
+        return None
+    raw = meta.get("/Title") if hasattr(meta, "get") else None
+    if raw is None:
+        raw = getattr(meta, "title", None)
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _stamp_pdf_title(pdf_path: Path, title: str) -> None:
+    """写入 PDF Title，供浏览器内置预览条显示文件名。"""
+    title = title.strip()
+    if not title:
+        return
+    if _read_pdf_title(pdf_path) == title:
+        return
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        logger.warning("pypdf unavailable, skip PDF title stamp")
+        return
+
+    reader = PdfReader(str(pdf_path))
+    writer = PdfWriter()
+    writer.append(reader)
+    writer.add_metadata({"/Title": title})
+    tmp = pdf_path.with_suffix(pdf_path.suffix + ".title.tmp")
+    try:
+        with tmp.open("wb") as handle:
+            writer.write(handle)
+        tmp.replace(pdf_path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def ensure_knowledge_preview_pdf(
+    source_path: Path,
+    file_ext: str | None,
+    *,
+    title: str | None = None,
+) -> Path:
+    """返回可内嵌预览的 PDF 路径；旁路缓存并写入原文件名作为 PDF 标题。"""
     if not source_path.is_file():
         raise KnowledgePreviewPdfError("文件不存在于存储目录")
     ext = (file_ext or source_path.suffix.lstrip(".")).lower().strip()
-    if ext == "pdf":
-        return source_path
-
+    display_title = _preview_title(title, source_path)
     cache = preview_cache_path(source_path)
-    if cache.is_file() and cache.stat().st_mtime >= source_path.stat().st_mtime:
+    cache.parent.mkdir(parents=True, exist_ok=True)
+
+    if ext == "pdf":
+        if cache.is_file() and cache.stat().st_mtime >= source_path.stat().st_mtime:
+            _stamp_pdf_title(cache, display_title)
+            return cache
+        tmp_out = cache.with_suffix(".tmp.pdf")
+        try:
+            shutil.copyfile(source_path, tmp_out)
+            _stamp_pdf_title(tmp_out, display_title)
+            tmp_out.replace(cache)
+        except Exception:
+            tmp_out.unlink(missing_ok=True)
+            raise
         return cache
 
-    cache.parent.mkdir(parents=True, exist_ok=True)
+    if cache.is_file() and cache.stat().st_mtime >= source_path.stat().st_mtime:
+        _stamp_pdf_title(cache, display_title)
+        return cache
+
     tmp_out = cache.with_suffix(".tmp.pdf")
     try:
         if tmp_out.exists():
@@ -58,6 +124,7 @@ def ensure_knowledge_preview_pdf(source_path: Path, file_ext: str | None) -> Pat
         _convert_to_pdf(source_path, ext, tmp_out)
         if not tmp_out.is_file() or tmp_out.stat().st_size <= 0:
             raise KnowledgePreviewPdfError("预览 PDF 生成结果为空")
+        _stamp_pdf_title(tmp_out, display_title)
         tmp_out.replace(cache)
     except Exception:
         tmp_out.unlink(missing_ok=True)

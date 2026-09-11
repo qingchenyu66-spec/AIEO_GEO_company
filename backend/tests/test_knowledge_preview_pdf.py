@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader, PdfWriter
 
 from app.services.knowledge_preview_pdf_service import (
     KnowledgePreviewPdfError,
@@ -13,24 +14,34 @@ from app.services.knowledge_preview_pdf_service import (
 )
 
 
-def test_pdf_preview_returns_original(tmp_path: Path):
+def _write_blank_pdf(path: Path) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+
+def test_pdf_preview_returns_titled_cache(tmp_path: Path):
     source = tmp_path / "sample.pdf"
-    source.write_bytes(b"%PDF-1.4\n% demo\n")
-    preview = ensure_knowledge_preview_pdf(source, "pdf")
-    assert preview == source
-    assert not preview_cache_path(source).exists()
+    _write_blank_pdf(source)
+    preview = ensure_knowledge_preview_pdf(source, "pdf", title="sample.pdf")
+    assert preview == preview_cache_path(source)
+    assert preview.is_file()
+    meta = PdfReader(str(preview)).metadata
+    assert meta is not None
+    assert (meta.get("/Title") or meta.title) == "sample.pdf"
 
 
 def test_txt_preview_builds_cached_pdf(tmp_path: Path):
     source = tmp_path / "notes.txt"
     source.write_text("知识库预览测试\n第二行", encoding="utf-8")
-    preview = ensure_knowledge_preview_pdf(source, "txt")
+    preview = ensure_knowledge_preview_pdf(source, "txt", title="notes.txt")
     assert preview == preview_cache_path(source)
     assert preview.is_file()
     assert preview.read_bytes()[:4] == b"%PDF"
 
     mtime = preview.stat().st_mtime
-    again = ensure_knowledge_preview_pdf(source, "txt")
+    again = ensure_knowledge_preview_pdf(source, "txt", title="notes.txt")
     assert again == preview
     assert again.stat().st_mtime == mtime
 
@@ -46,20 +57,24 @@ def test_doc_without_soffice_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         ensure_knowledge_preview_pdf(source, "doc")
 
 
-def test_image_preview_builds_pdf(tmp_path: Path):
+def test_image_preview_sets_pdf_title(tmp_path: Path):
     from PIL import Image
 
     source = tmp_path / "banner.png"
     Image.new("RGB", (120, 80), color=(30, 120, 200)).save(source)
-    preview = ensure_knowledge_preview_pdf(source, "png")
+    title = "20200907-demo.jpg"
+    preview = ensure_knowledge_preview_pdf(source, "png", title=title)
     assert preview.is_file()
     assert preview.read_bytes()[:4] == b"%PDF"
+    meta = PdfReader(str(preview)).metadata
+    assert meta is not None
+    assert (meta.get("/Title") or meta.title) == title
 
 
 def test_html_preview_builds_pdf(tmp_path: Path):
     source = tmp_path / "intro.html"
     source.write_text("<html><body><h1>知识库 HTML</h1><p>预览内容</p></body></html>", encoding="utf-8")
-    preview = ensure_knowledge_preview_pdf(source, "html")
+    preview = ensure_knowledge_preview_pdf(source, "html", title="intro.html")
     assert preview.is_file()
     assert preview.read_bytes()[:4] == b"%PDF"
 

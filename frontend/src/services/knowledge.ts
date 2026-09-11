@@ -83,7 +83,14 @@ export async function getKnowledgeFilePreviewObjectUrl(fileId: number): Promise<
   const blob = response.data instanceof Blob
     ? response.data
     : new Blob([response.data], { type: contentType.includes('pdf') ? contentType : 'application/pdf' })
-  return URL.createObjectURL(blob)
+  const filename = parseDownloadFilename(
+    response.headers['content-disposition'],
+    `knowledge-${fileId}.pdf`,
+  )
+  const named = new File([blob], filename, {
+    type: contentType.includes('pdf') ? 'application/pdf' : (blob.type || 'application/pdf'),
+  })
+  return URL.createObjectURL(named)
 }
 
 function parseDownloadFilename(contentDisposition: string | undefined, fallback: string) {
