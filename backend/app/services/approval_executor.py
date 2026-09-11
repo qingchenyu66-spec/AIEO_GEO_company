@@ -162,7 +162,13 @@ def _exec_tenant_create(db: Session, current: CurrentSession, record: OperationA
     db.flush()
     from app.services.management_service import apply_tenant_billing_mode_on_create
 
-    apply_tenant_billing_mode_on_create(db, tenant, payload.billing_mode)
+    apply_tenant_billing_mode_on_create(
+        db,
+        tenant,
+        payload.billing_mode,
+        opening_credit_amount=payload.opening_credit_amount,
+        operator_user_id=record.requester_user_id,
+    )
     if not tenant.status:
         if tenant.stop_reason == "expired" and tenant.stopped_at is None:
             tenant.stopped_at = datetime.now(UTC)

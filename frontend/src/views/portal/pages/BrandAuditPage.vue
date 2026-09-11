@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref } from 'vue'
+import { ElMessage, ElTooltip } from 'element-plus'
 import { HelpCircle, MoreHorizontal } from '@lucide/vue'
 import type { BrandAsset, BrandCompetitor } from '../../../services/brand'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import TenantLogoField from '../../../components/TenantLogoField.vue'
 import RegionMultiSelect from '../components/RegionMultiSelect.vue'
+import TenantCreditPanel from '../components/TenantCreditPanel.vue'
 import { useAuthStore } from '../../../stores/auth'
 import { useBrandAudit } from '../composables/useBrandAudit'
 import { keywordGroupMonitorKeywords, normalizePlatformSelections, platformSelectionCodes } from '../../../services/brand'
@@ -43,6 +45,10 @@ function uniqueNonEmpty(values: Array<string | null | undefined>) {
   return rows
 }
 
+const props = defineProps<{
+  customerConfigEmbed?: boolean
+}>()
+
 const emit = defineEmits<{
   'brand-updated': [asset: BrandAsset | null, competitors: BrandCompetitor[]]
 }>()
@@ -58,7 +64,12 @@ function navigateToReportCenter(reportId: number, tenantId: number) {
   })
 }
 
-function openCustomerPreview(tenant: { id: number; name: string }) {
+async function openCustomerPreview(tenant: { id: number; name: string }) {
+  await loadEnterpriseList()
+  if (!tenants.value.some(item => item.id === tenant.id)) {
+    ElMessage.warning('该企业已不存在或无权查看，列表已刷新')
+    return
+  }
   portalNavigate('customer.workspace', false, previewQueryFields(tenant.id, tenant.name))
 }
 
@@ -107,6 +118,7 @@ const {
   competitorNameInput,
   loadingBrand,
   brandForm,
+  tenants,
   filteredTenants,
   pagedTenants,
   enterprisePage,
@@ -133,6 +145,7 @@ const {
   stopTenantActionLabel,
   tenantServicePeriod,
   tenantMonitorLabel,
+  tenantBillingLabel,
   tenantOwnerLabel,
   editingGroupIndex,
   editingBrandWordGroupIndex,
@@ -157,6 +170,7 @@ const {
   addScheduleTime,
   removeScheduleTime,
   loadEnterpriseList,
+  loadResubmitDraftFromRoute,
   openEnterpriseDetail,
   openEnterpriseInfo,
   backToEnterpriseList,
@@ -199,7 +213,10 @@ const {
   isEnterprisePinned,
   pinEnterprise,
   unpinEnterprise,
+  initCustomerEnterpriseConfig,
+  customerDailyEstimate,
 } = useBrandAudit({
+  customerEnterpriseMode: props.customerConfigEmbed,
   onBrandUpdated: (asset, competitors) => emit('brand-updated', asset, competitors),
   navigateToReportCenter,
 })
@@ -248,17 +265,45 @@ const enterpriseInfoExposureTerms = computed(() => {
   return uniqueNonEmpty(asset.aliases || [])
 })
 
-onMounted(() => {
-  void loadEnterpriseList()
+const customerDailyCredits = computed(() => {
+  const raw = Number((customerDailyEstimate.value || {}).credits_per_day)
+  return Number.isFinite(raw) ? raw : null
+})
+
+const customerDailyEstimateMeta = computed(() => {
+  const estimate = customerDailyEstimate.value || {}
+  const keywordCount = Number(estimate.keyword_count)
+  const platformCount = Number(estimate.platform_count)
+  const scheduleSlots = Number(estimate.schedule_slots)
+  const parts: string[] = []
+  if (Number.isFinite(keywordCount)) parts.push(`${keywordCount} 词`)
+  if (Number.isFinite(platformCount)) parts.push(`${platformCount} 端`)
+  if (Number.isFinite(scheduleSlots)) parts.push(`${scheduleSlots} 次/日`)
+  return parts.join(' · ')
+})
+
+const showCustomerDailyEstimate = computed(() => (
+  props.customerConfigEmbed
+  && customerDailyCredits.value != null
+  && ['keywords', 'schedule', 'brand_words'].includes(enterpriseDetailTab.value)
+))
+
+onMounted(async () => {
+  if (props.customerConfigEmbed) {
+    void initCustomerEnterpriseConfig()
+    return
+  }
+  await loadEnterpriseList()
   void loadCatalogPlatforms()
+  void loadResubmitDraftFromRoute()
 })
 
 defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 </script>
 
 <template>
-  <section class="brand-page">
-    <article v-if="!enterpriseDetailMode" class="panel enterprise-list-panel">
+  <section :class="customerConfigEmbed ? 'brand-page customer-config-embed' : 'brand-page'">
+    <article v-if="!customerConfigEmbed && !enterpriseDetailMode" class="panel enterprise-list-panel">
       <!-- 2026-07-31 - 列表头与页头双标题重复 - 去面板头，动作并入筛选行右侧 -->
       <div class="enterprise-filter-bar">
         <label class="enterprise-filter-keyword">
@@ -275,6 +320,14 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
             <option value="stopped">已停止服务</option>
           </select>
         </label>
+        <label>
+          <span>企业类型</span>
+          <select v-model="enterpriseFilters.billing_mode">
+            <option value="all">全部类型</option>
+            <option value="hosted">平台托管</option>
+            <option value="credit">算力自助</option>
+          </select>
+        </label>
         <label v-if="canFilterBySales">
           <span>归属销售</span>
           <select v-model="enterpriseFilters.owner_user_id">
@@ -286,7 +339,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <button
           type="button"
           class="enterprise-filter-reset"
-          @click="enterpriseFilters.keyword = ''; enterpriseFilters.expiry = 'active'; enterpriseFilters.owner_user_id = 'all'"
+          @click="enterpriseFilters.keyword = ''; enterpriseFilters.expiry = 'active'; enterpriseFilters.billing_mode = 'all'; enterpriseFilters.owner_user_id = 'all'"
         >
           重置
         </button>
@@ -309,13 +362,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         >
           <div class="enterprise-main">
             <b>{{ tenant.name }}</b>
-            <small>{{ tenantServicePeriod(tenant) }}</small>
-            <small v-if="showOwnerOnEnterpriseList" class="enterprise-owner">销售 · {{ tenantOwnerLabel(tenant) }}</small>
+            <small class="enterprise-meta-line">
+              {{ tenantServicePeriod(tenant) }}
+              <template v-if="showOwnerOnEnterpriseList"> · 销售 {{ tenantOwnerLabel(tenant) }}</template>
+            </small>
           </div>
-          <div class="enterprise-metrics">
+          <div class="enterprise-metrics enterprise-metrics-inline">
             <span>
               <small>服务状态</small>
               <b class="status-pill" :class="{ dark: !tenant.status || isTenantExpired(tenant) || isTenantPending(tenant) }">{{ tenantServiceLabel(tenant) }}</b>
+            </span>
+            <span>
+              <small>企业类型</small>
+              <b>{{ tenantBillingLabel(tenant) }}</b>
             </span>
             <span>
               <small>自动监测</small>
@@ -394,7 +453,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
     </article>
 
     <article v-else class="panel brand-asset-panel">
-      <div class="panel-head">
+      <div v-if="!customerConfigEmbed" class="panel-head">
         <div>
           <h2>企业资料与监控配置</h2>
           <p>平台运营端维护客户企业、品牌词和竞品库，系统按配置定时提交监测任务。</p>
@@ -403,17 +462,42 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <button class="filter-reset-btn" @click="backToEnterpriseList">返回列表</button>
           <!-- 2026-08-18 - 草稿点页签保存就进审批 - 新建只走右上角这一处提交 -->
           <button
-            v-if="canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)"
+            v-if="(canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)) && enterpriseDetailTab !== 'credit'"
             class="primary-btn small-btn"
             :disabled="loadingBrand || !canSubmitBrandAssetProfile"
             @click="() => submitBrandAsset()"
           >保存当前配置</button>
         </div>
       </div>
+      <div v-else class="panel-head compact-head">
+        <button
+          v-if="canEditEnterpriseTab(enterpriseDetailTab) || (enterpriseDetailTab === 'profile' && canEditRegions)"
+          class="primary-btn small-btn"
+          :disabled="loadingBrand || !canSubmitBrandAssetProfile"
+          @click="() => submitBrandAsset()"
+        >保存当前配置</button>
+        <div
+          v-if="showCustomerDailyEstimate"
+          class="credit-daily-estimate"
+          title="按当前监测词、平台与计划估算，保存后刷新"
+        >
+          <span class="credit-daily-estimate-label">日预估算力</span>
+          <strong>{{ customerDailyCredits }}</strong>
+          <span v-if="customerDailyEstimateMeta" class="credit-daily-estimate-meta">{{ customerDailyEstimateMeta }}</span>
+        </div>
+      </div>
       <div class="enterprise-detail-tabs">
         <button v-for="tab in visibleEnterpriseTabs" :key="tab.code" :class="{ active: enterpriseDetailTab === tab.code }" @click="enterpriseDetailTab = tab.code">{{ tab.name }}</button>
       </div>
       <div v-if="enterpriseDetailTab === 'profile'" class="brand-form-grid">
+        <template v-if="customerConfigEmbed">
+          <label class="form-field-full"><span>企业名称</span><div class="readonly-status">{{ brandForm.company_full_name || '—' }}</div></label>
+          <label v-if="canEditRegions" class="region-field form-field-full">
+            <span>服务地区</span>
+            <RegionMultiSelect v-model="brandForm.region_codes" :disabled="!canEditRegions" />
+          </label>
+        </template>
+        <template v-else>
         <label><span>企业全称</span><input v-model="brandForm.company_full_name" :disabled="!canEditEnterpriseTab('profile')" placeholder="例如 北京艾亿欧科技有限公司" /></label>
         <label><span>服务开始日期</span><input v-model="brandForm.service_start_date" :disabled="!canEditEnterpriseTab('profile')" type="date" /></label>
         <label><span>服务结束日期</span><input v-model="brandForm.service_end_date" :disabled="!canEditEnterpriseTab('profile')" type="date" /></label>
@@ -456,6 +540,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           />
         </label>
         <label class="form-field-full"><span>品牌说明</span><textarea v-model="brandForm.description" :disabled="!canEditEnterpriseTab('profile')" rows="4" placeholder="用于内部识别，不直接展示给客户"></textarea></label>
+        </template>
       </div>
       <div v-if="!creatingDraftTenant && enterpriseDetailTab === 'profile' && (canEditEnterpriseTab('profile') || canEditRegions)" class="section-save-actions keyword-save-actions">
         <button class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('企业资料已保存')">保存企业资料</button>
@@ -590,6 +675,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   </label>
                 </div>
               </div>
+              <div v-else-if="platformSelectionCount(group)" class="keyword-field keyword-group-platform-field">
+                <span class="keyword-field-label">监测平台（{{ platformSelectionCount(group) }}）</span>
+                <div class="platform-check-grid compact readonly">
+                  <span
+                    v-for="code in platformSelectionCodes(group.platforms || [])"
+                    :key="`${index}-${code}-ro`"
+                    class="platform-check readonly"
+                  >
+                    <PlatformBadge :code="code" size="sm" :label="platformLabelMap[code]" />
+                    <small class="platform-mode-tag">{{ platformModeLabel(group, code) }}</small>
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
           <div v-if="!keywordGroupRows.length" class="mini-empty">暂无监测词组，请先新增一个。</div>
@@ -638,6 +736,14 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                     <option value="once">仅本次</option>
                     <option value="weekly">周</option>
                   </select>
+                </label>
+                <label v-if="customerConfigEmbed && group.run_mode === 'once'" class="keyword-group-status run-immediate-field">
+                  <span>立即跑</span>
+                  <input
+                    v-model="group.run_immediately"
+                    type="checkbox"
+                    :disabled="!canEditEnterpriseTab('brand_words')"
+                  />
                 </label>
                 <label class="keyword-group-status">
                   <span>状态</span>
@@ -756,7 +862,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </section>
     </article>
 
-    <section v-if="enterpriseDetailMode && ['competitors', 'files'].includes(enterpriseDetailTab)" class="brand-layout">
+    <section v-if="(customerConfigEmbed || enterpriseDetailMode) && ['competitors', 'files', 'credit'].includes(enterpriseDetailTab)" class="brand-layout">
       <article v-if="enterpriseDetailTab === 'competitors'" class="panel competitor-panel">
         <div class="panel-head">
           <div><h2>竞品监控库</h2><p>只维护竞品名称，系统提交任务时自动带入竞品用于排名、提及率和对比分析。</p></div>
@@ -815,6 +921,12 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <div v-if="!loadingKnowledgeFiles && !knowledgeFiles.length" class="mini-empty">该企业暂未上传资料。</div>
         </div>
       </article>
+      <TenantCreditPanel
+        v-if="enterpriseDetailTab === 'credit' && brandForm.tenant_id"
+        :tenant-id="brandForm.tenant_id"
+        :can-edit="canEditEnterpriseTab('credit')"
+        @billing-mode-changed="loadEnterpriseList"
+      />
     </section>
 
     <input
@@ -863,6 +975,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <p>{{ enterpriseInfoTenant ? tenantServicePeriod(enterpriseInfoTenant) : '-' }}</p>
           <div class="info-grid">
             <span><small>服务状态</small><b>{{ enterpriseInfoTenant ? tenantServiceLabel(enterpriseInfoTenant) : '-' }}</b></span>
+            <span><small>企业类型</small><b>{{ enterpriseInfoTenant ? tenantBillingLabel(enterpriseInfoTenant) : '-' }}</b></span>
             <span><small>归属销售</small><b>{{ enterpriseInfoTenant ? tenantOwnerLabel(enterpriseInfoTenant) : '-' }}</b></span>
             <span><small>官网</small><b>{{ enterpriseInfoAsset?.official_url || '-' }}</b></span>
             <span><small>购买模型</small><b>{{ formatPlatformLabels(enterpriseInfoAsset?.monitored_platforms || [], platformLabelMap) || '-' }}</b></span>
@@ -928,7 +1041,14 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </template>
     </el-dialog>
 
-    <el-dialog v-model="modeDialogVisible" width="440px" title="选择监测模式" @close="cancelModeDialog">
+    <el-dialog
+      v-model="modeDialogVisible"
+      width="440px"
+      title="选择监测模式"
+      destroy-on-close
+      append-to-body
+      @closed="cancelModeDialog"
+    >
       <div class="form-grid password-grid">
         <label class="form-field-full">
           <span>模式</span>
@@ -939,8 +1059,8 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         </label>
       </div>
       <template #footer>
-        <button class="plain-btn" @click="cancelModeDialog">取消</button>
-        <button class="primary-btn" @click="confirmModeDialog">确认</button>
+        <button type="button" class="plain-btn" @click="cancelModeDialog">取消</button>
+        <button type="button" class="primary-btn" @click="confirmModeDialog">确认</button>
       </template>
     </el-dialog>
 
@@ -972,6 +1092,13 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
         <label><span>企业名称</span><input v-model="tenantForm.name" placeholder="例如 北京某某科技有限公司" /></label>
         <label><span>服务开始日期</span><input v-model="tenantForm.service_start_date" type="date" /></label>
         <label><span>服务结束日期</span><input v-model="tenantForm.service_end_date" type="date" /></label>
+        <label class="form-field-full">
+          <span>企业类型</span>
+          <select v-model="tenantForm.billing_mode">
+            <option value="hosted">平台托管</option>
+            <option value="credit">算力自助</option>
+          </select>
+        </label>
         <label class="form-field-full">
           <span>企业 Logo（选填）</span>
           <TenantLogoField

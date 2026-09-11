@@ -561,7 +561,7 @@ def submit_schedule_group(
         }
 
     lock_key = f"schedule-submit:{item.tenant_id}:{item.group_key}"
-    # 2026-09-07 - 同企业多 kw 并行会抢共享行导致死锁；企业级串行，跨企业仍并行
+    # 2026-09-07 - 同企业多 kw 并行会抢 tenant FOR UPDATE / 品牌行导致死锁；企业级串行，跨企业仍并行
     tenant_lock_key = f"schedule-submit-tenant:{item.tenant_id}"
     with redis_lock(tenant_lock_key, ttl_seconds=600) as tenant_acquired:
         if not tenant_acquired:
@@ -582,7 +582,7 @@ def submit_schedule_group(
                     "status": "skipped",
                     "message": "该调度窗口已执行",
                 }
-            return _submit_schedule_group_locked(db, current, item, asset)
+            return _submit_schedule_group_locked(db, current, item, asset, tenant)
 
 
 def _submit_schedule_group_locked(
@@ -590,6 +590,7 @@ def _submit_schedule_group_locked(
     current: CurrentSession,
     item: DueScheduleGroup,
     asset: BrandAsset,
+    tenant: Tenant | None = None,
 ) -> dict[str, Any]:
     """持锁后的提交主体：先落 running 再打模力，降低 TOCTOU 双投。"""
     competitors = list(
@@ -645,6 +646,8 @@ def _submit_schedule_group_locked(
             "keyword": item.keyword,
             "message": str(exc),
         }
+    from app.services.credit_service import apply_schedule_credit_gate, finalize_schedule_submit
+
     existing_run = get_schedule_run(db, item.tenant_id, item.group_key)
     if existing_run is not None and existing_run.task_id:
         linked_task = db.scalar(
@@ -667,15 +670,42 @@ def _submit_schedule_group_locked(
                     "keyword": item.keyword,
                     "task": serialize_task(linked_task),
                 }
-            existing_run.task_id = None
-            existing_run.status = "running"
-            existing_run.error_message = None
-            run = existing_run
-        else:
-            existing_run.task_id = None
-            existing_run.status = "running"
-            existing_run.error_message = None
-            run = existing_run
+
+    # 2026-09-04 - 算力预扣/条款闸写了却没接到提交口 - 立即跑与定时共用此入口，托管不走
+    # 2026-09-09 - next_window 待生效须在本窗提交前落地，再走 credit 闸
+    if tenant is None:
+        tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id, Tenant.deleted.is_(False)))
+    from app.services.billing_mode_service import apply_pending_billing_mode_for_tenant
+
+    if apply_pending_billing_mode_for_tenant(db, item.tenant_id):
+        tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id, Tenant.deleted.is_(False)))
+    gate = apply_schedule_credit_gate(
+        db,
+        tenant,
+        group_key=item.group_key,
+        schedule_key=item.schedule_key,
+        platform_codes=[item_platform.platform for item_platform in payload.platforms],
+        prompt_count=len(payload.prompts),
+    )
+    if not gate.allowed:
+        # 2026-09-11 - 闸拒绝也要落库拦截记录与充值提醒，否则 celery Ignore/close 会回滚
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        return {
+            "tenant_id": item.tenant_id,
+            "schedule_key": item.group_key,
+            "status": "skipped",
+            "keyword": item.keyword,
+            "message": gate.message or "算力不足或尚未确认计费规则",
+        }
+
+    if existing_run is not None and existing_run.task_id:
+        existing_run.task_id = None
+        existing_run.status = "running"
+        existing_run.error_message = None
+        run = existing_run
     elif existing_run is not None:
         # 2026-09-07 - 陈旧 running/failed 必须复用原行；再 INSERT 会撞唯一键被当成「已执行」永久漏跑
         run = existing_run
@@ -705,6 +735,20 @@ def _submit_schedule_group_locked(
             "status": "skipped",
             "message": "该调度窗口已执行",
         }
+
+    def _release_credit_reserve(submit_status: str) -> None:
+        if tenant is None or not gate.reserved_credits:
+            return
+        finalize_schedule_submit(
+            db,
+            tenant,
+            reserve_ref=gate.reserve_ref or str(item.group_key)[:64],
+            reserved_credits=gate.reserved_credits,
+            submit_status=submit_status,
+            keyword=item.keyword,
+            window_key=str(item.schedule_key or item.group_key)[:32],
+        )
+
     try:
         db.refresh(run)
         if not payload.prompts:
@@ -717,8 +761,18 @@ def _submit_schedule_group_locked(
             schedule_key=item.group_key,
         )
         task = submit_monitor_task(db, payload, current, auto_commit=False)
+        # 2026-09-07 - 提交成功只保留预扣；把 reserve_ref 打进任务，方便同步后按格 settle
+        if gate.reserved_credits and gate.reserve_ref:
+            raw = dict(task.raw_request_json) if isinstance(task.raw_request_json, dict) else {}
+            raw["_geo_credit"] = {
+                "reserve_ref": str(gate.reserve_ref)[:64],
+                "window_key": str(item.schedule_key or item.group_key)[:32],
+                "reserved_credits": float(gate.reserved_credits),
+            }
+            task.raw_request_json = raw
         run.task_id = task.task_id
         run.status = "submitted"
+        _release_credit_reserve("submitted")
         db.commit()
         db.refresh(task)
         return {
@@ -730,6 +784,12 @@ def _submit_schedule_group_locked(
         }
     except _SCHEDULE_TRANSIENT_ERRORS:
         db.rollback()
+        # 2026-09-09 - running 已 commit 时预扣已落库；瞬时失败须释放，避免锁到 TTL
+        try:
+            _release_credit_reserve("failed")
+            db.commit()
+        except Exception:
+            db.rollback()
         raise
     except (IntegrityError, ValueError) as exc:
         db.rollback()
@@ -741,14 +801,17 @@ def _submit_schedule_group_locked(
         message = str(exc)
         # 兜底：即便漏过前置检查，服务闸门也不落 failed
         if is_service_gate_schedule_message(message):
-            tenant = db.scalar(select(Tenant).where(Tenant.id == item.tenant_id))
+            _release_credit_reserve("failed")
+            db.commit()
+            skip_tenant = tenant or db.scalar(select(Tenant).where(Tenant.id == item.tenant_id))
             return {
                 "tenant_id": item.tenant_id,
                 "schedule_key": item.group_key,
                 "status": "skipped",
                 "keyword": item.keyword,
-                "message": molizhishu_submit_skip_message(tenant) or "企业服务未开通，监测暂不提交",
+                "message": molizhishu_submit_skip_message(skip_tenant) or "企业服务未开通，监测暂不提交",
             }
+        _release_credit_reserve("failed")
         persist_schedule_group_failure(
             db,
             tenant_id=item.tenant_id,

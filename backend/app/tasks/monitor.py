@@ -210,6 +210,7 @@ def submit_schedule_group_task(
             max_prompts=max_prompts,
             keyword=keyword,
         )
+        # 显式传入时覆盖解析结果（兼容旧消息）
         if region_code:
             item = DueScheduleGroup(
                 tenant_id=item.tenant_id,
@@ -1019,3 +1020,73 @@ def label_unknown_source_categories(items: list[dict[str, Any]]) -> dict[str, An
     except Exception as exc:
         logger.exception("label_unknown_source_categories failed")
         return {"status": "error", "error": str(exc)}
+
+
+@celery_app.task(name="app.tasks.monitor.scan_stale_credit_reserves", ignore_result=True)
+def scan_stale_credit_reserves() -> dict[str, Any]:
+    """预扣 TTL 到期自动 release。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    from app.services.credit_service import scan_stale_reserves
+
+    db = SessionLocal()
+    try:
+        released = scan_stale_reserves(db)
+        db.commit()
+        return {"status": "ok", "released": released}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.monitor.refresh_credit_window_estimate", ignore_result=True)
+def refresh_credit_window_estimate() -> dict[str, Any]:
+    """窗口前刷新全平台预估（供 runway / 真金闸）。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+
+    from app.services.credit_service import estimate_next_window_platform_cost, set_cached_platform_window_estimate
+
+    db = SessionLocal()
+    try:
+        # 2026-09-04 - 预估与 next_window 模式落地拆开 - 避免预估挂住时计费切换永不生效
+        payload = estimate_next_window_platform_cost(db)
+        subtasks = int(payload["subtask_count"])
+        estimated_yuan = float(payload["estimated_yuan"])
+        set_cached_platform_window_estimate(payload)
+        return {"status": "ok", "subtask_count": subtasks, "estimated_yuan": estimated_yuan}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.monitor.apply_scheduled_billing_mode_changes", ignore_result=True)
+def apply_scheduled_billing_mode_changes() -> dict[str, Any]:
+    """兼容保留：不再挂 beat。
+
+    2026-09-08/09 - next_window 仅由监测/手动提交前 apply_pending_billing_mode_for_tenant 落地；
+    空闲企业请运营在算力运营页改「立即」或一键立即生效。
+    """
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    return {"status": "ok", "applied": 0, "deferred_to_submit": True, "beat_removed": True}
+
+@celery_app.task(name="app.tasks.monitor.scan_credit_three_day_shortfall", ignore_result=True)
+def scan_credit_three_day_shortfall() -> dict[str, Any]:
+    """可用算力不足约 3 日预估时通知企业。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled"}
+    from app.core.database import SessionLocal
+    from app.services.credit_service import scan_credit_three_day_shortfall as _scan
+
+    db = SessionLocal()
+    try:
+        sent = _scan(db)
+        db.commit()
+        return {"status": "ok", "sent": sent}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

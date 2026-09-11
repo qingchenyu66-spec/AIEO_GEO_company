@@ -22,21 +22,21 @@ export function isRequestCanceled(error: unknown): boolean {
   return msg === 'canceled' || msg === 'cancelled'
 }
 
-export function extractErrorDetail(error: unknown): string {
+export function extractErrorDetail(error: unknown, fallback = '操作失败，请稍后重试'): string {
   const response = (error as { response?: { data?: { detail?: unknown }; status?: number } })?.response
   const detail = response?.data?.detail
   if (Array.isArray(detail)) {
     return detail
       .map((item: { msg?: string }) => item.msg || '')
       .filter(Boolean)
-      .join('；') || '请求失败，请稍后重试'
+      .join('；') || fallback || '请求失败，请稍后重试'
   }
   if (typeof detail === 'string') return detail
   const status = response?.status
   if (status === 403) return '没有权限执行此操作'
   if (status === 404) return '请求的资源不存在'
   if (status && status >= 500) return '服务器错误，请联系管理员'
-  return (error as Error)?.message || '操作失败，请稍后重试'
+  return (error as Error)?.message || fallback
 }
 
 /** Page-level toast with operation context. Skips user-cancelled dialogs. */

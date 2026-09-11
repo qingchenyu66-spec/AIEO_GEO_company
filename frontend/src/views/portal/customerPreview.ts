@@ -1,6 +1,6 @@
 import type { MenuInfo } from '../../services/auth'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
-import { hiddenCustomerMenus } from './constants'
+import { hiddenCustomerMenus, hiddenEnterpriseConfigPermissionMenus } from './constants'
 
 /** 预览加载失败时的兜底菜单（不含商品卡；商品卡仅接口按开通返回）。 */
 export const CUSTOMER_PREVIEW_MENU_CODES = [
@@ -31,8 +31,9 @@ export function isCustomerPreviewMenuCode(code: string): boolean {
 
 /** 客户/预览侧栏过滤：商品卡是否出现由接口菜单决定，此处不写死。 */
 export function buildCustomerPortalSidebarMenus(sourceMenus: MenuInfo[]): MenuInfo[] {
+  // 2026-09-09 - 企业配置子项只做页内 Tab/权限，侧栏只留父级，避免两套菜单
   return sourceMenus.filter(menu => (
-    !['customer.assets', ...hiddenCustomerMenus].includes(menu.menu_code)
+    !['customer.assets', ...hiddenCustomerMenus, ...hiddenEnterpriseConfigPermissionMenus].includes(menu.menu_code)
   ))
 }
 
@@ -44,6 +45,11 @@ function parsePositiveTenantId(raw: unknown): number | null {
 
 export function parsePreviewTenantId(route: RouteLocationNormalizedLoaded): number | null {
   return parsePositiveTenantId(route.query.preview_tenant_id)
+}
+
+/** 企业管理/企业配置预览：优先 preview_tenant_id，回退 tenant_id（避免成员列表空）。 */
+export function resolveEnterprisePreviewTenantId(route: RouteLocationNormalizedLoaded): number | null {
+  return parsePreviewTenantId(route) ?? parsePositiveTenantId(route.query.tenant_id)
 }
 
 export function parsePreviewTenantName(route: RouteLocationNormalizedLoaded): string {

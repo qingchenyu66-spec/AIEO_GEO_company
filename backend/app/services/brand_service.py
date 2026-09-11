@@ -41,6 +41,8 @@ def save_brand_asset_maybe_bootstrap(
             owner_user_id=owner_user_id,
             service_start_date=payload.service_start_date,
             service_end_date=payload.service_end_date,
+            billing_mode=payload.billing_mode,
+            opening_credit_amount=payload.opening_credit_amount,
         )
         working = payload.model_copy(update={"tenant_id": tenant.id})
     asset = save_brand_asset(db, working, current)
@@ -280,7 +282,11 @@ def tenant_purchased_platforms(db: Session, tenant_id: int, asset: BrandAsset | 
         union.update(keyword_group_platforms(group, asset))
     if union:
         return sort_platform_codes(list(union))
-    return sort_platform_codes(list(asset.monitored_platforms_json or []))
+    legacy = sort_platform_codes(list(asset.monitored_platforms_json or []))
+    if legacy:
+        return legacy
+    # 2026-09-07 - 方案 A：空配置不再回落白名单（白名单已退役）
+    return []
 
 
 def _fallback_keyword_groups(asset: BrandAsset) -> list[dict[str, Any]]:
@@ -510,6 +516,7 @@ def brand_word_group_to_dict(group: BrandWordGroup) -> dict[str, Any]:
         "monitor_keywords": monitor_keywords,
         "platforms": normalize_platform_selections(group.platforms_json or []),
         "run_mode": run_mode,
+        "run_immediately": bool(getattr(group, "run_immediately", False)),
         "sort_order": group.sort_order,
         "status": group.status,
     }
@@ -529,6 +536,8 @@ def save_brand_word_groups(
     db: Session,
     payload: BrandWordGroupsSaveRequest,
     current: CurrentSession,
+    *,
+    respect_run_immediately: bool = False,
 ) -> tuple[BrandAsset, list[BrandWordGroup]]:
     """覆盖保存品牌词组；不触碰监测词组。
 
@@ -602,6 +611,7 @@ def save_brand_word_groups(
         if item.status and not keyword_group_platforms(group, asset):
             raise ValueError("每个启用的品牌词组至少选择一个监测平台")
         group.run_mode = run_mode
+        group.run_immediately = bool(getattr(item, "run_immediately", False))
         group.sort_order = item.sort_order if item.sort_order is not None else index
         group.status = item.status
         group.deleted = False
@@ -614,7 +624,7 @@ def save_brand_word_groups(
 
     db.commit()
     db.refresh(asset)
-    # 保存后立即提交：once / weekly 一视同仁（提交走 bwonce-*，不占用周一 weekly key）
+    # 保存后立即提交：平台代管仍全部启用词组；credit 客户仅 run_immediately
     submit_groups = [
         item
         for item in list_brand_word_groups(db, tenant_id)
@@ -625,6 +635,7 @@ def save_brand_word_groups(
                 "monitor_keywords": item.monitor_keywords_json or [],
             }
         )
+        and (not respect_run_immediately or bool(getattr(item, "run_immediately", False)))
     ]
     from app.services.monitor_service import invalidate_monitor_summary_cache
 
@@ -843,15 +854,43 @@ def save_brand_asset(db: Session, payload: BrandAssetSaveRequest, current: Curre
     tenant_id = resolve_tenant_id(current, payload.tenant_id)
     _guard_tenant_write(db, current, tenant_id)
     identity_id = current.identity.id
-    # 2026-07-30 - 地区看菜单编辑权；平台看职位白名单
-    can_profile = has_identity_menu_permission(db, identity_id, "platform.audit.profile", "can_update")
-    can_regions = has_identity_menu_permission(db, identity_id, "platform.audit.regions", "can_update")
-    can_keywords = has_identity_menu_permission(db, identity_id, "platform.audit.keywords", "can_update")
-    allowed_platform_codes: set[str] | None = set(identity_allowed_monitor_platforms(db, current.identity))
-    can_models = bool(allowed_platform_codes)
-    can_schedule = has_identity_menu_permission(db, identity_id, "platform.audit.schedule", "can_update")
-    if not can_models:
-        allowed_platform_codes = None
+    tenant_row = db.get(Tenant, tenant_id)
+    from app.services.credit_service import is_credit_tenant
+
+    credit_scopes = None
+    if current.identity.identity_type == "CUSTOMER" and tenant_row is not None and is_credit_tenant(tenant_row):
+        can_update = has_identity_menu_permission(db, identity_id, "customer.enterprise_monitor", "can_update")
+        can_read = has_identity_menu_permission(db, identity_id, "customer.enterprise_monitor", "can_export")
+        if not can_read and not can_update:
+            raise PermissionError("无企业配置权限")
+        # 2026-09-04 - 空白名单=不限制：须用目录全量作可改集合；此前 bool(whitelist) 导致保存忽略平台删改又回填
+        allowed_for_credit = set(identity_allowed_monitor_platforms(db, current.identity))
+        credit_scopes = {
+            "can_profile": can_update,
+            "can_keywords": can_update,
+            "can_regions": can_update,
+            "can_schedule": can_update,
+            "can_models": can_update and bool(allowed_for_credit),
+            "allowed_platform_codes": allowed_for_credit if can_update and allowed_for_credit else None,
+        }
+
+    if credit_scopes:
+        can_profile = credit_scopes["can_profile"]
+        can_regions = credit_scopes["can_regions"]
+        can_keywords = credit_scopes["can_keywords"]
+        allowed_platform_codes = credit_scopes["allowed_platform_codes"]
+        can_models = credit_scopes["can_models"]
+        can_schedule = credit_scopes["can_schedule"]
+    else:
+        # 2026-07-30 - 地区看菜单编辑权；平台看职位白名单
+        can_profile = has_identity_menu_permission(db, identity_id, "platform.audit.profile", "can_update")
+        can_regions = has_identity_menu_permission(db, identity_id, "platform.audit.regions", "can_update")
+        can_keywords = has_identity_menu_permission(db, identity_id, "platform.audit.keywords", "can_update")
+        allowed_platform_codes: set[str] | None = set(identity_allowed_monitor_platforms(db, current.identity))
+        can_models = bool(allowed_platform_codes)
+        can_schedule = has_identity_menu_permission(db, identity_id, "platform.audit.schedule", "can_update")
+        if not can_models:
+            allowed_platform_codes = None
 
     body_dump = payload.model_dump(mode="json")
     # 2026-08-26 - 企业配置保存缺 diff 审计 - 按编辑权限范围对比库内配置后落日志

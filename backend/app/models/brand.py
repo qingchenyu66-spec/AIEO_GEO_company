@@ -110,6 +110,13 @@ class BrandWordGroup(Base):
         server_default="once",
         comment="运行时间：once仅本次 / weekly每周一",
     )
+    run_immediately: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+        comment="保存后是否立即 submit+扣费（credit 品牌词）",
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="排序")
     status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment="是否启用")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False, comment="逻辑删除")

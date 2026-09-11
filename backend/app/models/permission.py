@@ -99,6 +99,45 @@ class PositionMenu(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, comment="创建时间")
 
 
+class CustomerPosition(Base):
+    """客户侧职位模板（与 sys_position 分表，credit 企业成员用）。"""
+
+    __tablename__ = "sys_customer_position"
+    __table_args__ = (UniqueConstraint("tenant_id", "position_code", name="uk_customer_position_tenant_code"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sys_tenant.id"),
+        index=True,
+        nullable=True,
+        comment="NULL=平台种子模板；非 NULL=该企业专属",
+    )
+    position_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    position_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    is_system_template: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
+
+
+class CustomerPositionMenu(Base):
+    """客户职位默认菜单权限。"""
+
+    __tablename__ = "sys_customer_position_menu"
+    __table_args__ = (UniqueConstraint("position_id", "menu_id", name="uk_customer_position_menu"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    position_id: Mapped[int] = mapped_column(ForeignKey("sys_customer_position.id"), index=True, nullable=False)
+    menu_id: Mapped[int] = mapped_column(ForeignKey("sys_menu.id"), index=True, nullable=False)
+    can_create: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_update: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_delete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_export: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
 class UserIdentityMenu(Base):
     """某个登录身份实际拥有的菜单和动作权限。"""
 

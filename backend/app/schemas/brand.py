@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -45,6 +46,7 @@ class BrandWordGroupSaveRequest(BaseModel):
     monitor_keywords: list[str] = Field(default_factory=list)
     platforms: list[str | PlatformSelectionRequest | dict] = Field(default_factory=list)
     run_mode: str = Field(default="once", pattern="^(once|weekly)$")
+    run_immediately: bool = False
     sort_order: int = 0
     status: bool = True
 
@@ -81,6 +83,11 @@ class BrandAssetSaveRequest(BaseModel):
     # 2026-08-18 - 新增企业草稿无 tenant_id；保存时带服务期一并建企业
     service_start_date: date | None = None
     service_end_date: date | None = None
+    billing_mode: str = Field(default="hosted", pattern="^(hosted|credit)$")
+    # 起步算力选填；有值才在新建保存时充值
+    opening_credit_amount: Decimal | None = Field(default=None, ge=0)
+    # 2026-09-01 - 商品卡按企业开通；仅资料可编辑时写入
+    goods_card_enabled: bool | None = None
     company_full_name: str = Field(min_length=2, max_length=150)
     brand_name: str = Field(min_length=1, max_length=100)
     brand_short_name: str | None = Field(default=None, max_length=100)
@@ -100,8 +107,9 @@ class BrandAssetSaveRequest(BaseModel):
     official_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
     schedule_type: str = Field(default="daily_times", pattern="^(daily_times|fixed_times|weekly|monthly)$")
-    schedule_times: list[str] = Field(default_factory=lambda: ["09:30", "14:30", "20:30"])
-    schedule_frequency: int = Field(default=3, ge=1, le=24)
+    # 2026-09-09 - 新建企业监测计划默认空，由运营自行配置场次
+    schedule_times: list[str] = Field(default_factory=list)
+    schedule_frequency: int = Field(default=1, ge=1, le=24)
     schedule_weekdays: list[int] = Field(default_factory=list)
     schedule_month_days: list[int] = Field(default_factory=list)
     # 2026-08-25 - Logo 随企业资料进审批 - 先传暂存，审批通过后再落库

@@ -8,11 +8,10 @@ import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monito
 import { useSentimentWordCloud, preloadSentimentWordCloudRuntime } from '../../../composables/useSentimentWordCloud'
 import { useAuthStore } from '../../../stores/auth'
 import {
-  customerDisplayCutoffDate,
-  workspaceTrendDateRange,
   workspaceTrendPeriodLabel,
   type WorkspaceTrendPreset,
 } from '../../../utils/customerMonitorDate'
+import { useCustomerDisplayDate } from './useCustomerDisplayDate'
 import { notifyOperationError } from '../../../utils/requestError'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
@@ -57,6 +56,7 @@ export function useBrandInsights(options?: {
     auth.session?.identity?.identity_type === 'CUSTOMER'
     || isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
   ))
+  const { cutoffDate, trendRange } = useCustomerDisplayDate()
   const analytics = inject(PortalAnalyticsKey)!
   const brandAsset = analytics.brandAsset
   const brandCompetitors = analytics.brandCompetitors
@@ -64,10 +64,10 @@ export function useBrandInsights(options?: {
   const datePreset = ref<CompetitorDatePreset>('30')
   // 客户首屏默认近7日，减轻冷启动聚合量；仍可切月/季/年
   const trendPreset = ref<WorkspaceTrendPreset>('7d')
-  const initialTrendRange = workspaceTrendDateRange('7d')
+  const initialTrendRange = trendRange('7d')
   const trendStartDate = ref(initialTrendRange.startDate)
   const trendEndDate = ref(initialTrendRange.endDate)
-  const trendMaxDate = customerDisplayCutoffDate()
+  const trendMaxDate = cutoffDate
   const trendPeriodLabel = computed(() => (
     workspaceTrendPeriodLabel(trendPreset.value, trendStartDate.value, trendEndDate.value)
   ))
@@ -100,7 +100,7 @@ export function useBrandInsights(options?: {
   const days = computed(() => Number(datePreset.value))
 
   function syncTrendRange(preset: WorkspaceTrendPreset) {
-    const range = workspaceTrendDateRange(
+    const range = trendRange(
       preset,
       trendStartDate.value,
       trendEndDate.value,
@@ -120,11 +120,11 @@ export function useBrandInsights(options?: {
     if (trendStartDate.value > trendEndDate.value) {
       trendStartDate.value = trendEndDate.value
     }
-    if (trendEndDate.value > trendMaxDate) {
-      trendEndDate.value = trendMaxDate
+    if (trendEndDate.value > trendMaxDate.value) {
+      trendEndDate.value = trendMaxDate.value
     }
-    if (trendStartDate.value > trendMaxDate) {
-      trendStartDate.value = trendMaxDate
+    if (trendStartDate.value > trendMaxDate.value) {
+      trendStartDate.value = trendMaxDate.value
     }
     trendPreset.value = 'custom'
     void loadSummary()

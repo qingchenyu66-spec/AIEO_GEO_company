@@ -20,8 +20,30 @@ export const SETTINGS_CHILD_MENUS = [
   SETTINGS_MENU_PERM,
 ] as const
 
+export const ENTERPRISE_CONFIG_MENU = 'customer.enterprise_config'
+export const ENTERPRISE_CHILD_MENUS = [
+  'customer.enterprise_monitor',
+  'customer.enterprise_members',
+  'customer.enterprise_credit',
+  'customer.enterprise_audit',
+] as const
+
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
-export const hiddenPlatformMenus = ['platform.plans', 'platform.admins', 'platform.diagnosis']
+
+/** 侧栏隐藏，但职位/权限矩阵里仍单独勾选 */
+export const sidebarHiddenAssignableCreditMenus = [
+  'platform.tenant_credit_blocks',
+  'platform.tenant_credit',
+] as const
+
+export const hiddenPlatformMenus = [
+  'platform.plans',
+  'platform.admins',
+  'platform.diagnosis',
+  // 2026-08-27 - 方案B：提交拦截/企业算力收进算力运营 Tab，侧栏不单独露出（职位权限里仍可勾选）
+  ...sidebarHiddenAssignableCreditMenus,
+]
+
 /** 仍可进侧栏，但不在职位/权限配置里勾选（避免运营端配置里出现客户分析页） */
 export const hiddenFromAssignablePermissionMenus = ['platform.competitor', 'platform.sources']
 export const hiddenEnterprisePermissionMenus = [
@@ -35,11 +57,17 @@ export const hiddenEnterprisePermissionMenus = [
   'platform.audit.competitors',
   'platform.audit.files',
 ]
+export const hiddenEnterpriseConfigPermissionMenus = [...ENTERPRISE_CHILD_MENUS]
 export const hiddenUserPermissionMenus = [
   USER_CREATE_PLATFORM_MENU,
   USER_CREATE_CUSTOMER_MENU,
 ]
 export const hiddenSettingsPermissionMenus = [...SETTINGS_CHILD_MENUS]
+
+export function isEnterpriseConfigMenuCode(code: string): boolean {
+  return code === ENTERPRISE_CONFIG_MENU
+    || (ENTERPRISE_CHILD_MENUS as readonly string[]).includes(code)
+}
 
 export function normalizeMenuCode(code: string) {
   return code === 'platform.users' ? USER_LIST_MENU : code

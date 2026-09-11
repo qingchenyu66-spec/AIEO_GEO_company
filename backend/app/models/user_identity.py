@@ -14,7 +14,13 @@ class UserIdentity(Base):
     identity_code: Mapped[str] = mapped_column(String(64), nullable=False, comment="身份唯一编码")
     user_id: Mapped[int] = mapped_column(ForeignKey("sys_user.id"), index=True, nullable=False)
     tenant_id: Mapped[int | None] = mapped_column(ForeignKey("sys_tenant.id"), index=True, nullable=True)
-    position_id: Mapped[int | None] = mapped_column(ForeignKey("sys_position.id"), index=True, nullable=True, comment="职位ID")
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("sys_position.id"), index=True, nullable=True, comment="平台职位ID")
+    customer_position_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sys_customer_position.id"),
+        index=True,
+        nullable=True,
+        comment="客户职位ID（CUSTOMER 身份用 sys_customer_position）",
+    )
     identity_type: Mapped[str] = mapped_column(String(20), index=True, nullable=False, comment="PLATFORM或CUSTOMER")
     identity_name: Mapped[str] = mapped_column(String(80), nullable=False, comment="身份名称")
     role_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="角色编码")

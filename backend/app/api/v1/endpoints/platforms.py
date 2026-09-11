@@ -75,15 +75,20 @@ def platforms_for_brand_config(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """企业管理勾选用：含下架/无服务态与可选 mode。"""
-    require_platform(current)
+    """企业管理/客户企业配置勾选用：含下架/无服务态与可选 mode。"""
+    # 2026-09-09 - 客户企业配置也要拉目录；通知职位仍仅平台可见
+    if current.identity.identity_type not in {"PLATFORM", "CUSTOMER"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台运营端或客户企业端可访问")
     from app.services.platform_catalog_lifecycle_service import list_platforms_for_brand_config
     from app.services.platform_notify_recipients import list_platform_positions_for_notify_config
 
-    return ApiResponse(data={
+    payload: dict = {
         "platforms": list_platforms_for_brand_config(db),
-        "notify_positions": list_platform_positions_for_notify_config(db),
-    })
+        "notify_positions": [],
+    }
+    if current.identity.identity_type == "PLATFORM":
+        payload["notify_positions"] = list_platform_positions_for_notify_config(db)
+    return ApiResponse(data=payload)
 
 
 @router.post("/sync-catalog", response_model=ApiResponse[dict])

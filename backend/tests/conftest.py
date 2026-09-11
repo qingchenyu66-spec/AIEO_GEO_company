@@ -4,12 +4,33 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.user import User
 from app.models.user_identity import UserIdentity
+
+
+@pytest.fixture
+def db() -> Session:
+    """算力等单测默认会话：服务层 commit 降级为 flush，结束 rollback，避免污染本地库。
+
+    HTTP 写测若必须真实落库，请自建 SessionLocal 并在 teardown 主动 purge。
+    """
+    session = SessionLocal()
+
+    def _flush_only() -> None:
+        session.flush()
+
+    # 2026-09-09 - 禁止单测路径把写测企业 commit 进共用库
+    session.commit = _flush_only  # type: ignore[method-assign]
+    try:
+        yield session
+        session.rollback()
+    finally:
+        session.close()
 
 
 @pytest.fixture(autouse=True)
@@ -66,3 +87,20 @@ def _ensure_demo_platform_login() -> None:
             identity.deleted = False
             identity.is_default = True
         db.commit()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _sweep_credit_test_junk_tenants() -> None:
+    """会话起止清掉算力写测垃圾企业，兜底 HTTP 夹具/历史残留。"""
+    from scripts.cleanup_credit_test_junk import purge_junk_tenants
+
+    def _purge() -> None:
+        with SessionLocal() as db:
+            purged, orphans = purge_junk_tenants(db)
+            if purged or orphans:
+                db.commit()
+                print(f"[pytest] credit junk sweep: tenants={purged} orphans={orphans}")
+
+    _purge()
+    yield
+    _purge()

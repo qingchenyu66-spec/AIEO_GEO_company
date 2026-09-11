@@ -1,5 +1,6 @@
 import hashlib
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -157,6 +158,45 @@ def _tenant_code_from_name(name: str) -> str:
     return f"TENANT_{digest}"
 
 
+def apply_tenant_billing_mode_on_create(
+    db: Session,
+    tenant: Tenant,
+    billing_mode: str | None,
+    *,
+    opening_credit_amount: Decimal | float | int | str | None = None,
+    operator_user_id: int | None = None,
+) -> None:
+    # 2026-08-27 - 新建企业可选算力自助，须同步注入企业配置菜单
+    # 2026-09-09 - 创建可选自助；起步算力选填，有值才充值
+    mode = (billing_mode or "hosted").strip().lower()
+    if mode not in {"hosted", "credit"}:
+        raise ValueError("企业类型无效")
+    if mode == "hosted":
+        tenant.billing_mode = mode
+        return
+
+    from app.services.billing_mode_service import inject_enterprise_menus_for_tenant
+    from app.services.credit_service import recharge_credits
+
+    tenant.billing_mode = "credit"
+    tenant.platform_whitelist_json = []
+    opening = None
+    if opening_credit_amount is not None and str(opening_credit_amount).strip() != "":
+        opening = Decimal(str(opening_credit_amount))
+        if opening < 0:
+            raise ValueError("起步算力不能为负数")
+    if opening is not None and opening > 0:
+        op_id = int(operator_user_id or tenant.owner_user_id or 0)
+        recharge_credits(
+            db,
+            tenant,
+            opening,
+            operator_user_id=op_id,
+            reason="新建企业起步充值",
+        )
+    inject_enterprise_menus_for_tenant(db, tenant.id)
+
+
 def create_platform_tenant(
     db: Session,
     *,
@@ -165,6 +205,8 @@ def create_platform_tenant(
     service_start_date: date | None = None,
     service_end_date: date | None = None,
     preferred_code: str | None = None,
+    billing_mode: str | None = "hosted",
+    opening_credit_amount: Decimal | float | int | str | None = None,
 ) -> Tenant:
     """新建在册企业（不 commit）。销售草稿保存 / 审批回放共用。"""
     # 2026-08-18 - 新增企业弹窗不再入库，保存配置时才建租户
@@ -194,6 +236,13 @@ def create_platform_tenant(
         tenant.stopped_at = datetime.now()
     db.add(tenant)
     db.flush()
+    apply_tenant_billing_mode_on_create(
+        db,
+        tenant,
+        billing_mode,
+        opening_credit_amount=opening_credit_amount,
+        operator_user_id=owner_user_id,
+    )
     if not tenant.status:
         sync_tenant_accounts_for_service_state(db, tenant)
     return tenant

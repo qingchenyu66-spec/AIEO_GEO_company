@@ -4,14 +4,11 @@ import { withRetry } from '../../../composables/useRetry'
 import { notifyOperationError } from '../../../utils/requestError'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import {
-  customerDisplayPeriodLabel,
-  customerDisplayCutoffDate,
-  customerDisplayDateRange,
   monitorTaskBeforeToday,
-  workspaceTrendDateRange,
   workspaceTrendPeriodLabel,
   type WorkspaceTrendPreset,
 } from '../../../utils/customerMonitorDate'
+import { useCustomerDisplayDate } from './useCustomerDisplayDate'
 import { useAuthStore } from '../../../stores/auth'
 import {
   findKeywordGroupByFilter,
@@ -314,6 +311,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   const route = useRoute()
   const router = useRouter()
   const auth = useAuthStore()
+  const { cutoffDate, periodLabel, dateRange, trendRange } = useCustomerDisplayDate()
   const tenantId = computed(() => {
     if (auth.session?.identity?.identity_type === 'CUSTOMER') return null
     if (externalTenantId != null) return externalTenantId
@@ -328,7 +326,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
     auth.session?.identity?.identity_type === 'CUSTOMER'
     || (auth.session?.identity?.identity_type === 'PLATFORM' && tenantId.value != null && Boolean(route.query.preview_tenant_id))
   ))
-  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
+  const customerPeriodLabel = periodLabel
   const customerTrendPeriodLabel = computed(() => (
     workspaceTrendPeriodLabel(
       isCustomerDatePreset(datePreset.value) ? datePreset.value : '7d',
@@ -336,7 +334,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       filters.endDate,
     )
   ))
-  const customerTrendMaxDate = customerDisplayCutoffDate()
+  const customerTrendMaxDate = cutoffDate
   const monitorTasks = ref<MonitorTask[]>([])
   const monitorDetail = ref<{ task: MonitorTask; subtasks: MonitorSubtask[] } | null>(null)
   const loadingMonitor = ref(false)
@@ -380,7 +378,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   } | null>(null)
 
   const initialDates = auth.session?.identity?.identity_type === 'CUSTOMER'
-    ? customerDisplayDateRange(7)
+    ? dateRange(7)
     : defaultDateRange(7)
   const filters = reactive({
     platform: '',
@@ -936,7 +934,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       datePreset.value = 'custom'
     } else if (days === '7' || days === '30' || days === '90') {
       const range = isCustomerView.value
-        ? customerDisplayDateRange(Number(days))
+        ? dateRange(Number(days))
         : defaultDateRange(Number(days))
       filters.startDate = range.startDate
       filters.endDate = range.endDate
@@ -1280,7 +1278,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       if (!isCustomerDatePreset(preset)) return
       // 2026-07-28 - 切月/季无体感 - 同选项再点也强制重拉；标签会显示「本月 …」
       if (preset === datePreset.value && preset !== 'custom') {
-        const range = workspaceTrendDateRange(preset)
+        const range = trendRange(preset)
         filters.startDate = range.startDate
         filters.endDate = range.endDate
         void loadRankingMatrix()
@@ -1288,7 +1286,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       }
       datePreset.value = preset
       if (preset === 'custom') return
-      const range = workspaceTrendDateRange(preset)
+      const range = trendRange(preset)
       filters.startDate = range.startDate
       filters.endDate = range.endDate
       void loadRankingMatrix()
@@ -1315,11 +1313,11 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       if (filters.startDate > filters.endDate) {
         filters.startDate = filters.endDate
       }
-      if (filters.endDate > customerTrendMaxDate) {
-        filters.endDate = customerTrendMaxDate
+      if (filters.endDate > customerTrendMaxDate.value) {
+        filters.endDate = customerTrendMaxDate.value
       }
-      if (filters.startDate > customerTrendMaxDate) {
-        filters.startDate = customerTrendMaxDate
+      if (filters.startDate > customerTrendMaxDate.value) {
+        filters.startDate = customerTrendMaxDate.value
       }
       datePreset.value = 'custom'
       void loadRankingMatrix()
@@ -1331,7 +1329,7 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
 
   function resetFilters() {
     const range = isCustomerView.value
-      ? workspaceTrendDateRange('7d')
+      ? trendRange('7d')
       : defaultDateRange(7)
     filters.platform = ''
     filters.keywordGroup = ''

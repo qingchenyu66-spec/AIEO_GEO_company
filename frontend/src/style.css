@@ -3616,6 +3616,44 @@ button:disabled {
 }
 .enterprise-detail-tabs button:hover { color:#1e68c8; background:#fff; }
 .enterprise-detail-tabs button.active { color:#fff; background:#2871db; box-shadow:0 8px 18px rgba(40,113,219,.18); }
+.brand-page .panel-head.compact-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:12px;
+  margin-bottom:12px;
+  min-height:36px;
+}
+.brand-page .panel-head.compact-head:empty { display:none; margin:0; min-height:0; }
+.credit-daily-estimate {
+  display:inline-flex;
+  align-items:baseline;
+  flex-wrap:wrap;
+  gap:6px 10px;
+  margin-left:auto;
+  padding:7px 12px;
+  border:1px solid #dbe7f5;
+  border-radius:999px;
+  background:linear-gradient(180deg, #f8fbff, #eef5fc);
+  color:#334155;
+  line-height:1.3;
+}
+.credit-daily-estimate-label {
+  color:#64748b;
+  font-size:12px;
+  font-weight:600;
+}
+.credit-daily-estimate strong {
+  color:#0f172a;
+  font-size:16px;
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.credit-daily-estimate-meta {
+  color:#94a3b8;
+  font-size:12px;
+}
 .brand-form-grid {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
@@ -3666,6 +3704,7 @@ button:disabled {
 .brand-form-grid select:focus,
 .competitor-form input:focus { border-color:#4288e8; background:#fff; box-shadow:0 0 0 3px rgba(66,136,232,.1); }
 .form-field-full { grid-column:1 / -1; }
+.form-grid .field-hint { display:block; margin-top:6px; color:#8a9bb5; font-size:12px; font-weight:500; line-height:1.4; }
 .region-field select { min-height:42px; }
 .region-multi-select { display:grid; gap:8px; width:100%; min-width:0; }
 .region-multi-select.is-disabled { opacity:.92; }

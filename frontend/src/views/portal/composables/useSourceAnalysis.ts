@@ -3,11 +3,7 @@ import { ElMessage } from 'element-plus'
 import { usePortalCharts } from '../../../composables/usePortalCharts'
 import { getSourceStats, type SourceAnalysisSummary, type SourceStatRow } from '../../../services/analytics'
 import { useAuthStore } from '../../../stores/auth'
-import {
-  customerDisplayDateRange,
-  customerDisplayPeriodLabel,
-  customerTrendPeriodLabel,
-} from '../../../utils/customerMonitorDate'
+import { useCustomerDisplayDate } from './useCustomerDisplayDate'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
 import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
@@ -310,7 +306,8 @@ export function useSourceAnalysis(options?: {
     auth.session?.identity?.identity_type === 'CUSTOMER'
     || isCustomerPreviewActive(route, auth.session?.identity?.identity_type === 'PLATFORM')
   ))
-  const customerPeriodLabel = computed(() => customerDisplayPeriodLabel())
+  const { periodLabel, dateRange } = useCustomerDisplayDate()
+  const customerPeriodLabel = periodLabel
   const brandAsset = analytics.brandAsset
 
   const loading = ref(false)
@@ -323,15 +320,18 @@ export function useSourceAnalysis(options?: {
   const inclusionDateRange = computed(() => {
     if (datePreset.value === 'all') {
       // brief 无日期时后端默认近 7 天；「全部」显式拉宽到近 365 天
-      return customerDisplayDateRange(365)
+      return dateRange(365)
     }
-    return customerDisplayDateRange(Number(datePreset.value))
+    return dateRange(Number(datePreset.value))
   })
 
   const trendPeriodLabel = computed(() => {
     if (datePreset.value === 'all') return '全部周期引用趋势'
     const days = Number(datePreset.value)
-    if (isCustomerView.value) return customerTrendPeriodLabel(days)
+    if (isCustomerView.value) {
+      const range = dateRange(days)
+      return `近${days}日 ${range.startDate} ~ ${range.endDate}`
+    }
     return `近 ${days} 日引用趋势`
   })
   const platformFilter = ref('all')

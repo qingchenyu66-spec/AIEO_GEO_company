@@ -1,4 +1,6 @@
+import type { MenuInfo } from '../../../services/auth'
 import { computed, inject, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
@@ -14,9 +16,10 @@ import {
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
 import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
-import { isDuplicateMergedApproval, isPendingApproval, pendingApprovalMessage } from '../../../services/approvals'
+import { getApproval, isDuplicateMergedApproval, isPendingApproval, isResubmittedApproval, pendingApprovalMessage, resubmitApproval } from '../../../services/approvals'
 import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
 import { getPlatformsForBrandConfig } from '../../../services/platforms'
+import { getTenantCredit } from '../../../services/credit'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
 import { regionOptions, selectableRegionOptions, regionLabels } from '../regionOptions'
 import {
@@ -24,8 +27,17 @@ import {
   sortTenantsWithPin,
   writeEnterprisePin,
 } from './useEnterprisePin'
-import { PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey } from '../injectionKeys'
+import { PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey, PreviewCustomerMenusKey } from '../injectionKeys'
 import { TENANT_LOGO_ACCEPT, TENANT_LOGO_MAX_BYTES } from '../../../constants/tenantLogo'
+import {
+  deleteEnterpriseCompetitor,
+  getEnterpriseMonitor,
+  estimateEnterpriseBrandWords,
+  saveEnterpriseBrandWords,
+  saveEnterpriseCompetitor,
+  saveEnterpriseMonitor,
+} from '../../../services/credit'
+import { resolveEnterprisePreviewTenantId } from '../customerPreview'
 
 const KNOWLEDGE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024
 const KNOWLEDGE_UPLOAD_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'md', 'txt'])
@@ -39,7 +51,7 @@ function validateKnowledgeUploadFile(file: File) {
   if (file.size > KNOWLEDGE_UPLOAD_MAX_BYTES) throw new Error('单个文件不能超过 30MB')
 }
 
-export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files'
+export type EnterpriseTab = 'profile' | 'keywords' | 'brand_words' | 'schedule' | 'competitors' | 'files' | 'credit'
 
 export const enterprisePermissionCodeMap = {
   list: 'platform.audit.list',
@@ -52,11 +64,14 @@ export const enterprisePermissionCodeMap = {
   schedule: 'platform.audit.schedule',
   competitors: 'platform.audit.competitors',
   files: 'platform.audit.files',
+  credit: 'platform.tenant_credit',
 } as const
 
 export type UseBrandAuditOptions = {
   onBrandUpdated?: (asset: BrandAsset | null, competitors: BrandCompetitor[]) => void
   navigateToReportCenter?: (reportId: number, tenantId: number) => void
+  /** 客户门户企业配置：复用同一套监测 UI，走 enterprise API */
+  customerEnterpriseMode?: boolean
 }
 
 function errorMessage(error: unknown) {
@@ -96,34 +111,83 @@ function notifyError(error: unknown, context: string) {
 
 export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const auth = useAuthStore()
+  const route = useRoute()
   const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLATFORM')
+  const customerEnterpriseMode = Boolean(options.customerEnterpriseMode)
+  const previewTenantId = computed(() => (isPlatform.value ? resolveEnterprisePreviewTenantId(route) : null))
+  const previewReadonly = computed(() => customerEnterpriseMode && previewTenantId.value != null)
+  const customerPlatformWhitelist = ref<string[]>([])
+  // 2026-09-07 - 算力自助地区/平台不设配额；policy 仅作展示预留
+  const customerCreditPolicy = ref<Record<string, unknown>>({})
+  const customerDailyEstimate = ref<Record<string, unknown>>({})
+
+  const previewCustomerMenus = inject(PreviewCustomerMenusKey, ref<MenuInfo[]>([]))
 
   function menuGrant(code: string) {
+    if (previewReadonly.value) {
+      return previewCustomerMenus.value.find(menu => menu.menu_code === code)
+    }
     return auth.allowedMenus.find(menu => menu.menu_code === code)
   }
 
+  function customerMonitorGrant() {
+    return menuGrant('customer.enterprise_monitor')
+  }
+
   function canViewEnterpriseTab(tab: EnterpriseTab) {
+    if (customerEnterpriseMode) {
+      if (tab === 'files' || tab === 'credit') return false
+      if (previewReadonly.value) return true
+      const grant = customerMonitorGrant()
+      return Boolean(grant && (grant.can_export || grant.can_update))
+    }
+    // 2026-09-07 - 托管企业不显示「算力与账单」，避免和自助计费口径打架
+    if (tab === 'credit' && brandForm.billing_mode !== 'credit') {
+      return false
+    }
     const grant = menuGrant(enterprisePermissionCodeMap[tab])
     return Boolean(grant && (grant.can_export || grant.can_update || grant.can_create || grant.can_delete))
   }
 
   function canEditEnterpriseTab(tab: EnterpriseTab) {
+    if (previewReadonly.value) return false
+    if (customerEnterpriseMode) {
+      return Boolean(customerMonitorGrant()?.can_update)
+    }
     const grant = menuGrant(enterprisePermissionCodeMap[tab])
     return Boolean(grant?.can_update)
   }
 
   function canCreateEnterpriseTab(tab: EnterpriseTab) {
+    if (previewReadonly.value) return false
     const grant = menuGrant(enterprisePermissionCodeMap[tab])
     return Boolean(grant?.can_create)
   }
 
   // 2026-07-30 - 地区仍看菜单编辑权；平台以职位白名单为准（非空即可勾对应端）
-  const canEditRegions = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.regions)?.can_update))
+  const canEditRegions = computed(() => {
+    if (previewReadonly.value) return false
+    if (customerEnterpriseMode) {
+      // 2026-09-07 - 算力自助地区完全由客户支配
+      return Boolean(customerMonitorGrant()?.can_update)
+    }
+    return Boolean(menuGrant(enterprisePermissionCodeMap.regions)?.can_update)
+  })
   const allowedMonitorPlatforms = computed(() => {
     const raw = auth.session?.allowed_monitor_platforms
     return Array.isArray(raw) ? raw.map(code => String(code || '').trim()).filter(Boolean) : []
   })
-  const canEditModels = computed(() => allowedMonitorPlatforms.value.length > 0)
+  // 2026-09-07 - 算力自助不设平台白名单：空数组=不限制（与 isMonitorPlatformAllowed 一致）
+  const effectiveMonitorPlatforms = computed(() => (
+    customerEnterpriseMode ? customerPlatformWhitelist.value : allowedMonitorPlatforms.value
+  ))
+  const canEditModels = computed(() => {
+    if (previewReadonly.value) return false
+    if (customerEnterpriseMode) {
+      return Boolean(customerMonitorGrant()?.can_update)
+    }
+    return allowedMonitorPlatforms.value.length > 0
+  })
   const editableCatalogPlatforms = computed(() => {
     const source = catalogPlatforms.value.length
       ? catalogPlatforms.value
@@ -134,13 +198,17 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           labels: [] as string[],
           default_mode: 'standard' as const,
         }))
-    if (!canEditModels.value) return []
+    if (customerEnterpriseMode) {
+      // 2026-09-07 - 客户侧展示目录全部，不再按租户白名单裁切
+      return source
+    }
+    if (!allowedMonitorPlatforms.value.length) return []
     const allow = new Set(allowedMonitorPlatforms.value)
     return source.filter(item => allow.has(item.code))
   })
 
   const canCreateTenant = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
-  const canEditTenantList = computed(() => Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
+  const canEditTenantList = computed(() => !customerEnterpriseMode && Boolean(menuGrant(enterprisePermissionCodeMap.list)?.can_update))
 
   const visibleEnterpriseTabs = computed(() => ([
     { code: 'profile', name: '企业资料' },
@@ -149,6 +217,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     { code: 'schedule', name: '监控计划' },
     { code: 'competitors', name: '竞品监控' },
     { code: 'files', name: '企业知识库' },
+    { code: 'credit', name: '算力与账单' },
   ] as Array<{ code: EnterpriseTab; name: string }>).filter(tab => {
     if (creatingDraftTenant.value && tab.code === 'files') {
       return false
@@ -167,11 +236,21 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const enterpriseFilters = reactive({
     keyword: '',
     expiry: 'active' as 'all' | 'active' | 'pending' | 'expired' | 'stopped',
+    billing_mode: 'all' as 'all' | 'hosted' | 'credit',
     owner_user_id: 'all' as 'all' | 'none' | number,
   })
   const tenantDialog = ref(false)
   const creatingDraftTenant = ref(false)
-  const tenantForm = reactive({ name: '', code: '', service_start_date: '', service_end_date: '' })
+  const resubmitApprovalId = ref<number | null>(null)
+  const resubmitOperationKey = ref<string | null>(null)
+  const tenantForm = reactive({
+    name: '',
+    code: '',
+    service_start_date: '',
+    service_end_date: '',
+    billing_mode: 'hosted' as 'hosted' | 'credit',
+    opening_credit_amount: '',
+  })
   const pendingTenantLogoFile = ref<File | null>(null)
   const pendingTenantLogoPreview = ref<string | null>(null)
   const pendingTenantLogoFileName = computed(() => pendingTenantLogoFile.value?.name || '')
@@ -259,6 +338,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     tenant_stop_reason: null as TenantInfo['stop_reason'],
     service_start_date: '',
     service_end_date: '',
+    billing_mode: 'hosted' as 'hosted' | 'credit',
+    opening_credit_amount: '',
     goods_card_enabled: false,
     brand_name: '',
     brand_short_name: '',
@@ -270,7 +351,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     description: '',
     schedule_type: 'daily_times' as 'daily_times' | 'fixed_times' | 'weekly' | 'monthly',
     schedule_times: [] as string[],
-    schedule_frequency: 3,
+    schedule_frequency: 1,
     schedule_weekdays: [] as number[],
     schedule_month_days_text: '',
   })
@@ -357,7 +438,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         || ownerFilter === 'all'
         || (ownerFilter === 'none' && tenant.owner_user_id == null)
         || (typeof ownerFilter === 'number' && tenant.owner_user_id === ownerFilter)
-      return keywordMatched && statusMatched && ownerMatched
+      const billingFilter = enterpriseFilters.billing_mode
+      const billingMatched = billingFilter === 'all'
+        || (billingFilter === 'credit' && tenant.billing_mode === 'credit')
+        || (billingFilter === 'hosted' && tenant.billing_mode !== 'credit')
+      return keywordMatched && statusMatched && ownerMatched && billingMatched
     })
     // 2026-08-05 - 企业列表个人单条置顶 - 仅当前结果集内提前，不破坏筛选口径
     return sortTenantsWithPin(matched, pinnedTenantId.value)
@@ -373,7 +458,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   })
 
   watch(
-    () => [enterpriseFilters.keyword, enterpriseFilters.expiry, enterpriseFilters.owner_user_id] as const,
+    () => [enterpriseFilters.keyword, enterpriseFilters.expiry, enterpriseFilters.billing_mode, enterpriseFilters.owner_user_id] as const,
     () => {
       enterprisePage.value = 1
     },
@@ -381,6 +466,21 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   watch(filteredTenants, () => {
     if (enterprisePage.value > enterpriseTotalPages.value) {
       enterprisePage.value = enterpriseTotalPages.value
+    }
+  })
+  watch(
+    () => brandForm.billing_mode,
+    () => {
+      // 切成托管或打开托管企业时，若还停在算力 Tab 则跳回可见第一项
+      if (enterpriseDetailTab.value !== 'credit') return
+      if (canViewEnterpriseTab('credit')) return
+      const first = visibleEnterpriseTabs.value[0]?.code
+      if (first) enterpriseDetailTab.value = first
+    },
+  )
+  watch(enterpriseDetailTab, (tab) => {
+    if (tab === 'credit' && brandForm.tenant_id) {
+      void refreshEditingTenantBilling(brandForm.tenant_id)
     }
   })
 
@@ -457,6 +557,34 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const start = tenant.service_start_date || '未设置'
     const end = tenant.service_end_date || '长期'
     return `${start} 至 ${end}`
+  }
+
+  function tenantBillingLabel(tenant: TenantInfo) {
+    if (tenant.billing_mode !== 'credit') return '平台托管'
+    const balance = Number(tenant.credit_balance)
+    if (Number.isFinite(balance) && balance <= 0) return '算力自助·零余额'
+    return '算力自助'
+  }
+
+  async function refreshEditingTenantBilling(tenantId?: number | null) {
+    const id = tenantId ?? brandForm.tenant_id
+    if (!id || customerEnterpriseMode) return
+    try {
+      const detail = await getTenantCredit(id)
+      const mode = detail.billing_mode === 'credit' ? 'credit' : 'hosted'
+      const balance = Number(detail.credit_balance)
+      brandForm.billing_mode = mode
+      const idx = tenants.value.findIndex(item => item.id === id)
+      if (idx >= 0) {
+        tenants.value.splice(idx, 1, {
+          ...tenants.value[idx],
+          billing_mode: mode,
+          credit_balance: Number.isFinite(balance) ? balance : tenants.value[idx].credit_balance,
+        })
+      }
+    } catch {
+      /* 详情刷新失败不阻断编辑页 */
+    }
   }
 
   function tenantMonitorLabel(tenant: TenantInfo) {
@@ -570,6 +698,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       monitor_keywords: keywords,
       platforms: inheritedPlatforms,
       run_mode: 'once',
+      run_immediately: false,
       sort_order: index,
       status: true,
     }
@@ -590,6 +719,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           group.platforms?.length ? group.platforms : (asset?.monitored_platforms || []),
         ),
         run_mode: runMode,
+        run_immediately: Boolean(group.run_immediately),
         sort_order: group.sort_order ?? index,
         status: group.status,
       }
@@ -714,10 +844,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   function removeScheduleTime(index: number) {
-    if (brandForm.schedule_times.length <= 1) {
-      ElMessage.warning('至少保留一个执行时间')
-      return
-    }
+    // 2026-09-09 - 新建企业允许监测计划为空，不强制留默认场次
     brandForm.schedule_times.splice(index, 1)
   }
 
@@ -734,6 +861,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.tenant_stop_reason = tenant?.stop_reason || null
     brandForm.service_start_date = tenant?.service_start_date || ''
     brandForm.service_end_date = tenant?.service_end_date || ''
+    brandForm.billing_mode = (tenant?.billing_mode === 'credit' ? 'credit' : 'hosted')
+    brandForm.opening_credit_amount = ''
     // 2026-09-01 - 商品卡默认关；仅显式 true 才算开通
     brandForm.goods_card_enabled = tenant?.goods_card_enabled === true
     brandForm.brand_name = asset?.brand_name || asset?.company_full_name || tenant?.name || ''
@@ -747,8 +876,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.official_url = asset?.official_url || ''
     brandForm.description = asset?.description || ''
     brandForm.schedule_type = 'daily_times'
-    brandForm.schedule_times = asset?.schedule_times?.length ? [...asset.schedule_times] : ['09:30', '14:30', '20:30']
-    brandForm.schedule_frequency = asset?.schedule_frequency || brandForm.schedule_times.length || 3
+    brandForm.schedule_times = asset?.schedule_times?.length ? [...asset.schedule_times] : []
+    brandForm.schedule_frequency = asset?.schedule_frequency || brandForm.schedule_times.length || 1
     brandForm.schedule_weekdays = []
     brandForm.schedule_month_days_text = ''
   }
@@ -764,12 +893,101 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }))
   }
 
+  function applyResubmitBrandBody(body: Record<string, unknown>) {
+    const tidRaw = body.tenant_id
+    const tid = tidRaw != null && Number.isFinite(Number(tidRaw)) ? Number(tidRaw) : null
+    enterpriseDetailMode.value = true
+    if (!tid) {
+      creatingDraftTenant.value = true
+      const firstVisibleTab = visibleEnterpriseTabs.value[0]?.code
+      if (firstVisibleTab) enterpriseDetailTab.value = firstVisibleTab
+    } else {
+      creatingDraftTenant.value = false
+    }
+    const pseudoAsset = body as unknown as BrandAsset
+    fillBrandForm(pseudoAsset, tid)
+    if (Array.isArray(body.competitors)) {
+      fillCompetitorRows(body.competitors as BrandCompetitor[])
+    }
+    normalizeBrandWordGroups(pseudoAsset)
+    if (body.logo_staging_key) {
+      ElMessage.warning('上次驳回已清理 Logo 暂存，如有需要请重新上传')
+    }
+  }
+
+  async function loadResubmitDraftFromRoute() {
+    const raw = route.query.resubmit_approval_id
+    const id = Number(Array.isArray(raw) ? raw[0] : raw)
+    if (!Number.isFinite(id) || id <= 0) return
+    try {
+      const row = await getApproval(id)
+      if (row.status !== 'rejected') {
+        ElMessage.warning('该审批单不是已驳回状态')
+        return
+      }
+      if (!['brand.asset.upsert', 'management.tenant.create'].includes(row.operation_key)) {
+        ElMessage.warning('请从对应业务页修改此审批单')
+        return
+      }
+      resubmitApprovalId.value = id
+      resubmitOperationKey.value = row.operation_key
+      const body = ((row.payload?.body || row.payload || {}) as Record<string, unknown>)
+      if (row.review_comment) {
+        ElMessage.warning(`上次驳回：${row.review_comment}`)
+      }
+      if (row.operation_key === 'management.tenant.create') {
+        tenantForm.name = String(body.name || '')
+        tenantForm.service_start_date = String(body.service_start_date || '')
+        tenantForm.service_end_date = String(body.service_end_date || '')
+        tenantForm.billing_mode = body.billing_mode === 'credit' ? 'credit' : 'hosted'
+        tenantForm.opening_credit_amount = body.opening_credit_amount != null ? String(body.opening_credit_amount) : ''
+        tenantDialog.value = true
+        return
+      }
+      applyResubmitBrandBody(body)
+    } catch (error: unknown) {
+      notifyError(error, '加载驳回单失败')
+    }
+  }
+
   function notifyBrandUpdated() {
     options.onBrandUpdated?.(brandAsset.value, brandCompetitors.value)
   }
 
+  async function loadCustomerEnterpriseMonitor() {
+    loadingBrand.value = true
+    try {
+      const data = await getEnterpriseMonitor(previewTenantId.value ?? undefined)
+      brandForm.tenant_id = Number(data.tenant_id) || null
+      brandAsset.value = (data.asset as BrandAsset | null) || null
+      brandCompetitors.value = (data.competitors as BrandCompetitor[]) || []
+      // 2026-09-07 - 忽略接口里的历史白名单，客户侧始终按「不限制」处理
+      customerPlatformWhitelist.value = []
+      customerCreditPolicy.value = (data.policy as Record<string, unknown>) || {}
+      customerDailyEstimate.value = (data.daily_estimate as Record<string, unknown>) || {}
+      fillBrandForm(brandAsset.value, brandForm.tenant_id)
+      fillCompetitorRows(brandCompetitors.value)
+      notifyBrandUpdated()
+    } catch (error: unknown) {
+      notifyError(error, '监测配置加载失败')
+    } finally {
+      loadingBrand.value = false
+    }
+  }
+
+  async function initCustomerEnterpriseConfig() {
+    enterpriseDetailMode.value = true
+    enterpriseDetailTab.value = 'keywords'
+    await loadCatalogPlatforms()
+    await loadCustomerEnterpriseMonitor()
+  }
+
   async function loadBrandAssetData() {
     if (creatingDraftTenant.value) return
+    if (customerEnterpriseMode) {
+      await loadCustomerEnterpriseMonitor()
+      return
+    }
     loadingBrand.value = true
     try {
       if (isPlatform.value && !brandForm.tenant_id) {
@@ -960,6 +1178,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterpriseDetailTab.value = firstVisibleTab
     brandForm.tenant_id = tenant.id
     brandForm.company_full_name = tenant.name
+    await refreshEditingTenantBilling(tenant.id)
     await loadBrandAssetData()
     await loadKnowledgeFiles()
   }
@@ -971,6 +1190,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     enterpriseInfoAsset.value = null
     enterpriseInfoCompetitors.value = []
     try {
+      await refreshEditingTenantBilling(tenant.id)
+      const latest = tenants.value.find(item => item.id === tenant.id) || tenant
+      enterpriseInfoTenant.value = latest
       const response = await withRetry(() => getBrandAsset(tenant.id))
       enterpriseInfoAsset.value = response.asset
       enterpriseInfoCompetitors.value = response.competitors
@@ -994,10 +1216,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
 
   async function applyPendingTenantLogoDirect(): Promise<boolean> {
     if (!pendingTenantLogoFile.value || !brandForm.tenant_id) return false
+    if (creatingDraftTenant.value || customerEnterpriseMode || previewReadonly.value) return false
     const file = pendingTenantLogoFile.value
     loadingBrand.value = true
     try {
-      // 2026-08-27 - 已有企业改 Logo 走直传，勿只写暂存（审批回滚易库盘不一致）
+      // 2026-08-27 - 已有企业改 Logo 走直传接口，勿只写暂存（审批回滚会库盘不一致）
       await uploadTenantLogo(brandForm.tenant_id, file)
       clearPendingTenantLogo()
       await loadEnterpriseList()
@@ -1013,6 +1236,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function submitBrandAsset(successText = '品牌资产已保存') {
+    if (previewReadonly.value) {
+      ElMessage.info('预览模式为只读，不可保存')
+      return
+    }
     // 2026-08-10 - 监测词组非必填；企业资料只需全称即可落资产，勿再卡「至少一个词组」
     const missing = brandAssetProfileMissing.value
     if (missing.length) {
@@ -1043,6 +1270,38 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const missingPlatforms = keywordGroups.find(group => group.status && !group.platforms.length)
     if (missingPlatforms && canEditModels.value) {
       ElMessage.warning('每个启用的监测词组至少选择一个监测平台')
+      return
+    }
+    const scheduleFrequency = Math.max(1, scheduleTimeList().length || brandForm.schedule_frequency)
+    if (customerEnterpriseMode) {
+      loadingBrand.value = true
+      try {
+        await saveEnterpriseMonitor({
+          tenant_id: brandForm.tenant_id,
+          company_full_name: brandForm.company_full_name.trim(),
+          brand_name: brandForm.company_full_name.trim(),
+          brand_short_name: null,
+          monitor_keywords: keywordGroups.flatMap(group => group.monitor_keywords),
+          aliases: [...new Set(keywordGroups.flatMap(group => group.exposure_terms))],
+          product_keywords: [],
+          monitored_platforms: [...new Set(keywordGroups.flatMap(group => platformSelectionCodes(group.platforms)))],
+          keyword_groups: keywordGroups,
+          region_codes: [...brandForm.region_codes],
+          official_url: brandForm.official_url.trim() || null,
+          description: brandForm.description.trim() || null,
+          schedule_type: 'daily_times',
+          schedule_times: scheduleTimeList(),
+          schedule_frequency: scheduleFrequency,
+          schedule_weekdays: [],
+          schedule_month_days: [],
+        })
+        await loadCustomerEnterpriseMonitor()
+        ElMessage.success(successText)
+      } catch (error: unknown) {
+        notifyError(error, '监测配置保存失败')
+      } finally {
+        loadingBrand.value = false
+      }
       return
     }
     loadingBrand.value = true
@@ -1090,12 +1349,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           .filter(item => item.name)
         : undefined
       let logoStagingKey: string | null = null
-      // 已有企业 Logo 已在前面直传；仅新建草稿仍走暂存随审批/bootstrap 落库
       if (pendingTenantLogoFile.value && isDraftCreate) {
         const staged = await uploadLogoStaging(pendingTenantLogoFile.value)
         logoStagingKey = staged.staging_key
       }
-      const saved = await saveBrandAsset({
+      const assetPayload = {
         tenant_id: brandForm.tenant_id,
         company_full_name: brandForm.company_full_name.trim(),
         brand_name: brandForm.company_full_name.trim(),
@@ -1108,22 +1366,35 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         region_codes: [...brandForm.region_codes],
         official_url: brandForm.official_url.trim() || null,
         description: brandForm.description.trim() || null,
-        schedule_type: 'daily_times',
+        schedule_type: 'daily_times' as const,
         schedule_times: scheduleTimeList(),
         schedule_frequency: scheduleFrequency,
-        schedule_weekdays: [],
-        schedule_month_days: [],
+        schedule_weekdays: [] as number[],
+        schedule_month_days: [] as number[],
         service_start_date: brandForm.service_start_date || null,
         service_end_date: brandForm.service_end_date || null,
+        billing_mode: brandForm.billing_mode,
         // 2026-09-04 - 与 updateTenant 双写，平台保存品牌资产时也带上开关
         goods_card_enabled: brandForm.goods_card_enabled === true,
         brand_word_groups: brandWordGroups,
         competitors,
         logo_staging_key: logoStagingKey,
-      })
+      }
+      if (resubmitApprovalId.value) {
+        const saved = await resubmitApproval(resubmitApprovalId.value, { body: assetPayload as Record<string, unknown> })
+        resubmitApprovalId.value = null
+        resubmitOperationKey.value = null
+        const msg = pendingApprovalMessage(saved, isDraftCreate ? '已重新提交，通过后企业才会创建' : '已重新提交，等待运营或管理员审核')
+        ElMessage.success(msg)
+        if (logoStagingKey) clearPendingTenantLogo()
+        if (isDraftCreate) backToEnterpriseList()
+        return
+      }
+      const saved = await saveBrandAsset(assetPayload)
       if (isPendingApproval(saved)) {
         const msg = pendingApprovalMessage(saved, isDraftCreate ? '已提交审批，通过后企业才会创建' : '已提交审批，等待运营或管理员审核')
         if (isDuplicateMergedApproval(saved)) ElMessage.warning(msg)
+        else if (isResubmittedApproval(saved)) ElMessage.success(msg)
         else ElMessage.info(msg)
         if (logoStagingKey) clearPendingTenantLogo()
         if (isDraftCreate) backToEnterpriseList()
@@ -1160,6 +1431,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function submitBrandWordGroups(successText = '品牌词配置已保存') {
+    if (previewReadonly.value) {
+      ElMessage.info('预览模式为只读，不可保存')
+      return
+    }
     if (creatingDraftTenant.value || !brandForm.tenant_id) {
       if (creatingDraftTenant.value) {
         // 2026-08-18 - 草稿点品牌词保存会整单进审批 - 仅右上角保存当前配置才提交
@@ -1192,6 +1467,59 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const missingPlatforms = groups.find(group => group.status && !group.platforms.length)
     if (missingPlatforms && canEditModels.value) {
       ElMessage.warning('每个启用的品牌词组至少选择一个监测平台')
+      return
+    }
+    if (customerEnterpriseMode) {
+      loadingBrand.value = true
+      try {
+        const payloadGroups = brandWordGroupRows.value
+          .map((group, index) => {
+            const monitorKeywords = (group.monitor_keywords || []).map(item => item.trim()).filter(Boolean)
+            return {
+              id: group.id || null,
+              name: (group.name || '').trim() || defaultBrandWordGroupName(index),
+              monitor_keyword: monitorKeywords[0] || '',
+              monitor_keywords: monitorKeywords,
+              platforms: normalizePlatformSelections(group.platforms),
+              run_mode: group.run_mode === 'weekly' ? 'weekly' as const : 'once' as const,
+              run_immediately: Boolean(group.run_immediately),
+              sort_order: index,
+              status: group.status,
+            }
+          })
+          .filter(group => group.monitor_keywords.length)
+        const needImmediate = payloadGroups.some(group => group.run_immediately)
+        if (needImmediate) {
+          try {
+            const estimate = await estimateEnterpriseBrandWords({
+              tenant_id: brandForm.tenant_id,
+              groups: payloadGroups,
+            })
+            const credits = Number(estimate?.credits || 0)
+            await ElMessageBox.confirm(
+              `勾选立即跑一轮将额外消耗约 ${credits} 算力（${estimate?.group_count || 0} 组），确认保存并提交？`,
+              '算力确认',
+              { type: 'warning' },
+            )
+          } catch {
+            loadingBrand.value = false
+            return
+          }
+        }
+        const saved = await saveEnterpriseBrandWords({
+          tenant_id: brandForm.tenant_id,
+          groups: payloadGroups,
+          confirm_immediate: needImmediate,
+        })
+        await loadCustomerEnterpriseMonitor()
+        const onceRows = (saved.once_submitted as Array<{ status?: string }>) || []
+        const onceCount = onceRows.filter(item => item.status === 'submitted').length
+        ElMessage.success(onceCount ? `${successText}，已提交 ${onceCount} 组` : successText)
+      } catch (error: unknown) {
+        notifyError(error, '品牌词保存失败')
+      } finally {
+        loadingBrand.value = false
+      }
       return
     }
     loadingBrand.value = true
@@ -1279,6 +1607,34 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
       ElMessage.warning('服务结束日期不能早于服务开始日期')
       return
     }
+    if (resubmitApprovalId.value && resubmitOperationKey.value === 'management.tenant.create') {
+      loadingBrand.value = true
+      try {
+        const saved = await resubmitApproval(resubmitApprovalId.value, {
+          body: {
+            name,
+            code: null,
+            service_start_date: tenantForm.service_start_date || null,
+            service_end_date: tenantForm.service_end_date || null,
+            billing_mode: tenantForm.billing_mode,
+          },
+        })
+        resubmitApprovalId.value = null
+        resubmitOperationKey.value = null
+        tenantDialog.value = false
+        tenantForm.name = ''
+        tenantForm.service_start_date = ''
+        tenantForm.service_end_date = ''
+        tenantForm.billing_mode = 'hosted'
+        tenantForm.opening_credit_amount = ''
+        ElMessage.success(pendingApprovalMessage(saved, '已重新提交，等待审核'))
+      } catch (error: unknown) {
+        notifyError(error, '重新提交失败')
+      } finally {
+        loadingBrand.value = false
+      }
+      return
+    }
     loadingBrand.value = true
     try {
       // 2026-08-18 - 同名仍能进草稿 - 下一步先打全库重名/待审校验
@@ -1302,10 +1658,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.brand_name = name
     brandForm.service_start_date = tenantForm.service_start_date || ''
     brandForm.service_end_date = tenantForm.service_end_date || ''
+    brandForm.billing_mode = tenantForm.billing_mode
+    brandForm.opening_credit_amount = ''
     brandForm.goods_card_enabled = false
     tenantForm.name = ''
     tenantForm.service_start_date = ''
     tenantForm.service_end_date = ''
+    tenantForm.billing_mode = 'hosted'
+    tenantForm.opening_credit_amount = ''
     tenantDialog.value = false
   }
 
@@ -1454,6 +1814,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function saveCompetitorRow(row: typeof competitorRows.value[number]) {
+    if (previewReadonly.value) {
+      ElMessage.info('预览模式为只读，不可保存')
+      return
+    }
     if (!row.name.trim()) {
       ElMessage.warning('请填写竞品名称')
       return
@@ -1469,7 +1833,13 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         category: row.category.trim() || '直接竞品',
       }
       if (row.id) {
-        await updateCompetitor(row.id, payload)
+        if (customerEnterpriseMode) {
+          await saveEnterpriseCompetitor(payload)
+        } else {
+          await updateCompetitor(row.id, payload)
+        }
+      } else if (customerEnterpriseMode) {
+        await saveEnterpriseCompetitor(payload)
       } else {
         await createCompetitor(payload)
       }
@@ -1483,6 +1853,10 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   async function removeCompetitorRow(row: typeof competitorRows.value[number], index: number) {
+    if (previewReadonly.value) {
+      ElMessage.info('预览模式为只读，不可保存')
+      return
+    }
     if (!row.id) {
       competitorRows.value.splice(index, 1)
       return
@@ -1494,7 +1868,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     }
     loadingBrand.value = true
     try {
-      await deleteCompetitor(row.id, brandForm.tenant_id)
+      if (customerEnterpriseMode) {
+        await deleteEnterpriseCompetitor(row.id)
+      } else {
+        await deleteCompetitor(row.id, brandForm.tenant_id)
+      }
       await loadBrandAssetData()
       ElMessage.success('竞品已移除')
     } catch (error: unknown) {
@@ -1558,7 +1936,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
 
   async function loadCatalogPlatforms() {
     try {
-      const data = await getPlatformsForBrandConfig()
+      const data = await getPlatformsForBrandConfig({ silentError: customerEnterpriseMode })
       catalogPlatforms.value = data.platforms || []
     } catch {
       catalogPlatforms.value = supportedPlatforms.map(item => ({
@@ -1589,13 +1967,20 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return source === 'brand_words' ? brandWordGroupRows : keywordGroupRows
   }
 
+  function isMonitorPlatformAllowed(code: string) {
+    // 2026-09-04 - 空白名单=不限制；此前 includes 空数组导致点击全灭
+    const allow = effectiveMonitorPlatforms.value
+    if (!allow.length) return true
+    return allow.includes(code)
+  }
+
   function onPlatformCheckClick(groupIndex: number, code: string, source: 'keywords' | 'brand_words' = 'keywords') {
     const rows = platformRows(source)
     const group = rows.value[groupIndex]
     if (!group) return
     // 2026-07-30 - 无平台权限整块隐藏且不可选；仅职位多选内的端可点
     if (!canEditModels.value) return
-    if (!allowedMonitorPlatforms.value.includes(code)) return
+    if (!isMonitorPlatformAllowed(code)) return
     if (!canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const meta = catalogPlatforms.value.find(item => item.code === code)
     if (groupHasPlatform(group, code)) {
@@ -1620,7 +2005,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const rows = platformRows(source)
     const group = rows.value[groupIndex]
     if (!group || !canEditModels.value) return
-    if (!allowedMonitorPlatforms.value.includes(code)) return
+    if (!isMonitorPlatformAllowed(code)) return
     if (!canEditEnterpriseTab(source === 'brand_words' ? 'brand_words' : 'keywords')) return
     const next = normalizePlatformSelections(group.platforms).filter(item => item.code !== code)
     rows.value[groupIndex] = { ...group, platforms: next }
@@ -1630,6 +2015,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     const target = modeDialogTarget.value
     if (!target || !canEditModels.value) {
       modeDialogVisible.value = false
+      modeDialogTarget.value = null
       return
     }
     const rows = platformRows(target.source)
@@ -1648,8 +2034,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     })
     if (saved) next.push(saved)
     rows.value[target.groupIndex] = { ...group, platforms: next }
-    modeDialogVisible.value = false
+    // 2026-09-04 - 确认后偶发弹窗不关 - 先清 target 再关，并 destroy-on-close
     modeDialogTarget.value = null
+    modeDialogVisible.value = false
   }
 
   function cancelModeDialog() {
@@ -1721,6 +2108,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     downloadKnowledgeFileItem,
     removeKnowledgeFile,
     brandAsset,
+    customerEnterpriseMode,
+    customerDailyEstimate,
+    initCustomerEnterpriseConfig,
     brandCompetitors,
     competitorRows,
     keywordGroupRows,
@@ -1758,6 +2148,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     stopTenantActionLabel,
     tenantServicePeriod,
     tenantMonitorLabel,
+    tenantBillingLabel,
     tenantOwnerLabel,
     editingGroupIndex,
     editingBrandWordGroupIndex,
@@ -1787,6 +2178,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     loadBrandAssetData,
     loadEnterpriseList,
     loadKnowledgeFiles,
+    loadResubmitDraftFromRoute,
     openEnterpriseDetail,
     openEnterpriseInfo,
     backToEnterpriseList,

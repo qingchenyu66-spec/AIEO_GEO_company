@@ -2,7 +2,8 @@ import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from '
 import { useRoute, useRouter } from 'vue-router'
 import { PortalNavigateKey } from '../injectionKeys'
 import { extractErrorDetail, notifyOperationError } from '../../../utils/requestError'
-import { customerDisplayPeriodLabel, customerDisplayCutoffDate, workspacePeriodCompareLabel, workspacePreviousPeriodRange, workspaceTrendDateRange, workspaceTrendPeriodLabel, type WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { workspacePeriodCompareLabel, workspacePreviousPeriodRange, workspaceTrendPeriodLabel, type WorkspaceTrendPreset } from '../../../utils/customerMonitorDate'
+import { useCustomerDisplayDate } from './useCustomerDisplayDate'
 import { onMonitorRefresh } from '../../../utils/monitorRefresh'
 import { useAuthStore } from '../../../stores/auth'
 import {
@@ -343,6 +344,7 @@ export function useCustomerWorkspace() {
   const route = useRoute()
   const auth = useAuthStore()
   const portalNavigate = inject(PortalNavigateKey, null)
+  const { cutoffDate, periodLabel, trendRange } = useCustomerDisplayDate()
   const brief = ref<WorkspaceBrief | null>(null)
   const previousPeriodAvg = ref<PeriodKpiAvg | null>(null)
   const loading = ref(false)
@@ -352,10 +354,10 @@ export function useCustomerWorkspace() {
   const alertsSectionRef = ref<HTMLElement | null>(null)
   const alertsFocused = ref(false)
   const trendPreset = ref<WorkspaceTrendPreset>('7d')
-  const initialTrendRange = workspaceTrendDateRange('7d')
+  const initialTrendRange = trendRange('7d')
   const trendStartDate = ref(initialTrendRange.startDate)
   const trendEndDate = ref(initialTrendRange.endDate)
-  const trendMaxDate = customerDisplayCutoffDate()
+  const trendMaxDate = computed(() => cutoffDate.value)
 
   const realtimeMenuName = computed(() => (
     auth.allowedMenus.find(menu => menu.menu_code === 'customer.realtime')?.menu_name || '监测'
@@ -426,7 +428,7 @@ export function useCustomerWorkspace() {
   ))
 
   const platformPeriodLabel = computed(() => (
-    brief.value?.platform_period_label || customerDisplayPeriodLabel()
+    brief.value?.platform_period_label || periodLabel.value
   ))
 
   const maxPlatformMentionRate = computed(() => {
@@ -816,7 +818,7 @@ export function useCustomerWorkspace() {
   ))
 
   function syncTrendRange(preset: WorkspaceTrendPreset) {
-    const range = workspaceTrendDateRange(
+    const range = trendRange(
       preset,
       trendStartDate.value,
       trendEndDate.value,
@@ -845,11 +847,11 @@ export function useCustomerWorkspace() {
     if (trendStartDate.value > trendEndDate.value) {
       trendStartDate.value = trendEndDate.value
     }
-    if (trendEndDate.value > trendMaxDate) {
-      trendEndDate.value = trendMaxDate
+    if (trendEndDate.value > trendMaxDate.value) {
+      trendEndDate.value = trendMaxDate.value
     }
-    if (trendStartDate.value > trendMaxDate) {
-      trendStartDate.value = trendMaxDate
+    if (trendStartDate.value > trendMaxDate.value) {
+      trendStartDate.value = trendMaxDate.value
     }
     trendPreset.value = 'custom'
     void loadBrief({ periodSwitch: true, force: true })
@@ -1160,7 +1162,7 @@ export function useCustomerWorkspace() {
     platformLabelMap,
     formatPlatformLabels,
     greetingLabel,
-    customerPeriodLabel: customerDisplayPeriodLabel(),
+    customerPeriodLabel: periodLabel,
     trendPreset,
     trendStartDate,
     trendEndDate,

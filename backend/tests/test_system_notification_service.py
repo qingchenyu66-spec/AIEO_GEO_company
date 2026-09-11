@@ -83,7 +83,38 @@ def test_celery_notification_category_gated():
     )
     assert can_view_notification_category("report_published", **flags) is False
     assert can_view_notification_category("report_published", **{**flags, "can_view_customer_reports": True}) is True
+    # 2026-09-08 - 算力类须对客户可见，否则三日不足通知发了也看不到
+    assert can_view_notification_category("credit_runway", **flags) is True
+    assert can_view_notification_category("credit_submit_block", **flags) is True
+    assert can_view_notification_category("credit_balance_capped", **flags) is True
     assert can_view_notification_category("unknown_category", **flags) is False
+
+
+def test_credit_billing_mode_platform_owner_only(db_session):
+    from app.services.system_notification_service import _user_can_read_notification
+
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="credit_billing_mode",
+        level="info",
+        title="客户已转回托管",
+        message="测试",
+        payload_json='{"owner_user_id": 42, "tenant_id": 1, "to_mode": "hosted"}',
+        source_key="credit:billing_mode:sales:1:tenant:1",
+    )
+    db_session.add(row)
+    db_session.commit()
+    common = dict(
+        identity_type="PLATFORM",
+        tenant_id=None,
+        can_review_approvals=False,
+        can_view_ops_alerts=False,
+        can_view_snapshot_backfill=False,
+        can_view_customer_reports=False,
+    )
+    assert _user_can_read_notification(row, user_id=42, **common) is True
+    assert _user_can_read_notification(row, user_id=99, **common) is False
 
 
 def test_snapshot_backfill_owner_only_read_check(db_session):

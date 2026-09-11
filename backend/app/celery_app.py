@@ -65,6 +65,10 @@ celery_app.conf.update(
         "app.tasks.monitor.finalize_platform_probes": {"queue": "sync"},
         "app.tasks.monitor.refresh_ops_overview_rollup": {"queue": "default"},
         "app.tasks.monitor.sync_announcement_lifecycle": {"queue": "default"},
+        "app.tasks.monitor.scan_stale_credit_reserves": {"queue": "default"},
+        "app.tasks.monitor.refresh_credit_window_estimate": {"queue": "default"},
+        "app.tasks.monitor.apply_scheduled_billing_mode_changes": {"queue": "default"},
+        "app.tasks.monitor.scan_credit_three_day_shortfall": {"queue": "default"},
         "app.tasks.knowledge.parse_knowledge_file_task": {"queue": "default"},
         "app.tasks.knowledge.fail_stale_knowledge_parses": {"queue": "default"},
         # 2026-09-02 - Playwright 解析/截图独立队列 - 勿与报表/知识库抢 default
@@ -170,6 +174,23 @@ celery_app.conf.update(
         "sync-announcement-lifecycle": {
             "task": "app.tasks.monitor.sync_announcement_lifecycle",
             "schedule": crontab(minute="*/1"),
+        },
+        # 2026-09-04 - 算力自助三定时 + 模式落地独立（A+C）- 此前只写了 task 未进 beat
+        "scan-stale-credit-reserves": {
+            "task": "app.tasks.monitor.scan_stale_credit_reserves",
+            "schedule": crontab(minute="*/5"),
+        },
+        "refresh-credit-window-estimate": {
+            "task": "app.tasks.monitor.refresh_credit_window_estimate",
+            "schedule": crontab(minute="*/15"),
+        },
+        # 2026-09-09 - A甲：next_window 仅监测提交落地，不再每 5 分钟挂空跑 beat
+        # （任务 apply_scheduled_billing_mode_changes 仍保留，供手工/兼容调用）
+        # 2026-09-08 - 条款不硬确认，已移除 scan-credit-terms-reminders beat
+        # 2026-09-08 - 方案甲：可用 < 日预估×3 通知企业（每日一次去重）
+        "scan-credit-three-day-shortfall": {
+            "task": "app.tasks.monitor.scan_credit_three_day_shortfall",
+            "schedule": crontab(hour=9, minute=40),
         },
     },
 )

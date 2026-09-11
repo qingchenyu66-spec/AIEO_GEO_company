@@ -33,6 +33,7 @@ from app.schemas.common import ApiResponse
 from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
+from app.services.credit_service import credit_ops_summary
 from app.services.operation_log_service import tenant_names_by_id, write_operation_log
 from app.services.operation_log_labels import humanize_action_type, humanize_description, humanize_target_module
 from app.schemas.permission import (
@@ -290,6 +291,9 @@ def tenant_to_dict(
         "logo_updated_at": tenant.logo_updated_at.isoformat(sep=" ", timespec="seconds")
         if tenant.logo_updated_at
         else None,
+        "billing_mode": getattr(tenant, "billing_mode", "hosted") or "hosted",
+        "credit_balance": float(tenant.credit_balance or 0) if getattr(tenant, "credit_balance", None) is not None else None,
+        "credit_reserved": float(tenant.credit_reserved or 0) if getattr(tenant, "credit_reserved", None) is not None else None,
         # 2026-09-01 - 商品卡开通状态给企业管理列表/详情
         "goods_card_enabled": bool(getattr(tenant, "goods_card_enabled", False)),
     }
@@ -690,11 +694,15 @@ def management_tenant_customer_preview_menus(
         resolved_id = resolve_customer_preview_tenant_id(db, current, tenant_id)
         menus = get_tenant_customer_preview_menus(db, resolved_id)
     except (ValueError, PermissionError) as exc:
+        # 2026-08-27 - 已删/不存在企业预览勿 500 - 走统一 400/403
         raise_read_endpoint_error(exc, context="customer_preview_menus")
+    from app.services.monitor_service import credit_customer_includes_today
+
+    # 2026-08-27 - 预览算力企业须含今日口径，勿沿用平台会话「截至昨日」
     return ApiResponse(
         data={
             "menus": [item.model_dump() for item in menus],
-            "customer_includes_today": False,
+            "customer_includes_today": credit_customer_includes_today(db, resolved_id),
         }
     )
 
@@ -1136,6 +1144,7 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         "celery_queues": queue_snapshot,
         "molizhishu_balance": fetch_molizhishu_balance(),
         "deepseek_balance": fetch_deepseek_balance(),
+        "credit_summary": credit_ops_summary(db),
         "meta": overview_meta,
     }
     return data
@@ -1176,6 +1185,15 @@ def management_create_tenant(
         )
         db.add(tenant)
         db.flush()
+        from app.services.management_service import apply_tenant_billing_mode_on_create
+
+        apply_tenant_billing_mode_on_create(
+            db,
+            tenant,
+            payload.billing_mode,
+            opening_credit_amount=payload.opening_credit_amount,
+            operator_user_id=current.user.id,
+        )
         if not tenant.status:
             if tenant.stop_reason == "expired" and tenant.stopped_at is None:
                 tenant.stopped_at = datetime.now()

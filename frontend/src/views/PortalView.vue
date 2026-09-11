@@ -15,7 +15,7 @@ import { withRetry } from '../composables/useRetry'
 import PortalLayout from './portal/PortalLayout.vue'
 import { useMonitorAnalytics } from './portal/composables/useMonitorAnalytics'
 import { usePlatformAdmin } from './portal/composables/usePlatformAdmin'
-import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey, PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey, PlatformDefaultLogoRefreshKey } from './portal/injectionKeys'
+import { PortalAnalyticsKey, PlatformAdminKey, PortalNavigateKey, WorkspaceFullscreenKey, ApprovalPendingRefreshKey, PlatformBrandLogoTenantKey, PlatformTenantsRefreshKey, PlatformDefaultLogoRefreshKey, PreviewCustomerMenusKey, PreviewCustomerIncludesTodayKey } from './portal/injectionKeys'
 import PlatformAdminDialogs from './portal/PlatformAdminDialogs.vue'
 import { menuIcon } from './portal/menuIcons'
 import {
@@ -27,11 +27,15 @@ import {
   CUSTOMER_PREVIEW_MENU,
   SETTINGS_MENU,
   SETTINGS_CHILD_MENUS,
+  ENTERPRISE_CONFIG_MENU,
+  ENTERPRISE_CHILD_MENUS,
   hiddenCustomerMenus,
+  hiddenEnterpriseConfigPermissionMenus,
   hiddenEnterprisePermissionMenus,
   hiddenPlatformMenus,
   hiddenSettingsPermissionMenus,
   hiddenUserPermissionMenus,
+  isEnterpriseConfigMenuCode,
   normalizeMenuCode,
 } from './portal/constants'
 import {
@@ -72,6 +76,9 @@ const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/App
 const AnnouncementManagePage = defineAsyncComponent(() => import('./portal/pages/AnnouncementManagePage.vue'))
 const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
 const AnnouncementModal = defineAsyncComponent(() => import('./portal/components/AnnouncementModal.vue'))
+// 2026-09-08 - 算力运营 / 企业配置（credit）页挂载
+const CreditOpsPage = defineAsyncComponent(() => import('./portal/pages/CreditOpsPage.vue'))
+const EnterpriseConfigPage = defineAsyncComponent(() => import('./portal/pages/EnterpriseConfigPage.vue'))
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -80,7 +87,12 @@ const isPlatform = computed(() => auth.session?.identity?.identity_type === 'PLA
 const isPreviewActive = computed(() => isCustomerPreviewActive(route, isPlatform.value))
 const previewTenantId = computed(() => parsePreviewTenantId(route))
 const previewTenantName = computed(() => parsePreviewTenantName(route))
-const { previewCustomerMenus } = useCustomerPreviewMenus(isPreviewActive, previewTenantId)
+const {
+  previewCustomerMenus,
+  previewCustomerIncludesToday,
+} = useCustomerPreviewMenus(isPreviewActive, previewTenantId)
+provide(PreviewCustomerMenusKey, previewCustomerMenus)
+provide(PreviewCustomerIncludesTodayKey, previewCustomerIncludesToday)
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
 
 function userCreateRouteAllowed(menus: MenuInfo[]) {
@@ -141,7 +153,7 @@ const menus = computed(() => {
       : CUSTOMER_PREVIEW_MENUS
   }
   const filtered = auth.allowedMenus
-    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
+    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenEnterpriseConfigPermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
   if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
     const auditChild = auth.allowedMenus.find(menu => menu.menu_code.startsWith('platform.audit.'))
     if (auditChild) {
@@ -182,7 +194,46 @@ const isApprovalPage = computed(() => activeMenuCode.value === 'platform.approva
 const isAnnouncementPage = computed(() => activeMenuCode.value === 'platform.announcements')
 const isCustomerWorkspacePage = computed(() => activeMenuCode.value === 'customer.workspace')
 const isBrandAnalysisPage = computed(() => activeMenuCode.value === 'customer.brand_analysis')
+const isCreditOpsPage = computed(() => activeMenuCode.value === 'platform.credit_ops_board')
+const isEnterpriseConfigPage = computed(() => isEnterpriseConfigMenuCode(activeMenuCode.value))
+/** 侧栏高亮父级；子项仅作页内 Tab / deep-link */
+const sidebarActiveMenuCode = computed(() => (
+  (ENTERPRISE_CHILD_MENUS as readonly string[]).includes(activeMenuCode.value)
+    ? ENTERPRISE_CONFIG_MENU
+    : activeMenuCode.value
+))
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
+
+// 2026-09-08 - zero 仍解析，CreditOpsPage 映射到概览+仅零余额
+function parseCreditOpsQueryTab(): 'overview' | 'recharge' | 'blocks' | 'zero' | 'pricing' | 'mode' | undefined {
+  const raw = route.query.credit_tab
+  const text = Array.isArray(raw) ? raw[0] : raw
+  if (text === 'overview' || text === 'recharge' || text === 'blocks' || text === 'zero' || text === 'pricing' || text === 'mode') return text
+  return undefined
+}
+
+function parseCreditOpsQueryTenantId(): number | undefined {
+  const raw = route.query.tenant_id
+  const text = Array.isArray(raw) ? raw[0] : raw
+  const parsed = Number(text)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function parseCreditOpsQueryBlockTab(): 'tenant_credit' | 'platform_balance' | 'terms' | 'inactive' | 'daily_cap' | undefined {
+  // 2026-09-09 - 旧 book_tab/block_tab 仍接受，CreditOps 一律进合并「提交拦截」
+  const raw = route.query.block_tab
+  const text = Array.isArray(raw) ? raw[0] : raw
+  if (
+    text === 'tenant_credit'
+    || text === 'platform_balance'
+    || text === 'terms'
+    || text === 'inactive'
+    || text === 'daily_cap'
+  ) {
+    return text
+  }
+  return undefined
+}
 
 const workspaceFullscreen = useWorkspaceFullscreen()
 provide(WorkspaceFullscreenKey, workspaceFullscreen)
@@ -246,7 +297,10 @@ const portalAnalytics = useMonitorAnalytics({
 })
 provide(PortalAnalyticsKey, portalAnalytics)
 
-const pageTitle = computed(() => activeMenu.value?.menu_name || (isPlatform.value ? '平台运营总览' : '客户运营工作台'))
+const pageTitle = computed(() => {
+  if (isEnterpriseConfigPage.value) return '企业配置'
+  return activeMenu.value?.menu_name || (isPlatform.value ? '平台运营总览' : '客户运营工作台')
+})
 const pageSubtitle = computed(() => {
   if (isPreviewActive.value) {
     return `只读预览「${previewTenantName.value || '客户'}」门户，可切换左侧菜单核对客户可见数据`
@@ -262,6 +316,8 @@ const pageSubtitle = computed(() => {
   }
   // 2026-07-31 - 企业管理页副文案像运营总览 - 改为贴列表能力
   if (isBrandAssetPage.value) return '管理客户企业、服务状态与监测配置'
+  if (isCreditOpsPage.value) return '算力企业余额、充扣、拦截与平台侧流水'
+  if (isEnterpriseConfigPage.value) return '监测配置、成员权限、算力与操作记录'
   if (activeMenuCode.value === 'platform.logs') return '审计用户、企业、任务、权限和导出操作'
   if (activeMenuCode.value === 'platform.settings') return '基础参数、调度策略、菜单权限和安全配置'
   if (activeMenuCode.value === 'platform.models') return '展示系统支持的监测平台，以及今日各平台探测成功/失败条数。'
@@ -502,7 +558,7 @@ watch(effectiveTenantIdForLogo, () => {
     :pinned-menu-count="pinnedMenuCount"
     :menu-favorites-enabled="menuFavoritesEnabled"
     :is-menu-pinned="isMenuPinned"
-    :active-menu-code="activeMenuCode"
+    :active-menu-code="sidebarActiveMenuCode"
     :user-menu-expanded="userMenuExpanded"
     :has-user-create-menu="hasUserCreateMenu"
     :has-user-list-menu="hasUserListMenu"
@@ -553,6 +609,17 @@ watch(effectiveTenantIdForLogo, () => {
     <BrandAnalysisPage v-else-if="isBrandAnalysisPage" />
     <ApprovalCenterPage v-else-if="isApprovalPage" />
     <AnnouncementManagePage v-else-if="isAnnouncementPage" />
+    <CreditOpsPage
+      v-else-if="isCreditOpsPage"
+      :initial-tab="parseCreditOpsQueryTab()"
+      :initial-tenant-id="parseCreditOpsQueryTenantId()"
+      :initial-block-tab="parseCreditOpsQueryBlockTab()"
+    />
+    <EnterpriseConfigPage
+      v-else-if="isEnterpriseConfigPage"
+      :preview-readonly="isPreviewActive"
+      :initial-tab="activeMenuCode"
+    />
 
     <template v-else>
       <template v-if="isDashboardPage">

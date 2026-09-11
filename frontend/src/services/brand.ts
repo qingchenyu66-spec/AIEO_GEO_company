@@ -52,6 +52,8 @@ export interface BrandWordGroup {
   monitor_keywords?: string[]
   platforms?: Array<string | PlatformSelection>
   run_mode: 'once' | 'weekly'
+  /** 保存后是否立刻跑一轮；后端 schema 已有，漏同步会导致 vue-tsc 失败 */
+  run_immediately?: boolean
   sort_order: number
   status: boolean
 }

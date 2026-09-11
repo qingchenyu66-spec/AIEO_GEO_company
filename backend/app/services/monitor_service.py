@@ -312,6 +312,29 @@ def customer_display_cutoff(now: datetime | None = None) -> datetime:
     return datetime.combine(day, time.max)
 
 
+def credit_customer_includes_today(db: Session, tenant_id: int | None) -> bool:
+    # 2026-09-04 - 算力自助客户看板含今日；托管仍截止昨日（auth/management 会话字段依赖）
+    if not tenant_id:
+        return False
+    tenant = db.get(Tenant, int(tenant_id))
+    if tenant is None or bool(getattr(tenant, "deleted", False)):
+        return False
+    from app.services.credit_service import is_credit_tenant
+
+    return bool(is_credit_tenant(tenant))
+
+
+def customer_display_cutoff_for_tenant(
+    db: Session,
+    tenant_id: int | None,
+    now: datetime | None = None,
+) -> datetime:
+    anchor = now or datetime.now()
+    if credit_customer_includes_today(db, tenant_id):
+        return datetime.combine(anchor.date(), time.max)
+    return customer_display_cutoff(anchor)
+
+
 def customer_display_date_range(
     *,
     now: datetime | None = None,
@@ -1180,6 +1203,42 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
         raise ValueError("所属企业不存在")
     ensure_sales_tenant_access(db, current, tenant_id)
     _validate_tenant_service_available(tenant)
+
+    credit_gate = None
+    from app.services.billing_mode_service import apply_pending_billing_mode_for_tenant
+    from app.services.credit_service import (
+        apply_manual_monitor_credit_gate,
+        finalize_schedule_submit,
+        is_credit_tenant,
+    )
+
+    # 2026-09-09 - 手动提交同样先落地 next_window，避免只调度路径能切模式
+    if apply_pending_billing_mode_for_tenant(db, tenant_id):
+        tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
+        if tenant is None:
+            raise ValueError("所属企业不存在")
+
+    # 2026-09-07 - credit 企业监控页直提也要预扣，禁止绕过调度白跑
+    if is_credit_tenant(tenant) and auto_commit:
+        from app.core.region_catalog import normalize_region_codes
+
+        platform_codes = [str(p.platform) for p in (payload.platforms or []) if getattr(p, "platform", None)]
+        regions = normalize_region_codes(payload.region_code or []) or [None]
+        credit_gate = apply_manual_monitor_credit_gate(
+            db,
+            tenant,
+            platform_codes=platform_codes,
+            prompt_count=len(payload.prompts or []),
+            region_count=max(1, len([r for r in regions if r is not None]) or 1),
+        )
+        if not credit_gate.allowed:
+            # 2026-09-11 - 先提交拦截审计/通知，再抛错；否则端点 rollback 会吞掉
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise ValueError(credit_gate.message or "算力不足或尚未确认计费规则")
+
     default_monitor_keywords, default_aliases, competitors = molizhishu_brand_payload(db, tenant_id)
     monitor_keywords = payload.monitor_keywords or default_monitor_keywords
     aliases = payload.monitor_keyword_aliases or default_aliases
@@ -1189,16 +1248,58 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
         monitor_keyword_aliases=aliases,
         competitors=competitors,
     )
-    response = MolizhishuClient().submit_task(request_body)
+    try:
+        response = MolizhishuClient().submit_task(request_body)
+    except Exception:
+        if credit_gate is not None and credit_gate.reserved_credits and credit_gate.reserve_ref:
+            finalize_schedule_submit(
+                db,
+                tenant,
+                reserve_ref=credit_gate.reserve_ref,
+                reserved_credits=credit_gate.reserved_credits,
+                submit_status="failed",
+            )
+            if auto_commit:
+                db.commit()
+        raise
     data = response.get("data") or {}
     task_id = data.get("taskId")
     if not task_id:
+        if credit_gate is not None and credit_gate.reserved_credits and credit_gate.reserve_ref:
+            finalize_schedule_submit(
+                db,
+                tenant,
+                reserve_ref=credit_gate.reserve_ref,
+                reserved_credits=credit_gate.reserved_credits,
+                submit_status="failed",
+            )
+            if auto_commit:
+                db.commit()
         raise ValueError("监测任务提交成功但未返回 taskId")
     existing = db.scalar(select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id))
     if existing is not None:
+        if credit_gate is not None and credit_gate.reserved_credits and credit_gate.reserve_ref:
+            finalize_schedule_submit(
+                db,
+                tenant,
+                reserve_ref=credit_gate.reserve_ref,
+                reserved_credits=credit_gate.reserved_credits,
+                submit_status="failed",
+            )
+            if auto_commit:
+                db.commit()
         raise ValueError(f"任务已存在：{task_id}")
     region_codes = normalize_region_codes(payload.region_code or []) or None
     from app.core.monitor_purpose import normalize_task_purpose
+
+    if credit_gate is not None and credit_gate.reserve_ref:
+        request_body = dict(request_body)
+        request_body["_geo_credit"] = {
+            "reserve_ref": str(credit_gate.reserve_ref)[:64],
+            "window_key": datetime.now().strftime("%Y%m%d-%H%M")[:32],
+            "reserved_credits": float(credit_gate.reserved_credits or 0),
+            "submit_channel": "manual_monitor",
+        }
 
     task = GeoMonitorTask(
         task_id=task_id,
@@ -1221,6 +1322,14 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
     db.add(task)
     for subtask in data.get("subTaskList") or []:
         _upsert_subtask(db, task_id, subtask)
+    if credit_gate is not None and credit_gate.reserved_credits and credit_gate.reserve_ref:
+        finalize_schedule_submit(
+            db,
+            tenant,
+            reserve_ref=credit_gate.reserve_ref,
+            reserved_credits=credit_gate.reserved_credits,
+            submit_status="submitted",
+        )
     if auto_commit:
         db.commit()
         db.refresh(task)
@@ -2086,6 +2195,10 @@ def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> Geo
         )
         launch_auto_retries_for_task(db, task)
         notify_failed_subtasks_for_task(db, task)
+        # 2026-09-07 - 跑完/重试收尾后按格 settle 或释放未计费预扣
+        from app.services.credit_service import settle_ready_credit_cells_for_task
+
+        settle_ready_credit_cells_for_task(db, task)
     except Exception as exc:
         if not isinstance(exc, _TRANSIENT_SYNC_ERRORS):
             task.last_error = str(exc)
@@ -2183,7 +2296,7 @@ def serialize_subtask(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
     pending = raw.get("screenshot_pending")
     shot_ok = raw.get("screenshot_ok")
-    # 2026-09-07 - 历史复用来源仅库内/操作日志；客户侧 raw_result 不外泄
+    # 2026-09-07 - 历史复用来源仅库内操作日志；客户侧 raw_result 不外泄
     raw_out: dict[str, Any] | None
     if isinstance(subtask.raw_result_json, dict):
         raw_out = dict(subtask.raw_result_json)

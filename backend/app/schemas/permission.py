@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -125,6 +126,9 @@ class TenantCreateRequest(BaseModel):
     code: str | None = Field(default=None, max_length=50)
     service_start_date: date | None = None
     service_end_date: date | None = None
+    billing_mode: str = Field(default="hosted", pattern="^(hosted|credit)$")
+    # 起步算力选填；有值才在创建时充值
+    opening_credit_amount: Decimal | None = Field(default=None, ge=0)
 
 
 class TenantUpdateRequest(BaseModel):

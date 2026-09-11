@@ -230,7 +230,7 @@ export async function getPlatformMatrix(force = false): Promise<PlatformMatrix> 
   return platformMatrixCache.data
 }
 
-export async function getPlatformsForBrandConfig(): Promise<{
+export async function getPlatformsForBrandConfig(options?: { silentError?: boolean }): Promise<{
   platforms: Array<{
     code: string
     name: string
@@ -250,7 +250,9 @@ export async function getPlatformsForBrandConfig(): Promise<{
     selected: boolean
   }>
 }> {
-  const response = await http.get('/v1/platforms/brand-config')
+  const response = await http.get('/v1/platforms/brand-config', {
+    silentError: options?.silentError,
+  } as GeoHttpRequestConfig)
   return response.data.data
 }
 

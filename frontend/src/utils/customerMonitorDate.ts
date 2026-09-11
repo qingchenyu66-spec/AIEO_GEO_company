@@ -1,4 +1,4 @@
-/** 客户侧监测展示：截至昨日（含）的全部历史，不含今日。 */
+/** 客户侧监测展示日期口径：托管默认截至昨日；算力自助可含今日。 */
 
 function formatLocalDate(date: Date) {
   const year = date.getFullYear()
@@ -17,12 +17,12 @@ export function todayDateString(date = new Date()) {
   return formatLocalDate(date)
 }
 
-export function customerDisplayCutoffDate(date = new Date()) {
-  return yesterdayDateString(date)
+export function customerDisplayCutoffDate(date = new Date(), includesToday = false) {
+  return includesToday ? todayDateString(date) : yesterdayDateString(date)
 }
 
-export function customerDisplayDateRange(lookbackDays = 7, date = new Date()) {
-  const endDate = customerDisplayCutoffDate(date)
+export function customerDisplayDateRange(lookbackDays = 7, date = new Date(), includesToday = false) {
+  const endDate = customerDisplayCutoffDate(date, includesToday)
   const start = new Date(`${endDate}T00:00:00`)
   start.setDate(start.getDate() - (lookbackDays - 1))
   return {
@@ -54,12 +54,12 @@ export function monitorTaskBeforeToday(task: {
   return created !== todayKey
 }
 
-export function customerDisplayPeriodLabel() {
-  return `数据截至 ${customerDisplayCutoffDate()}`
+export function customerDisplayPeriodLabel(includesToday = false) {
+  return `数据截至 ${customerDisplayCutoffDate(new Date(), includesToday)}`
 }
 
-export function customerTrendPeriodLabel(lookbackDays = 7, date = new Date()) {
-  const { startDate, endDate } = customerDisplayDateRange(lookbackDays, date)
+export function customerTrendPeriodLabel(lookbackDays = 7, date = new Date(), includesToday = false) {
+  const { startDate, endDate } = customerDisplayDateRange(lookbackDays, date, includesToday)
   return `近${lookbackDays}日 ${startDate} ~ ${endDate}`
 }
 
@@ -70,12 +70,13 @@ export function workspaceTrendDateRange(
   customStart?: string,
   customEnd?: string,
   date = new Date(),
+  includesToday = false,
 ) {
-  const endDate = customerDisplayCutoffDate(date)
+  const endDate = customerDisplayCutoffDate(date, includesToday)
   const end = new Date(`${endDate}T00:00:00`)
 
   if (preset === '7d') {
-    return customerDisplayDateRange(7, date)
+    return customerDisplayDateRange(7, date, includesToday)
   }
   if (preset === 'month') {
     const start = new Date(end.getFullYear(), end.getMonth(), 1)
@@ -91,7 +92,7 @@ export function workspaceTrendDateRange(
     return { startDate: formatLocalDate(start), endDate }
   }
   return {
-    startDate: customStart || customerDisplayDateRange(7, date).startDate,
+    startDate: customStart || customerDisplayDateRange(7, date, includesToday).startDate,
     endDate: customEnd || endDate,
   }
 }
@@ -188,8 +189,12 @@ export function workspacePeriodCompareLabel(preset: WorkspaceTrendPreset) {
   return '较上期'
 }
 
-export function isBeforeCustomerCutoff(isoTime: string | null | undefined, date = new Date()) {
+export function isBeforeCustomerCutoff(
+  isoTime: string | null | undefined,
+  date = new Date(),
+  includesToday = false,
+) {
   if (!isoTime) return false
-  const cutoffEnd = new Date(`${customerDisplayCutoffDate(date)}T23:59:59.999`)
+  const cutoffEnd = new Date(`${customerDisplayCutoffDate(date, includesToday)}T23:59:59.999`)
   return new Date(isoTime).getTime() <= cutoffEnd.getTime()
 }

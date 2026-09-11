@@ -51,6 +51,9 @@ export interface TenantInfo {
   has_logo?: boolean
   goods_card_enabled?: boolean
   logo_updated_at?: string | null
+  billing_mode?: 'hosted' | 'credit'
+  credit_balance?: number | null
+  credit_reserved?: number | null
 }
 
 /** 与企业管理「服务中」口径一致：启用、非人工停服/取消，且在服务期内 */
@@ -200,6 +203,19 @@ export interface PlatformOverview {
   system_health: Array<{ name: string; status: string; detail: string }>
   molizhishu_balance?: MolizhishuBalance
   deepseek_balance?: DeepseekBalance
+  credit_summary?: {
+    credit_tenant_count: number
+    credit_total_balance: number
+    credit_today_deduct: number
+    zero_balance_count: number
+    blocks_24h: number
+    tenant_credit_blocks_24h: number
+    platform_balance_blocks_24h: number
+    runway_windows: number | null
+    runway_low?: boolean
+    platform_balance_low?: boolean
+    next_window_estimate?: { subtask_count?: number; estimated_yuan?: number; window_key?: string }
+  }
 }
 
 export interface CreateUserPayload {
@@ -294,7 +310,6 @@ export function tenantLogoUrl(tenantId: number, logoUpdatedAt?: string | null): 
   const query = logoUpdatedAt ? `?v=${encodeURIComponent(logoUpdatedAt)}` : ''
   return `/api/v1/management/tenants/${tenantId}/logo${query}`
 }
-
 
 export type PlatformLogoMeta = { has_logo: boolean; logo_updated_at: string | null }
 
@@ -398,7 +413,14 @@ export async function checkTenantNameAvailable(name: string): Promise<void> {
   await http.get('/v1/management/tenants/name-check', { params: { name } })
 }
 
-export async function createTenant(payload: { name: string; code?: string | null; service_start_date?: string | null; service_end_date?: string | null }): Promise<unknown> {
+export async function createTenant(payload: {
+  name: string
+  code?: string | null
+  service_start_date?: string | null
+  service_end_date?: string | null
+  billing_mode?: 'hosted' | 'credit'
+  opening_credit_amount?: number | null
+}): Promise<unknown> {
   const response = await http.post('/v1/management/tenants', payload)
   invalidateCache('/v1/management/tenants')
   return response.data.data

@@ -25,6 +25,8 @@ PLATFORM_RESTRICTED_CATEGORIES = (
     "snapshot_backfill",
     "platform_service",
     "tenant_expiry",
+    # 2026-09-11 - 转托管销售通知须按 owner_user_id 过滤，禁止全平台串客户
+    "credit_billing_mode",
 )
 
 
@@ -61,6 +63,16 @@ def can_view_notification_category(
             return False
         # 销售需按 owner_user_id 过滤；其他已勾职位看全部（含无归属）
         return None if tenant_expiry_owner_only else True
+    # 2026-09-08 - 算力类通知原先落 unknown→False，客户看不到三日不足/拦截提醒
+    if category in {
+        "credit_runway",
+        "credit_submit_block",
+        "credit_platform_block",
+        "credit_billing_mode",
+        "credit_balance_capped",
+        "credit_terms",
+    }:
+        return True
     return False
 
 
@@ -231,6 +243,14 @@ def _apply_notification_visibility_filter(
             )
         else:
             clauses.append(SystemNotification.category == "tenant_expiry")
+    # 2026-09-11 - 转托管销售铃铛仅负责销售可见（payload.owner_user_id）
+    owner_expr = _owner_user_id_expr()
+    clauses.append(
+        and_(
+            SystemNotification.category == "credit_billing_mode",
+            owner_expr == user_id,
+        )
+    )
     return stmt.where(or_(*clauses))
 
 
@@ -381,6 +401,16 @@ def _user_can_read_notification(
             return False
         owner_id = _payload_owner_user_id(payload)
         return owner_id is not None and owner_id == user_id
+    if row.category == "credit_billing_mode":
+        # 平台侧销售通知：仅 owner；客户侧走下方 allowed is True
+        if not row.payload_json:
+            return False
+        try:
+            payload = json.loads(row.payload_json)
+        except json.JSONDecodeError:
+            return False
+        owner_id = _payload_owner_user_id(payload)
+        return owner_id is not None and owner_id == user_id
     allowed = can_view_notification_category(
         row.category,
         can_review_approvals=can_review_approvals,
@@ -480,6 +510,357 @@ def resolve_tenant_expiry_notifications(
     if auto_commit and cleared:
         db.commit()
     return cleared
+
+
+def upsert_credit_block_notification(
+    db: Session,
+    *,
+    tenant,
+    block_reason: str,
+    window_key: str,
+) -> SystemNotification | None:
+    """算力/平台余额拦截通知。"""
+    from app.models.tenant import Tenant as TenantModel
+
+    if not isinstance(tenant, TenantModel):
+        return None
+    if block_reason == "tenant_credit":
+        source_key = f"credit:block:tenant:{tenant.id}:{window_key}"
+        title = "监测未提交：算力不足"
+        message = f"企业「{tenant.name}」窗口 {window_key} 因算力不足未提交监测，请充值。"
+        audience = "CUSTOMER"
+        category = "credit_submit_block"
+        level = "warning"
+        target_tenant_id = tenant.id
+    else:
+        source_key = f"credit:block:platform:{window_key}"
+        title = "监测未提交：平台账户余额不足"
+        message = f"窗口 {window_key} 因监测平台账户余额不足，全平台提交已拦截。"
+        audience = "PLATFORM"
+        category = "credit_platform_block"
+        level = "critical"
+        target_tenant_id = None
+
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == audience,
+        )
+    )
+    payload = json.dumps(
+        {"tenant_id": tenant.id, "block_reason": block_reason, "window_key": window_key},
+        ensure_ascii=False,
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.level = level
+        existing.payload_json = payload
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return existing
+    row = SystemNotification(
+        audience_type=audience,
+        tenant_id=target_tenant_id,
+        category=category,
+        level=level,
+        title=title,
+        message=message,
+        payload_json=payload,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def upsert_credit_balance_capped_notification(
+    db: Session,
+    *,
+    tenant,
+    window_key: str,
+    requested: float,
+    charged: float,
+) -> SystemNotification | None:
+    """结算少收（余额封顶）通知平台运营；同企业同窗去重。"""
+    from app.models.tenant import Tenant as TenantModel
+
+    if not isinstance(tenant, TenantModel):
+        return None
+    source_key = f"credit:balance_capped:{tenant.id}:{window_key}"
+    title = "结算少收：余额不足已封顶"
+    message = (
+        f"企业「{tenant.name}」窗口 {window_key} 应扣 {requested:g}，"
+        f"实扣 {charged:g}（余额封顶）。请核对充值与单价。"
+    )
+    payload = json.dumps(
+        {
+            "tenant_id": tenant.id,
+            "block_reason": "balance_capped",
+            "window_key": window_key,
+            "requested_credits": requested,
+            "charged_credits": charged,
+        },
+        ensure_ascii=False,
+    )
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.level = "warning"
+        existing.payload_json = payload
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return existing
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="credit_balance_capped",
+        level="warning",
+        title=title,
+        message=message,
+        payload_json=payload,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def notify_credit_terms_published(db: Session, terms) -> int:
+    # 2026-09-08 - 服务条款仅门户查阅，发布不再推系统通知（原「请确认」已退役）
+    del db, terms
+    return 0
+
+
+def scan_credit_terms_reminders(db: Session) -> int:
+    # 2026-09-08 - 条款不再硬确认，停发生效前提醒
+    del db
+    return 0
+
+
+def upsert_credit_three_day_shortfall_notification(
+    db: Session,
+    *,
+    tenant,
+    available: float,
+    credits_per_day: float,
+    need_three_days: float,
+) -> SystemNotification | None:
+    """可用算力不足以支撑约 3 日预估时通知该企业（按日去重）。"""
+    from app.models.tenant import Tenant as TenantModel
+
+    if not isinstance(tenant, TenantModel):
+        return None
+    today_key = datetime.now().date().isoformat()
+    source_key = f"credit:runway3d:{tenant.id}:{today_key}"
+    # 2026-09-08 - 客户通知：可用约数 + 约还能撑几天，催及时补充算力
+    days_left = (available / credits_per_day) if credits_per_day > 0 else 0.0
+    if days_left < 0.1:
+        days_text = "已不足 1 天"
+    else:
+        days_text = f"大约还能支撑 {days_left:.1f} 天"
+    title = "算力余量提醒"
+    message = (
+        f"根据当前监测配置，可用算力约 {available:.0f}，{days_text}（不足 3 天）。"
+        f"为避免监测中止，请及时补充算力。"
+    )
+    payload = json.dumps(
+        {
+            "tenant_id": tenant.id,
+            "available": available,
+            "credits_per_day": credits_per_day,
+            "need_three_days": need_three_days,
+            "days_left": round(days_left, 2),
+        },
+        ensure_ascii=False,
+    )
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "CUSTOMER",
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.payload_json = payload
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return existing
+    row = SystemNotification(
+        audience_type="CUSTOMER",
+        tenant_id=tenant.id,
+        category="credit_runway",
+        level="warning",
+        title=title,
+        message=message,
+        payload_json=payload,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def notify_billing_mode_switched(db: Session, tenant, log, *, operator_name: str | None = None) -> int:
+    """G7：模式切换后通知企业管理员。"""
+    from app.models.credit import BillingModeChangeLog
+
+    if not isinstance(log, BillingModeChangeLog):
+        return 0
+    mode_label = "算力自助" if log.to_mode == "credit" else "平台托管"
+    title = f"计费模式已切换为{mode_label}"
+    op = f"操作人：{operator_name}" if operator_name else "平台运营"
+    message = f"企业计费模式已调整为{mode_label}。{op}。原因：{log.reason}"
+    source_key = f"credit:billing_mode:{log.id}:tenant:{tenant.id}"
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "CUSTOMER",
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return 1
+    db.add(
+        SystemNotification(
+            audience_type="CUSTOMER",
+            tenant_id=tenant.id,
+            category="credit_billing_mode",
+            level="info",
+            title=title,
+            message=message,
+            payload_json=json.dumps(
+                {"change_log_id": log.id, "from_mode": log.from_mode, "to_mode": log.to_mode},
+                ensure_ascii=False,
+            ),
+            source_key=source_key,
+        )
+    )
+    db.flush()
+    return 1
+
+
+def notify_billing_mode_switched_to_sales(db: Session, tenant, log, *, operator_name: str | None = None) -> int:
+    """G7：转托管时通知负责销售（PLATFORM + owner_user_id 过滤）。"""
+    from app.models.credit import BillingModeChangeLog
+
+    if not isinstance(log, BillingModeChangeLog) or log.to_mode != "hosted":
+        return 0
+    owner_id = getattr(tenant, "owner_user_id", None)
+    if not owner_id:
+        return 0
+    mode_label = "平台托管"
+    op = f"操作人：{operator_name}" if operator_name else "平台运营"
+    title = f"客户已转回托管：{tenant.name}"
+    message = f"企业「{tenant.name}」计费模式已调整为{mode_label}。{op}。原因：{log.reason}"
+    source_key = f"credit:billing_mode:sales:{log.id}:tenant:{tenant.id}"
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+        )
+    )
+    payload = json.dumps(
+        {"change_log_id": log.id, "tenant_id": tenant.id, "owner_user_id": owner_id, "to_mode": log.to_mode},
+        ensure_ascii=False,
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.payload_json = payload
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return 1
+    db.add(
+        SystemNotification(
+            audience_type="PLATFORM",
+            tenant_id=None,
+            category="credit_billing_mode",
+            level="info",
+            title=title,
+            message=message,
+            payload_json=payload,
+            source_key=source_key,
+        )
+    )
+    db.flush()
+    return 1
+
+
+def upsert_credit_runway_alert(
+    db: Session,
+    *,
+    runway_windows: float | None,
+    runway_threshold: int,
+    molizhishu_balance: float,
+    next_window_yuan: float,
+    platform_gate_ok: bool,
+) -> SystemNotification | None:
+    """B+4：runway 低于阈值或模力余额闸不通过时提醒平台运营。"""
+    if platform_gate_ok and (runway_windows is None or runway_windows >= runway_threshold):
+        return None
+    source_key = "credit:runway:platform_alert"
+    if platform_gate_ok:
+        title = f"Runway 偏低（{runway_windows:.1f} 窗）"
+        message = (
+            f"模力账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
+            f"Runway 约 {runway_windows:.1f} 窗，低于阈值 {runway_threshold} 窗。"
+        )
+        level = "warning"
+    else:
+        title = "模力余额不足，全平台提交可能被拦截"
+        message = (
+            f"模力账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
+            f"未达 runway×预估+安全垫要求（阈值 {runway_threshold} 窗）。"
+        )
+        level = "critical"
+    payload = json.dumps(
+        {
+            "runway_windows": runway_windows,
+            "runway_threshold": runway_threshold,
+            "molizhishu_balance": molizhishu_balance,
+            "next_window_yuan": next_window_yuan,
+            "platform_gate_ok": platform_gate_ok,
+        },
+        ensure_ascii=False,
+    )
+    existing = db.scalar(
+        select(SystemNotification).where(
+            SystemNotification.source_key == source_key,
+            SystemNotification.audience_type == "PLATFORM",
+        )
+    )
+    if existing is not None:
+        existing.title = title
+        existing.message = message
+        existing.level = level
+        existing.payload_json = payload
+        existing.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        db.flush()
+        return existing
+    row = SystemNotification(
+        audience_type="PLATFORM",
+        tenant_id=None,
+        category="credit_runway",
+        level=level,
+        title=title,
+        message=message,
+        payload_json=payload,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def upsert_monitor_alert_notification(db: Session, alert: dict[str, Any]) -> SystemNotification | None:
