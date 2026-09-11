@@ -121,7 +121,7 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         field="observer_platforms",
         category="schedule",
         label="观察号监测平台",
-        description="艾迪亚观察号可见平台；后台勾选即可，无需手写编码。改后约 2 秒生效；职位白名单可重跑 ensure_aidiya_observer 同步",
+        description="艾迪亚观察号可见平台；勾选后约 2 秒生效。若职位白名单未同步，可在服务器重跑观察号同步脚本。",
         value_type="str",
     ),
     "redis_enabled": ConfigMeta(

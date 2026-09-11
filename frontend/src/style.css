@@ -5007,8 +5007,20 @@ button:disabled {
   min-width: 0;
 }
 
-.settings-observer-platforms .platform-check-grid.compact {
+/* 配置表「当前值」列较窄，248px 底宽会被迫单列拉很高 */
+.settings-observer-platforms.keyword-group-platform-field .platform-check-grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 6px;
+}
+
+.settings-observer-platforms .platform-check {
+  min-height: 34px;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.settings-config-row:has(.settings-observer-platforms) {
+  align-items: start;
 }
 
 .settings-config-actions {
