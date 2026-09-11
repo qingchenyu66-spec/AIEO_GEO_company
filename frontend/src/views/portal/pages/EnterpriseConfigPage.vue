@@ -137,10 +137,19 @@ function formatLedgerAmount(amount: number) {
 function formatLedgerTime(value: unknown) {
   const text = String(value || '').trim()
   if (!text) return '—'
-  // 2026-09-11 17:10:33 → 09-11 17:10
-  const matched = text.match(/(\d{4}-)?(\d{2}-\d{2})\s+(\d{2}:\d{2})/)
-  if (!matched) return text
-  return `${matched[2]} ${matched[3]}`
+  const matched = text.match(/(\d{2}-\d{2})\s+(\d{2}:\d{2})/)
+  if (matched) return `${matched[1]} ${matched[2]}`
+  try {
+    return new Date(text).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+  } catch {
+    return text
+  }
 }
 
 function isInternalLedgerReason(reason: string) {
@@ -165,12 +174,41 @@ function formatLedgerReason(row: CreditLedgerItem) {
   return hint || '—'
 }
 
+/** 流水主文案：监测词 + 平台；充值/调整用 reason */
+function ledgerPrimary(row: CreditLedgerItem) {
+  if (row.entry_type === 'settle') {
+    const keyword = (row.keyword || '').trim()
+    const platform = row.platform_code ? getPlatformMeta(row.platform_code).name : ''
+    if (keyword && platform) return `${keyword} · ${platform}`
+    if (keyword) return keyword
+    return formatLedgerReason(row)
+  }
+  const reason = (row.reason || '').trim()
+  if (reason && !isInternalLedgerReason(reason)) return reason
+  return entryTypeLabel[row.entry_type] || '账单变动'
+}
+
+/** 流水次文案：时间 · 类型 · 窗口 */
+function ledgerSecondary(row: CreditLedgerItem) {
+  const parts = [
+    formatLedgerTime(row.created_at),
+    entryTypeLabel[row.entry_type] || row.entry_type,
+  ]
+  if (row.entry_type === 'settle' && (row.window_key || '').trim()) {
+    parts.push(String(row.window_key).trim())
+  }
+  return parts.filter(Boolean).join(' · ')
+}
+
 const ledgerTotal = computed(() => Number((ledger.value as { total?: number } | null)?.total || 0))
 const ledgerTotalPages = computed(() => Math.max(1, Math.ceil(ledgerTotal.value / ledgerPageSize) || 1))
 
 async function loadCreditLedger(page = ledgerPage.value) {
   const tenantId = enterpriseTenantId.value
   ledgerPage.value = page
+  ledgerDetailVisible.value = false
+  ledgerDetailRowId.value = null
+  ledgerDetail.value = null
   ledger.value = await getEnterpriseCreditLedger(page, ledgerPageSize, tenantId)
 }
 
@@ -353,7 +391,7 @@ function openTermsView() {
 const termsDialogTitle = computed(() => '服务条款')
 
 async function openLedgerDetail(row: CreditLedgerItem) {
-  // 再点同一行收起明细
+  // 再点同一行收起；展开插在该行下方，避免滚到页面底
   if (ledgerDetailVisible.value && ledgerDetailRowId.value === row.id) {
     ledgerDetailVisible.value = false
     ledgerDetailRowId.value = null
@@ -373,11 +411,6 @@ async function openLedgerDetail(row: CreditLedgerItem) {
   } finally {
     ledgerDetailLoading.value = false
   }
-}
-
-function onLedgerDrawerClosed() {
-  ledgerDetailRowId.value = null
-  ledgerDetail.value = null
 }
 
 function selectTab(code: string) {
@@ -487,91 +520,109 @@ watch(visibleTabs, () => ensureAllowedTab())
       <BrandAuditPage v-if="tab === 'monitor'" customer-config-embed />
 
         <div v-else-if="tab === 'credit' && isCreditBilling" class="panel credit-panel">
-        <div class="credit-kpi">
-          <article class="credit-kpi-card">
-            <span>可用算力</span>
-            <strong>{{ formatCreditNumber(summary?.available) }}</strong>
-          </article>
-          <article class="credit-kpi-card">
-            <span>今日已扣</span>
-            <strong>{{ formatCreditNumber(summary?.today_deduct ?? 0) }}</strong>
-          </article>
-        </div>
-        <div class="credit-notice">
-          <span>充值请联系客户经理</span>
-          <button v-if="terms" type="button" class="credit-notice-link" @click="openTermsView">查看服务条款</button>
-        </div>
+        <header class="credit-hero">
+          <div class="credit-hero-metrics">
+            <div class="credit-metric is-primary">
+              <span class="credit-metric-label">可用算力</span>
+              <strong class="credit-metric-value">{{ formatCreditNumber(summary?.available) }}</strong>
+            </div>
+            <div class="credit-metric">
+              <span class="credit-metric-label">今日已扣</span>
+              <strong class="credit-metric-value">{{ formatCreditNumber(summary?.today_deduct ?? 0) }}</strong>
+            </div>
+            <div class="credit-metric">
+              <span class="credit-metric-label">总用量</span>
+              <strong class="credit-metric-value">{{ formatCreditNumber(summary?.total_usage ?? 0) }}</strong>
+            </div>
+          </div>
+          <div class="credit-hero-links">
+            <span>充值请联系客户经理</span>
+            <template v-if="terms">
+              <span class="credit-hero-sep" aria-hidden="true">·</span>
+              <button type="button" class="credit-notice-link" @click="openTermsView">服务条款</button>
+            </template>
+          </div>
+        </header>
+
         <el-dialog v-model="termsViewVisible" width="560px" :title="termsDialogTitle">
           <div v-if="terms?.content_html" class="terms-box terms-box-dialog" v-html="terms.content_html" />
         </el-dialog>
 
-        <div class="credit-ledger-head">
-          <span class="credit-ledger-title">算力流水</span>
-          <span v-if="ledgerTotal" class="credit-ledger-meta">共 {{ ledgerTotal }} 条 · 第 {{ ledgerPage }} / {{ ledgerTotalPages }} 页</span>
-        </div>
-        <div class="table-scroll">
-          <table v-if="ledger?.items?.length" class="table ledger-table">
-            <thead>
-              <tr>
-                <th class="col-time">时间</th>
-                <th class="col-type">类型</th>
-                <th class="col-amount">变动</th>
-                <th class="col-balance">余额</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in ledger.items"
-                :key="row.id"
-                class="clickable"
+        <section class="credit-ledger">
+          <div class="credit-ledger-head">
+            <h3 class="credit-ledger-title">算力流水</h3>
+            <span v-if="ledgerTotal" class="credit-ledger-meta">共 {{ ledgerTotal }} 条</span>
+          </div>
+
+          <div v-if="ledger?.items?.length" class="credit-ledger-list">
+            <div
+              v-for="row in ledger.items"
+              :key="row.id"
+              class="credit-ledger-block"
+              :class="{ open: ledgerDetailVisible && ledgerDetailRowId === row.id }"
+            >
+              <button
+                type="button"
+                class="credit-ledger-item"
                 :class="{ 'is-active': ledgerDetailVisible && ledgerDetailRowId === row.id }"
                 @click="openLedgerDetail(row)"
               >
-                <td class="col-time">{{ formatLedgerTime(row.created_at) }}</td>
-                <td class="col-type">{{ entryTypeLabel[row.entry_type] || row.entry_type }}</td>
-                <td class="col-amount" :class="{ plus: row.amount > 0, minus: row.amount < 0 }">{{ formatLedgerAmount(row.amount) }}</td>
-                <td class="col-balance">{{ formatCreditNumber(row.balance_after) }}</td>
-                <td class="reason-cell" :title="formatLedgerReason(row)">{{ formatLedgerReason(row) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="hint">暂无流水</p>
-        </div>
-        <div v-if="ledgerTotalPages > 1" class="ledger-pagination">
-          <button type="button" class="plain-btn" :disabled="ledgerPage <= 1" @click="changeLedgerPage(-1)">上一页</button>
-          <button type="button" class="plain-btn" :disabled="ledgerPage >= ledgerTotalPages" @click="changeLedgerPage(1)">下一页</button>
-        </div>
-        <el-drawer
-          v-model="ledgerDetailVisible"
-          size="520px"
-          title="流水明细"
-          direction="rtl"
-          @closed="onLedgerDrawerClosed"
-        >
-          <div v-loading="ledgerDetailLoading">
-            <template v-if="ledgerDetail">
-              <p>类型：{{ entryTypeLabel[ledgerDetail.entry_type] || ledgerDetail.entry_type }}</p>
-              <p>时间：{{ ledgerDetail.created_at }}</p>
-              <p>变动：{{ formatLedgerAmount(ledgerDetail.amount) }} · 余额：{{ formatCreditNumber(ledgerDetail.balance_after) }}</p>
-              <p>窗口：{{ ledgerDetail.window_key || '—' }}</p>
-              <p>说明：{{ formatLedgerReason(ledgerDetail) }}</p>
-              <h4 v-if="ledgerDetail.subtasks?.length">子任务明细</h4>
-              <table v-if="ledgerDetail.subtasks?.length" class="table subtask-table">
-                <thead><tr><th>平台</th><th>关键词</th><th>状态</th><th>算力</th></tr></thead>
-                <tbody>
-                  <tr v-for="(st, idx) in ledgerDetail.subtasks" :key="st.subtask_id || idx">
-                    <td>{{ st.platform_code ? getPlatformMeta(st.platform_code).name : '—' }}</td>
-                    <td>{{ st.keyword || '—' }}</td>
-                    <td>{{ formatSubtaskStatus(st.status) }}</td>
-                    <td>{{ st.credits ?? '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <p v-else class="hint">暂无子任务明细</p>
-            </template>
+                <div class="credit-ledger-main">
+                  <strong class="credit-ledger-primary" :title="ledgerPrimary(row)">{{ ledgerPrimary(row) }}</strong>
+                  <span class="credit-ledger-secondary">{{ ledgerSecondary(row) }}</span>
+                </div>
+                <div class="credit-ledger-side">
+                  <strong
+                    class="credit-ledger-amount"
+                    :class="{ plus: row.amount > 0, minus: row.amount < 0 }"
+                  >{{ formatLedgerAmount(row.amount) }}</strong>
+                  <span class="credit-ledger-balance">余额 {{ formatCreditNumber(row.balance_after) }}</span>
+                </div>
+              </button>
+              <div
+                v-if="ledgerDetailVisible && ledgerDetailRowId === row.id"
+                v-loading="ledgerDetailLoading"
+                class="credit-ledger-expand"
+              >
+                <template v-if="ledgerDetail">
+                  <dl class="credit-expand-dl">
+                    <div><dt>类型</dt><dd>{{ entryTypeLabel[ledgerDetail.entry_type] || ledgerDetail.entry_type }}</dd></div>
+                    <div><dt>时间</dt><dd>{{ ledgerDetail.created_at }}</dd></div>
+                    <div>
+                      <dt>变动</dt>
+                      <dd :class="{ plus: ledgerDetail.amount > 0, minus: ledgerDetail.amount < 0 }">
+                        {{ formatLedgerAmount(ledgerDetail.amount) }}
+                      </dd>
+                    </div>
+                    <div><dt>余额</dt><dd>{{ formatCreditNumber(ledgerDetail.balance_after) }}</dd></div>
+                    <div v-if="ledgerDetail.window_key"><dt>窗口</dt><dd>{{ ledgerDetail.window_key }}</dd></div>
+                    <div><dt>说明</dt><dd>{{ formatLedgerReason(ledgerDetail) }}</dd></div>
+                  </dl>
+                  <div v-if="ledgerDetail.subtasks?.length" class="credit-expand-subs-wrap">
+                    <h4 class="credit-expand-subhead">明细</h4>
+                    <ul class="credit-expand-subs">
+                      <li v-for="(st, idx) in ledgerDetail.subtasks" :key="st.subtask_id || idx">
+                        <div>
+                          <strong>{{ st.keyword || '—' }}</strong>
+                          <span>{{ st.platform_code ? getPlatformMeta(st.platform_code).name : '—' }} · {{ formatSubtaskStatus(st.status) }}</span>
+                        </div>
+                        <em>{{ st.credits ?? '—' }}</em>
+                      </li>
+                    </ul>
+                  </div>
+                  <p v-else-if="!ledgerDetailLoading" class="hint credit-expand-empty">暂无子任务明细</p>
+                </template>
+              </div>
+            </div>
           </div>
-        </el-drawer>
+          <p v-else class="hint">暂无流水</p>
+
+          <div v-if="ledgerTotalPages > 1" class="ledger-pagination">
+            <span class="ledger-pagination-meta">第 {{ ledgerPage }} / {{ ledgerTotalPages }} 页</span>
+            <button type="button" class="plain-btn" :disabled="ledgerPage <= 1" @click="changeLedgerPage(-1)">上一页</button>
+            <button type="button" class="plain-btn" :disabled="ledgerPage >= ledgerTotalPages" @click="changeLedgerPage(1)">下一页</button>
+          </div>
+        </section>
       </div>
 
       <div v-else-if="tab === 'members'" class="panel">
@@ -710,51 +761,223 @@ watch(visibleTabs, () => ensureAllowedTab())
 .card span { display: block; font-size: 12px; color: #64748b; margin-bottom: 6px; }
 .card strong { font-size: 22px; }
 .credit-panel { padding-top: 4px; }
-.credit-kpi {
+.credit-hero {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #eef2f7;
+}
+.credit-hero-metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 12px;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  align-items: end;
 }
-.credit-kpi-card {
-  border: 1px solid #eef2f7;
-  border-radius: 8px;
-  padding: 14px 16px;
-  background: #f8fafc;
-}
-.credit-kpi-card span {
+.credit-metric-label {
   display: block;
-  font-size: 12px;
-  color: #64748b;
   margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
-.credit-kpi-card strong {
-  font-size: 24px;
+.credit-metric-value {
+  display: block;
+  color: #0f172a;
+  font-size: 22px;
   font-weight: 700;
-  color: #12253f;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+}
+.credit-metric.is-primary .credit-metric-value {
+  font-size: 34px;
+  color: #0f172a;
+}
+.credit-hero-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+  margin-top: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.credit-hero-sep {
+  margin: 0 6px;
+  color: #cbd5e1;
 }
 .credit-ledger-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 4px 0 8px;
+  margin-bottom: 4px;
 }
 .credit-ledger-title {
-  font-size: 14px;
+  margin: 0;
+  font-size: 15px;
   font-weight: 700;
-  color: #12253f;
+  color: #0f172a;
 }
 .credit-ledger-meta {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 12px;
 }
+.credit-ledger-list {
+  border-top: 1px solid #eef2f7;
+}
+.credit-ledger-block {
+  border-bottom: 1px solid #eef2f7;
+}
+.credit-ledger-block.open {
+  background: #f8fafc;
+}
+.credit-ledger-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  margin: 0;
+  padding: 14px 4px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.credit-ledger-item:hover {
+  background: #f8fafc;
+}
+.credit-ledger-item.is-active {
+  background: transparent;
+}
+.credit-ledger-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.credit-ledger-primary {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.credit-ledger-block.open .credit-ledger-primary {
+  color: var(--el-color-primary);
+}
+.credit-ledger-secondary {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.credit-ledger-side {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 96px;
+}
+.credit-ledger-amount {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.credit-ledger-amount.plus { color: #047857; }
+.credit-ledger-amount.minus { color: #b45309; }
+.credit-ledger-balance {
+  color: #94a3b8;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.credit-ledger-expand {
+  min-height: 48px;
+  margin: 0 4px 12px;
+  padding: 12px 14px;
+  border: 1px solid #e8eef5;
+  border-radius: 8px;
+  background: #fff;
+}
+.credit-expand-dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.credit-expand-dl > div {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.credit-expand-dl dt {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.credit-expand-dl dd {
+  margin: 0;
+  color: #0f172a;
+  font-size: 13px;
+  word-break: break-word;
+}
+.credit-expand-dl dd.plus { color: #047857; font-weight: 600; }
+.credit-expand-dl dd.minus { color: #b45309; font-weight: 600; }
+.credit-expand-subs-wrap { margin-top: 12px; }
+.credit-expand-subhead {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+.credit-expand-subs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid #eef2f7;
+}
+.credit-expand-subs li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+.credit-expand-subs strong {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+}
+.credit-expand-subs span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.credit-expand-subs em {
+  flex-shrink: 0;
+  font-style: normal;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+.credit-expand-empty { margin: 8px 0 0; }
 .ledger-pagination {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+.ledger-pagination-meta {
+  margin-right: auto;
+  color: #94a3b8;
+  font-size: 12px;
 }
 .ledger-pagination .plain-btn {
   border: 1px solid #dbe3ee;
@@ -769,30 +992,12 @@ watch(visibleTabs, () => ensureAllowedTab())
   cursor: not-allowed;
 }
 .hint { color: #64748b; font-size: 13px; }
-.credit-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 14px;
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 13px;
-}
-.credit-notice span + span::before,
-.credit-notice span + .credit-notice-link::before {
-  content: '·';
-  margin-right: 14px;
-  color: #cbd5e1;
-}
 .credit-notice-link {
   border: none;
   background: transparent;
   padding: 0;
   color: var(--el-color-primary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 .credit-notice-link:hover { text-decoration: underline; }
@@ -809,44 +1014,6 @@ watch(visibleTabs, () => ensureAllowedTab())
 .table th, .table td { border: 1px solid var(--el-border-color); padding: 8px 10px; text-align: left; vertical-align: top; }
 .table tr.clickable { cursor: pointer; }
 .table tr.clickable:hover { background: #f8fafc; }
-.ledger-table tr.clickable.is-active { background: #eff6ff; }
-.ledger-table {
-  table-layout: fixed;
-  margin-top: 0;
-}
-.ledger-table th,
-.ledger-table td {
-  border: none;
-  border-bottom: 1px solid #eef2f7;
-  padding: 10px 8px;
-  vertical-align: middle;
-}
-.ledger-table th {
-  color: #5f7390;
-  font-weight: 700;
-  background: #f7fafc;
-  white-space: nowrap;
-}
-.ledger-table .col-time {
-  width: 108px;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.ledger-table .col-type { width: 64px; }
-.ledger-table .col-amount,
-.ledger-table .col-balance {
-  width: 88px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.ledger-table .reason-cell {
-  max-width: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #425a78;
-}
 .audit-table { table-layout: fixed; margin-top: 0; }
 .audit-table th, .audit-table td { overflow: hidden; }
 .audit-table .col-time { width: 138px; white-space: nowrap; color: #64748b; font-variant-numeric: tabular-nums; }
@@ -938,10 +1105,6 @@ watch(visibleTabs, () => ensureAllowedTab())
 .audit-expand-btn:hover { text-decoration: underline; }
 .terms-box { max-height: 200px; overflow: auto; border: 1px solid var(--el-border-color); padding: 12px; margin: 12px 0; font-size: 13px; }
 .terms-box-dialog { max-height: 420px; margin: 0; }
-.subtask-table { margin-top: 8px; }
-.subtask-table th, .subtask-table td { font-size: 12px; padding: 6px 8px; }
-.ledger-table td.plus { color: #047857; font-weight: 600; }
-.ledger-table td.minus { color: #b45309; font-weight: 600; }
 @media (max-width: 900px) {
   /* 2026-09-07 - 企业配置窄屏：侧栏改顶栏横滑 */
   .enterprise-config-page { flex-direction: column; min-height: 0; }
@@ -966,5 +1129,9 @@ watch(visibleTabs, () => ensureAllowedTab())
   }
   .enterprise-main { padding: 12px; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .credit-hero-metrics { grid-template-columns: 1fr; gap: 10px; }
+  .credit-metric.is-primary .credit-metric-value { font-size: 30px; }
+  .credit-expand-dl { grid-template-columns: 1fr; }
+  .credit-ledger-item { gap: 12px; padding: 12px 0; }
 }
 </style>

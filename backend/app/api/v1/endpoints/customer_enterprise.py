@@ -38,6 +38,7 @@ from app.services.credit_service import (
     ledger_row_to_dict,
     merge_credit_policy,
     tenant_today_credit_deduct,
+    tenant_total_credit_deduct,
     validate_credit_monitor_save,
 )
 from app.services.enterprise_member_service import (
@@ -112,12 +113,14 @@ def enterprise_credit_summary(
     asset = get_brand_asset(db, tenant_id)
     estimate = estimate_daily_credits(db, tenant, asset) if asset else {}
     today_deduct = tenant_today_credit_deduct(db, tenant_id)
+    total_usage = tenant_total_credit_deduct(db, tenant_id)
     # 2026-09-08 - 客户 summary 不返回 reserved/pending_terms（UI 已藏；防接口侧读预扣）
     return ApiResponse(
         data={
             "balance": float(tenant.credit_balance or 0),
             "available": float((tenant.credit_balance or 0) - (tenant.credit_reserved or 0)),
             "today_deduct": float(today_deduct),
+            "total_usage": float(total_usage),
             "daily_estimate": estimate,
             "billing_mode": tenant.billing_mode,
         }

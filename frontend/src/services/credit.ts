@@ -8,6 +8,7 @@ export interface CreditSummary {
   balance: number
   available: number
   today_deduct?: number
+  total_usage?: number
   daily_estimate: Record<string, unknown>
   billing_mode: string
 }

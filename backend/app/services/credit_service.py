@@ -221,6 +221,16 @@ def tenant_today_credit_deduct(db: Session, tenant_id: int | None = None) -> Dec
     return Decimal(str(db.scalar(stmt) or 0))
 
 
+def tenant_total_credit_deduct(db: Session, tenant_id: int) -> Decimal:
+    """累计总用量：历史 settle 扣费绝对值之和。"""
+    stmt = select(func.coalesce(func.sum(-TenantCreditLedger.amount), 0)).where(
+        TenantCreditLedger.entry_type == "settle",
+        TenantCreditLedger.tenant_id == int(tenant_id),
+        TenantCreditLedger.amount < 0,
+    )
+    return Decimal(str(db.scalar(stmt) or 0))
+
+
 def list_open_credit_reserves(db: Session, tenant_id: int, *, limit: int = 30) -> list[dict[str, Any]]:
     """运营手工 release：列出该 ref 仍有剩余预扣占用的批次。"""
     reserves = list(

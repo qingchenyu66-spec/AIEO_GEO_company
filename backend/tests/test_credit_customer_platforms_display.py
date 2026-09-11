@@ -142,7 +142,7 @@ def test_resolve_monitor_date_range_credit_keeps_today(db: Session):
 
 def test_tenant_today_credit_deduct(db: Session):
     from app.models.credit import TenantCreditLedger
-    from app.services.credit_service import tenant_today_credit_deduct
+    from app.services.credit_service import tenant_today_credit_deduct, tenant_total_credit_deduct
 
     suffix = uuid4().hex[:8]
     tenant = Tenant(name="t", code=f"CR_TD_{suffix}", billing_mode=BILLING_MODE_CREDIT, credit_balance=100)
@@ -159,6 +159,7 @@ def test_tenant_today_credit_deduct(db: Session):
     )
     db.flush()
     assert tenant_today_credit_deduct(db, tenant.id) == Decimal("5")
+    assert tenant_total_credit_deduct(db, tenant.id) == Decimal("5")
 
 
 def test_tenant_purchased_platforms_no_whitelist_fallback(db: Session):
