@@ -66,7 +66,7 @@ export async function getEnterpriseCreditLedger(page = 1, pageSize = 20, tenantI
   const response = await http.get('/v1/customer/enterprise/credit/ledger', {
     params: { page, page_size: pageSize, ...enterpriseTenantParams(tenantId) },
   })
-  return response.data.data as { items: CreditLedgerItem[]; page: number; page_size: number }
+  return response.data.data as { items: CreditLedgerItem[]; total?: number; page: number; page_size: number }
 }
 
 export async function getEnterpriseCreditLedgerDetail(ledgerId: number, tenantId?: number) {

@@ -1347,7 +1347,7 @@ def backfill_false_unbilled_releases(
             credits=credits,
             platform_code=platform,
             keyword=(getattr(origin, "prompt", None) or "")[:200] or None,
-            window_key=None,
+            window_key=(batch_ref.split("-kw", 1)[0] if batch_ref else None) or None,
             detail_json=detail,
             prepaid_share=Decimal("0"),
         )
@@ -1365,8 +1365,8 @@ def backfill_false_unbilled_releases(
         claim.credits = credits
         if ledger is not None:
             claim.ledger_id = ledger.id
-            if not (ledger.reason or "").strip():
-                ledger.reason = "补扣：amount 晚到误释放"
+            # 客户流水说明用窗口/词/平台拼接；勿写技术英文
+            ledger.reason = None
         settled.append(origin_id)
         db.flush()
 
@@ -2166,14 +2166,18 @@ def list_credit_ledger(
     exclude_internal: bool = False,
 ) -> dict[str, Any]:
     stmt = select(TenantCreditLedger).order_by(TenantCreditLedger.created_at.desc())
+    count_stmt = select(func.count()).select_from(TenantCreditLedger)
     tenant_ids = _ledger_tenant_filter_ids(db, tenant_id=tenant_id, tenant_name=tenant_name)
     if tenant_ids is not None:
         if not tenant_ids:
-            return {"items": [], "page": page, "page_size": page_size}
+            return {"items": [], "total": 0, "page": page, "page_size": page_size}
         stmt = stmt.where(TenantCreditLedger.tenant_id.in_(tenant_ids))
+        count_stmt = count_stmt.where(TenantCreditLedger.tenant_id.in_(tenant_ids))
     # 2026-08-27 - 客户算力流水 - 预扣/释放是内部账务，列表只展示充值/调整/扣费
     if exclude_internal:
         stmt = stmt.where(TenantCreditLedger.entry_type.in_(CUSTOMER_VISIBLE_LEDGER_TYPES))
+        count_stmt = count_stmt.where(TenantCreditLedger.entry_type.in_(CUSTOMER_VISIBLE_LEDGER_TYPES))
+    total = int(db.scalar(count_stmt) or 0)
     offset = (page - 1) * page_size
     rows = list(db.scalars(stmt.offset(offset).limit(page_size)))
     tenant_map = {
@@ -2192,6 +2196,7 @@ def list_credit_ledger(
         items.append(payload)
     return {
         "items": items,
+        "total": total,
         "page": page,
         "page_size": page_size,
     }

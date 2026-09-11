@@ -23,6 +23,7 @@ import {
 import { useAuthStore } from '../../../stores/auth'
 import type { MenuInfo } from '../../../services/auth'
 import { extractErrorDetail, isRequestCanceled } from '../../../utils/requestError'
+import { getPlatformMeta } from '../platformMeta'
 
 const props = defineProps<{ initialTab?: string; previewReadonly?: boolean }>()
 const route = useRoute()
@@ -47,6 +48,8 @@ const tab = ref('monitor')
 const loading = ref(false)
 const summary = ref<Awaited<ReturnType<typeof getEnterpriseCreditSummary>> | null>(null)
 const ledger = ref<Awaited<ReturnType<typeof getEnterpriseCreditLedger>> | null>(null)
+const ledgerPage = ref(1)
+const ledgerPageSize = 20
 const members = ref<Awaited<ReturnType<typeof getEnterpriseMembers>> | null>(null)
 const audit = ref<Awaited<ReturnType<typeof getEnterpriseAudit>> | null>(null)
 const terms = ref<Awaited<ReturnType<typeof getCurrentCreditTerms>> | null>(null)
@@ -102,6 +105,7 @@ const entryTypeLabel: Record<string, string> = {
 
 const subtaskStatusLabel: Record<string, string> = {
   settled: '已结算',
+  settled_backfill: '已结算',
   released_unbilled: '未计费已释放',
   released: '已释放',
   pending: '待处理',
@@ -117,6 +121,12 @@ function formatSubtaskStatus(status: unknown) {
   return subtaskStatusLabel[key] || subtaskStatusLabel[key.toLowerCase()] || key
 }
 
+function formatCreditNumber(value: unknown) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return num.toLocaleString('zh-CN', { maximumFractionDigits: 1 })
+}
+
 function formatLedgerAmount(amount: number) {
   const value = Number(amount)
   if (!Number.isFinite(value)) return '—'
@@ -124,15 +134,59 @@ function formatLedgerAmount(amount: number) {
   return value > 0 ? `+${text}` : text
 }
 
+function formatLedgerTime(value: unknown) {
+  const text = String(value || '').trim()
+  if (!text) return '—'
+  // 2026-09-11 17:10:33 → 09-11 17:10
+  const matched = text.match(/(\d{4}-)?(\d{2}-\d{2})\s+(\d{2}:\d{2})/)
+  if (!matched) return text
+  return `${matched[2]} ${matched[3]}`
+}
+
+function isInternalLedgerReason(reason: string) {
+  const text = reason.trim()
+  if (!text) return true
+  return /amount|晚到误释放|模力未计费|prepaid|backfill|补扣：/i.test(text)
+}
+
 function formatLedgerReason(row: CreditLedgerItem) {
-  const reason = (row.reason || '').trim()
-  if (reason) return reason
-  if (row.entry_type !== 'settle') return '—'
-  const hint = [row.window_key, row.keyword, row.platform_code]
+  const platform = row.platform_code ? getPlatformMeta(row.platform_code).name : ''
+  const hint = [row.window_key, row.keyword, platform]
     .map(part => (part || '').trim())
     .filter(Boolean)
     .join(' · ')
-  return hint || '监测扣费'
+  const reason = (row.reason || '').trim()
+  if (row.entry_type === 'settle') {
+    if (hint) return hint
+    if (reason && !isInternalLedgerReason(reason)) return reason
+    return '监测扣费'
+  }
+  if (reason && !isInternalLedgerReason(reason)) return reason
+  return hint || '—'
+}
+
+const ledgerTotal = computed(() => Number((ledger.value as { total?: number } | null)?.total || 0))
+const ledgerTotalPages = computed(() => Math.max(1, Math.ceil(ledgerTotal.value / ledgerPageSize) || 1))
+
+async function loadCreditLedger(page = ledgerPage.value) {
+  const tenantId = enterpriseTenantId.value
+  ledgerPage.value = page
+  ledger.value = await getEnterpriseCreditLedger(page, ledgerPageSize, tenantId)
+}
+
+async function changeLedgerPage(delta: number) {
+  const next = Math.min(ledgerTotalPages.value, Math.max(1, ledgerPage.value + delta))
+  if (next === ledgerPage.value) return
+  loading.value = true
+  try {
+    await loadCreditLedger(next)
+  } catch (error) {
+    if (!isRequestCanceled(error)) {
+      ElMessage.error(extractErrorDetail(error, '加载流水失败'))
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
 type AuditListDiff = {
@@ -271,7 +325,7 @@ async function loadTab() {
     const tenantId = enterpriseTenantId.value
     if (tab.value === 'credit') {
       summary.value = await getEnterpriseCreditSummary(tenantId)
-      ledger.value = await getEnterpriseCreditLedger(1, 20, tenantId)
+      await loadCreditLedger(1)
       terms.value = await getCurrentCreditTerms(tenantId)
     } else if (tab.value === 'members') {
       members.value = await getEnterpriseMembers(tenantId)
@@ -432,13 +486,17 @@ watch(visibleTabs, () => ensureAllowedTab())
     <section class="enterprise-main">
       <BrandAuditPage v-if="tab === 'monitor'" customer-config-embed />
 
-        <div v-else-if="tab === 'credit' && isCreditBilling" class="panel">
-        <div class="cards">
-          <article class="card"><span>可用算力</span><strong>{{ summary?.available ?? '—' }}</strong></article>
-          <article class="card"><span>今日已扣</span><strong>{{ summary?.today_deduct ?? 0 }}</strong></article>
-          <!-- 2026-09-08 - 方案甲：客户侧不展示预扣中，后台仍预扣防并发 -->
+        <div v-else-if="tab === 'credit' && isCreditBilling" class="panel credit-panel">
+        <div class="credit-kpi">
+          <article class="credit-kpi-card">
+            <span>可用算力</span>
+            <strong>{{ formatCreditNumber(summary?.available) }}</strong>
+          </article>
+          <article class="credit-kpi-card">
+            <span>今日已扣</span>
+            <strong>{{ formatCreditNumber(summary?.today_deduct ?? 0) }}</strong>
+          </article>
         </div>
-        <!-- 2026-09-08 - 服务条款改为查阅即可，去掉强制确认按钮与内嵌正文 -->
         <div class="credit-notice">
           <span>充值请联系客户经理</span>
           <button v-if="terms" type="button" class="credit-notice-link" @click="openTermsView">查看服务条款</button>
@@ -446,9 +504,22 @@ watch(visibleTabs, () => ensureAllowedTab())
         <el-dialog v-model="termsViewVisible" width="560px" :title="termsDialogTitle">
           <div v-if="terms?.content_html" class="terms-box terms-box-dialog" v-html="terms.content_html" />
         </el-dialog>
+
+        <div class="credit-ledger-head">
+          <span class="credit-ledger-title">算力流水</span>
+          <span v-if="ledgerTotal" class="credit-ledger-meta">共 {{ ledgerTotal }} 条 · 第 {{ ledgerPage }} / {{ ledgerTotalPages }} 页</span>
+        </div>
         <div class="table-scroll">
           <table v-if="ledger?.items?.length" class="table ledger-table">
-            <thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th><th>说明</th></tr></thead>
+            <thead>
+              <tr>
+                <th class="col-time">时间</th>
+                <th class="col-type">类型</th>
+                <th class="col-amount">变动</th>
+                <th class="col-balance">余额</th>
+                <th>说明</th>
+              </tr>
+            </thead>
             <tbody>
               <tr
                 v-for="row in ledger.items"
@@ -457,16 +528,19 @@ watch(visibleTabs, () => ensureAllowedTab())
                 :class="{ 'is-active': ledgerDetailVisible && ledgerDetailRowId === row.id }"
                 @click="openLedgerDetail(row)"
               >
-                <td>{{ row.created_at }}</td>
-                <td>{{ entryTypeLabel[row.entry_type] || row.entry_type }}</td>
-                <td :class="{ plus: row.amount > 0, minus: row.amount < 0 }">{{ formatLedgerAmount(row.amount) }}</td>
-                <td>{{ row.balance_after }}</td>
-                <td class="reason-cell">{{ formatLedgerReason(row) }}</td>
+                <td class="col-time">{{ formatLedgerTime(row.created_at) }}</td>
+                <td class="col-type">{{ entryTypeLabel[row.entry_type] || row.entry_type }}</td>
+                <td class="col-amount" :class="{ plus: row.amount > 0, minus: row.amount < 0 }">{{ formatLedgerAmount(row.amount) }}</td>
+                <td class="col-balance">{{ formatCreditNumber(row.balance_after) }}</td>
+                <td class="reason-cell" :title="formatLedgerReason(row)">{{ formatLedgerReason(row) }}</td>
               </tr>
             </tbody>
           </table>
-          <!-- 2026-09-07 - v-else 须紧挨 table 的 v-if，不能隔一层 div 否则编译失败 -->
           <p v-else class="hint">暂无流水</p>
+        </div>
+        <div v-if="ledgerTotalPages > 1" class="ledger-pagination">
+          <button type="button" class="plain-btn" :disabled="ledgerPage <= 1" @click="changeLedgerPage(-1)">上一页</button>
+          <button type="button" class="plain-btn" :disabled="ledgerPage >= ledgerTotalPages" @click="changeLedgerPage(1)">下一页</button>
         </div>
         <el-drawer
           v-model="ledgerDetailVisible"
@@ -479,7 +553,7 @@ watch(visibleTabs, () => ensureAllowedTab())
             <template v-if="ledgerDetail">
               <p>类型：{{ entryTypeLabel[ledgerDetail.entry_type] || ledgerDetail.entry_type }}</p>
               <p>时间：{{ ledgerDetail.created_at }}</p>
-              <p>变动：{{ formatLedgerAmount(ledgerDetail.amount) }} · 余额：{{ ledgerDetail.balance_after }}</p>
+              <p>变动：{{ formatLedgerAmount(ledgerDetail.amount) }} · 余额：{{ formatCreditNumber(ledgerDetail.balance_after) }}</p>
               <p>窗口：{{ ledgerDetail.window_key || '—' }}</p>
               <p>说明：{{ formatLedgerReason(ledgerDetail) }}</p>
               <h4 v-if="ledgerDetail.subtasks?.length">子任务明细</h4>
@@ -487,7 +561,7 @@ watch(visibleTabs, () => ensureAllowedTab())
                 <thead><tr><th>平台</th><th>关键词</th><th>状态</th><th>算力</th></tr></thead>
                 <tbody>
                   <tr v-for="(st, idx) in ledgerDetail.subtasks" :key="st.subtask_id || idx">
-                    <td>{{ st.platform_code || '—' }}</td>
+                    <td>{{ st.platform_code ? getPlatformMeta(st.platform_code).name : '—' }}</td>
                     <td>{{ st.keyword || '—' }}</td>
                     <td>{{ formatSubtaskStatus(st.status) }}</td>
                     <td>{{ st.credits ?? '—' }}</td>
@@ -635,6 +709,65 @@ watch(visibleTabs, () => ensureAllowedTab())
 .card.warn { background: #fffbeb; border-color: #fcd34d; }
 .card span { display: block; font-size: 12px; color: #64748b; margin-bottom: 6px; }
 .card strong { font-size: 22px; }
+.credit-panel { padding-top: 4px; }
+.credit-kpi {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.credit-kpi-card {
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #f8fafc;
+}
+.credit-kpi-card span {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+.credit-kpi-card strong {
+  font-size: 24px;
+  font-weight: 700;
+  color: #12253f;
+  font-variant-numeric: tabular-nums;
+}
+.credit-ledger-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 8px;
+}
+.credit-ledger-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #12253f;
+}
+.credit-ledger-meta {
+  color: #64748b;
+  font-size: 12px;
+}
+.ledger-pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ledger-pagination .plain-btn {
+  border: 1px solid #dbe3ee;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ledger-pagination .plain-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .hint { color: #64748b; font-size: 13px; }
 .credit-notice {
   display: flex;
@@ -677,6 +810,43 @@ watch(visibleTabs, () => ensureAllowedTab())
 .table tr.clickable { cursor: pointer; }
 .table tr.clickable:hover { background: #f8fafc; }
 .ledger-table tr.clickable.is-active { background: #eff6ff; }
+.ledger-table {
+  table-layout: fixed;
+  margin-top: 0;
+}
+.ledger-table th,
+.ledger-table td {
+  border: none;
+  border-bottom: 1px solid #eef2f7;
+  padding: 10px 8px;
+  vertical-align: middle;
+}
+.ledger-table th {
+  color: #5f7390;
+  font-weight: 700;
+  background: #f7fafc;
+  white-space: nowrap;
+}
+.ledger-table .col-time {
+  width: 108px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ledger-table .col-type { width: 64px; }
+.ledger-table .col-amount,
+.ledger-table .col-balance {
+  width: 88px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ledger-table .reason-cell {
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #425a78;
+}
 .audit-table { table-layout: fixed; margin-top: 0; }
 .audit-table th, .audit-table td { overflow: hidden; }
 .audit-table .col-time { width: 138px; white-space: nowrap; color: #64748b; font-variant-numeric: tabular-nums; }
@@ -772,7 +942,6 @@ watch(visibleTabs, () => ensureAllowedTab())
 .subtask-table th, .subtask-table td { font-size: 12px; padding: 6px 8px; }
 .ledger-table td.plus { color: #047857; font-weight: 600; }
 .ledger-table td.minus { color: #b45309; font-weight: 600; }
-.ledger-table .reason-cell { max-width: 280px; word-break: break-word; }
 @media (max-width: 900px) {
   /* 2026-09-07 - 企业配置窄屏：侧栏改顶栏横滑 */
   .enterprise-config-page { flex-direction: column; min-height: 0; }
