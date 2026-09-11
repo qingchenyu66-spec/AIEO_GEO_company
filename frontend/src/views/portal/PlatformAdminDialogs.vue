@@ -26,7 +26,6 @@ const {
   positions,
   tenants,
   applyPositionToConfig,
-  permissionGroupsForForm,
   saveEditUser,
   passwordDialog,
   resetPassword,
@@ -156,22 +155,9 @@ function toggleAllowedPlatform(code: string, event: Event) {
       </div>
       <div class="form-grid">
         <label><span>职位</span><select v-model.number="editForm.identity_configs[type].position_id" :disabled="!positions[type].length" @change="applyPositionToConfig(type, editForm, editForm.identity_configs[type].position_id)"><option disabled :value="null">{{ positions[type].length ? '请选择职位' : '职位加载中或暂无职位' }}</option><option v-for="position in positions[type]" :key="position.id" :value="position.id">{{ position.position_name }}</option></select></label>
-        <label v-if="type === 'CUSTOMER'"><span>选择已有企业</span><select v-model.number="editForm.identity_configs.CUSTOMER.tenant_id"><option :value="null">{{ tenants.length ? '不选择，手动输入' : '暂无企业，手动输入' }}</option><option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option></select></label>
-        <label v-if="type === 'CUSTOMER'"><span>新企业名称</span><input v-model="editForm.identity_configs.CUSTOMER.tenant_name" :disabled="Boolean(editForm.identity_configs.CUSTOMER.tenant_id)" placeholder="没有企业时直接输入" /></label>
+        <label v-if="type === 'CUSTOMER'"><span>所属企业<el-tooltip content="请选择已有企业；若列表没有，请先到企业管理新建" placement="top"><HelpCircle /></el-tooltip></span><select v-model.number="editForm.identity_configs.CUSTOMER.tenant_id"><option disabled :value="null">{{ tenants.length ? '请选择企业' : '暂无企业，请先新建' }}</option><option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option></select></label>
       </div>
-      <div class="permission-box permission-group-box" :class="`permission-${type.toLowerCase()}`">
-        <div class="permission-side-note">
-          <b>{{ type === 'PLATFORM' ? '平台运营端' : '客户企业端' }}</b>
-          <span>{{ type === 'PLATFORM' ? '本公司内部后台菜单。' : '客户登录后可见的展示菜单。' }}</span>
-        </div>
-        <div v-for="group in permissionGroupsForForm(type, editForm)" :key="group.key" class="permission-group">
-          <div class="permission-group-head">
-            <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-          </div>
-          <p class="feature-note">权限由所选职位决定，如需调整请到「职位管理」修改功能权限。</p>
-        </div>
-      </div>
-      <p class="feature-note">权限由职位决定，如需调整请到“用户管理 / 职位管理”中修改职位权限。</p>
+      <p class="feature-note">权限由职位决定，如需调整请到「用户管理 / 职位管理」中修改功能权限。</p>
     </div>
     <template #footer>
       <button class="plain-btn" @click="editDialog = false">取消</button>

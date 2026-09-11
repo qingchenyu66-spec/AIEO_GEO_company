@@ -219,13 +219,10 @@ onMounted(async () => {
 
 <template>
   <section class="announcement-page">
-    <header class="announcement-page-head">
-      <div>
-        <h2>系统公告</h2>
-        <p>发布到运营端 / 客户端；登录后串行弹窗，确认后该账号不再提示。</p>
-      </div>
-      <button v-if="canCreate" type="button" class="primary-btn" @click="openCreate">新建公告</button>
-    </header>
+    <div class="announcement-toolbar">
+      <span class="announcement-toolbar-meta">共 {{ rows.length }} 条</span>
+      <button v-if="canCreate" type="button" class="primary-btn small-btn" @click="openCreate">新建公告</button>
+    </div>
 
     <div v-loading="loading" class="announcement-table-wrap">
       <table class="data-table">
@@ -350,19 +347,15 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.announcement-page-head {
+.announcement-toolbar {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
-.announcement-page-head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
-}
-.announcement-page-head p {
-  margin: 0;
+.announcement-toolbar-meta {
   color: #64748b;
   font-size: 13px;
 }

@@ -193,8 +193,8 @@ export function useUserManagement(options: UserManagementOptions) {
     }
     if (editForm.identity_types.includes('CUSTOMER')) {
       const customerConfig = editForm.identity_configs.CUSTOMER
-      if (!customerConfig.tenant_id && !customerConfig.tenant_name.trim()) {
-        ElMessage.warning('客户企业端身份需要选择或输入所属企业')
+      if (!customerConfig.tenant_id) {
+        ElMessage.warning('客户企业端身份需要选择所属企业')
         return false
       }
     }
@@ -233,8 +233,8 @@ export function useUserManagement(options: UserManagementOptions) {
     }
     if (userForm.identity_types.includes('CUSTOMER')) {
       const customerConfig = userForm.identity_configs.CUSTOMER
-      if (!customerConfig.tenant_id && !customerConfig.tenant_name.trim()) {
-        ElMessage.warning('客户企业端身份需要选择或输入所属企业')
+      if (!customerConfig.tenant_id) {
+        ElMessage.warning('客户企业端身份需要选择所属企业')
         return
       }
     }

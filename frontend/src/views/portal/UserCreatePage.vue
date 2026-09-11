@@ -13,7 +13,6 @@ const {
   tenants,
   creatingUser,
   applyPositionToConfig,
-  permissionGroupsForForm,
   submitUser,
 } = usePlatformAdminInject()
 
@@ -24,7 +23,6 @@ const positionsFor = (type: IdentityType) => positions[type] || []
 <template>
   <section class="user-page user-create-page">
     <article class="panel user-create-panel">
-      <div class="panel-head"><h2>新增用户与权限分配</h2><span>菜单来自数据库</span></div>
       <div class="form-grid">
         <label>
           <span>登录账号<el-tooltip content="至少 3 个字符，建议使用英文、数字或下划线，例如 zhangsan_01" placement="top"><HelpCircle /></el-tooltip></span>
@@ -60,19 +58,7 @@ const positionsFor = (type: IdentityType) => positions[type] || []
         </div>
         <div class="form-grid">
           <label><span>职位<el-tooltip content="职位是业务可选项，例如运营、销售、交付；选择后自动带出默认角色和菜单权限" placement="top"><HelpCircle /></el-tooltip></span><select v-model.number="userForm.identity_configs[type].position_id" :disabled="!positionsFor(type).length" @change="applyPositionToConfig(type, userForm, userForm.identity_configs[type].position_id)"><option disabled :value="null">{{ positionsFor(type).length ? '请选择职位' : '职位加载中或暂无职位' }}</option><option v-for="position in positionsFor(type)" :key="position.id" :value="position.id">{{ position.position_name }}</option></select></label>
-          <label v-if="type === 'CUSTOMER'"><span>选择已有企业<el-tooltip content="如果客户公司已经存在，直接从这里选择；没有则选择手动输入" placement="top"><HelpCircle /></el-tooltip></span><select v-model.number="userForm.identity_configs.CUSTOMER.tenant_id"><option :value="null">{{ tenants.length ? '不选择，手动输入' : '暂无企业，手动输入' }}</option><option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option></select></label>
-          <label v-if="type === 'CUSTOMER'"><span>新企业名称<el-tooltip content="仅在没有选择已有企业时填写，保存后系统会自动创建这家公司" placement="top"><HelpCircle /></el-tooltip></span><input v-model="userForm.identity_configs.CUSTOMER.tenant_name" :disabled="Boolean(userForm.identity_configs.CUSTOMER.tenant_id)" placeholder="没有企业时直接输入" /></label>
-        </div>
-        <div class="permission-box permission-group-box" :class="`permission-${type.toLowerCase()}`">
-          <div class="permission-side-note">
-            <b>{{ type === 'PLATFORM' ? '平台运营端' : '客户企业端' }}</b>
-            <span>{{ type === 'PLATFORM' ? '本公司内部后台菜单。' : '客户登录后可见的展示菜单。' }}</span>
-          </div>
-          <div v-for="group in permissionGroupsForForm(type, userForm)" :key="group.key" class="permission-group">
-            <div class="permission-group-head">
-              <div><b>{{ group.title }}</b><small>{{ group.note }}</small></div>
-            </div>
-          </div>
+          <label v-if="type === 'CUSTOMER'"><span>所属企业<el-tooltip content="请选择已有企业；若列表没有，请先到企业管理新建" placement="top"><HelpCircle /></el-tooltip></span><select v-model.number="userForm.identity_configs.CUSTOMER.tenant_id"><option disabled :value="null">{{ tenants.length ? '请选择企业' : '暂无企业，请先新建' }}</option><option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option></select></label>
         </div>
         <p class="feature-note">权限由职位决定，如需调整请到「用户管理 / 职位管理」中修改功能权限。</p>
       </div>
