@@ -1049,6 +1049,17 @@ def cell_credit_already_finalized(
     return False
 
 
+def _origin_molizhishu_amount(origin: Any) -> Decimal | None:
+    """模力计费金额：列优先，其次 raw.amount；都没有则视为尚未回写。"""
+    amount = getattr(origin, "amount", None)
+    if amount is not None:
+        return Decimal(str(amount))
+    raw = origin.raw_result_json if isinstance(getattr(origin, "raw_result_json", None), dict) else {}
+    if isinstance(raw, dict) and raw.get("amount") is not None:
+        return Decimal(str(raw["amount"]))
+    return None
+
+
 def _cell_billed_attempt_count(origin: Any) -> int:
     """计费次数：产品定重试免费，有模力计费最多按 1 格收。"""
     raw = origin.raw_result_json if isinstance(getattr(origin, "raw_result_json", None), dict) else {}
@@ -1056,14 +1067,18 @@ def _cell_billed_attempt_count(origin: Any) -> int:
     if isinstance(attempts, list) and attempts:
         if any(Decimal(str(item or 0)) > 0 for item in attempts):
             return 1
-    amount = getattr(origin, "amount", None)
-    if amount is not None and Decimal(str(amount)) > 0:
+    amount = _origin_molizhishu_amount(origin)
+    if amount is not None and amount > 0:
         return 1
     return 0
 
 
 def cell_ready_for_credit_settle(origin: Any) -> bool:
-    """子任务终态且不在自动重试等待中，才可按格结算。"""
+    """子任务终态且不在自动重试等待中，才可按格结算。
+
+    完成态须等模力 amount 落地（含 0）；amount 仍空时先不 finalize，避免晚到计费被误释放。
+    硬失败可在无 amount 时释放预扣。
+    """
     from app.services.monitor_auto_retry_service import (
         subtask_failure_awaits_or_in_auto_retry,
         subtask_hard_failed,
@@ -1073,6 +1088,12 @@ def cell_ready_for_credit_settle(origin: Any) -> bool:
         return False
     status = str(getattr(origin, "status", "") or "").lower()
     if status in {"completed", "partial_completed"}:
+        raw = origin.raw_result_json if isinstance(getattr(origin, "raw_result_json", None), dict) else {}
+        attempts = raw.get("_credit_attempt_amounts") if isinstance(raw, dict) else None
+        amount_known = _origin_molizhishu_amount(origin) is not None
+        attempts_known = isinstance(attempts, list) and len(attempts) > 0
+        if not amount_known and not attempts_known:
+            return False
         return True
     if subtask_hard_failed(origin):
         return True
@@ -1178,7 +1199,9 @@ def finalize_monitor_cell_credit(
         "cell_unit": float(unit),
         "prepaid_share": float(prepaid_share),
         "cell_prepaid_share": float(prepaid_share),
-        "molizhishu_amount": float(origin.amount) if getattr(origin, "amount", None) is not None else None,
+        "molizhishu_amount": (
+            float(amount_now) if (amount_now := _origin_molizhishu_amount(origin)) is not None else None
+        ),
         "auto_retry_status": getattr(origin, "auto_retry_status", None),
         "subtasks": [
             {
@@ -1239,6 +1262,123 @@ def finalize_monitor_cell_credit(
         return True
     except IntegrityError:
         return False
+
+
+def backfill_false_unbilled_releases(
+    db: Session,
+    *,
+    tenant_id: int,
+    batch_ref: str,
+    origin_subtask_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """补扣：曾因 amount 晚到被 release，现已有模力计费的格子。
+
+    预扣当时已释放，这里只补客户可见 settle，并改 finalize 记录；不回滚历史 release 流水。
+    """
+    from app.models.monitor import GeoMonitorSubtask
+
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
+    if tenant is None:
+        return {"ok": False, "error": "tenant_missing", "settled": []}
+
+    stmt = select(TenantCreditCellFinalize).where(
+        TenantCreditCellFinalize.tenant_id == tenant_id,
+        TenantCreditCellFinalize.batch_ref == batch_ref,
+        TenantCreditCellFinalize.entry_type == "release",
+    )
+    if origin_subtask_ids:
+        wanted = {str(x).strip() for x in origin_subtask_ids if str(x).strip()}
+        stmt = stmt.where(TenantCreditCellFinalize.origin_subtask_id.in_(wanted))
+    claims = list(db.scalars(stmt))
+    settled: list[str] = []
+    skipped: list[dict[str, Any]] = []
+
+    for claim in claims:
+        origin_id = str(claim.origin_subtask_id or "").strip()
+        origin = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == origin_id))
+        if origin is None:
+            skipped.append({"origin_subtask_id": origin_id, "reason": "subtask_missing"})
+            continue
+        credits = compute_cell_settle_credits(db, tenant, origin)
+        if credits <= 0:
+            skipped.append({"origin_subtask_id": origin_id, "reason": "still_unbilled", "amount": str(origin.amount)})
+            continue
+        existing_settles = list(
+            db.scalars(
+                select(TenantCreditLedger).where(
+                    TenantCreditLedger.tenant_id == tenant_id,
+                    TenantCreditLedger.ref_id == batch_ref,
+                    TenantCreditLedger.entry_type == "settle",
+                )
+            )
+        )
+        if any(
+            isinstance(row.detail_json, dict) and str(row.detail_json.get("origin_subtask_id") or "") == origin_id
+            for row in existing_settles
+        ):
+            skipped.append({"origin_subtask_id": origin_id, "reason": "already_settled"})
+            continue
+
+        platform = str(getattr(origin, "platform", None) or "") or None
+        unit = resolve_credits_per_subtask(db, tenant_id=tenant.id, platform_code=platform)
+        detail = {
+            "origin_subtask_id": origin_id,
+            "billed_attempts": _cell_billed_attempt_count(origin),
+            "cell_unit": float(unit),
+            "prepaid_share": 0.0,
+            "cell_prepaid_share": 0.0,
+            "molizhishu_amount": float(amount_now) if (amount_now := _origin_molizhishu_amount(origin)) is not None else None,
+            "auto_retry_status": getattr(origin, "auto_retry_status", None),
+            "backfill_false_unbilled": True,
+            "subtasks": [
+                {
+                    "subtask_id": origin_id,
+                    "platform_code": platform,
+                    "keyword": (getattr(origin, "prompt", None) or "")[:200],
+                    "credits": float(credits),
+                    "status": "settled_backfill",
+                }
+            ],
+        }
+        settle_credits(
+            db,
+            tenant_id=tenant.id,
+            ref_id=batch_ref,
+            credits=credits,
+            platform_code=platform,
+            keyword=(getattr(origin, "prompt", None) or "")[:200] or None,
+            window_key=None,
+            detail_json=detail,
+            prepaid_share=Decimal("0"),
+        )
+        ledger = db.scalar(
+            select(TenantCreditLedger)
+            .where(
+                TenantCreditLedger.tenant_id == tenant.id,
+                TenantCreditLedger.ref_id == batch_ref,
+                TenantCreditLedger.entry_type == "settle",
+            )
+            .order_by(TenantCreditLedger.id.desc())
+            .limit(1)
+        )
+        claim.entry_type = "settle"
+        claim.credits = credits
+        if ledger is not None:
+            claim.ledger_id = ledger.id
+            if not (ledger.reason or "").strip():
+                ledger.reason = "补扣：amount 晚到误释放"
+        settled.append(origin_id)
+        db.flush()
+
+    return {
+        "ok": True,
+        "tenant_id": tenant_id,
+        "batch_ref": batch_ref,
+        "settled": settled,
+        "settled_count": len(settled),
+        "skipped": skipped,
+        "balance": float(tenant.credit_balance or 0),
+    }
 
 
 def maybe_release_batch_reserve_remainder(

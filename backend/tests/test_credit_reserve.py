@@ -317,6 +317,156 @@ def test_cell_settle_releases_unbilled_and_charges_billed(db):
     assert tenant.credit_balance == Decimal("19")
 
 
+def test_completed_without_amount_does_not_finalize_until_amount_lands(db):
+    """完成态但模力 amount 仍空时不 finalize，避免晚到金额被误释放。"""
+    from types import SimpleNamespace
+
+    from app.models.credit import TenantCreditCellFinalize
+    from app.services.credit_service import finalize_monitor_cell_credit
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("10"))
+    ref = "amount-lag"
+    assert reserve_credits(
+        db,
+        tenant,
+        Decimal("1"),
+        ref_id=ref,
+        ref_type="reserve_batch",
+        detail_json={"shares_by_platform": {"doubao": 1.0}, "default_cell_share": 1.0},
+    )
+    origin = SimpleNamespace(
+        subtask_id="st-amount-lag",
+        platform="doubao",
+        prompt="词晚到",
+        status="completed",
+        amount=None,
+        auto_retry_status=None,
+        auto_retry_count=0,
+        answer_content="已有正文",
+        error_message=None,
+        raw_result_json={"status": "completed"},
+    )
+    assert finalize_monitor_cell_credit(db, tenant, origin=origin, batch_ref=ref) is False
+    db.refresh(tenant)
+    assert tenant.credit_reserved == Decimal("1")
+    assert tenant.credit_balance == Decimal("10")
+    assert db.scalar(select(TenantCreditCellFinalize.id).where(TenantCreditCellFinalize.origin_subtask_id == "st-amount-lag")) is None
+
+    origin.amount = Decimal("0.18")
+    origin.raw_result_json = {"status": "completed", "amount": 0.18}
+    assert finalize_monitor_cell_credit(db, tenant, origin=origin, batch_ref=ref) is True
+    db.refresh(tenant)
+    assert tenant.credit_reserved == Decimal("0")
+    assert tenant.credit_balance == Decimal("9")
+    settle = db.scalar(
+        select(TenantCreditLedger).where(
+            TenantCreditLedger.tenant_id == tenant.id,
+            TenantCreditLedger.ref_id == ref,
+            TenantCreditLedger.entry_type == "settle",
+        )
+    )
+    assert settle is not None
+    assert settle.amount == Decimal("-1")
+
+
+def test_backfill_false_unbilled_releases_charges_late_amount(db):
+    """误释放后 amount 晚到：补扣 settle，余额减 1，finalize 改为 settle。"""
+    from types import SimpleNamespace
+
+    from app.models.credit import TenantCreditCellFinalize
+    from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+    from app.services.credit_service import backfill_false_unbilled_releases, finalize_monitor_cell_credit
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("10"))
+    ref = "backfill-lag"
+    task_id = f"task-{uuid4().hex[:12]}"
+    assert reserve_credits(
+        db,
+        tenant,
+        Decimal("1"),
+        ref_id=ref,
+        ref_type="reserve_batch",
+        detail_json={"shares_by_platform": {"doubao": 1.0}, "default_cell_share": 1.0},
+    )
+    # 旧逻辑：完成态无 amount 会 release；这里用硬失败先落一条 release finalize
+    origin_early = SimpleNamespace(
+        subtask_id="st-backfill",
+        platform="doubao",
+        prompt="词补扣",
+        status="failed",
+        amount=Decimal("0"),
+        auto_retry_status="failed",
+        auto_retry_count=1,
+        answer_content=None,
+        error_message="timeout",
+        raw_result_json=None,
+    )
+    assert finalize_monitor_cell_credit(db, tenant, origin=origin_early, batch_ref=ref) is True
+    db.refresh(tenant)
+    assert tenant.credit_reserved == Decimal("0")
+    assert tenant.credit_balance == Decimal("10")
+
+    db.add(
+        GeoMonitorTask(
+            task_id=task_id,
+            tenant_id=tenant.id,
+            status="completed",
+            total_items=1,
+            completed_items=1,
+            failed_items=0,
+            prompts_json=["词补扣"],
+            platforms_json=[{"platform": "doubao"}],
+            raw_request_json={},
+            raw_response_json={},
+        )
+    )
+    db.add(
+        GeoMonitorSubtask(
+            subtask_id="st-backfill",
+            task_id=task_id,
+            platform="doubao",
+            mode="search",
+            prompt="词补扣",
+            status="completed",
+            amount=Decimal("0.18"),
+            answer_content="ok",
+            raw_result_json={"amount": 0.18, "status": "completed"},
+        )
+    )
+    db.flush()
+
+    result = backfill_false_unbilled_releases(db, tenant_id=tenant.id, batch_ref=ref)
+    assert result["ok"] is True
+    assert result["settled"] == ["st-backfill"]
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("9")
+    claim = db.scalar(
+        select(TenantCreditCellFinalize).where(
+            TenantCreditCellFinalize.tenant_id == tenant.id,
+            TenantCreditCellFinalize.batch_ref == ref,
+            TenantCreditCellFinalize.origin_subtask_id == "st-backfill",
+        )
+    )
+    assert claim is not None
+    assert claim.entry_type == "settle"
+    assert claim.credits == Decimal("1")
+    # 幂等：已改成 settle 后不再匹配 release claim
+    again = backfill_false_unbilled_releases(db, tenant_id=tenant.id, batch_ref=ref)
+    assert again["settled"] == []
+    assert again["skipped"] == []
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("9")
+    # 再造一条已 settle 的 release 场景：手动把 claim 拨回 release，应命中 already_settled
+    claim.entry_type = "release"
+    claim.credits = Decimal("0")
+    db.flush()
+    third = backfill_false_unbilled_releases(db, tenant_id=tenant.id, batch_ref=ref)
+    assert third["settled"] == []
+    assert third["skipped"][0]["reason"] == "already_settled"
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("9")
+
+
 def test_cell_settle_retry_still_one_credit(db):
     """产品：重试免费，即使 attempt 列表有两次计费也只收 1 格。"""
     from types import SimpleNamespace
