@@ -21,20 +21,29 @@ from app.services.approval_service import (
 router = APIRouter(prefix="/approvals")
 
 
-@router.get("", response_model=ApiResponse[list[dict]])
+@router.get("", response_model=ApiResponse[dict])
 def approval_list(
     approval_status: str | None = Query(default=None, alias="status"),
     mine_only: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
-) -> ApiResponse[list[dict]]:
+) -> ApiResponse[dict]:
     try:
-        rows = list_approvals(db, current, status=approval_status, mine_only=mine_only)
+        data = list_approvals(
+            db,
+            current,
+            status=approval_status,
+            mine_only=mine_only,
+            page=page,
+            page_size=page_size,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except Exception as exc:
         raise_read_endpoint_error(exc, context="approvals.list")
-    return ApiResponse(data=rows)
+    return ApiResponse(data=data)
 
 
 @router.get("/pending-count", response_model=ApiResponse[dict])

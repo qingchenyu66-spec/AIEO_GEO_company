@@ -33,6 +33,9 @@ const actingId = ref<number | null>(null)
 const statusFilter = ref<'pending' | 'approved' | 'rejected' | 'all'>('pending')
 const rows = ref<OperationApproval[]>([])
 const expandedId = ref<number | null>(null)
+const page = ref(1)
+const pageSize = 20
+const total = ref(0)
 
 type LeadEditForm = {
   brand_name: string
@@ -64,13 +67,41 @@ const canReview = computed(() => {
   return Boolean(grant?.can_update)
 })
 
-const filteredRows = computed(() => {
-  if (statusFilter.value === 'all') return rows.value
-  return rows.value.filter(item => item.status === statusFilter.value)
-})
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const pagerVisible = computed(() => total.value > pageSize)
+
+function formatCreatedAt(value: string) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return value
+  }
+}
+
+function metaLine(row: OperationApproval) {
+  const parts = [
+    `${row.module_label} · ${row.action_label}`,
+    `申请人 ${row.requester_name || row.requester_user_id}`,
+  ]
+  if (row.tenant_name) parts.push(row.tenant_name)
+  parts.push(formatCreatedAt(row.created_at))
+  return parts.join(' · ')
+}
 
 function isLeadCreate(row: OperationApproval) {
   return row.operation_key === 'lead_diagnosis.create'
+}
+
+function detailHint(row: OperationApproval) {
+  if (isLeadCreate(row) && leadHasRevision(row)) return '已改'
+  if (!isLeadCreate(row) && row.preview?.change_count) return `${row.preview.change_count} 项`
+  return ''
 }
 
 function leadOriginal(row: OperationApproval): Record<string, unknown> {
@@ -230,16 +261,39 @@ function openResubmit(row: OperationApproval) {
 async function loadRows() {
   loading.value = true
   try {
-    rows.value = await listApprovals({
+    const data = await listApprovals({
       status: statusFilter.value === 'all' ? undefined : statusFilter.value,
       mine_only: !canReview.value,
+      page: page.value,
+      page_size: pageSize,
     })
+    rows.value = data.items
+    total.value = data.total
+    if (page.value > 1 && !data.items.length && data.total > 0) {
+      page.value = Math.max(1, Math.ceil(data.total / pageSize))
+      await loadRows()
+      return
+    }
   } catch {
     ElMessage.error('审批列表加载失败')
   } finally {
     loading.value = false
     void refreshPendingCount()
   }
+}
+
+function switchStatus(next: typeof statusFilter.value) {
+  statusFilter.value = next
+  page.value = 1
+  expandedId.value = null
+  void loadRows()
+}
+
+function changePage(next: number) {
+  if (next < 1 || next > totalPages.value || next === page.value) return
+  page.value = next
+  expandedId.value = null
+  void loadRows()
 }
 
 watch(statusFilter, () => {
@@ -362,42 +416,93 @@ onMounted(loadRows)
 <template>
   <section class="panel approval-page">
     <div class="approval-toolbar">
-      <div class="approval-filter-bar">
-        <button type="button" :class="{ active: statusFilter === 'pending' }" @click="statusFilter = 'pending'; loadRows()">待审批</button>
-        <button type="button" :class="{ active: statusFilter === 'approved' }" @click="statusFilter = 'approved'; loadRows()">已通过</button>
-        <button type="button" :class="{ active: statusFilter === 'rejected' }" @click="statusFilter = 'rejected'; loadRows()">已驳回</button>
-        <button type="button" :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'; loadRows()">全部</button>
+      <div class="approval-tabs" role="tablist" aria-label="审批状态">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === 'pending'"
+          :class="{ active: statusFilter === 'pending' }"
+          @click="switchStatus('pending')"
+        >待审批</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === 'approved'"
+          :class="{ active: statusFilter === 'approved' }"
+          @click="switchStatus('approved')"
+        >已通过</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === 'rejected'"
+          :class="{ active: statusFilter === 'rejected' }"
+          @click="switchStatus('rejected')"
+        >已驳回</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === 'all'"
+          :class="{ active: statusFilter === 'all' }"
+          @click="switchStatus('all')"
+        >全部</button>
       </div>
-      <button type="button" class="filter-reset-btn" :disabled="loading" @click="loadRows">刷新</button>
+      <div class="approval-toolbar-right">
+        <span v-if="!loading" class="approval-total-meta">共 {{ total }} 条</span>
+        <button type="button" class="filter-reset-btn" :disabled="loading" @click="loadRows">刷新</button>
+      </div>
     </div>
 
-    <div v-if="loading" class="mini-empty">加载中...</div>
-    <div v-else-if="!filteredRows.length" class="mini-empty">暂无审批记录</div>
-    <div v-else class="approval-list">
-      <article v-for="row in filteredRows" :key="row.id" class="approval-card" :class="[`is-${row.status}`, { expanded: expandedId === row.id }]">
-        <div class="approval-card-main">
-          <strong>{{ row.summary }}</strong>
-          <span>{{ row.module_label }} · {{ row.action_label }} · {{ row.status_label }}</span>
-          <span v-if="row.tenant_name">企业：{{ row.tenant_name }}</span>
-          <span>申请人：{{ row.requester_name || row.requester_user_id }} · {{ new Date(row.created_at).toLocaleString('zh-CN') }}</span>
-          <span v-if="row.review_comment">审批意见：{{ row.review_comment }}</span>
-          <button type="button" class="approval-detail-toggle" @click="toggleExpand(row)">
-            {{ expandedId === row.id ? '收起详情' : '查看详情' }}
-            <template v-if="isLeadCreate(row) && leadHasRevision(row)">（已改）</template>
-            <template v-else-if="!isLeadCreate(row) && row.preview?.change_count">（{{ row.preview.change_count }} 项）</template>
+    <div v-if="loading && !rows.length" class="mini-empty">加载中...</div>
+    <div v-else-if="!rows.length" class="mini-empty">暂无审批记录</div>
+    <div v-else class="approval-inbox">
+      <article
+        v-for="row in rows"
+        :key="row.id"
+        class="inbox-item"
+        :class="[`is-${row.status}`, { open: expandedId === row.id }]"
+      >
+        <div class="inbox-row">
+          <button type="button" class="inbox-main" @click="toggleExpand(row)">
+            <strong class="inbox-title" :title="row.summary">{{ row.summary }}</strong>
+            <span class="inbox-meta">{{ metaLine(row) }}</span>
+            <span v-if="row.review_comment" class="inbox-comment" :title="row.review_comment">
+              意见：{{ row.review_comment }}
+            </span>
+            <span v-if="detailHint(row)" class="inbox-hint">{{ detailHint(row) }}</span>
           </button>
-        </div>
-        <div v-if="canReview && row.status === 'pending'" class="approval-card-actions">
-          <button type="button" class="filter-search-btn" @click="approveRow(row)">通过</button>
-          <button type="button" class="danger-text-btn" @click="rejectRow(row)">驳回</button>
-        </div>
-        <div v-else-if="canResubmit(row)" class="approval-card-actions">
-          <button type="button" class="filter-search-btn" @click="openResubmit(row)">修改并重新提交</button>
+
+          <div class="inbox-side">
+            <span class="status-tag" :data-status="row.status">{{ row.status_label }}</span>
+            <div class="inbox-actions" @click.stop>
+              <template v-if="canReview && row.status === 'pending'">
+                <button
+                  type="button"
+                  class="act-btn primary"
+                  :disabled="actingId === row.id"
+                  @click="approveRow(row)"
+                >通过</button>
+                <button
+                  type="button"
+                  class="act-btn ghost"
+                  :disabled="actingId === row.id"
+                  @click="rejectRow(row)"
+                >驳回</button>
+              </template>
+              <button
+                v-else-if="canResubmit(row)"
+                type="button"
+                class="act-btn primary"
+                @click="openResubmit(row)"
+              >重新提交</button>
+              <button type="button" class="act-btn ghost" @click="toggleExpand(row)">
+                {{ expandedId === row.id ? '收起' : '详情' }}
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div v-if="expandedId === row.id" class="approval-detail-panel">
+        <div v-if="expandedId === row.id" class="inbox-detail">
           <template v-if="isLeadCreate(row)">
-            <!-- 2026-08-04 - 双栏常驻过长 - 无改动单栏；有改动才对照；改在弹窗 -->
             <div class="lead-detail-wrap">
               <button
                 v-if="canReview && row.status === 'pending'"
@@ -475,6 +580,28 @@ onMounted(loadRows)
           </template>
         </div>
       </article>
+
+      <div v-if="pagerVisible || total > 0" class="log-pagination">
+        <span class="log-pagination-meta">共 {{ total }} 条，第 {{ page }} / {{ totalPages }} 页 · 每页 {{ pageSize }} 条</span>
+        <div class="log-pagination-actions">
+          <button
+            type="button"
+            class="filter-reset-btn tiny-btn"
+            :disabled="loading || page <= 1"
+            @click="changePage(page - 1)"
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            class="filter-reset-btn tiny-btn"
+            :disabled="loading || page >= totalPages"
+            @click="changePage(page + 1)"
+          >
+            下一页
+          </button>
+        </div>
+      </div>
     </div>
 
     <el-dialog
@@ -512,23 +639,22 @@ onMounted(loadRows)
             </label>
           </div>
         </div>
-        <div class="lead-field schedule-time-picker">
-          <div class="schedule-time-title">
-            <span>抓取时间段（日期 + 时间）</span>
-            <button type="button" class="filter-reset-btn" @click="addEditScheduleSlot">新增时间</button>
-          </div>
-          <div class="schedule-time-list is-datetime">
-            <div
-              v-for="(_, index) in editForm.schedule_datetimes"
-              :key="`approval-slot-${index}-${editForm.schedule_datetimes[index]}`"
-            >
-              <input
-                v-model="editForm.schedule_datetimes[index]"
-                type="datetime-local"
-                :min="scheduleDatetimeMinLocal"
-              />
-              <button type="button" class="danger-text-btn" @click="removeEditScheduleSlot(index)">删除</button>
-            </div>
+        <div class="lead-field">
+          <span class="lead-schedule-head">
+            <em>抓取时间点</em>
+            <button type="button" class="filter-reset-btn tiny-btn" @click="addEditScheduleSlot">新增时间</button>
+          </span>
+          <div
+            v-for="(_, index) in editForm.schedule_datetimes"
+            :key="`dlg-sch-${index}`"
+            class="lead-schedule-row"
+          >
+            <input
+              v-model="editForm.schedule_datetimes[index]"
+              type="datetime-local"
+              :min="scheduleDatetimeMinLocal"
+            />
+            <button type="button" class="danger-text-btn" @click="removeEditScheduleSlot(index)">删除</button>
           </div>
           <div v-if="!editForm.schedule_datetimes.length" class="mini-empty compact-empty">
             暂无抓取时间，请点击「新增时间」配置。
@@ -570,81 +696,217 @@ onMounted(loadRows)
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
-.approval-filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin:0; }
-.approval-filter-bar button {
-  border:1px solid #d7e2f0; background:#fff; border-radius:8px; padding:6px 12px; cursor:pointer;
+.approval-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.approval-filter-bar button.active { background:#eef4ff; border-color:#2d6cdf; color:#1d4fbf; }
-.approval-list { display:grid; gap:12px; }
-.approval-card {
-  border:1px solid #e3ebf5;
-  border-radius:12px;
-  padding:14px 16px;
-  display:grid;
-  gap:10px;
-  background:#fff;
+.approval-total-meta {
+  color: #64748b;
+  font-size: 13px;
 }
-.approval-card.is-pending { border-left:4px solid #d97706; }
-.approval-card.is-approved { border-left:4px solid #059669; }
-.approval-card.is-rejected { border-left:4px solid #dc2626; }
-.approval-card-main { display:grid; gap:4px; min-width:0; }
-.approval-card-main strong { font-size:15px; color:#12253f; }
-.approval-card-main span { color:#6d8099; font-size:12px; }
-.approval-detail-toggle {
-  width:fit-content;
-  margin-top:4px;
-  border:0;
-  background:transparent;
-  color:#2d6cdf;
-  cursor:pointer;
-  padding:0;
-  font-size:13px;
+.approval-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #e6edf5;
 }
-.approval-detail-panel {
-  border-top:1px dashed #d7e2f0;
-  padding-top:12px;
-  display:grid;
-  gap:12px;
+.approval-tabs button {
+  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 10px 16px;
+  color: #64748b;
+  font-size: 14px;
+  cursor: pointer;
+}
+.approval-tabs button.active {
+  color: #1d4fbf;
+  font-weight: 600;
+}
+.approval-tabs button.active::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: -1px;
+  height: 2px;
+  background: #2d6cdf;
+  border-radius: 2px 2px 0 0;
+}
+
+.approval-inbox {
+  display: flex;
+  flex-direction: column;
+}
+.inbox-item {
+  border-bottom: 1px solid #eef2f7;
+}
+.inbox-item:last-of-type {
+  border-bottom: 0;
+}
+.inbox-item.open {
+  background: #f8fbff;
+}
+.inbox-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 4px;
+  min-height: 64px;
+}
+.inbox-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-title {
+  color: #12253f;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-item:hover .inbox-title {
+  color: #1d4fbf;
+}
+.inbox-meta {
+  color: #8494a8;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-comment {
+  color: #94a3b8;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-hint {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #3b6fd8;
+  font-size: 11px;
+  font-weight: 600;
+}
+.inbox-side {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.status-tag[data-status='pending'] { background: #fff7ed; color: #c2410c; }
+.status-tag[data-status='approved'] { background: #ecfdf5; color: #047857; }
+.status-tag[data-status='rejected'] { background: #fef2f2; color: #b91c1c; }
+.inbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.act-btn {
+  border: 1px solid #d7e2f0;
+  background: #fff;
+  color: #334155;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.act-btn:hover {
+  border-color: #9fc0ea;
+  color: #1d4fbf;
+}
+.act-btn.primary {
+  border-color: #2d6cdf;
+  background: #2d6cdf;
+  color: #fff;
+}
+.act-btn.primary:hover {
+  background: #245dc4;
+  border-color: #245dc4;
+  color: #fff;
+}
+.act-btn.ghost {
+  background: transparent;
+}
+.act-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inbox-detail {
+  margin: 0 4px 14px;
+  padding: 12px;
+  border: 1px solid #e3ebf5;
+  border-radius: 8px;
+  background: #fff;
 }
 .approval-change-table {
-  width:100%;
-  border-collapse:collapse;
-  font-size:13px;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
 .approval-change-table th,
 .approval-change-table td {
-  border:1px solid #e3ebf5;
-  padding:8px 10px;
-  text-align:left;
-  vertical-align:top;
-  word-break:break-word;
+  border: 1px solid #e3ebf5;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
 }
-.approval-change-table th { color:#5f7390; font-weight:700; background:#f1f6fd; }
-.approval-change-table tr.is-changed td:last-child { background:#f3f8ff; }
+.approval-change-table th {
+  color: #5f7390;
+  font-weight: 700;
+  background: #f1f6fd;
+}
+.approval-change-table tr.is-changed td:last-child {
+  background: #f3f8ff;
+}
 .approval-change-kind {
-  display:inline-block;
-  border-radius:999px;
-  padding:2px 8px;
-  font-size:12px;
+  display: inline-block;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
 }
-.approval-change-kind.is-add { background:#dcfce7; color:#166534; }
-.approval-change-kind.is-update { background:#dbeafe; color:#1d4ed8; }
-.approval-change-kind.is-delete { background:#fee2e2; color:#b91c1c; }
-.approval-change-kind.is-info { background:#f3f4f6; color:#4b5563; }
+.approval-change-kind.is-add { background: #dcfce7; color: #166534; }
+.approval-change-kind.is-update { background: #dbeafe; color: #1d4ed8; }
+.approval-change-kind.is-delete { background: #fee2e2; color: #b91c1c; }
+.approval-change-kind.is-info { background: #f3f4f6; color: #4b5563; }
 .approval-change-logo {
   max-width: 80px;
   max-height: 80px;
   object-fit: contain;
   vertical-align: middle;
   display: block;
-}
-.approval-card-actions {
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
 }
 .lead-detail-wrap {
   position: relative;
@@ -674,33 +936,65 @@ onMounted(loadRows)
   .lead-edit-hover-btn { opacity: 1; pointer-events: auto; }
 }
 .pre-line { white-space: pre-line; }
-.lead-edit-dialog { display:grid; gap:12px; }
-.lead-field { display:grid; gap:6px; font-size:13px; }
-.lead-field > span { color:#5f7390; font-size:12px; font-weight:600; }
+.lead-edit-dialog { display: grid; gap: 12px; }
+.lead-field { display: grid; gap: 6px; font-size: 13px; }
+.lead-field > span { color: #5f7390; font-size: 12px; font-weight: 600; }
 .lead-field input,
 .lead-field textarea {
-  border:1px solid #d7e2f0;
-  border-radius:8px;
-  padding:8px 10px;
+  border: 1px solid #d7e2f0;
+  border-radius: 8px;
+  padding: 8px 10px;
   font: inherit;
 }
-.lead-field input:disabled { background:#eef2f7; color:#66788f; }
-.lead-prompt-input { margin-top:6px; }
+.lead-field input:disabled { background: #eef2f7; color: #66788f; }
+.lead-prompt-input { margin-top: 6px; }
+.lead-schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lead-schedule-head em {
+  font-style: normal;
+  color: #5f7390;
+  font-size: 12px;
+  font-weight: 600;
+}
+.lead-schedule-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.lead-schedule-row input { flex: 1; }
 .platform-check-grid.compact {
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .platform-check {
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  border:1px solid #d7e2f0;
-  border-radius:999px;
-  padding:4px 10px;
-  cursor:pointer;
-  background:#fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d7e2f0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+  background: #fff;
 }
-.platform-check.is-selected { border-color:#2d6cdf; background:#eef4ff; }
-.platform-check input { display:none; }
+.platform-check.is-selected { border-color: #2d6cdf; background: #eef4ff; }
+.platform-check input { display: none; }
+.mini-empty.compact { padding: 16px; }
+
+@media (max-width: 860px) {
+  .inbox-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .inbox-side {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
 </style>

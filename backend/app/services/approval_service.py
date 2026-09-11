@@ -625,16 +625,24 @@ def list_approvals(
     *,
     status: str | None = None,
     mine_only: bool = False,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    stmt = select(OperationApproval).where(OperationApproval.deleted.is_(False)).order_by(desc(OperationApproval.id)).limit(limit)
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 20)))
+    stmt = select(OperationApproval).where(OperationApproval.deleted.is_(False))
     if status:
         stmt = stmt.where(OperationApproval.status == status)
     if mine_only or requires_sales_approval(db, current):
         stmt = stmt.where(OperationApproval.requester_user_id == current.user.id)
     elif not can_review_approvals(db, current):
         raise PermissionError("当前账号无权查看审批单")
-    rows = list(db.scalars(stmt))
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    rows = list(
+        db.scalars(
+            stmt.order_by(desc(OperationApproval.id)).offset((page - 1) * page_size).limit(page_size)
+        )
+    )
     user_ids = {item.requester_user_id for item in rows}
     user_ids.update(item.reviewer_user_id for item in rows if item.reviewer_user_id)
     tenant_ids = {item.tenant_id for item in rows if item.tenant_id}
@@ -650,10 +658,16 @@ def list_approvals(
             tenant.id: tenant
             for tenant in db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids)))
         }
-    return [
+    items = [
         approval_to_dict(db, item, users_by_id=users_by_id, tenants_by_id=tenants_by_id)
         for item in rows
     ]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def count_pending_approvals(db: Session, current: CurrentSession) -> int:

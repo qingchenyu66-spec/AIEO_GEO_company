@@ -98,9 +98,31 @@ export async function getPendingApprovalCount(): Promise<number> {
   return Number(response.data.data?.count ?? 0)
 }
 
-export async function listApprovals(params?: { status?: string; mine_only?: boolean }): Promise<OperationApproval[]> {
+export type ApprovalListResult = {
+  items: OperationApproval[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export async function listApprovals(params?: {
+  status?: string
+  mine_only?: boolean
+  page?: number
+  page_size?: number
+}): Promise<ApprovalListResult> {
   const response = await http.get('/v1/approvals', { params })
-  return response.data.data
+  const data = response.data.data
+  // 兼容旧版直接返回数组的响应
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page: 1, page_size: data.length || 20 }
+  }
+  return {
+    items: Array.isArray(data?.items) ? data.items : [],
+    total: Number(data?.total ?? 0),
+    page: Number(data?.page ?? 1),
+    page_size: Number(data?.page_size ?? 20),
+  }
 }
 
 export async function reviseLeadDiagnosisApproval(
