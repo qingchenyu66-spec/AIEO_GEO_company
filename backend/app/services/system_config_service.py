@@ -117,6 +117,13 @@ CONFIG_REGISTRY: dict[str, ConfigMeta] = {
         description="任务进入终态后继续同步的宽限时间",
         value_type="int",
     ),
+    "observer_platforms": ConfigMeta(
+        field="observer_platforms",
+        category="schedule",
+        label="观察号监测平台",
+        description="艾迪亚观察号可见平台；后台勾选即可，无需手写编码。改后约 2 秒生效；职位白名单可重跑 ensure_aidiya_observer 同步",
+        value_type="str",
+    ),
     "redis_enabled": ConfigMeta(
         field="redis_enabled",
         category="cache_queue",
@@ -381,6 +388,9 @@ def sync_registry_from_env(db: Session, *, overwrite: bool = False) -> int:
     for key, meta in CONFIG_REGISTRY.items():
         # 2026-09-04 - H5 付费诊断由后台面板改库，勿被 deploy sync_from_env 用默认值冲掉
         if key.startswith("h5_diagnosis_"):
+            continue
+        # 2026-09-11 - 观察号平台常在系统配置改，勿被 .env 默认冲掉
+        if key == "observer_platforms":
             continue
         row = db.scalar(select(SystemConfig).where(SystemConfig.config_key == key))
         if row is None:

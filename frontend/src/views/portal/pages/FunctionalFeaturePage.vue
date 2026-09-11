@@ -34,6 +34,7 @@ import {
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import H5DiagnosisConfigPanel from '../components/H5DiagnosisConfigPanel.vue'
 import PlatformBrandLogoPanel from '../components/PlatformBrandLogoPanel.vue'
+import { getPlatformMeta, supportedPlatforms } from '../platformMeta'
 import '../../../styles/platform-matrix.css'
 
 const emit = defineEmits<{ 'open-menu-config': [] }>()
@@ -178,6 +179,12 @@ const scheduleRunLoading = ref(false)
 const scheduleTenantId = ref<number | ''>('')
 const platformPositions = ref<PositionInfo[]>([])
 const editingPositionIds = ref<number[]>([])
+const editingObserverPlatforms = ref<string[]>([])
+
+/** 观察号平台勾选：默认不含移动端变体，列表更干净 */
+const observerPlatformOptions = computed(() => (
+  supportedPlatforms.filter(item => !item.code.endsWith('_mobile'))
+))
 
 function isSecretConfigRow(row: { config_key: string; secret?: boolean }) {
   return row.secret || isSecretConfigKey(row.config_key)
@@ -188,6 +195,10 @@ function isPositionNotifyConfig(row: { config_key: string }) {
     row.config_key === 'platform_service_notify_position_ids'
     || row.config_key === 'tenant_expiry_notify_position_ids'
   )
+}
+
+function isObserverPlatformsConfig(row: { config_key: string }) {
+  return row.config_key === 'observer_platforms'
 }
 
 function isTenantExpiryPositionConfig(row: { config_key: string }) {
@@ -238,6 +249,21 @@ function formatPositionIdsDisplay(raw: string, configKey?: string) {
     .join('、')
 }
 
+function parseObserverPlatformCodes(raw: string): string[] {
+  return [...new Set(
+    String(raw || '')
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean),
+  )]
+}
+
+function formatObserverPlatformsDisplay(raw: string) {
+  const codes = parseObserverPlatformCodes(raw)
+  if (!codes.length) return '未选择'
+  return codes.map(code => getPlatformMeta(code).name).join('、')
+}
+
 function formatConfigDisplay(row: {
   config_key: string
   config_value: string
@@ -246,6 +272,7 @@ function formatConfigDisplay(row: {
 }) {
   if (row.value_type === 'bool') return formatBoolDisplay(row.config_value)
   if (isPositionNotifyConfig(row)) return formatPositionIdsDisplay(row.config_value, row.config_key)
+  if (isObserverPlatformsConfig(row)) return formatObserverPlatformsDisplay(row.config_value)
   return maskedConfigValue(row.config_value, row.config_key, row.secret)
 }
 
@@ -282,15 +309,24 @@ function startEditConfig(row: {
   if (row.value_type === 'bool') {
     editingConfigValue.value = isTruthyConfig(row.config_value) ? 'true' : 'false'
     editingPositionIds.value = []
+    editingObserverPlatforms.value = []
     return
   }
   if (isPositionNotifyConfig(row)) {
     editingPositionIds.value = parsePositionIds(row.config_value)
     editingConfigValue.value = JSON.stringify(editingPositionIds.value)
+    editingObserverPlatforms.value = []
     void ensurePlatformPositions()
     return
   }
+  if (isObserverPlatformsConfig(row)) {
+    editingObserverPlatforms.value = parseObserverPlatformCodes(row.config_value)
+    editingConfigValue.value = editingObserverPlatforms.value.join(',')
+    editingPositionIds.value = []
+    return
+  }
   editingPositionIds.value = []
+  editingObserverPlatforms.value = []
   editingConfigValue.value = row.config_value
 }
 
@@ -298,6 +334,7 @@ function cancelEditConfig() {
   editingConfigId.value = null
   editingConfigValue.value = ''
   editingPositionIds.value = []
+  editingObserverPlatforms.value = []
 }
 
 async function saveConfigRow(row: {
@@ -307,11 +344,14 @@ async function saveConfigRow(row: {
   scope?: string
   value_type?: string
 }) {
-  const nextValue = isPositionNotifyConfig(row)
-    ? JSON.stringify(editingPositionIds.value)
-    : editingConfigValue.value.trim()
+  let nextValue = editingConfigValue.value.trim()
+  if (isPositionNotifyConfig(row)) {
+    nextValue = JSON.stringify(editingPositionIds.value)
+  } else if (isObserverPlatformsConfig(row)) {
+    nextValue = editingObserverPlatforms.value.map(item => item.trim()).filter(Boolean).join(',')
+  }
   if (!isPositionNotifyConfig(row) && !nextValue) {
-    ElMessage.warning('配置值不能为空')
+    ElMessage.warning(isObserverPlatformsConfig(row) ? '请至少选择一个平台' : '配置值不能为空')
     return
   }
   savingConfig.value = true
@@ -845,6 +885,24 @@ onUnmounted(() => {
                   :value="position.id"
                 />
               </ElSelect>
+              <ElSelect
+                v-else-if="isObserverPlatformsConfig(row)"
+                v-model="editingObserverPlatforms"
+                class="settings-config-select"
+                multiple
+                filterable
+                clearable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="勾选观察号可见平台"
+              >
+                <ElOption
+                  v-for="platform in observerPlatformOptions"
+                  :key="platform.code"
+                  :label="platform.name"
+                  :value="platform.code"
+                />
+              </ElSelect>
               <input
                 v-else
                 v-model="editingConfigValue"
@@ -901,6 +959,24 @@ onUnmounted(() => {
                   :key="position.id"
                   :label="position.position_name"
                   :value="position.id"
+                />
+              </ElSelect>
+              <ElSelect
+                v-else-if="isObserverPlatformsConfig(row)"
+                v-model="editingObserverPlatforms"
+                class="settings-config-select"
+                multiple
+                filterable
+                clearable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="勾选观察号可见平台"
+              >
+                <ElOption
+                  v-for="platform in observerPlatformOptions"
+                  :key="platform.code"
+                  :label="platform.name"
+                  :value="platform.code"
                 />
               </ElSelect>
               <input

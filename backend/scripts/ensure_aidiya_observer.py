@@ -1,7 +1,7 @@
 """本地：创建/修复艾迪亚公用观察账号（幂等）。
 
 登录名「艾迪亚」/ 密码 123456；绑租户「艾迪亚控股集团有限公司」；
-菜单客户侧全开但只读（知识库可上传）；平台白名单由 observer_account 写死 kimi/yuanbao。
+菜单客户侧全开但只读（知识库可上传）；平台白名单读 observer_platforms 配置。
 
 用法（backend 目录）:
   $env:PYTHONPATH="..."
@@ -20,9 +20,9 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.services.menu_permission_service import replace_identity_menus_from_position
 from app.services.observer_account import (
-    OBSERVER_PLATFORMS,
     OBSERVER_TENANT_NAME,
     OBSERVER_USERNAME,
+    get_observer_platforms,
 )
 
 POSITION_CODE = "CUSTOMER_AIDIYA_OBSERVER"
@@ -43,6 +43,7 @@ CUSTOMER_MENU_CODES = (
 
 
 def _ensure_position(db) -> Position:
+    platforms = sorted(get_observer_platforms(db))
     position = db.scalar(select(Position).where(Position.position_code == POSITION_CODE))
     if position is None:
         position = Position(
@@ -50,8 +51,8 @@ def _ensure_position(db) -> Position:
             position_name=POSITION_NAME,
             identity_type="CUSTOMER",
             role_code=ROLE_CODE,
-            description="公用观察：只读+知识库上传；平台范围见账号硬编码",
-            allowed_monitor_platforms_json=sorted(OBSERVER_PLATFORMS),
+            description="公用观察：只读+知识库上传；平台范围见系统配置 observer_platforms",
+            allowed_monitor_platforms_json=platforms,
             sort_order=90,
             status=True,
             deleted=False,
@@ -61,7 +62,7 @@ def _ensure_position(db) -> Position:
     else:
         position.position_name = POSITION_NAME
         position.role_code = ROLE_CODE
-        position.allowed_monitor_platforms_json = sorted(OBSERVER_PLATFORMS)
+        position.allowed_monitor_platforms_json = platforms
         position.status = True
         position.deleted = False
         db.flush()
@@ -180,7 +181,7 @@ def main() -> None:
         print(
             f"ok user_id={user.id} username={user.username!r} "
             f"tenant_id={tenant.id} tenant={tenant.name!r} "
-            f"platforms={sorted(OBSERVER_PLATFORMS)}"
+            f"platforms={sorted(get_observer_platforms(db))}"
         )
 
 

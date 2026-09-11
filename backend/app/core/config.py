@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     aliyun_sms_region_id: str = "cn-hangzhou"
     # 2026-09-01 - H5 落地页「一键体验」观察号（不暴露密码）
     h5_observer_demo_login_enabled: bool = True
+    # 2026-09-11 - 观察号可见监测平台（逗号分隔编码，如 qianwen,baiduai）；系统配置可改
+    observer_platforms: str = "qianwen,baiduai"
 
     # 补录自截图目录（空=backend/storage/backfill_screenshots；生产经软链落 /data/geo/storage）
     backfill_screenshot_dir: str = ""
