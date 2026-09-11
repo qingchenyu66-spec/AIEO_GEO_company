@@ -216,6 +216,74 @@ def _menu_display(menu: Menu, config: MenuConfig | None) -> MenuInfo:
     )
 
 
+def sync_menu_row_from_config(db: Session, config: MenuConfig) -> Menu | None:
+    """菜单配置是唯一展示口径：改配置时回写 sys_menu，避免两套名称漂移。"""
+    menu = db.scalar(
+        select(Menu).where(
+            Menu.menu_code == config.menu_code,
+            Menu.identity_type == config.identity_type,
+            Menu.deleted.is_(False),
+        )
+    )
+    if menu is None:
+        return None
+    if config.menu_name:
+        menu.menu_name = config.menu_name
+    menu.sort_order = int(config.sort_order or 0)
+    if config.icon:
+        menu.icon = config.icon
+    if config.route_path:
+        menu.route_path = config.route_path
+    return menu
+
+
+def sync_all_menus_from_configs(db: Session) -> int:
+    """把全部未删除的 MenuConfig 回写到对应 sys_menu。"""
+    updated = 0
+    rows = list(db.scalars(select(MenuConfig).where(MenuConfig.deleted.is_(False))))
+    for config in rows:
+        if sync_menu_row_from_config(db, config) is not None:
+            updated += 1
+    return updated
+
+
+def _is_enterprise_config_child_menu(menu_code: str) -> bool:
+    return menu_code.startswith("customer.enterprise_") and menu_code != "customer.enterprise_config"
+
+
+def _filter_items_by_menu_config_visibility(
+    db: Session,
+    items: list[MenuInfo],
+    identity_type: str,
+) -> list[MenuInfo]:
+    """MenuConfig.is_visible=false 的菜单不进侧栏会话。
+
+    企业配置子项（监测/成员/算力/操作记录）靠会话做页内权限，侧栏由前端隐藏，
+    不受 is_visible 裁切。
+    """
+    if not items:
+        return items
+    configs = {
+        row.menu_code: row
+        for row in db.scalars(
+            select(MenuConfig).where(
+                MenuConfig.identity_type == identity_type,
+                MenuConfig.deleted.is_(False),
+            )
+        )
+    }
+    out: list[MenuInfo] = []
+    for item in items:
+        if _is_enterprise_config_child_menu(item.menu_code):
+            out.append(item)
+            continue
+        cfg = configs.get(item.menu_code)
+        if cfg is not None and not bool(cfg.is_visible):
+            continue
+        out.append(item)
+    return out
+
+
 def has_identity_menu_permission(
     db: Session,
     identity_id: int,
@@ -415,6 +483,7 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
     items = list(by_code.values())
     items = [item for item in items if not is_retired_menu_code(item.menu_code)]
+    items = _filter_items_by_menu_config_visibility(db, items, identity.identity_type)
     # 2026-08-07 - 观察号会话剔除推广链接/品牌诊断
     from app.services.observer_account import OBSERVER_HIDDEN_MENU_CODES, observer_platforms_for_user_id
 
@@ -954,6 +1023,8 @@ def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
             can_export=bool(grant.can_export),
         ):
             continue
+        if config is not None and not bool(config.is_visible) and not _is_enterprise_config_child_menu(menu.menu_code):
+            continue
         base = _menu_display(menu, config)
         item = _menu_with_grant(
             base,
@@ -963,17 +1034,28 @@ def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
             can_export=bool(grant.can_export),
         )
         by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
-    for menu in db.scalars(
-        select(Menu).where(
+    hole_rows = db.execute(
+        select(Menu, MenuConfig)
+        .outerjoin(
+            MenuConfig,
+            (MenuConfig.menu_code == Menu.menu_code)
+            & (MenuConfig.identity_type == Menu.identity_type)
+            & (MenuConfig.deleted.is_(False)),
+        )
+        .where(
             Menu.identity_type == "CUSTOMER",
             Menu.menu_code.in_(_CUSTOMER_PORTAL_MENU_CODES),
             Menu.deleted.is_(False),
             Menu.status.is_(True),
         )
-    ):
+    ).all()
+    for menu, config in hole_rows:
         if menu.id in granted_menu_ids or menu.menu_code in by_code:
             continue
-        base = _menu_display(menu, None)
+        # 有配置且停用：不补进侧栏
+        if config is not None and not bool(config.is_visible):
+            continue
+        base = _menu_display(menu, config)
         if menu.menu_code == "customer.knowledge":
             # 2026-09-09 - 补洞只给查看，不抬上传/编辑；写权限须来自职位模板
             flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}
@@ -984,7 +1066,8 @@ def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
         item = _menu_with_grant(base, **flags)
         by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
     _derive_route_parent_menus(db, by_code, "CUSTOMER")
-    return _filter_customer_menus_for_tenant(list(by_code.values()), tenant)
+    filtered = _filter_items_by_menu_config_visibility(db, list(by_code.values()), "CUSTOMER")
+    return _filter_customer_menus_for_tenant(filtered, tenant)
 
 
 def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuInfo]:

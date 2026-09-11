@@ -8,6 +8,7 @@ from app.services.menu_permission_service import (
     heal_empty_identity_menus,
     sanitize_menu_grant_flags,
     sync_identity_menus_for_position,
+    sync_menu_row_from_config,
 )
 
 
@@ -197,3 +198,33 @@ def test_heal_empty_identity_menus_skips_non_empty(monkeypatch):
     count = heal_empty_identity_menus(FakeSession())
     assert count == 1
     assert ensure_ids == [1]
+
+
+def test_sync_menu_row_from_config_overwrites_sys_menu_name():
+    menu = SimpleNamespace(
+        menu_code="customer.workspace",
+        identity_type="CUSTOMER",
+        menu_name="运营工作台",
+        sort_order=10,
+        icon="Old",
+        route_path="/old",
+    )
+    config = SimpleNamespace(
+        menu_code="customer.workspace",
+        identity_type="CUSTOMER",
+        menu_name="品牌概览",
+        sort_order=10,
+        icon="LayoutDashboard",
+        route_path="/customer/workspace",
+    )
+
+    class FakeSession:
+        def scalar(self, _stmt):
+            return menu
+
+    synced = sync_menu_row_from_config(FakeSession(), config)
+    assert synced is menu
+    assert menu.menu_name == "品牌概览"
+    assert menu.icon == "LayoutDashboard"
+    assert menu.route_path == "/customer/workspace"
+    assert menu.sort_order == 10

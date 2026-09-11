@@ -76,7 +76,9 @@ from app.services.menu_permission_service import (
     has_identity_menu_permission,
     position_menu_grants,
     position_menu_grants_map,
+    sync_all_menus_from_configs,
     sync_identity_menus_for_position,
+    sync_menu_row_from_config,
     sync_position_menu_grants,
 )
 from app.services.tenant_account_service import (
@@ -1889,6 +1891,7 @@ def update_menu_config(
     for field, value in update_data.items():
         setattr(config, field, value)
 
+    sync_menu_row_from_config(db, config)
     write_management_log(db, current, "菜单配置", f"修改菜单配置：{config.menu_name}", target_module="系统配置", target_id=config.id, risk_level="关注")
     db.commit()
 
@@ -1941,9 +1944,31 @@ def batch_update_menu_configs(
             update_data = item.model_dump(exclude_unset=True, exclude={"id"})
             for field, value in update_data.items():
                 setattr(config, field, value)
+            sync_menu_row_from_config(db, config)
             updated_count += 1
 
     write_management_log(db, current, "菜单批量配置", f"批量更新菜单配置：{updated_count} 项", target_module="系统配置", risk_level="关注")
     db.commit()
 
     return ApiResponse(data={"message": f"已更新 {updated_count} 个菜单配置"})
+
+
+@router.post("/menus/config/sync-to-menus", response_model=ApiResponse[dict])
+def sync_menu_configs_to_menus(
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """一次性把菜单配置回写到 sys_menu，消除历史双名称漂移。"""
+    require_platform(current)
+    require_system_config_access(db, current, category="menu", for_update=True)
+    updated = sync_all_menus_from_configs(db)
+    write_management_log(
+        db,
+        current,
+        "菜单配置同步",
+        f"回写菜单配置到 sys_menu：{updated} 项",
+        target_module="系统配置",
+        risk_level="关注",
+    )
+    db.commit()
+    return ApiResponse(data={"updated": updated})
