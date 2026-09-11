@@ -125,6 +125,9 @@ function onUserMenuCommand(command: string) {
       </div>
       <!-- 2026-08-20 - 侧栏身份白胶囊已去掉（用户确认可删） -->
       <nav class="nav" aria-label="主导航">
+        <div v-if="previewMode && !menus.length" class="nav-item" style="pointer-events:none;opacity:.7">
+          <span>菜单加载中…</span>
+        </div>
         <template v-for="(menu, index) in menus" :key="menu.menu_code">
           <div
             v-if="menuFavoritesEnabled && pinnedMenuCount > 0 && index === pinnedMenuCount"

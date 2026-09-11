@@ -12,6 +12,8 @@ import { useBrandAudit } from '../composables/useBrandAudit'
 import { keywordGroupMonitorKeywords, normalizePlatformSelections, platformSelectionCodes } from '../../../services/brand'
 import { PortalNavigateKey } from '../injectionKeys'
 import { previewQueryFields } from '../customerPreview'
+import { prefetchCustomerPreviewMenus } from '../previewMenusCache'
+import { extractErrorDetail } from '../../../utils/requestError'
 
 function platformSelectionCount(group: { platforms?: unknown[] }) {
   return platformSelectionCodes((group.platforms || []) as never).length
@@ -55,6 +57,7 @@ const emit = defineEmits<{
 
 const auth = useAuthStore()
 const portalNavigate = inject(PortalNavigateKey)!
+const openingPreview = ref(false)
 
 function navigateToReportCenter(reportId: number, tenantId: number) {
   if (!auth.allowedMenus.some(menu => menu.menu_code === 'platform.reports')) return
@@ -65,12 +68,22 @@ function navigateToReportCenter(reportId: number, tenantId: number) {
 }
 
 async function openCustomerPreview(tenant: { id: number; name: string }) {
+  if (openingPreview.value) return
   await loadEnterpriseList()
   if (!tenants.value.some(item => item.id === tenant.id)) {
     ElMessage.warning('该企业已不存在或无权查看，列表已刷新')
     return
   }
-  portalNavigate('customer.workspace', false, previewQueryFields(tenant.id, tenant.name))
+  openingPreview.value = true
+  try {
+    // 先拉菜单再进预览，侧栏进门就有配置名，禁止空窗/硬编码闪名
+    await prefetchCustomerPreviewMenus(tenant.id)
+    portalNavigate('customer.workspace', false, previewQueryFields(tenant.id, tenant.name))
+  } catch (error: unknown) {
+    ElMessage.error(extractErrorDetail(error) || '客户菜单加载失败，无法进入预览')
+  } finally {
+    openingPreview.value = false
+  }
 }
 
 const {
@@ -383,7 +396,9 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           </div>
           <div class="enterprise-actions">
             <!-- 2026-07-30 - 按线上卡片布局收敛操作 - 主钮留查看/详情/编辑，其余进三点 -->
-            <button type="button" class="filter-search-btn" @click="openCustomerPreview(tenant)">查看客户端</button>
+            <button type="button" class="filter-search-btn" :disabled="openingPreview" @click="openCustomerPreview(tenant)">
+              {{ openingPreview ? '加载中…' : '查看客户端' }}
+            </button>
             <button type="button" class="filter-reset-btn" @click="openEnterpriseInfo(tenant)">详情</button>
             <button v-if="canEditTenantList" type="button" class="filter-reset-btn" @click="openEnterpriseDetail(tenant)">编辑</button>
             <el-dropdown trigger="click">

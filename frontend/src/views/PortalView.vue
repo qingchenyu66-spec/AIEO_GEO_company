@@ -88,10 +88,21 @@ const previewTenantName = computed(() => parsePreviewTenantName(route))
 const {
   previewCustomerMenus,
   previewCustomerIncludesToday,
+  previewMenusLoading,
+  previewMenusError,
+  reloadPreviewCustomerMenus,
 } = useCustomerPreviewMenus(isPreviewActive, previewTenantId)
 provide(PreviewCustomerMenusKey, previewCustomerMenus)
 provide(PreviewCustomerIncludesTodayKey, previewCustomerIncludesToday)
 const defaultMenuCode = normalizeMenuCode(auth.allowedMenus[0]?.menu_code || '')
+
+/** 预览主区：菜单未就绪时不挂业务页，避免空权限连锁报错 */
+const previewMenusReady = computed(() => (
+  !isPreviewActive.value || previewCustomerMenus.value.length > 0
+))
+const previewMenusBlocked = computed(() => (
+  isPreviewActive.value && !previewMenusReady.value
+))
 
 function userCreateRouteAllowed(menus: MenuInfo[]) {
   return menus.some(menu => (
@@ -294,6 +305,9 @@ const portalAnalytics = useMonitorAnalytics({
 provide(PortalAnalyticsKey, portalAnalytics)
 
 const pageTitle = computed(() => {
+  if (previewMenusBlocked.value) {
+    return previewMenusError.value ? '预览菜单加载失败' : '正在加载客户菜单'
+  }
   if (isEnterpriseConfigPage.value) return '企业配置'
   return activeMenu.value?.menu_name || (isPlatform.value ? '平台运营总览' : '客户运营工作台')
 })
@@ -586,6 +600,18 @@ watch(effectiveTenantIdForLogo, () => {
     @open-alerts="navigateToMenu('platform.alerts', true)"
     @exit-preview="exitCustomerPreview"
   >
+    <div v-if="previewMenusBlocked" class="mini-empty preview-menus-gate">
+      <p v-if="previewMenusLoading && !previewMenusError">正在加载客户菜单…</p>
+      <template v-else>
+        <p>{{ previewMenusError || '客户菜单暂不可用' }}</p>
+        <div class="action-buttons" style="justify-content: center; margin-top: 12px">
+          <button type="button" class="plain-btn" @click="exitCustomerPreview">返回企业管理</button>
+          <button type="button" class="primary-btn" @click="reloadPreviewCustomerMenus">重试</button>
+        </div>
+      </template>
+    </div>
+
+    <template v-else>
     <PositionPage v-if="isPositionManagementPage" />
 
     <UserCreatePage v-else-if="isUserCreatePage" />
@@ -630,6 +656,7 @@ watch(effectiveTenantIdForLogo, () => {
         <CustomerWorkspacePage v-else />
       </template>
       <FunctionalFeaturePage v-else @open-menu-config="openMenuConfigDialog" />
+    </template>
     </template>
   </PortalLayout>
 
