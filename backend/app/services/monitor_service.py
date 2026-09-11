@@ -1241,8 +1241,6 @@ def submit_monitor_task(db: Session, payload: MonitorTaskCreateRequest, current:
 
     # 2026-09-07 - credit 企业监控页直提也要预扣，禁止绕过调度白跑
     if is_credit_tenant(tenant) and auto_commit:
-        from app.core.region_catalog import normalize_region_codes
-
         platform_codes = [str(p.platform) for p in (payload.platforms or []) if getattr(p, "platform", None)]
         regions = normalize_region_codes(payload.region_code or []) or [None]
         credit_gate = apply_manual_monitor_credit_gate(
