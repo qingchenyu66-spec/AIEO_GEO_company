@@ -690,13 +690,11 @@ def resolve_customer_credit_terms(db: Session, tenant_id: int) -> CreditTermsVer
     )
     if current is not None:
         return current
+    # MySQL 不支持 NULLS LAST；DESC 下 NULL 已靠后，勿用 .nulls_last()
     return db.scalar(
         select(CreditTermsVersion)
         .where(*formal)
-        .order_by(
-            CreditTermsVersion.published_at.desc().nulls_last(),
-            CreditTermsVersion.id.desc(),
-        )
+        .order_by(CreditTermsVersion.published_at.desc(), CreditTermsVersion.id.desc())
     )
 
 def validate_credit_monitor_save(tenant: Tenant, payload) -> None:
