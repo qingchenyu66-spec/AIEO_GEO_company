@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage, ElOption, ElSelect } from 'element-plus'
+import { ElDialog, ElMessage, ElOption, ElSelect } from 'element-plus'
+import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/select/style/css'
 import 'element-plus/es/components/option/style/css'
 import { useAuthStore } from '../../../stores/auth'
@@ -161,6 +162,14 @@ const showFeatureHero = computed(() => {
 const editingConfigId = ref<number | null>(null)
 const editingConfigValue = ref('')
 const savingConfig = ref(false)
+const observerPlatformsDialogVisible = ref(false)
+const editingObserverConfigRow = ref<{
+  id: number
+  config_key: string
+  category?: string
+  scope?: string
+  value_type?: string
+} | null>(null)
 
 const logFilterPanelRef = ref<HTMLElement | null>(null)
 const logDays = ref(7)
@@ -316,29 +325,47 @@ function startEditConfig(row: {
   config_key: string
   config_value: string
   value_type?: string
+  category?: string
+  scope?: string
 }) {
   editingConfigId.value = row.id
   if (row.value_type === 'bool') {
     editingConfigValue.value = isTruthyConfig(row.config_value) ? 'true' : 'false'
     editingPositionIds.value = []
     editingObserverPlatforms.value = []
+    editingObserverConfigRow.value = null
+    observerPlatformsDialogVisible.value = false
     return
   }
   if (isPositionNotifyConfig(row)) {
     editingPositionIds.value = parsePositionIds(row.config_value)
     editingConfigValue.value = JSON.stringify(editingPositionIds.value)
     editingObserverPlatforms.value = []
+    editingObserverConfigRow.value = null
+    observerPlatformsDialogVisible.value = false
     void ensurePlatformPositions()
     return
   }
   if (isObserverPlatformsConfig(row)) {
+    // 表格列太窄，平台勾选改弹层；行内保持只读展示
+    editingConfigId.value = null
+    editingPositionIds.value = []
     editingObserverPlatforms.value = parseObserverPlatformCodes(row.config_value)
     editingConfigValue.value = editingObserverPlatforms.value.join(',')
-    editingPositionIds.value = []
+    editingObserverConfigRow.value = {
+      id: row.id,
+      config_key: row.config_key,
+      category: row.category,
+      scope: row.scope,
+      value_type: row.value_type,
+    }
+    observerPlatformsDialogVisible.value = true
     return
   }
   editingPositionIds.value = []
   editingObserverPlatforms.value = []
+  editingObserverConfigRow.value = null
+  observerPlatformsDialogVisible.value = false
   editingConfigValue.value = row.config_value
 }
 
@@ -347,6 +374,13 @@ function cancelEditConfig() {
   editingConfigValue.value = ''
   editingPositionIds.value = []
   editingObserverPlatforms.value = []
+  editingObserverConfigRow.value = null
+  observerPlatformsDialogVisible.value = false
+}
+
+async function saveObserverPlatformsDialog() {
+  if (!editingObserverConfigRow.value) return
+  await saveConfigRow(editingObserverConfigRow.value)
 }
 
 async function saveConfigRow(row: {
@@ -870,7 +904,7 @@ onUnmounted(() => {
             <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
             <div v-for="row in filteredConfigRows" :key="row.id" class="ops-row settings-config-row">
               <b>{{ row.config_name || row.config_key }}</b>
-              <span v-if="editingConfigId !== row.id">{{ formatConfigDisplay(row) }}</span>
+              <span v-if="editingConfigId !== row.id || isObserverPlatformsConfig(row)">{{ formatConfigDisplay(row) }}</span>
               <select
                 v-else-if="row.value_type === 'bool'"
                 v-model="editingConfigValue"
@@ -897,31 +931,6 @@ onUnmounted(() => {
                   :value="position.id"
                 />
               </ElSelect>
-              <div
-                v-else-if="isObserverPlatformsConfig(row)"
-                class="keyword-group-platform-field settings-observer-platforms"
-              >
-                <div class="platform-check-grid compact">
-                  <label
-                    v-for="platform in observerPlatformOptions"
-                    :key="platform.code"
-                    class="platform-check"
-                    :class="{ 'is-selected': editingObserverPlatforms.includes(platform.code) }"
-                    @click.prevent="toggleObserverPlatform(platform.code)"
-                  >
-                    <input
-                      type="checkbox"
-                      tabindex="-1"
-                      :checked="editingObserverPlatforms.includes(platform.code)"
-                    >
-                    <PlatformBadge
-                      :code="platform.code"
-                      size="sm"
-                      :label="platform.name"
-                    />
-                  </label>
-                </div>
-              </div>
               <input
                 v-else
                 v-model="editingConfigValue"
@@ -953,7 +962,7 @@ onUnmounted(() => {
             <div class="ops-head"><span>配置项</span><span>当前值</span><span>说明</span><span>状态</span><span>操作</span></div>
             <div v-for="row in filteredConfigRows" :key="row.id" class="ops-row settings-config-row">
               <b>{{ row.config_name || row.config_key }}</b>
-              <span v-if="editingConfigId !== row.id">{{ formatConfigDisplay(row) }}</span>
+              <span v-if="editingConfigId !== row.id || isObserverPlatformsConfig(row)">{{ formatConfigDisplay(row) }}</span>
               <select
                 v-else-if="row.value_type === 'bool'"
                 v-model="editingConfigValue"
@@ -980,31 +989,6 @@ onUnmounted(() => {
                   :value="position.id"
                 />
               </ElSelect>
-              <div
-                v-else-if="isObserverPlatformsConfig(row)"
-                class="keyword-group-platform-field settings-observer-platforms"
-              >
-                <div class="platform-check-grid compact">
-                  <label
-                    v-for="platform in observerPlatformOptions"
-                    :key="platform.code"
-                    class="platform-check"
-                    :class="{ 'is-selected': editingObserverPlatforms.includes(platform.code) }"
-                    @click.prevent="toggleObserverPlatform(platform.code)"
-                  >
-                    <input
-                      type="checkbox"
-                      tabindex="-1"
-                      :checked="editingObserverPlatforms.includes(platform.code)"
-                    >
-                    <PlatformBadge
-                      :code="platform.code"
-                      size="sm"
-                      :label="platform.name"
-                    />
-                  </label>
-                </div>
-              </div>
               <input
                 v-else
                 v-model="editingConfigValue"
@@ -1052,5 +1036,43 @@ onUnmounted(() => {
         </div>
       </article>
     </section>
+
+    <ElDialog
+      v-model="observerPlatformsDialogVisible"
+      title="观察号监测平台"
+      width="640px"
+      align-center
+      destroy-on-close
+      class="observer-platforms-dialog"
+      @closed="cancelEditConfig"
+    >
+      <p class="observer-platforms-dialog-hint">勾选后约 2 秒生效；影响观察号可见的监测平台范围。</p>
+      <div class="keyword-group-platform-field settings-observer-platforms-dialog">
+        <div class="platform-check-grid compact">
+          <label
+            v-for="platform in observerPlatformOptions"
+            :key="platform.code"
+            class="platform-check"
+            :class="{ 'is-selected': editingObserverPlatforms.includes(platform.code) }"
+            @click.prevent="toggleObserverPlatform(platform.code)"
+          >
+            <input
+              type="checkbox"
+              tabindex="-1"
+              :checked="editingObserverPlatforms.includes(platform.code)"
+            >
+            <PlatformBadge
+              :code="platform.code"
+              size="sm"
+              :label="platform.name"
+            />
+          </label>
+        </div>
+      </div>
+      <template #footer>
+        <button type="button" class="filter-reset-btn tiny-btn" :disabled="savingConfig" @click="cancelEditConfig">取消</button>
+        <button type="button" class="primary-btn small-btn" :disabled="savingConfig" @click="saveObserverPlatformsDialog">保存</button>
+      </template>
+    </ElDialog>
   </section>
 </template>
