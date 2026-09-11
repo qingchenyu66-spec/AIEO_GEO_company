@@ -240,7 +240,7 @@ def _brand_changes(db: Session, tenant_id: int | None, body: dict[str, Any]) -> 
 
     if before is None:
         rows = [
-            _change("操作类型", after="首次保存企业配置", kind="info"),
+            _change("操作类型", after="新建企业配置", kind="info"),
             _change("企业全称", after=after_name or "—", kind="add"),
             _change("监测地区", after=region_display_labels(body.get("region_codes")), kind="add"),
             _change("监测时段", after=_join_list(body.get("schedule_times")), kind="add"),
@@ -551,7 +551,7 @@ def _lead_platform_display(raw: Any) -> str:
 def _brand_word_group_changes(body: dict[str, Any]) -> list[dict[str, str]]:
     groups = [item for item in (body.get("groups") or []) if isinstance(item, dict)]
     rows = [
-        _change("操作类型", after="保存品牌词配置", kind="info"),
+        _change("操作类型", after="修改品牌词配置", kind="info"),
         _change("词组数量", after=str(len(groups)), kind="update"),
     ]
     for index, group in enumerate(groups[:8]):

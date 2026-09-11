@@ -778,7 +778,7 @@ def _log_brand_asset_config_changes(
         tenant_id=tenant_id,
         action_type="企业配置",
         target_module="企业配置",
-        description_prefix="保存企业配置",
+        description_prefix="修改企业配置",
         rows=rows,
     )
 
@@ -802,7 +802,7 @@ def _log_brand_word_group_save(
         tenant_id=tenant_id,
         action_type="品牌词配置",
         target_module="品牌词配置",
-        description_prefix="保存品牌词",
+        description_prefix="修改品牌词",
         rows=rows,
     )
 

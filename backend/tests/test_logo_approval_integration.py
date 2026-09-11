@@ -184,7 +184,7 @@ def test_reject_approval_cleans_logo_staging(monkeypatch, tmp_path):
         reviewer_identity_id=None,
         review_comment=None,
         reviewed_at=None,
-        summary="保存企业配置",
+        summary="修改企业配置",
     )
     db = MagicMock()
     db.scalar.return_value = record

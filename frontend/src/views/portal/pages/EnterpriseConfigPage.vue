@@ -173,8 +173,8 @@ function buildAuditListDiff(before?: string, after?: string): AuditListDiff | nu
 /** 企业页内已有上下文：去掉「保存…「企业名」：」前缀，按；拆成变更行 */
 function parseAuditDescription(description: string): AuditChangeLine[] {
   let text = String(description || '').trim()
-  text = text.replace(/^(保存企业配置|保存品牌词|新增竞品|删除竞品|更新竞品)「[^」]*」[：:]\s*/, '')
-  text = text.replace(/^(保存企业配置|保存品牌词)[：:]\s*/, '')
+  text = text.replace(/^(保存企业配置|修改企业配置|保存品牌词|修改品牌词|新增竞品|删除竞品|更新竞品)「[^」]*」[：:]\s*/, '')
+  text = text.replace(/^(保存企业配置|修改企业配置|保存品牌词|修改品牌词)[：:]\s*/, '')
   const parts = text.split(/；/).map(part => part.trim()).filter(Boolean)
   if (!parts.length) return text ? [{ field: '', raw: text }] : []
   return parts.map((part) => {

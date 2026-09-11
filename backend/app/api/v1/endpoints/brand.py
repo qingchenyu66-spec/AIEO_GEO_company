@@ -171,7 +171,7 @@ def upsert_brand_asset(
             summary=(
                 f"新增企业：{payload.company_full_name or payload.brand_name}"
                 if tenant_id is None
-                else f"保存企业配置：{payload.company_full_name or payload.brand_name}"
+                else f"修改企业配置：{payload.company_full_name or payload.brand_name}"
             ),
             payload={"body": body},
             tenant_id=tenant_id,
@@ -265,7 +265,7 @@ def upsert_brand_word_groups(
             operation_key="brand.brand_word_groups.upsert",
             module="brand",
             action="update",
-            summary="保存品牌词配置",
+            summary="修改品牌词配置",
             payload={"body": payload.model_dump(mode="json")},
             tenant_id=tenant_id,
             executor=_execute,

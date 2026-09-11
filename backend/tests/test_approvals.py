@@ -63,3 +63,12 @@ def test_approval_list_returns_paginated_payload(monkeypatch):
         assert data["items"][0]["id"] == 1
     finally:
         app.dependency_overrides.clear()
+
+
+def test_normalize_approval_summary_save_to_create_or_update():
+    from app.services.approval_service import normalize_approval_summary
+
+    assert normalize_approval_summary("保存企业配置：载望志愿") == "修改企业配置：载望志愿"
+    assert normalize_approval_summary("保存品牌词配置") == "修改品牌词配置"
+    assert normalize_approval_summary("新增企业：甲公司") == "新增企业：甲公司"
+    assert normalize_approval_summary("新建售前诊断：乙品牌") == "新建售前诊断：乙品牌"

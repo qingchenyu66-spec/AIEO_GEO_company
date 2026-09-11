@@ -45,6 +45,16 @@ STATUS_LABELS = {
 }
 
 
+def normalize_approval_summary(summary: str | None) -> str:
+    """列表展示：历史「保存」摘要对齐新建/修改语义。"""
+    text = str(summary or "").strip()
+    if text.startswith("保存企业配置"):
+        return "修改企业配置" + text[len("保存企业配置") :]
+    if text.startswith("保存品牌词配置"):
+        return "修改品牌词配置" + text[len("保存品牌词配置") :]
+    return text
+
+
 def _payload_body(payload: dict[str, Any] | None) -> dict[str, Any]:
     raw = payload if isinstance(payload, dict) else {}
     body = raw.get("body")
@@ -277,7 +287,7 @@ def approval_to_dict(
         "module_label": MODULE_LABELS.get(record.module, record.module),
         "action": record.action,
         "action_label": ACTION_LABELS.get(record.action, record.action),
-        "summary": record.summary,
+        "summary": normalize_approval_summary(record.summary),
         "tenant_id": record.tenant_id,
         "tenant_name": tenant.name if tenant else None,
         "target_id": record.target_id,
@@ -396,7 +406,7 @@ def _resubmit_summary(record: OperationApproval, payload: dict[str, Any]) -> str
     if record.operation_key == "brand.asset.upsert":
         name = str(body.get("company_full_name") or body.get("brand_name") or "").strip() or "未命名企业"
         if record.tenant_id is not None:
-            return f"保存企业配置：{name}"
+            return f"修改企业配置：{name}"
         return f"新增企业：{name}"
     return record.summary
 
