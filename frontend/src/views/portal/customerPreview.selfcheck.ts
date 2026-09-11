@@ -17,17 +17,18 @@ const expected = [
   'customer.sources',
   'customer.reports',
   'customer.knowledge',
+  'customer.goods_cards',
+  'customer.enterprise_config',
 ]
 
-if (CUSTOMER_PREVIEW_MENU_CODES.length !== 7) {
-  throw new Error(`expected 7 fallback preview menus, got ${CUSTOMER_PREVIEW_MENU_CODES.length}`)
+if (CUSTOMER_PREVIEW_MENU_CODES.length !== expected.length) {
+  throw new Error(`expected ${expected.length} preview nav codes, got ${CUSTOMER_PREVIEW_MENU_CODES.length}`)
 }
 for (const code of expected) {
   if (!isCustomerPreviewMenuCode(code)) throw new Error(`missing preview menu ${code}`)
 }
-// 2026-09-04 - 商品卡不能写进兜底列表，只能接口按开通返回
-if (isCustomerPreviewMenuCode('customer.goods_cards')) {
-  throw new Error('customer.goods_cards must not be a hardcoded fallback preview menu')
+if (!isCustomerPreviewMenuCode('customer.enterprise_monitor')) {
+  throw new Error('enterprise child menus should be allowed in preview')
 }
 if (isCustomerPreviewMenuCode('platform.audit')) {
   throw new Error('platform.audit must not be a preview menu')

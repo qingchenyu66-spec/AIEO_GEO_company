@@ -12,6 +12,8 @@ export function useCustomerPreviewMenus(
   const previewCustomerIncludesToday = ref<boolean | null>(null)
   const previewMenusLoading = ref(false)
   const previewMenusError = ref('')
+  let loadedTenantId: number | null = null
+  let loadSeq = 0
 
   async function loadPreviewCustomerMenus() {
     const tenantId = previewTenantId.value
@@ -19,21 +21,31 @@ export function useCustomerPreviewMenus(
       previewCustomerMenus.value = []
       previewCustomerIncludesToday.value = null
       previewMenusError.value = ''
+      loadedTenantId = null
       return
     }
+    // 同企业刷新：保留现有侧栏，等接口覆盖，禁止先清空再闪兜底名
+    if (loadedTenantId !== tenantId) {
+      previewCustomerMenus.value = []
+      previewCustomerIncludesToday.value = null
+    }
+    const seq = ++loadSeq
     previewMenusLoading.value = true
     previewMenusError.value = ''
     try {
-      // 2026-09-04 - 预览侧栏跟开通状态走接口，避免写死商品卡；算力企业带回含今日口径
       const meta = await withRetry(() => getTenantCustomerPreviewMenus(tenantId))
+      if (seq !== loadSeq) return
       previewCustomerMenus.value = meta.menus
       previewCustomerIncludesToday.value = meta.customer_includes_today
+      loadedTenantId = tenantId
     } catch (error: unknown) {
+      if (seq !== loadSeq) return
       previewCustomerMenus.value = []
       previewCustomerIncludesToday.value = null
+      loadedTenantId = null
       previewMenusError.value = extractErrorDetail(error) || '客户菜单加载失败'
     } finally {
-      previewMenusLoading.value = false
+      if (seq === loadSeq) previewMenusLoading.value = false
     }
   }
 

@@ -39,8 +39,6 @@ import {
   normalizeMenuCode,
 } from './portal/constants'
 import {
-  CUSTOMER_PREVIEW_MENUS,
-  CUSTOMER_PREVIEW_MENU_CODES,
   buildCustomerPortalSidebarMenus,
   isCustomerPreviewActive,
   parsePreviewTenantId,
@@ -118,8 +116,8 @@ function settingsRouteAllowed(menus: MenuInfo[]) {
 
 const allowedMenuCodes = computed(() => {
   if (isPreviewActive.value) {
-    const codes = previewCustomerMenus.value.map(item => item.menu_code)
-    return codes.length ? codes : [...CUSTOMER_PREVIEW_MENU_CODES]
+    // 只认接口菜单；加载中为空，导航靠 isCustomerPreviewMenuCode 放行，禁止硬编码名兜底
+    return previewCustomerMenus.value.map(item => item.menu_code)
   }
   const codes = auth.allowedMenus.map(item => item.menu_code)
   const extra: string[] = []
@@ -146,11 +144,9 @@ const userMenuExpanded = ref(activeMenuCode.value.startsWith('platform.users') |
 const brandAuditRef = ref<{ resetDetailMode?: () => void } | null>(null)
 
 const menus = computed(() => {
-  // 2026-09-04 - 预览侧栏跟企业开通状态走接口，未开通不展示商品卡
+  // 预览侧栏只展示接口菜单；未返回前空着，绝不硬编码兜底名
   if (isPreviewActive.value) {
-    return previewCustomerMenus.value.length
-      ? buildCustomerPortalSidebarMenus(previewCustomerMenus.value)
-      : CUSTOMER_PREVIEW_MENUS
+    return buildCustomerPortalSidebarMenus(previewCustomerMenus.value)
   }
   const filtered = auth.allowedMenus
     .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenEnterpriseConfigPermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
@@ -486,8 +482,9 @@ function ensureActiveMenuAllowed() {
       return
     }
     const codes = previewCustomerMenus.value.map(item => item.menu_code)
-    const allowed = codes.length ? codes : [...CUSTOMER_PREVIEW_MENU_CODES]
-    if (allowed.includes(code)) return
+    // 菜单尚未拉回：先别改路由，避免空列表时乱跳
+    if (!codes.length) return
+    if (codes.includes(code)) return
     navigateToMenu('customer.workspace', true, previewQueryFields(
       parsePreviewTenantId(route)!,
       parsePreviewTenantName(route),

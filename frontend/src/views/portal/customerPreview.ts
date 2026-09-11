@@ -2,7 +2,7 @@ import type { MenuInfo } from '../../services/auth'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import { hiddenCustomerMenus, hiddenEnterpriseConfigPermissionMenus } from './constants'
 
-/** 预览加载失败时的兜底菜单（不含商品卡；商品卡仅接口按开通返回）。 */
+/** 预览导航允许的客户菜单编码（仅鉴权放行，不提供展示名）。 */
 export const CUSTOMER_PREVIEW_MENU_CODES = [
   'customer.workspace',
   'customer.brand_analysis',
@@ -11,23 +11,15 @@ export const CUSTOMER_PREVIEW_MENU_CODES = [
   'customer.sources',
   'customer.reports',
   'customer.knowledge',
+  'customer.goods_cards',
+  'customer.enterprise_config',
 ] as const
 
 export type CustomerPreviewMenuCode = (typeof CUSTOMER_PREVIEW_MENU_CODES)[number]
 
-/** 预览接口失败时的兜底：文案与现行 MenuConfig 客户端一致，避免再冒出 sys_menu 旧名。 */
-export const CUSTOMER_PREVIEW_MENUS: MenuInfo[] = [
-  { id: -1, menu_code: 'customer.workspace', menu_name: '品牌概览', identity_type: 'CUSTOMER', route_path: '/customer/workspace', icon: 'LayoutDashboard', sort_order: 10, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -7, menu_code: 'customer.brand_analysis', menu_name: '品牌诊断', identity_type: 'CUSTOMER', route_path: '/customer/brand-analysis', icon: 'Radar', sort_order: 50, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -2, menu_code: 'customer.realtime', menu_name: 'AI监测', identity_type: 'CUSTOMER', route_path: '/customer/realtime', icon: 'Search', sort_order: 30, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -3, menu_code: 'customer.competitor', menu_name: '竞品分析', identity_type: 'CUSTOMER', route_path: '/customer/competitor', icon: 'BarChart3', sort_order: 90, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -4, menu_code: 'customer.sources', menu_name: '信源追踪', identity_type: 'CUSTOMER', route_path: '/customer/sources', icon: 'Database', sort_order: 100, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -5, menu_code: 'customer.reports', menu_name: '报告中心', identity_type: 'CUSTOMER', route_path: '/customer/reports', icon: 'FileBarChart', sort_order: 110, can_create: false, can_update: false, can_delete: false, can_export: true },
-  { id: -6, menu_code: 'customer.knowledge', menu_name: '品牌资料', identity_type: 'CUSTOMER', route_path: '/customer/knowledge', icon: 'BookOpen', sort_order: 120, can_create: false, can_update: false, can_delete: false, can_export: true },
-]
-
 export function isCustomerPreviewMenuCode(code: string): boolean {
   return (CUSTOMER_PREVIEW_MENU_CODES as readonly string[]).includes(code)
+    || code.startsWith('customer.enterprise_')
 }
 
 /** 客户/预览侧栏过滤：商品卡是否出现由接口菜单决定，此处不写死。 */

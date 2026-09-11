@@ -12,6 +12,12 @@ function stripToken(session: AuthSession): AuthSession {
   return rest as AuthSession
 }
 
+function stripForStorage(session: AuthSession): AuthSession {
+  // 菜单展示名以 /me 为准；不把 menu_name 落本地，避免配置更新后首屏闪旧名
+  const base = stripToken(session)
+  return { ...base, menus: [] }
+}
+
 function readSession(): AuthSession | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -21,7 +27,8 @@ function readSession(): AuthSession | null {
       localStorage.removeItem(STORAGE_KEY)
       return null
     }
-    return session as AuthSession
+    // 历史缓存里可能仍带旧 menu_name，读出时丢弃，等 refreshSession 回填
+    return { ...(session as AuthSession), menus: [] }
   }
   catch {
     localStorage.removeItem(STORAGE_KEY)
@@ -47,7 +54,7 @@ export const useAuthStore = defineStore('auth', {
       // 2026-08-07 - 切账号不清工作台内存缓存会串全平台数据到观察号
       invalidatePortalMonitorReadCaches()
       this.session = session
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripToken(session)))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripForStorage(session)))
       this.pendingTicket = ''
       this.pendingUser = null
       this.pendingIdentities = []
