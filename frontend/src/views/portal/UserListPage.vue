@@ -3,6 +3,7 @@ import { Users } from '@lucide/vue'
 import { ElOption, ElSelect } from 'element-plus'
 import 'element-plus/es/components/select/style/css'
 import 'element-plus/es/components/option/style/css'
+import type { IdentityType } from '../../services/auth'
 import { usePlatformAdminInject } from './composables/usePlatformAdminInject'
 
 const {
@@ -34,7 +35,7 @@ function identitySummary(user: {
     identity_name?: string | null
     position_id?: number | null
     role_code?: string
-    identity_type?: string
+    identity_type?: IdentityType
   }>
 }) {
   const rows = user.identities || []
