@@ -278,10 +278,21 @@ export function useMonitorAnalytics(options: MonitorAnalyticsOptions) {
 
   const systemSettings = computed(() => systemConfigRows.value.map(row => {
     const isSecret = /key|token|secret|password/i.test(row.config_key)
-    const value = isSecret && row.config_value ? `${row.config_value.slice(0, 4)}****${row.config_value.slice(-4)}` : row.config_value
+    let value = row.config_value || '-'
+    if (row.config_key === 'observer_platforms') {
+      const codes = String(row.config_value || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean)
+      value = codes.length
+        ? codes.map(code => platformLabelMap[code] || code).join('、')
+        : '未选择'
+    } else if (isSecret && row.config_value) {
+      value = `${row.config_value.slice(0, 4)}****${row.config_value.slice(-4)}`
+    }
     return [
       row.config_key,
-      value || '-',
+      value,
       row.remark || row.scope || '平台运行配置',
       row.status ? '启用' : '停用',
     ]

@@ -34,6 +34,7 @@ import {
 import PlatformMatrixPanel from '../components/PlatformMatrixPanel.vue'
 import H5DiagnosisConfigPanel from '../components/H5DiagnosisConfigPanel.vue'
 import PlatformBrandLogoPanel from '../components/PlatformBrandLogoPanel.vue'
+import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { getPlatformMeta, supportedPlatforms } from '../platformMeta'
 import '../../../styles/platform-matrix.css'
 
@@ -262,6 +263,17 @@ function formatObserverPlatformsDisplay(raw: string) {
   const codes = parseObserverPlatformCodes(raw)
   if (!codes.length) return '未选择'
   return codes.map(code => getPlatformMeta(code).name).join('、')
+}
+
+function toggleObserverPlatform(code: string) {
+  const next = new Set(editingObserverPlatforms.value)
+  if (next.has(code)) next.delete(code)
+  else next.add(code)
+  // 保持勾选顺序与选项列表一致，避免保存后跳动
+  editingObserverPlatforms.value = observerPlatformOptions.value
+    .map(item => item.code)
+    .filter(item => next.has(item))
+  editingConfigValue.value = editingObserverPlatforms.value.join(',')
 }
 
 function formatConfigDisplay(row: {
@@ -512,7 +524,7 @@ function exportConfigsCsv() {
   const lines = rows.map(row => [
     row.config_name || row.config_key,
     row.config_key,
-    maskedConfigValue(row.config_value, row.config_key, row.secret),
+    formatConfigDisplay(row),
     row.remark || row.scope || '平台运行配置',
     row.status || '启用',
   ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
@@ -885,24 +897,31 @@ onUnmounted(() => {
                   :value="position.id"
                 />
               </ElSelect>
-              <ElSelect
+              <div
                 v-else-if="isObserverPlatformsConfig(row)"
-                v-model="editingObserverPlatforms"
-                class="settings-config-select"
-                multiple
-                filterable
-                clearable
-                collapse-tags
-                collapse-tags-tooltip
-                placeholder="勾选观察号可见平台"
+                class="keyword-group-platform-field settings-observer-platforms"
               >
-                <ElOption
-                  v-for="platform in observerPlatformOptions"
-                  :key="platform.code"
-                  :label="platform.name"
-                  :value="platform.code"
-                />
-              </ElSelect>
+                <div class="platform-check-grid compact">
+                  <label
+                    v-for="platform in observerPlatformOptions"
+                    :key="platform.code"
+                    class="platform-check"
+                    :class="{ 'is-selected': editingObserverPlatforms.includes(platform.code) }"
+                    @click.prevent="toggleObserverPlatform(platform.code)"
+                  >
+                    <input
+                      type="checkbox"
+                      tabindex="-1"
+                      :checked="editingObserverPlatforms.includes(platform.code)"
+                    >
+                    <PlatformBadge
+                      :code="platform.code"
+                      size="sm"
+                      :label="platform.name"
+                    />
+                  </label>
+                </div>
+              </div>
               <input
                 v-else
                 v-model="editingConfigValue"
@@ -961,24 +980,31 @@ onUnmounted(() => {
                   :value="position.id"
                 />
               </ElSelect>
-              <ElSelect
+              <div
                 v-else-if="isObserverPlatformsConfig(row)"
-                v-model="editingObserverPlatforms"
-                class="settings-config-select"
-                multiple
-                filterable
-                clearable
-                collapse-tags
-                collapse-tags-tooltip
-                placeholder="勾选观察号可见平台"
+                class="keyword-group-platform-field settings-observer-platforms"
               >
-                <ElOption
-                  v-for="platform in observerPlatformOptions"
-                  :key="platform.code"
-                  :label="platform.name"
-                  :value="platform.code"
-                />
-              </ElSelect>
+                <div class="platform-check-grid compact">
+                  <label
+                    v-for="platform in observerPlatformOptions"
+                    :key="platform.code"
+                    class="platform-check"
+                    :class="{ 'is-selected': editingObserverPlatforms.includes(platform.code) }"
+                    @click.prevent="toggleObserverPlatform(platform.code)"
+                  >
+                    <input
+                      type="checkbox"
+                      tabindex="-1"
+                      :checked="editingObserverPlatforms.includes(platform.code)"
+                    >
+                    <PlatformBadge
+                      :code="platform.code"
+                      size="sm"
+                      :label="platform.name"
+                    />
+                  </label>
+                </div>
+              </div>
               <input
                 v-else
                 v-model="editingConfigValue"

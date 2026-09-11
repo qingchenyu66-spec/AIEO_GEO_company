@@ -5002,6 +5002,15 @@ button:disabled {
   min-height: 34px;
 }
 
+.settings-observer-platforms {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-observer-platforms .platform-check-grid.compact {
+  gap: 6px;
+}
+
 .settings-config-actions {
   display: inline-flex;
   gap: 6px;
