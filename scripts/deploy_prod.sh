@@ -45,6 +45,10 @@ cd "$ROOT/backend"
 # shellcheck disable=SC1091
 source .venv/bin/activate
 export PYTHONPATH="$ROOT/backend"
+
+echo "==> pip install requirements"
+pip install -r requirements.txt
+
 alembic upgrade head
 
 echo "==> sync sys_config from .env (Redis/Celery 等运行时配置)"

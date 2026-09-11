@@ -15,7 +15,7 @@ import {
   normalizePlatformSelection, normalizePlatformSelections, platformSelectionCodes,
   type BrandAsset, type BrandCompetitor, type BrandKeywordGroup, type BrandWordGroup, type PlatformSelection,
 } from '../../../services/brand'
-import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFileContent, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
+import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFilePreviewObjectUrl, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { getApproval, isDuplicateMergedApproval, isPendingApproval, isResubmittedApproval, pendingApprovalMessage, resubmitApproval } from '../../../services/approvals'
 import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
 import { getPlatformsForBrandConfig } from '../../../services/platforms'
@@ -40,12 +40,17 @@ import {
 import { resolveEnterprisePreviewTenantId } from '../customerPreview'
 
 const KNOWLEDGE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024
-const KNOWLEDGE_UPLOAD_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'md', 'txt'])
+const KNOWLEDGE_UPLOAD_EXTENSIONS = new Set([
+  'pdf', 'doc', 'docx', 'md', 'txt',
+  'png', 'jpg', 'jpeg', 'webp',
+  'html', 'htm',
+  'ppt', 'pptx',
+])
 
 function validateKnowledgeUploadFile(file: File) {
   const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase() : ''
   if (!KNOWLEDGE_UPLOAD_EXTENSIONS.has(ext)) {
-    throw new Error('仅支持 PDF、Word、Markdown 和 TXT 文件')
+    throw new Error('仅支持 PDF、Word、PPT、图片、HTML、Markdown 和 TXT 文件')
   }
   if (file.size === 0) throw new Error('不能上传空文件')
   if (file.size > KNOWLEDGE_UPLOAD_MAX_BYTES) throw new Error('单个文件不能超过 30MB')
@@ -292,9 +297,18 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   const loadingKnowledgeFiles = ref(false)
   const knowledgePreviewVisible = ref(false)
   const knowledgePreviewFile = ref<KnowledgeFileRecord | null>(null)
-  const knowledgePreviewText = ref('')
+  const knowledgePreviewUrl = ref('')
   const knowledgePreviewLoading = ref(false)
   const knowledgePreviewError = ref('')
+  let knowledgePreviewObjectUrl = ''
+
+  function revokeKnowledgePreviewUrl() {
+    if (knowledgePreviewObjectUrl) {
+      URL.revokeObjectURL(knowledgePreviewObjectUrl)
+      knowledgePreviewObjectUrl = ''
+    }
+    knowledgePreviewUrl.value = ''
+  }
   const canUploadKnowledgeFiles = computed(() => (
     isPlatform.value
     && Boolean(menuGrant(enterprisePermissionCodeMap.files)?.can_create)
@@ -1116,12 +1130,14 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     knowledgePreviewVisible.value = true
     knowledgePreviewLoading.value = true
     knowledgePreviewError.value = ''
-    knowledgePreviewText.value = ''
+    revokeKnowledgePreviewUrl()
     try {
-      const data = await withRetry(() => getKnowledgeFileContent(file.id))
-      knowledgePreviewText.value = data.text || ''
+      const url = await withRetry(() => getKnowledgeFilePreviewObjectUrl(file.id))
+      knowledgePreviewObjectUrl = url
+      knowledgePreviewUrl.value = url
     } catch (error: unknown) {
       knowledgePreviewError.value = errorMessage(error)
+      revokeKnowledgePreviewUrl()
     } finally {
       knowledgePreviewLoading.value = false
     }
@@ -1130,8 +1146,8 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function closeKnowledgePreview() {
     knowledgePreviewVisible.value = false
     knowledgePreviewFile.value = null
-    knowledgePreviewText.value = ''
     knowledgePreviewError.value = ''
+    revokeKnowledgePreviewUrl()
   }
 
   async function downloadKnowledgeFileItem(file: KnowledgeFileRecord) {
@@ -2091,7 +2107,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     loadingKnowledgeFiles,
     knowledgePreviewVisible,
     knowledgePreviewFile,
-    knowledgePreviewText,
+    knowledgePreviewUrl,
     knowledgePreviewLoading,
     knowledgePreviewError,
     canDeleteKnowledgeFiles,

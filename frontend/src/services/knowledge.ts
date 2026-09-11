@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, type GeoHttpRequestConfig } from './http'
 
 export type KnowledgeParseStatus = 'none' | 'parsing' | 'parsed' | 'failed'
 
@@ -61,6 +61,29 @@ export async function uploadKnowledgeFile(file: File, tenantId?: number | null):
 export async function getKnowledgeFileContent(fileId: number): Promise<KnowledgeFileContent> {
   const response = await http.get(`/v1/knowledge/files/${fileId}/content`)
   return response.data.data
+}
+
+export async function getKnowledgeFilePreviewObjectUrl(fileId: number): Promise<string> {
+  const response = await http.get(`/v1/knowledge/files/${fileId}/preview`, {
+    responseType: 'blob',
+    timeout: 120_000,
+  } as GeoHttpRequestConfig)
+  const contentType = String(response.headers['content-type'] || 'application/pdf')
+  if (contentType.includes('application/json')) {
+    const text = await (response.data as Blob).text()
+    let detail = '预览生成失败'
+    try {
+      const parsed = JSON.parse(text) as { detail?: string; message?: string }
+      detail = String(parsed.detail || parsed.message || detail)
+    } catch {
+      detail = text.slice(0, 200) || detail
+    }
+    throw new Error(detail)
+  }
+  const blob = response.data instanceof Blob
+    ? response.data
+    : new Blob([response.data], { type: contentType.includes('pdf') ? contentType : 'application/pdf' })
+  return URL.createObjectURL(blob)
 }
 
 function parseDownloadFilename(contentDisposition: string | undefined, fallback: string) {

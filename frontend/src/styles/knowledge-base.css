@@ -405,6 +405,21 @@
   color: #2563eb;
 }
 
+.kb-file-icon.is-ppt {
+  background: rgba(234, 88, 12, .12);
+  color: #ea580c;
+}
+
+.kb-file-icon.is-image {
+  background: rgba(168, 85, 247, .12);
+  color: #9333ea;
+}
+
+.kb-file-icon.is-html {
+  background: rgba(14, 165, 233, .12);
+  color: #0284c7;
+}
+
 .kb-file-icon.is-md {
   background: rgba(16, 185, 129, .12);
   color: #059669;
@@ -744,6 +759,18 @@
   gap: 10px;
 }
 
+.kb-pdf-preview-panel {
+  min-height: 560px;
+}
+
+.kb-pdf-frame {
+  width: 100%;
+  height: min(70vh, 720px);
+  border: 1px solid #e3edf8;
+  border-radius: 14px;
+  background: #fcfdff;
+}
+
 .kb-fulltext-body {
   max-height: 560px;
   margin: 0;
@@ -961,6 +988,21 @@
 .kb-detail-type.is-doc {
   background: rgba(37, 99, 235, .12);
   color: #2563eb;
+}
+
+.kb-detail-type.is-ppt {
+  background: rgba(234, 88, 12, .12);
+  color: #ea580c;
+}
+
+.kb-detail-type.is-image {
+  background: rgba(168, 85, 247, .12);
+  color: #9333ea;
+}
+
+.kb-detail-type.is-html {
+  background: rgba(14, 165, 233, .12);
+  color: #0284c7;
 }
 
 .kb-detail-type.is-md {

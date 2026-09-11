@@ -10,7 +10,21 @@ from app.api.dependencies import CurrentSession
 from app.models.knowledge import KnowledgeFile
 from app.services.tenant_scope import guard_tenant_resource_access, resolve_and_guard_tenant_id
 
-ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx", ".md", ".txt"}
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".md",
+    ".txt",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".html",
+    ".htm",
+    ".ppt",
+    ".pptx",
+}
 MAX_FILE_SIZE = 30 * 1024 * 1024
 STORAGE_ROOT = Path(__file__).resolve().parents[2] / "storage" / "knowledge"
 
@@ -19,6 +33,12 @@ FILE_SIGNATURES: dict[str, list[tuple[bytes, int]]] = {
     ".pdf": [(b"%PDF", 0)],
     ".docx": [(b"PK\x03\x04", 0)],
     ".doc": [(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", 0)],
+    ".pptx": [(b"PK\x03\x04", 0)],
+    ".ppt": [(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", 0)],
+    ".png": [(b"\x89PNG\r\n\x1a\n", 0)],
+    ".jpg": [(b"\xff\xd8\xff", 0)],
+    ".jpeg": [(b"\xff\xd8\xff", 0)],
+    ".webp": [(b"RIFF", 0)],
 }
 
 
@@ -26,8 +46,12 @@ def _validate_file_signature(file_ext: str, content: bytes) -> None:
     signatures = FILE_SIGNATURES.get(file_ext)
     if not signatures:
         return
+    if file_ext == ".webp":
+        if not (content.startswith(b"RIFF") and content[8:12] == b"WEBP"):
+            raise ValueError("文件内容与扩展名不匹配，请上传真实图片文件")
+        return
     if not any(content[offset:offset + len(magic)] == magic for magic, offset in signatures):
-        raise ValueError("文件内容与扩展名不匹配，请上传真实 PDF 或 Word 文件")
+        raise ValueError("文件内容与扩展名不匹配，请上传真实 PDF、Office 或图片文件")
 
 
 def _safe_file_path(storage_path: str) -> Path:
@@ -72,7 +96,7 @@ async def save_knowledge_file(
         raise ValueError("文件名不能为空")
     file_ext = Path(original_name).suffix.lower()
     if file_ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("仅支持 PDF、Word、Markdown 和 TXT 文件")
+        raise ValueError("仅支持 PDF、Word、PPT、图片、HTML、Markdown 和 TXT 文件")
 
     # Stream to disk in chunks; abort as soon as size exceeds the cap (CWE-400).
     tenant_dir = STORAGE_ROOT / str(resolved_tenant_id)
@@ -196,6 +220,21 @@ def resolve_knowledge_file_path(db: Session, current: CurrentSession, file_id: i
     return record, file_path
 
 
+def resolve_knowledge_preview_pdf(db: Session, current: CurrentSession, file_id: int) -> tuple[KnowledgeFile, Path]:
+    """返回可内嵌预览的 PDF（原 PDF 或转换缓存）。"""
+    from app.services.knowledge_preview_pdf_service import (
+        KnowledgePreviewPdfError,
+        ensure_knowledge_preview_pdf,
+    )
+
+    record, source_path = resolve_knowledge_file_path(db, current, file_id)
+    try:
+        preview_path = ensure_knowledge_preview_pdf(source_path, record.file_ext)
+    except KnowledgePreviewPdfError as exc:
+        raise ValueError(str(exc)) from exc
+    return record, preview_path
+
+
 def knowledge_file_media_type(record: KnowledgeFile) -> str:
     if record.content_type:
         return record.content_type
@@ -203,7 +242,15 @@ def knowledge_file_media_type(record: KnowledgeFile) -> str:
         "pdf": "application/pdf",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "doc": "application/msword",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt": "application/vnd.ms-powerpoint",
         "md": "text/markdown; charset=utf-8",
         "txt": "text/plain; charset=utf-8",
+        "html": "text/html; charset=utf-8",
+        "htm": "text/html; charset=utf-8",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
     }
     return mapping.get(str(record.file_ext or "").lower(), "application/octet-stream")

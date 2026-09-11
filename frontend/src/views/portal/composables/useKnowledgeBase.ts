@@ -11,13 +11,22 @@ import { useAuthStore } from '../../../stores/auth'
 import { formatDateTime, formatFileSize } from '../portalUtils'
 import { isCustomerPreviewActive, parsePreviewTenantId, parsePreviewTenantName } from '../customerPreview'
 
-export type KnowledgeTypeFilter = 'all' | 'pdf' | 'doc' | 'md' | 'txt'
+export type KnowledgeTypeFilter = 'all' | 'pdf' | 'doc' | 'ppt' | 'image' | 'html' | 'md' | 'txt'
 
 const MAX_FILE_SIZE = 30 * 1024 * 1024
+const ALLOWED_UPLOAD_EXTS = new Set([
+  'pdf', 'doc', 'docx', 'md', 'txt',
+  'png', 'jpg', 'jpeg', 'webp',
+  'html', 'htm',
+  'ppt', 'pptx',
+])
 
 function normalizeExt(ext: string) {
   const value = ext.toLowerCase().replace(/^\./, '')
   if (value === 'doc' || value === 'docx') return 'doc'
+  if (value === 'ppt' || value === 'pptx') return 'ppt'
+  if (value === 'htm' || value === 'html') return 'html'
+  if (value === 'jpg' || value === 'jpeg' || value === 'png' || value === 'webp') return 'image'
   return value
 }
 
@@ -82,6 +91,9 @@ export function useKnowledgeBase() {
   const totalSize = computed(() => files.value.reduce((sum, file) => sum + file.file_size, 0))
   const pdfCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'pdf').length)
   const docCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'doc').length)
+  const pptCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'ppt').length)
+  const imageCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'image').length)
+  const htmlCount = computed(() => files.value.filter(file => normalizeExt(file.file_ext) === 'html').length)
   const textCount = computed(() => files.value.filter(file => ['md', 'txt'].includes(normalizeExt(file.file_ext))).length)
 
   const lastUploadLabel = computed(() => {
@@ -100,6 +112,9 @@ export function useKnowledgeBase() {
     { value: 'all', label: '全部', count: files.value.length },
     { value: 'pdf', label: 'PDF', count: pdfCount.value },
     { value: 'doc', label: 'Word', count: docCount.value },
+    { value: 'ppt', label: 'PPT', count: pptCount.value },
+    { value: 'image', label: '图片', count: imageCount.value },
+    { value: 'html', label: 'HTML', count: htmlCount.value },
     { value: 'md', label: 'Markdown', count: files.value.filter(file => normalizeExt(file.file_ext) === 'md').length },
     { value: 'txt', label: 'TXT', count: files.value.filter(file => normalizeExt(file.file_ext) === 'txt').length },
   ])
@@ -136,9 +151,8 @@ export function useKnowledgeBase() {
   function validateFile(file: File) {
     const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
     const bare = ext.replace(/^\./, '')
-    const allowed = new Set(['pdf', 'doc', 'docx', 'md', 'txt'])
-    if (!allowed.has(bare)) {
-      throw new Error('仅支持 PDF、Word、Markdown 和 TXT 文件')
+    if (!ALLOWED_UPLOAD_EXTS.has(bare)) {
+      throw new Error('仅支持 PDF、Word、PPT、图片、HTML、Markdown 和 TXT 文件')
     }
     if (file.size === 0) throw new Error('不能上传空文件')
     if (file.size > MAX_FILE_SIZE) throw new Error('单个文件不能超过 30MB')
@@ -192,6 +206,9 @@ export function useKnowledgeBase() {
     const normalized = normalizeExt(ext)
     if (normalized === 'pdf') return 'PDF'
     if (normalized === 'doc') return 'Word'
+    if (normalized === 'ppt') return 'PPT'
+    if (normalized === 'image') return '图片'
+    if (normalized === 'html') return 'HTML'
     if (normalized === 'md') return 'Markdown'
     if (normalized === 'txt') return 'TXT'
     return ext.toUpperCase()
@@ -216,6 +233,9 @@ export function useKnowledgeBase() {
     totalSize,
     pdfCount,
     docCount,
+    pptCount,
+    imageCount,
+    htmlCount,
     textCount,
     lastUploadLabel,
     headline,

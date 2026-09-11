@@ -188,7 +188,7 @@ const {
   resetDetailMode,
   knowledgePreviewVisible,
   knowledgePreviewFile,
-  knowledgePreviewText,
+  knowledgePreviewUrl,
   knowledgePreviewLoading,
   knowledgePreviewError,
   canDeleteKnowledgeFiles,
@@ -933,7 +933,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       ref="knowledgeUploadInputRef"
       type="file"
       class="knowledge-hidden-file-input"
-      accept=".pdf,.doc,.docx,.md,.txt"
+      accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.html,.htm,.md,.txt"
       :disabled="uploadingKnowledgeFile"
       @change="onKnowledgeUploadInput"
     />
@@ -1002,14 +1002,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 
     <el-dialog
       v-model="knowledgePreviewVisible"
-      width="760px"
+      width="900px"
       :title="knowledgePreviewFile?.original_name || '文件预览'"
       @closed="closeKnowledgePreview"
     >
-      <div v-if="knowledgePreviewLoading" class="mini-empty">预览加载中...</div>
+      <div v-if="knowledgePreviewLoading" class="mini-empty">正在生成原版预览...</div>
       <div v-else-if="knowledgePreviewError" class="mini-empty">{{ knowledgePreviewError }}</div>
-      <pre v-else-if="knowledgePreviewText" class="knowledge-preview-body">{{ knowledgePreviewText }}</pre>
-      <div v-else class="mini-empty">暂无可预览的文本内容，可尝试下载原文件查看。</div>
+      <iframe
+        v-else-if="knowledgePreviewUrl"
+        class="knowledge-preview-frame"
+        :src="knowledgePreviewUrl"
+        title="知识库文件原版预览"
+      />
+      <div v-else class="mini-empty">暂无可预览内容，可尝试下载原文件查看。</div>
       <template #footer>
         <button class="plain-btn" @click="closeKnowledgePreview">关闭</button>
         <button

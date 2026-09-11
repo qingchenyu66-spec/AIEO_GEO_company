@@ -1,5 +1,6 @@
 """知识库 API。"""
 
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
@@ -20,6 +21,7 @@ from app.services.knowledge_service import (
     list_knowledge_files,
     read_knowledge_file_text,
     resolve_knowledge_file_path,
+    resolve_knowledge_preview_pdf,
     save_knowledge_file,
 )
 from app.services.menu_permission_service import require_knowledge_permission
@@ -115,6 +117,32 @@ def download_knowledge_file(
         media_type=knowledge_file_media_type(record),
         filename=record.original_name,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"},
+    )
+
+
+@router.get("/files/{file_id}/preview")
+def preview_knowledge_file(
+    file_id: int,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """原版排版预览：返回 PDF（原 PDF 直出，Word/文本转 PDF 后缓存）。"""
+    try:
+        require_knowledge_permission(db, current, "can_export")
+        record, preview_path = resolve_knowledge_preview_pdf(db, current, file_id)
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="knowledge.preview")
+    stem = Path(record.original_name).stem or f"knowledge-{record.id}"
+    preview_name = f"{stem}.pdf"
+    encoded_name = quote(preview_name)
+    return FileResponse(
+        path=preview_path,
+        media_type="application/pdf",
+        filename=preview_name,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}",
+            "Cache-Control": "private, max-age=60",
+        },
     )
 
 

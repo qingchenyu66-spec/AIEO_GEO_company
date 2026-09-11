@@ -1,40 +1,54 @@
 import { ref, watch, type ComputedRef } from 'vue'
 import { withRetry } from '../../../composables/useRetry'
-import { getKnowledgeFileContent, type KnowledgeFileRecord } from '../../../services/knowledge'
+import { getKnowledgeFilePreviewObjectUrl, type KnowledgeFileRecord } from '../../../services/knowledge'
 
 export function useKnowledgePreview(selectedFile: ComputedRef<KnowledgeFileRecord | null>) {
-  const fullText = ref('')
-  const fullTextLoading = ref(false)
-  const fullTextError = ref('')
+  const previewUrl = ref('')
+  const previewLoading = ref(false)
+  const previewError = ref('')
   let loadSeq = 0
+  let activeObjectUrl = ''
 
-  async function loadFullText(fileId: number) {
+  function revokePreviewUrl() {
+    if (activeObjectUrl) {
+      URL.revokeObjectURL(activeObjectUrl)
+      activeObjectUrl = ''
+    }
+    previewUrl.value = ''
+  }
+
+  async function loadPreview(fileId: number) {
     const seq = ++loadSeq
-    fullTextLoading.value = true
-    fullTextError.value = ''
+    previewLoading.value = true
+    previewError.value = ''
+    revokePreviewUrl()
     try {
-      const data = await withRetry(() => getKnowledgeFileContent(fileId))
-      if (seq !== loadSeq) return
-      fullText.value = data.text || ''
+      const url = await withRetry(() => getKnowledgeFilePreviewObjectUrl(fileId))
+      if (seq !== loadSeq) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      activeObjectUrl = url
+      previewUrl.value = url
     } catch (error: unknown) {
       if (seq !== loadSeq) return
-      fullTextError.value = error instanceof Error ? error.message : '预览加载失败'
-      fullText.value = ''
+      previewError.value = error instanceof Error ? error.message : '预览加载失败'
+      revokePreviewUrl()
     } finally {
-      if (seq === loadSeq) fullTextLoading.value = false
+      if (seq === loadSeq) previewLoading.value = false
     }
   }
 
   watch(selectedFile, file => {
-    fullText.value = ''
-    fullTextError.value = ''
-    if (file?.id) void loadFullText(file.id)
+    previewError.value = ''
+    if (file?.id) void loadPreview(file.id)
+    else revokePreviewUrl()
   }, { immediate: true })
 
   return {
-    fullText,
-    fullTextLoading,
-    fullTextError,
-    loadFullText,
+    previewUrl,
+    previewLoading,
+    previewError,
+    loadPreview,
   }
 }

@@ -29,6 +29,9 @@ const {
   totalSize,
   pdfCount,
   docCount,
+  pptCount,
+  imageCount,
+  htmlCount,
   textCount,
   lastUploadLabel,
   headline,
@@ -44,10 +47,10 @@ const {
 } = useKnowledgeBase()
 
 const {
-  fullText,
-  fullTextLoading,
-  fullTextError,
-  loadFullText,
+  previewUrl,
+  previewLoading,
+  previewError,
+  loadPreview,
 } = useKnowledgePreview(selectedFile)
 
 function openUploadDialog() {
@@ -59,6 +62,9 @@ function fileIconClass(ext: string) {
   const normalized = normalizeExt(ext)
   if (normalized === 'pdf') return 'is-pdf'
   if (normalized === 'doc') return 'is-doc'
+  if (normalized === 'ppt') return 'is-ppt'
+  if (normalized === 'image') return 'is-image'
+  if (normalized === 'html') return 'is-html'
   if (normalized === 'md') return 'is-md'
   return 'is-txt'
 }
@@ -109,7 +115,7 @@ function fileIconClass(ext: string) {
         ref="fileInputRef"
         type="file"
         class="kb-hidden-input"
-        accept=".pdf,.doc,.docx,.md,.txt"
+        accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.html,.htm,.md,.txt"
         :disabled="!canUpload || uploading"
         @change="handleFileInput"
       />
@@ -119,7 +125,7 @@ function fileIconClass(ext: string) {
       <div class="kb-hero-copy">
         <span class="kb-hero-eyebrow">{{ tenantName }}</span>
         <h2>{{ headline }}</h2>
-        <p>集中管理产品手册、白皮书、FAQ 与品牌资料，上传后可在线预览文本内容，便于团队查阅与复用。</p>
+        <p>集中管理产品手册、白皮书、FAQ 与品牌资料，上传后可在线预览原版排版，便于团队查阅与复用。</p>
         <div class="kb-hero-signals">
           <span><BookOpen /> 资料归档</span>
           <span><FileText /> 在线预览</span>
@@ -129,7 +135,7 @@ function fileIconClass(ext: string) {
         <div class="kb-stat">
           <span>资料总数</span>
           <b>{{ files.length }}</b>
-          <em>PDF {{ pdfCount }} · Word {{ docCount }} · 文本 {{ textCount }}</em>
+          <em>PDF {{ pdfCount }} · Word {{ docCount }} · PPT {{ pptCount }} · 图 {{ imageCount }} · HTML {{ htmlCount }} · 文本 {{ textCount }}</em>
         </div>
         <div class="kb-stat">
           <span>占用空间</span>
@@ -214,25 +220,30 @@ function fileIconClass(ext: string) {
 
           <section class="kb-preview-panel">
             <div class="kb-preview-toolbar">
-              <strong>文件预览</strong>
+              <strong>原版预览</strong>
               <button
                 type="button"
                 class="filter-reset-btn tiny-btn"
-                :disabled="fullTextLoading"
-                @click="loadFullText(selectedFile.id)"
+                :disabled="previewLoading"
+                @click="loadPreview(selectedFile.id)"
               >
                 <RefreshCw />
                 刷新预览
               </button>
             </div>
 
-            <div class="kb-fulltext-panel">
-              <div v-if="fullTextLoading" class="kb-fulltext-state">预览加载中...</div>
-              <div v-else-if="fullTextError" class="kb-fulltext-state is-error">
-                {{ fullTextError }}
+            <div class="kb-fulltext-panel kb-pdf-preview-panel">
+              <div v-if="previewLoading" class="kb-fulltext-state">正在生成原版预览...</div>
+              <div v-else-if="previewError" class="kb-fulltext-state is-error">
+                {{ previewError }}
               </div>
-              <pre v-else-if="fullText" class="kb-fulltext-body">{{ fullText }}</pre>
-              <div v-else class="kb-fulltext-state">暂无可预览的文本内容，请确认文件格式是否支持。</div>
+              <iframe
+                v-else-if="previewUrl"
+                class="kb-pdf-frame"
+                :src="previewUrl"
+                title="知识库文件原版预览"
+              />
+              <div v-else class="kb-fulltext-state">暂无可预览内容，请确认文件格式是否支持。</div>
             </div>
           </section>
         </template>
@@ -246,13 +257,13 @@ function fileIconClass(ext: string) {
           >
             <input
               type="file"
-              accept=".pdf,.doc,.docx,.md,.txt"
+              accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.html,.htm,.md,.txt"
               :disabled="uploading"
               @change="handleFileInput"
             />
             <BookOpen />
             <h3>拖拽或点击上传品牌资料</h3>
-            <p>支持 PDF、Word、Markdown、TXT，上传后可在线预览，单个文件不超过 30MB</p>
+            <p>支持 PDF、Word、PPT、图片、HTML、Markdown、TXT，上传后可原版预览，单个文件不超过 30MB</p>
             <span class="kb-upload-hint">建议上传：产品说明书、品牌白皮书、FAQ、核心卖点文案</span>
           </label>
         </template>
