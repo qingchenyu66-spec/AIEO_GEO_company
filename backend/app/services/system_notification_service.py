@@ -813,14 +813,14 @@ def upsert_credit_runway_alert(
     if platform_gate_ok:
         title = f"Runway 偏低（{runway_windows:.1f} 窗）"
         message = (
-            f"模力账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
+            f"监测账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
             f"Runway 约 {runway_windows:.1f} 窗，低于阈值 {runway_threshold} 窗。"
         )
         level = "warning"
     else:
-        title = "模力余额不足，全平台提交可能被拦截"
+        title = "监测账户余额不足，全平台提交可能被拦截"
         message = (
-            f"模力账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
+            f"监测账户余额 {molizhishu_balance:.2f} 元，下一窗预估 {next_window_yuan:.2f} 元，"
             f"未达 runway×预估+安全垫要求（阈值 {runway_threshold} 窗）。"
         )
         level = "critical"

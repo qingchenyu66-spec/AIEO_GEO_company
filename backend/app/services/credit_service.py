@@ -1241,7 +1241,7 @@ def finalize_monitor_cell_credit(
                     tenant_id=tenant.id,
                     ref_id=batch_ref,
                     amount=prepaid_share,
-                    reason="模力未计费释放预扣",
+                    reason="监测未计费释放预扣",
                     detail_json=detail,
                 )
             else:

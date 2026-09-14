@@ -164,7 +164,7 @@ function formatLedgerTime(value: unknown) {
 function isInternalLedgerReason(reason: string) {
   const text = reason.trim()
   if (!text) return true
-  return /amount|晚到误释放|模力未计费|prepaid|backfill|补扣：/i.test(text)
+  return /amount|晚到误释放|模力未计费|监测未计费|prepaid|backfill|补扣：/i.test(text)
 }
 
 function formatLedgerReason(row: CreditLedgerItem) {

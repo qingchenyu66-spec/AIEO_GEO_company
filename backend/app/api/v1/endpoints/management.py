@@ -851,7 +851,7 @@ def management_quota_daily_cost(
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """模力监测按日消耗日历；默认当月。DeepSeek 无官方日流水，不在此返回格子。"""
+    """监测按日消耗日历；默认当月。DeepSeek 无官方日流水，不在此返回格子。"""
     # 2026-07-31 - 费用日历要当月热力 - 独立轻量接口，避免塞进 overview 加重缓存
     require_platform(current)
     today = date.today()

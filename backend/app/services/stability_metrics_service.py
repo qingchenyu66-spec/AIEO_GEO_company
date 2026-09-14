@@ -230,7 +230,7 @@ def evaluate_stability_alerts(metrics: dict[str, Any] | None = None) -> list[dic
             {
                 "queue": "callback_fail_rate",
                 "level": "critical",
-                "title": "模力回调失败率过高",
+                "title": "监测回调失败率过高",
                 "message": f"近 {cb.get('hours')}h 失败率 {rate:.1%}（{cb.get('failed')}/{total}）",
                 "queued": int(rate * 1000),
                 "threshold": int(CALLBACK_FAIL_RATE_CRIT * 1000),
@@ -241,7 +241,7 @@ def evaluate_stability_alerts(metrics: dict[str, Any] | None = None) -> list[dic
             {
                 "queue": "callback_fail_rate",
                 "level": "warning",
-                "title": "模力回调失败率预警",
+                "title": "监测回调失败率预警",
                 "message": f"近 {cb.get('hours')}h 失败率 {rate:.1%}（{cb.get('failed')}/{total}）",
                 "queued": int(rate * 1000),
                 "threshold": int(CALLBACK_FAIL_RATE_WARN * 1000),

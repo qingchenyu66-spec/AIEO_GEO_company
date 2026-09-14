@@ -406,7 +406,7 @@ onUnmounted(() => {
         <div class="ops-quota-calendar">
           <div class="ops-quota-calendar-head">
             <div>
-              <strong>{{ quotaDaily?.source_label || '模力监测按日消耗' }}</strong>
+              <strong>{{ quotaDaily?.source_label || '监测按日消耗' }}</strong>
               <span v-if="quotaDaily">本月合计 ¥{{ quotaDaily.month_total }}</span>
             </div>
             <div class="ops-quota-calendar-nav">

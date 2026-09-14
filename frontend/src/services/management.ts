@@ -377,7 +377,7 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
   return response.data.data
 }
 
-/** 模力监测按日消耗日历；DeepSeek 无官方日流水 */
+/** 监测按日消耗日历；DeepSeek 无官方日流水 */
 export interface QuotaDailyCostDay {
   date: string
   amount: number

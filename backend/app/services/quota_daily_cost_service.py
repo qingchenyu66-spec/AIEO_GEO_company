@@ -1,4 +1,4 @@
-"""模力监测按日消耗（运营总览费用日历）。"""
+"""监测按日消耗（运营总览费用日历）。"""
 
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def _pack_response(*, year: int, month: int, days: list[dict[str, Any]]) -> dict
         "month": month,
         "month_label": f"{year}-{month:02d}",
         "source": "molizhishu_monitor",
-        "source_label": "模力监测按日消耗",
+        "source_label": "监测按日消耗",
         "deepseek_note": "DeepSeek 仅余额快照，无官方按日流水",
         "days_in_month": calendar.monthrange(year, month)[1],
         "first_weekday": first_weekday,

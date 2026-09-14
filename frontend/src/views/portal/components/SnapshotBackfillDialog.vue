@@ -236,7 +236,7 @@ async function handleSubmit() {
               ? '品牌排名（可选，清空则自动解析）'
               : hasMolResult
                 ? '品牌排名（不填链接时必填）'
-                : '品牌排名（须先有模力结果，或粘贴分享链接）'
+                : '品牌排名（须先有监测结果，或粘贴分享链接）'
           }}</span>
           <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
         </label>

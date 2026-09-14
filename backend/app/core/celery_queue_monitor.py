@@ -597,7 +597,12 @@ def is_business_metric_type(metric_type: str) -> bool:
 def threshold_display_name(metric_type: str, threshold_name: str | None) -> str:
     name = str(threshold_name or "").strip()
     if metric_type == "molizhishu_balance":
-        return name.replace("模力账户余额", "账户余额")
+        cleaned = name.replace("模力账户余额", "账户余额").replace("模力", "")
+        cleaned = " ".join(cleaned.split())
+        return cleaned or "账户余额"
+    if "模力" in name:
+        cleaned = name.replace("模力指数", "").replace("模力", "")
+        return " ".join(cleaned.split()) or name
     return name
 
 
