@@ -14,7 +14,8 @@ class MenuConfig(Base):
     identity_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True,
                                                comment="身份类型：PLATFORM/CUSTOMER")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, comment="排序权重")
-    is_visible: Mapped[bool] = mapped_column(Boolean, default=True, index=True, comment="是否可见")
+    show_in_sidebar: Mapped[bool] = mapped_column(Boolean, default=True, index=True, comment="是否进侧栏")
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True, index=True, comment="功能是否启用")
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="图标名称")
     route_path: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="路由路径")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注说明")

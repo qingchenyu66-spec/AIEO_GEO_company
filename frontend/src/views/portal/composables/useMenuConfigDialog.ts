@@ -25,6 +25,7 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
     menu_name: '',
     sort_order: 1,
     is_visible: true,
+    show_in_sidebar: true,
   })
 
   function notifyError(error: unknown, context: string) {
@@ -58,6 +59,7 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
     menuConfigForm.menu_name = config.menu_name
     menuConfigForm.sort_order = config.sort_order
     menuConfigForm.is_visible = config.is_visible
+    menuConfigForm.show_in_sidebar = config.show_in_sidebar !== false
   }
 
   function cancelEditMenuConfig() {
@@ -65,6 +67,7 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
     menuConfigForm.menu_name = ''
     menuConfigForm.sort_order = 1
     menuConfigForm.is_visible = true
+    menuConfigForm.show_in_sidebar = true
   }
 
   async function saveMenuConfig(configId: number) {
@@ -78,6 +81,7 @@ export function useMenuConfigDialog(options: MenuConfigOptions) {
         menu_name: menuConfigForm.menu_name.trim(),
         sort_order: menuConfigForm.sort_order,
         is_visible: menuConfigForm.is_visible,
+        show_in_sidebar: menuConfigForm.show_in_sidebar,
       })
       ElMessage.success('菜单配置已更新')
       cancelEditMenuConfig()

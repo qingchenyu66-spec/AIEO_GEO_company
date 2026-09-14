@@ -19,8 +19,16 @@ PORTAL_MENU_CODES = (
     "customer.sources",
     "customer.reports",
     "customer.knowledge",
-    "customer.enterprise_config",
 )
+
+_SKIP_IDENTITY_MENU_CODES = {
+    "customer.goods_cards",
+    "customer.enterprise_config",
+    "customer.enterprise_monitor",
+    "customer.enterprise_members",
+    "customer.enterprise_credit",
+    "customer.enterprise_audit",
+}
 
 
 def _validate_position(db: Session, tenant_id: int, position_id: int) -> CustomerPosition:
@@ -45,7 +53,15 @@ def replace_identity_menus_from_customer_position(db: Session, identity_id: int,
         db.scalars(select(CustomerPositionMenu).where(CustomerPositionMenu.position_id == position_id))
     )
     granted_menu_ids = {row.menu_id for row in position_rows}
+    skip_ids = {
+        menu.id
+        for menu in db.scalars(
+            select(Menu).where(Menu.menu_code.in_(tuple(_SKIP_IDENTITY_MENU_CODES)), Menu.deleted.is_(False))
+        )
+    }
     for row in position_rows:
+        if row.menu_id in skip_ids:
+            continue
         db.add(
             UserIdentityMenu(
                 identity_id=identity_id,
@@ -71,8 +87,6 @@ def replace_identity_menus_from_customer_position(db: Session, identity_id: int,
             continue
         if menu.menu_code == "customer.knowledge":
             # 2026-09-09 - 补洞只给查看，不抬上传/编辑；写权限须来自职位模板
-            flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}
-        elif menu.menu_code == "customer.enterprise_config":
             flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}
         else:
             flags = {"can_create": False, "can_update": False, "can_delete": False, "can_export": True}

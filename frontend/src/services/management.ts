@@ -138,6 +138,7 @@ export interface MenuConfigRecord {
   identity_type: 'PLATFORM' | 'CUSTOMER'
   sort_order: number
   is_visible: boolean
+  show_in_sidebar?: boolean
   icon: string | null
   route_path: string | null
   remark: string | null
@@ -368,7 +369,7 @@ export async function deleteMenuConfig(configId: number): Promise<void> {
   await http.delete(`/v1/management/menus/config/${configId}`)
 }
 
-export async function batchUpdateMenuConfigs(configs: Array<{ id: number; menu_name?: string; sort_order?: number; is_visible?: boolean }>): Promise<void> {
+export async function batchUpdateMenuConfigs(configs: Array<{ id: number; menu_name?: string; sort_order?: number; is_visible?: boolean; show_in_sidebar?: boolean }>): Promise<void> {
   await http.post('/v1/management/menus/config/batch-update', configs)
 }
 

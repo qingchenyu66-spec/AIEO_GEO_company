@@ -69,8 +69,22 @@ export const enterprisePermissionCodeMap = {
   schedule: 'platform.audit.schedule',
   competitors: 'platform.audit.competitors',
   files: 'platform.audit.files',
-  credit: 'platform.tenant_credit',
+  // 主码算力运营；页内仍兼容旧 tenant_credit（见 creditMenuGrant）
+  credit: 'platform.credit_ops_board',
 } as const
+
+function creditMenuGrantFrom(menus: { menu_code: string; can_export?: boolean; can_update?: boolean; can_create?: boolean; can_delete?: boolean }[]) {
+  const board = menus.find(menu => menu.menu_code === 'platform.credit_ops_board')
+  const legacy = menus.find(menu => menu.menu_code === 'platform.tenant_credit')
+  if (!board && !legacy) return undefined
+  return {
+    menu_code: 'platform.credit_ops_board',
+    can_export: Boolean(board?.can_export || legacy?.can_export),
+    can_update: Boolean(board?.can_update || legacy?.can_update),
+    can_create: Boolean(board?.can_create || legacy?.can_create),
+    can_delete: Boolean(board?.can_delete || legacy?.can_delete),
+  }
+}
 
 export type UseBrandAuditOptions = {
   onBrandUpdated?: (asset: BrandAsset | null, competitors: BrandCompetitor[]) => void
@@ -131,6 +145,9 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   function menuGrant(code: string) {
     if (previewReadonly.value) {
       return previewCustomerMenus.value.find(menu => menu.menu_code === code)
+    }
+    if (code === 'platform.credit_ops_board' || code === 'platform.tenant_credit') {
+      return creditMenuGrantFrom(auth.allowedMenus)
     }
     return auth.allowedMenus.find(menu => menu.menu_code === code)
   }

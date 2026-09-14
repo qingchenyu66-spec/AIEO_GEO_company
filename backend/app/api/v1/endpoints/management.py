@@ -578,7 +578,8 @@ def management_create_position(
         writable=payload.identity_type == "PLATFORM",
         menu_grants=_strip_purge_grant_unless_admin(position, payload.menu_grants or None),
     )
-    write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}", target_module="职位管理", target_id=position.id)
+    synced_users = sync_identity_menus_for_position(db, position.id)
+    write_management_log(db, current, "职位新增", f"新增职位：{position.position_name}（已同步 {synced_users} 个身份）", target_module="职位管理", target_id=position.id)
     db.commit()
     db.refresh(position)
     return ApiResponse(data=position_to_dict(position, db=db))
@@ -1846,6 +1847,21 @@ def management_restore_user(
     return ApiResponse(data={"id": user.id, "deleted": user.deleted, "status": user.status})
 
 
+def _menu_config_dict(row: MenuConfig) -> dict:
+    return {
+        "id": row.id,
+        "menu_code": row.menu_code,
+        "menu_name": row.menu_name,
+        "identity_type": row.identity_type,
+        "sort_order": row.sort_order,
+        "is_visible": row.is_visible,
+        "show_in_sidebar": bool(getattr(row, "show_in_sidebar", True)),
+        "icon": row.icon,
+        "route_path": row.route_path,
+        "remark": row.remark,
+    }
+
+
 @router.get("/menus/config", response_model=ApiResponse[list[dict]])
 def get_menu_configs(
     current: CurrentSession = Depends(get_current_session),
@@ -1860,17 +1876,7 @@ def get_menu_configs(
         stmt = stmt.where(MenuConfig.identity_type == identity_type)
     stmt = stmt.order_by(MenuConfig.sort_order.asc(), MenuConfig.id.asc())
     rows = list(db.scalars(stmt))
-    return ApiResponse(data=[{
-        "id": row.id,
-        "menu_code": row.menu_code,
-        "menu_name": row.menu_name,
-        "identity_type": row.identity_type,
-        "sort_order": row.sort_order,
-        "is_visible": row.is_visible,
-        "icon": row.icon,
-        "route_path": row.route_path,
-        "remark": row.remark,
-    } for row in rows])
+    return ApiResponse(data=[_menu_config_dict(row) for row in rows])
 
 
 @router.put("/menus/config/{config_id}", response_model=ApiResponse[dict])
@@ -1895,17 +1901,7 @@ def update_menu_config(
     write_management_log(db, current, "菜单配置", f"修改菜单配置：{config.menu_name}", target_module="系统配置", target_id=config.id, risk_level="关注")
     db.commit()
 
-    return ApiResponse(data={
-        "id": config.id,
-        "menu_code": config.menu_code,
-        "menu_name": config.menu_name,
-        "identity_type": config.identity_type,
-        "sort_order": config.sort_order,
-        "is_visible": config.is_visible,
-        "icon": config.icon,
-        "route_path": config.route_path,
-        "remark": config.remark,
-    })
+    return ApiResponse(data=_menu_config_dict(config))
 
 
 @router.delete("/menus/config/{config_id}")

@@ -36,6 +36,7 @@ export interface MenuInfo {
   can_update: boolean
   can_delete: boolean
   can_export: boolean
+  show_in_sidebar?: boolean
 }
 
 export interface AuthSession {

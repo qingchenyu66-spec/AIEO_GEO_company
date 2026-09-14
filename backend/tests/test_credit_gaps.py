@@ -389,20 +389,16 @@ def test_inject_enterprise_menus_follows_customer_position(db):
     inject_enterprise_menus_for_tenant(db, tenant.id)
     db.flush()
 
-    admin_members = db.scalar(
+    from app.services.menu_permission_service import has_identity_menu_permission
+
+    assert has_identity_menu_permission(db, admin_ident.id, "customer.enterprise_members", "can_create") is True
+    assert has_identity_menu_permission(db, viewer_ident.id, "customer.enterprise_members", "can_create") is False
+    assert db.scalar(
         select(UserIdentityMenu).where(
             UserIdentityMenu.identity_id == admin_ident.id,
             UserIdentityMenu.menu_id == members_menu.id,
         )
-    )
-    viewer_members = db.scalar(
-        select(UserIdentityMenu).where(
-            UserIdentityMenu.identity_id == viewer_ident.id,
-            UserIdentityMenu.menu_id == members_menu.id,
-        )
-    )
-    assert admin_members is not None and admin_members.can_create is True
-    assert viewer_members is None
+    ) is None
 
 
 def test_switch_billing_mode_allows_empty_reason(db):

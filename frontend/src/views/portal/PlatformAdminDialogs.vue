@@ -194,7 +194,8 @@ function toggleAllowedPlatform(code: string, event: Event) {
             <th>当前名称</th>
             <th>显示名称</th>
             <th>排序</th>
-            <th>状态</th>
+            <th>功能</th>
+            <th>侧栏</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -213,9 +214,16 @@ function toggleAllowedPlatform(code: string, event: Event) {
             <td>
               <select v-if="editingMenuConfig?.id === config.id" v-model="menuConfigForm.is_visible">
                 <option :value="true">启用</option>
-                <option :value="false">停用</option>
+                <option :value="false">关闭</option>
               </select>
-              <span v-else :class="{ 'status-disabled': !config.is_visible }">{{ config.is_visible ? '启用' : '停用' }}</span>
+              <span v-else :class="{ 'status-disabled': !config.is_visible }">{{ config.is_visible ? '启用' : '关闭' }}</span>
+            </td>
+            <td>
+              <select v-if="editingMenuConfig?.id === config.id" v-model="menuConfigForm.show_in_sidebar">
+                <option :value="true">显示</option>
+                <option :value="false">隐藏</option>
+              </select>
+              <span v-else :class="{ 'status-disabled': config.show_in_sidebar === false }">{{ config.show_in_sidebar === false ? '隐藏' : '显示' }}</span>
             </td>
             <td class="action-buttons">
               <button v-if="editingMenuConfig?.id !== config.id" class="plain-btn small-btn" @click="startEditMenuConfig(config)">编辑</button>

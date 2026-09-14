@@ -13,7 +13,7 @@ import {
   USER_LIST_MENU,
   hiddenFromAssignablePermissionMenus,
   hiddenPlatformMenus,
-  sidebarHiddenAssignableCreditMenus,
+  productCapabilityMenusHiddenFromAssignable,
 } from './constants'
 import { permissionGroupKey, permissionGroupNote, permissionGroupTitle } from './permissionGroups'
 
@@ -135,9 +135,9 @@ export type PermissionMenuRow = {
 }
 
 const HIDDEN_ASSIGNABLE = new Set([
-  // 算力子页仍要在矩阵里勾选，不能跟着 hiddenPlatformMenus 一起藏掉
-  ...hiddenPlatformMenus.filter(code => !(sidebarHiddenAssignableCreditMenus as readonly string[]).includes(code)),
+  ...hiddenPlatformMenus,
   ...hiddenFromAssignablePermissionMenus,
+  ...productCapabilityMenusHiddenFromAssignable,
   'customer.assets',
   'customer.batch',
   'customer.geo',
@@ -335,7 +335,7 @@ export function grantsToPayload(state: MenuGrantState, menus: MenuInfo[]) {
     .filter(item => grantHasAccess(item))
 }
 
-/** 职位保存时保留「配置里隐藏」的已有授权，避免改别的权限时把品牌洞察/信源分析清掉 */
+/** 职位保存时保留「配置里隐藏」的已有授权，避免改别的权限时误清 */
 export function preserveHiddenAssignableGrants(
   allMenus: MenuInfo[],
   existingGrants: Array<{
@@ -349,6 +349,7 @@ export function preserveHiddenAssignableGrants(
 ) {
   const hiddenCodes = new Set([
     ...hiddenFromAssignablePermissionMenus,
+    ...productCapabilityMenusHiddenFromAssignable,
     'customer.links',
     'customer.diagnosis',
   ])

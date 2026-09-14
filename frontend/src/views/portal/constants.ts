@@ -30,18 +30,31 @@ export const ENTERPRISE_CHILD_MENUS = [
 
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
 
-/** 侧栏隐藏，但职位/权限矩阵里仍单独勾选 */
-export const sidebarHiddenAssignableCreditMenus = [
+/** 侧栏不单独露出：已收进「算力运营」Tab */
+export const sidebarHiddenCreditSubMenus = [
   'platform.tenant_credit_blocks',
   'platform.tenant_credit',
+] as const
+
+/**
+ * 产品能力 / 已合并入口：不进职位勾选。
+ * - 商品卡：企业开通开关管有没有
+ * - 企业配置及子项：算力自助企业才有，按客户职位动态给
+ * - 旧算力子页：平台职位只勾「算力运营」
+ * 保存职位时仍保留历史授权，避免误清。
+ */
+export const productCapabilityMenusHiddenFromAssignable = [
+  'customer.goods_cards',
+  ENTERPRISE_CONFIG_MENU,
+  ...ENTERPRISE_CHILD_MENUS,
+  ...sidebarHiddenCreditSubMenus,
 ] as const
 
 export const hiddenPlatformMenus = [
   'platform.plans',
   'platform.admins',
   'platform.diagnosis',
-  // 2026-08-27 - 方案B：提交拦截/企业算力收进算力运营 Tab，侧栏不单独露出（职位权限里仍可勾选）
-  ...sidebarHiddenAssignableCreditMenus,
+  ...sidebarHiddenCreditSubMenus,
 ]
 
 /** 仍可进侧栏，但不在职位/权限配置里勾选（避免运营端配置里出现客户分析页） */

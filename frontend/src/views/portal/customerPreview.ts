@@ -26,7 +26,8 @@ export function isCustomerPreviewMenuCode(code: string): boolean {
 export function buildCustomerPortalSidebarMenus(sourceMenus: MenuInfo[]): MenuInfo[] {
   // 2026-09-09 - 企业配置子项只做页内 Tab/权限，侧栏只留父级，避免两套菜单
   return sourceMenus.filter(menu => (
-    !['customer.assets', ...hiddenCustomerMenus, ...hiddenEnterpriseConfigPermissionMenus].includes(menu.menu_code)
+    menu.show_in_sidebar !== false
+    && !['customer.assets', ...hiddenCustomerMenus, ...hiddenEnterpriseConfigPermissionMenus].includes(menu.menu_code)
   ))
 }
 

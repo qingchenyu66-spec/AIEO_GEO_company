@@ -118,6 +118,15 @@ function auditRouteAllowed(menus: MenuInfo[]) {
   ))
 }
 
+function sortSidebarMenus(list: MenuInfo[]) {
+  return [...list].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
+}
+
+function withSyntheticSidebarMenu(list: MenuInfo[], extra: MenuInfo) {
+  if (list.some(menu => menu.menu_code === extra.menu_code)) return list
+  return sortSidebarMenus([...list, extra])
+}
+
 function settingsRouteAllowed(menus: MenuInfo[]) {
   return menus.some(menu => (
     (menu.menu_code === SETTINGS_MENU || SETTINGS_CHILD_MENUS.includes(menu.menu_code as typeof SETTINGS_CHILD_MENUS[number]))
@@ -160,17 +169,29 @@ const menus = computed(() => {
     return buildCustomerPortalSidebarMenus(previewCustomerMenus.value)
   }
   const filtered = auth.allowedMenus
+    .filter(menu => menu.show_in_sidebar !== false)
     .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenEnterpriseConfigPermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
   if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
     const auditChild = auth.allowedMenus.find(menu => menu.menu_code.startsWith('platform.audit.'))
     if (auditChild) {
-      return [{ ...auditChild, menu_code: 'platform.audit', menu_name: '企业管理' }, ...filtered]
+      return withSyntheticSidebarMenu(filtered, {
+        ...auditChild,
+        menu_code: 'platform.audit',
+        menu_name: '企业管理',
+        show_in_sidebar: true,
+      })
     }
   }
   if (settingsRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === SETTINGS_MENU)) {
     const settingsChild = auth.allowedMenus.find(menu => SETTINGS_CHILD_MENUS.includes(menu.menu_code as typeof SETTINGS_CHILD_MENUS[number]))
     if (settingsChild) {
-      return [{ ...settingsChild, menu_code: SETTINGS_MENU, menu_name: '系统配置' }, ...filtered]
+      return withSyntheticSidebarMenu(filtered, {
+        ...settingsChild,
+        menu_code: SETTINGS_MENU,
+        menu_name: '系统配置',
+        show_in_sidebar: true,
+        sort_order: 90,
+      })
     }
   }
   return filtered
@@ -505,9 +526,9 @@ function ensureActiveMenuAllowed() {
     ))
     return
   }
-  const allowedCodes = auth.allowedMenus.map(menu => normalizeMenuCode(menu.menu_code))
+  const allowedCodes = allowedMenuCodes.value.map(code => normalizeMenuCode(code))
   if (isMenuBlocked(activeMenuCode.value) || !allowedCodes.includes(activeMenuCode.value)) {
-    navigateToMenu(normalizeMenuCode(auth.allowedMenus[0]?.menu_code || ''), true)
+    navigateToMenu(normalizeMenuCode(allowedMenuCodes.value[0] || auth.allowedMenus[0]?.menu_code || ''), true)
   }
   userMenuExpanded.value = activeMenuCode.value.startsWith('platform.users') || activeMenuCode.value === POSITION_MENU
 }

@@ -180,6 +180,7 @@ def _revoke_enterprise_menus(db: Session, identity_id: int) -> None:
 
 
 def inject_enterprise_menus_for_tenant(db: Session, tenant_id: int) -> None:
+    """转自助只清身份表里的企业配置脏授权；会话按客户职位动态合并。"""
     identities = list(
         db.scalars(
             select(UserIdentity).where(
@@ -191,9 +192,7 @@ def inject_enterprise_menus_for_tenant(db: Session, tenant_id: int) -> None:
         )
     )
     for identity in identities:
-        # 先撤再按职位注入，避免历史上按管理员模板多开的权限残留
         _revoke_enterprise_menus(db, identity.id)
-        _grant_enterprise_menus_for_identity(db, identity)
 
 
 def revoke_enterprise_menus_for_tenant(db: Session, tenant_id: int) -> None:

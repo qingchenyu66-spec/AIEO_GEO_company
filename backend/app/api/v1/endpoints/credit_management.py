@@ -98,7 +98,7 @@ def credit_ops_summary_api(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board")
+    _require_any_menu(db, current, _CREDIT_OPS_READ_MENUS)
     try:
         return ApiResponse(data=credit_ops_summary(db))
     except Exception as exc:
@@ -290,7 +290,7 @@ def credit_platform_ledger(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board")
+    _require_any_menu(db, current, _CREDIT_OPS_READ_MENUS)
     if tenant_id is not None:
         guard_sales_tenant(db, current, tenant_id)
     return ApiResponse(
@@ -312,7 +312,7 @@ def credit_platform_ledger_export(
     db: Session = Depends(get_db),
 ):
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board", "can_export")
+    _require_any_menu(db, current, _CREDIT_OPS_READ_MENUS, "can_export")
     if tenant_id is not None:
         guard_sales_tenant(db, current, tenant_id)
     from app.services.credit_service import _ledger_tenant_filter_ids
@@ -501,7 +501,7 @@ def credit_terms_list(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board")
+    _require_any_menu(db, current, _CREDIT_OPS_READ_MENUS)
     from app.services.credit_service import is_offline_price_terms
 
     rows = list(db.scalars(select(CreditTermsVersion).order_by(CreditTermsVersion.created_at.desc())))
@@ -532,7 +532,7 @@ def credit_terms_publish(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board", "can_update")
+    _require_any_menu(db, current, _CREDIT_OPS_WRITE_MENUS, "can_update")
     row = CreditTermsVersion(
         version_code=payload.version_code,
         title=payload.title,
@@ -784,7 +784,7 @@ def credit_price_rules_list(
     db: Session = Depends(get_db),
 ) -> ApiResponse[list[dict]]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board")
+    _require_any_menu(db, current, _CREDIT_OPS_READ_MENUS)
     rows = list_price_rules(db, scope=scope, tenant_id=tenant_id)
     tenant_map = {
         t.id: t.name
@@ -822,7 +822,7 @@ def credit_price_rule_upsert(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     require_platform(current)
-    _require_menu(db, current, "platform.credit_ops_board", "can_update")
+    _require_any_menu(db, current, _CREDIT_OPS_WRITE_MENUS, "can_update")
     try:
         row = upsert_price_rule(
             db,

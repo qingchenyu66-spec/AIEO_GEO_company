@@ -181,6 +181,7 @@ def merge_grant_flags(current: MenuInfo | None, incoming: MenuInfo) -> MenuInfo:
         can_update=current.can_update or incoming.can_update,
         can_delete=current.can_delete or incoming.can_delete,
         can_export=current.can_export or incoming.can_export,
+        show_in_sidebar=current.show_in_sidebar,
     )
 
 
@@ -204,10 +205,14 @@ def _menu_with_grant(
         can_update=can_update,
         can_delete=can_delete,
         can_export=can_export,
+        show_in_sidebar=base.show_in_sidebar,
     )
 
 
 def _menu_display(menu: Menu, config: MenuConfig | None) -> MenuInfo:
+    show_in_sidebar = True
+    if config is not None and hasattr(config, "show_in_sidebar"):
+        show_in_sidebar = bool(config.show_in_sidebar)
     return MenuInfo(
         id=menu.id,
         menu_code=menu.menu_code,
@@ -216,6 +221,7 @@ def _menu_display(menu: Menu, config: MenuConfig | None) -> MenuInfo:
         route_path=(config.route_path if config and config.route_path else menu.route_path),
         icon=(config.icon if config and config.icon else menu.icon),
         sort_order=(config.sort_order if config is not None else menu.sort_order),
+        show_in_sidebar=show_in_sidebar,
     )
 
 
@@ -254,10 +260,26 @@ def _is_enterprise_config_child_menu(menu_code: str) -> bool:
     return menu_code.startswith("customer.enterprise_") and menu_code != "customer.enterprise_config"
 
 
+# 产品能力：不写职位/身份授权表，由企业开通 + 客户职位动态给
+PRODUCT_CAPABILITY_MENU_CODES = frozenset({
+    "customer.goods_cards",
+    "customer.enterprise_config",
+    "customer.enterprise_monitor",
+    "customer.enterprise_members",
+    "customer.enterprise_credit",
+    "customer.enterprise_audit",
+})
+
+
+def is_product_capability_menu_code(menu_code: str) -> bool:
+    return menu_code in PRODUCT_CAPABILITY_MENU_CODES
+
+
 # 侧栏不单独露出、但会话里必须保留的页内权限（Tab / 按钮），与 MenuConfig.is_visible=0 不冲突
 _SESSION_KEEP_WHEN_CONFIG_HIDDEN = frozenset({
     *SETTINGS_CHILD_MENU_CODES,
     "platform.audit.purge",
+    "platform.credit_ops_board",
     "platform.tenant_credit",
     "platform.tenant_credit_blocks",
 })
@@ -275,10 +297,10 @@ def _filter_items_by_menu_config_visibility(
     items: list[MenuInfo],
     identity_type: str,
 ) -> list[MenuInfo]:
-    """MenuConfig.is_visible=false 的菜单不进侧栏会话。
+    """MenuConfig.is_visible=false 表示功能关闭，不进会话。
 
-    企业配置 / 系统配置子项、算力运营子页、彻底删除等靠会话做页内权限，
-    侧栏由前端隐藏，不受 is_visible 裁切。
+    页内权限项（系统配置子项等）功能仍开、仅侧栏隐藏时靠 show_in_sidebar=0，
+    旧数据 is_visible=0 仍用 keep 名单保住会话。
     """
     if not items:
         return items
@@ -312,6 +334,9 @@ def has_identity_menu_permission(
     # 2026-09-09 - 方案甲：企业配置权限不读身份落库，按 credit + 客户职位动态判定
     if _is_enterprise_config_menu_code(menu_code):
         return _has_derived_enterprise_menu_permission(db, identity_id, menu_code, action)
+    # 2026-09-14 - 商品卡：企业开通开关管有没有，不读职位勾选
+    if menu_code == "customer.goods_cards":
+        return _has_goods_card_product_permission(db, identity_id, action)
     grant = db.execute(
         select(UserIdentityMenu)
         .join(Menu, Menu.id == UserIdentityMenu.menu_id)
@@ -323,6 +348,18 @@ def has_identity_menu_permission(
         )
     ).scalar_one_or_none()
     return bool(grant and getattr(grant, action, False))
+
+
+def _has_goods_card_product_permission(db: Session, identity_id: int, action: str) -> bool:
+    """商品卡是企业产品能力：开通即客户身份可查看，不靠职位矩阵勾选。"""
+    allowed = _allowed_actions_for_menu("customer.goods_cards", "CUSTOMER")
+    if action not in allowed:
+        return False
+    identity = db.get(UserIdentity, identity_id)
+    if identity is None or identity.identity_type != "CUSTOMER" or not identity.tenant_id:
+        return False
+    tenant = db.get(Tenant, int(identity.tenant_id))
+    return bool(tenant and not bool(getattr(tenant, "deleted", False)) and getattr(tenant, "goods_card_enabled", False))
 
 
 def _is_enterprise_config_menu_code(menu_code: str) -> bool:
@@ -508,15 +545,55 @@ def get_identity_menus(db: Session, identity: UserIdentity) -> list[MenuInfo]:
 
     if observer_platforms_for_user_id(db, identity.user_id) is not None:
         items = [item for item in items if item.menu_code not in OBSERVER_HIDDEN_MENU_CODES]
-    # 2026-09-01 - 商品卡未开通企业侧栏不出现该菜单
-    if identity.identity_type == "CUSTOMER" and identity.tenant_id:
-        from app.models.tenant import Tenant
-
-        tenant = db.scalar(select(Tenant).where(Tenant.id == identity.tenant_id, Tenant.deleted.is_(False)))
-        if tenant is None or not bool(getattr(tenant, "goods_card_enabled", False)):
-            items = [item for item in items if item.menu_code != "customer.goods_cards"]
+    # 2026-09-14 - 商品卡：企业开通才注入会话，职位勾选不再决定有没有
+    items = _apply_goods_card_product_gate(db, identity, items)
     items.sort(key=lambda item: (item.sort_order, item.id))
     return items
+
+
+def _apply_goods_card_product_gate(
+    db: Session,
+    identity: UserIdentity,
+    items: list[MenuInfo],
+) -> list[MenuInfo]:
+    """先去掉落库里的商品卡，再按企业开通开关注入查看权。"""
+    rows = [item for item in items if item.menu_code != "customer.goods_cards"]
+    if identity.identity_type != "CUSTOMER" or not identity.tenant_id:
+        return rows
+    tenant = db.scalar(select(Tenant).where(Tenant.id == identity.tenant_id, Tenant.deleted.is_(False)))
+    if tenant is None or not bool(getattr(tenant, "goods_card_enabled", False)):
+        return rows
+    menu_row = db.execute(
+        select(Menu, MenuConfig)
+        .outerjoin(
+            MenuConfig,
+            (MenuConfig.menu_code == Menu.menu_code)
+            & (MenuConfig.identity_type == Menu.identity_type)
+            & (MenuConfig.deleted.is_(False)),
+        )
+        .where(
+            Menu.menu_code == "customer.goods_cards",
+            Menu.identity_type == "CUSTOMER",
+            Menu.status.is_(True),
+            Menu.deleted.is_(False),
+        )
+    ).first()
+    if menu_row is None:
+        return rows
+    menu, config = menu_row
+    if config is not None and not bool(config.is_visible):
+        return rows
+    base = _menu_display(menu, config)
+    rows.append(
+        _menu_with_grant(
+            base,
+            can_create=False,
+            can_update=False,
+            can_delete=False,
+            can_export=True,
+        )
+    )
+    return rows
 
 
 def _merge_derived_enterprise_menus(
@@ -641,6 +718,8 @@ def sync_position_menu_grants(
             menu_code = menu_code_map.get(item.menu_id, "")
             if is_retired_menu_code(menu_code) or menu_code in ROUTE_ONLY_MENU_CODES:
                 continue
+            if is_product_capability_menu_code(menu_code):
+                continue
             flags = sanitize_menu_grant_flags(
                 menu_code,
                 identity_type,
@@ -677,6 +756,17 @@ def sync_position_menu_grants(
     db.flush()
 
 
+def _product_capability_menu_ids(db: Session) -> set[int]:
+    return set(
+        db.scalars(
+            select(Menu.id).where(
+                Menu.menu_code.in_(tuple(PRODUCT_CAPABILITY_MENU_CODES)),
+                Menu.deleted.is_(False),
+            )
+        )
+    )
+
+
 def replace_identity_menus_from_position(
     db: Session,
     identity_id: int,
@@ -689,8 +779,12 @@ def replace_identity_menus_from_position(
     selected_set = set(selected_menu_ids or [])
     if selected_menu_ids is not None:
         rows = [row for row in rows if row.menu_id in selected_set]
+    skip_ids = _product_capability_menu_ids(db)
     db.query(UserIdentityMenu).filter(UserIdentityMenu.identity_id == identity_id).delete(synchronize_session=False)
     for row in rows:
+        if row.menu_id in skip_ids:
+            selected_set.discard(row.menu_id)
+            continue
         if not grant_has_access(
             can_create=row.can_create,
             can_update=row.can_update,
@@ -710,6 +804,8 @@ def replace_identity_menus_from_position(
             )
         )
     for menu_id in selected_set:
+        if menu_id in skip_ids:
+            continue
         db.add(
             UserIdentityMenu(
                 identity_id=identity_id,
@@ -740,9 +836,13 @@ def sync_identity_menus_for_position(db: Session, position_id: int) -> int:
     return len(identity_ids)
 
 
-def _grant_signature_rows(rows) -> set[tuple[int, bool, bool, bool, bool]]:
+def _grant_signature_rows(rows, *, skip_product: bool = False) -> set[tuple[int, bool, bool, bool, bool]]:
     signature: set[tuple[int, bool, bool, bool, bool]] = set()
     for row in rows:
+        if skip_product:
+            menu_code = getattr(row, "menu_code", None)
+            if menu_code and is_product_capability_menu_code(str(menu_code)):
+                continue
         if not grant_has_access(
             can_create=bool(row.can_create),
             can_update=bool(row.can_update),
@@ -763,8 +863,17 @@ def _grant_signature_rows(rows) -> set[tuple[int, bool, bool, bool, bool]]:
 
 
 def identity_menus_match_position(db: Session, identity_id: int, position_id: int) -> bool:
-    position_rows = db.scalars(select(PositionMenu).where(PositionMenu.position_id == position_id))
-    identity_rows = db.scalars(select(UserIdentityMenu).where(UserIdentityMenu.identity_id == identity_id))
+    skip_ids = _product_capability_menu_ids(db)
+    position_rows = [
+        row
+        for row in db.scalars(select(PositionMenu).where(PositionMenu.position_id == position_id))
+        if row.menu_id not in skip_ids
+    ]
+    identity_rows = [
+        row
+        for row in db.scalars(select(UserIdentityMenu).where(UserIdentityMenu.identity_id == identity_id))
+        if row.menu_id not in skip_ids
+    ]
     return _grant_signature_rows(position_rows) == _grant_signature_rows(identity_rows)
 
 
@@ -943,12 +1052,10 @@ _CUSTOMER_PORTAL_MENU_CODES = (
     "customer.workspace",
     "customer.brand_analysis",
     "customer.realtime",
-    "customer.goods_cards",
     "customer.competitor",
     "customer.sources",
     "customer.reports",
     "customer.knowledge",
-    "customer.enterprise_config",
 )
 
 
@@ -991,13 +1098,41 @@ def _derive_route_parent_menus(db: Session, by_code: dict[str, MenuInfo], identi
             by_code[parent_code] = merge_grant_flags(by_code.get(parent_code), synthesized)
 
 
-def _filter_customer_menus_for_tenant(items: list[MenuInfo], tenant) -> list[MenuInfo]:
+def _filter_customer_menus_for_tenant(db: Session, items: list[MenuInfo], tenant) -> list[MenuInfo]:
     rows = [item for item in items if not is_retired_menu_code(item.menu_code)]
     if (tenant.billing_mode or "hosted") != "credit":
         rows = [item for item in rows if not item.menu_code.startswith("customer.enterprise")]
-    # 2026-09-01 - 预览侧栏同样受商品卡开关约束
-    if not bool(getattr(tenant, "goods_card_enabled", False)):
-        rows = [item for item in rows if item.menu_code != "customer.goods_cards"]
+    # 2026-09-14 - 商品卡只看企业开通，不看职位勾选
+    rows = [item for item in rows if item.menu_code != "customer.goods_cards"]
+    if bool(getattr(tenant, "goods_card_enabled", False)):
+        menu_row = db.execute(
+            select(Menu, MenuConfig)
+            .outerjoin(
+                MenuConfig,
+                (MenuConfig.menu_code == Menu.menu_code)
+                & (MenuConfig.identity_type == Menu.identity_type)
+                & (MenuConfig.deleted.is_(False)),
+            )
+            .where(
+                Menu.menu_code == "customer.goods_cards",
+                Menu.identity_type == "CUSTOMER",
+                Menu.status.is_(True),
+                Menu.deleted.is_(False),
+            )
+        ).first()
+        if menu_row is not None:
+            menu, config = menu_row
+            if config is None or bool(config.is_visible):
+                base = _menu_display(menu, config)
+                rows.append(
+                    _menu_with_grant(
+                        base,
+                        can_create=False,
+                        can_update=False,
+                        can_delete=False,
+                        can_export=True,
+                    )
+                )
     rows.sort(key=lambda item: (item.sort_order, item.id))
     return rows
 
@@ -1086,7 +1221,7 @@ def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
         by_code[item.menu_code] = merge_grant_flags(by_code.get(item.menu_code), item)
     _derive_route_parent_menus(db, by_code, "CUSTOMER")
     filtered = _filter_items_by_menu_config_visibility(db, list(by_code.values()), "CUSTOMER")
-    return _filter_customer_menus_for_tenant(filtered, tenant)
+    return _filter_customer_menus_for_tenant(db, filtered, tenant)
 
 
 def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuInfo]:
@@ -1112,123 +1247,18 @@ def get_tenant_customer_preview_menus(db: Session, tenant_id: int) -> list[MenuI
         for identity in identities:
             for item in get_identity_menus(db, identity):
                 merged[item.menu_code] = merge_grant_flags(merged.get(item.menu_code), item)
-        return _filter_customer_menus_for_tenant(list(merged.values()), tenant)
+        return _filter_customer_menus_for_tenant(db, list(merged.values()), tenant)
     return _customer_menus_from_admin_position(db, tenant)
 
 
 def sync_goods_card_menu_for_tenant(db: Session, tenant_id: int, *, enabled: bool) -> int:
-    """开通商品卡时给该企业客户身份补「商品卡」查看权；关闭只靠企业开关过滤侧栏。
+    """开通商品卡时的兼容补丁。
 
-    2026-09-01 - 只开开关不授菜单会导致客户侧栏空白，开通时自动补 grant。
-    2026-09-02 - 登录/me 会按职位模板覆盖身份菜单 - 职位模板也需补商品卡，否则 grant 被冲掉。
+    2026-09-14 - 会话已按企业开通开关注入商品卡，不再依赖职位勾选；
+    此函数保留为空操作计数，避免调用方改动，旧 grant 可继续留着不影响。
     """
+    del db, tenant_id  # 兼容签名；会话注入不再写职位/身份 grant
     if not enabled:
         return 0
-    menu = db.scalar(
-        select(Menu).where(
-            Menu.menu_code == "customer.goods_cards",
-            Menu.deleted.is_(False),
-            Menu.status.is_(True),
-        )
-    )
-    if menu is None:
-        return 0
-    identities = list(
-        db.scalars(
-            select(UserIdentity).where(
-                UserIdentity.tenant_id == tenant_id,
-                UserIdentity.identity_type == "CUSTOMER",
-                UserIdentity.deleted.is_(False),
-            )
-        )
-    )
-    added = 0
-    position_ids = {identity.position_id for identity in identities if identity.position_id}
-    customer_position_ids = {
-        identity.customer_position_id for identity in identities if identity.customer_position_id
-    }
-    for position_id in position_ids:
-        exists = db.scalar(
-            select(PositionMenu).where(
-                PositionMenu.position_id == position_id,
-                PositionMenu.menu_id == menu.id,
-            )
-        )
-        if exists is None:
-            db.add(
-                PositionMenu(
-                    position_id=position_id,
-                    menu_id=menu.id,
-                    can_create=False,
-                    can_update=False,
-                    can_delete=False,
-                    can_export=True,
-                )
-            )
-            added += 1
-        elif not grant_has_access(
-            can_create=exists.can_create,
-            can_update=exists.can_update,
-            can_delete=exists.can_delete,
-            can_export=exists.can_export,
-        ):
-            exists.can_export = True
-            added += 1
-    for position_id in customer_position_ids:
-        exists = db.scalar(
-            select(CustomerPositionMenu).where(
-                CustomerPositionMenu.position_id == position_id,
-                CustomerPositionMenu.menu_id == menu.id,
-            )
-        )
-        if exists is None:
-            db.add(
-                CustomerPositionMenu(
-                    position_id=position_id,
-                    menu_id=menu.id,
-                    can_create=False,
-                    can_update=False,
-                    can_delete=False,
-                    can_export=True,
-                )
-            )
-            added += 1
-        elif not grant_has_access(
-            can_create=exists.can_create,
-            can_update=exists.can_update,
-            can_delete=exists.can_delete,
-            can_export=exists.can_export,
-        ):
-            exists.can_export = True
-            added += 1
-    for identity in identities:
-        exists = db.scalar(
-            select(UserIdentityMenu).where(
-                UserIdentityMenu.identity_id == identity.id,
-                UserIdentityMenu.menu_id == menu.id,
-            )
-        )
-        if exists is None:
-            db.add(
-                UserIdentityMenu(
-                    identity_id=identity.id,
-                    menu_id=menu.id,
-                    can_create=False,
-                    can_update=False,
-                    can_delete=False,
-                    can_export=True,
-                )
-            )
-            added += 1
-        elif not grant_has_access(
-            can_create=exists.can_create,
-            can_update=exists.can_update,
-            can_delete=exists.can_delete,
-            can_export=exists.can_export,
-        ):
-            exists.can_export = True
-            added += 1
-    if added:
-        db.flush()
-    return added
+    return 0
 

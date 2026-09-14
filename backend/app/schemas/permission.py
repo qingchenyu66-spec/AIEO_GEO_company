@@ -18,6 +18,7 @@ class MenuInfo(BaseModel):
     can_update: bool = False
     can_delete: bool = False
     can_export: bool = True
+    show_in_sidebar: bool = True
 
 
 class MenuGrantItem(BaseModel):
@@ -35,6 +36,7 @@ class MenuConfigUpdateRequest(BaseModel):
     menu_name: str | None = Field(default=None, min_length=1, max_length=120)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     is_visible: bool | None = None
+    show_in_sidebar: bool | None = None
     icon: str | None = Field(default=None, max_length=50)
     route_path: str | None = Field(default=None, max_length=255)
     remark: str | None = Field(default=None, max_length=500)
@@ -45,6 +47,7 @@ class MenuConfigBatchItem(BaseModel):
     menu_name: str | None = Field(default=None, min_length=1, max_length=120)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     is_visible: bool | None = None
+    show_in_sidebar: bool | None = None
 
 
 class RoleInfo(BaseModel):

@@ -2,12 +2,14 @@
 
 from types import SimpleNamespace
 
+from app.schemas.permission import MenuInfo
 from app.services.menu_permission_service import (
     ROUTE_ONLY_MENU_CODES,
     _filter_items_by_menu_config_visibility,
     _keep_in_session_despite_config_hidden,
     ensure_identity_menus_from_position,
     heal_empty_identity_menus,
+    merge_grant_flags,
     sanitize_menu_grant_flags,
     sync_identity_menus_for_position,
     sync_menu_row_from_config,
@@ -53,12 +55,21 @@ def test_settings_parent_is_route_only_children_assignable():
             can_delete=True,
             can_export=True,
         )
-        assert flags == {
-            "can_create": False,
-            "can_update": True,
-            "can_delete": False,
-            "can_export": True,
-        }
+    assert flags == {
+        "can_create": False,
+        "can_update": True,
+        "can_delete": False,
+        "can_export": True,
+    }
+
+
+def test_product_capability_codes_are_not_position_grants():
+    from app.services.menu_permission_service import is_product_capability_menu_code
+
+    assert is_product_capability_menu_code("customer.goods_cards")
+    assert is_product_capability_menu_code("customer.enterprise_config")
+    assert not is_product_capability_menu_code("customer.workspace")
+    assert not is_product_capability_menu_code("platform.credit_ops_board")
 
 
 def test_users_create_child_does_not_get_export_flag():
@@ -235,10 +246,36 @@ def test_sync_menu_row_from_config_overwrites_sys_menu_name():
 def test_session_keeps_nested_permissions_when_config_hidden():
     assert _keep_in_session_despite_config_hidden("platform.settings.secrets")
     assert _keep_in_session_despite_config_hidden("platform.audit.purge")
+    assert _keep_in_session_despite_config_hidden("platform.credit_ops_board")
     assert _keep_in_session_despite_config_hidden("platform.tenant_credit")
     assert _keep_in_session_despite_config_hidden("customer.enterprise_credit")
     assert not _keep_in_session_despite_config_hidden("customer.links")
     assert not _keep_in_session_despite_config_hidden("customer.diagnosis")
+    assert not _keep_in_session_despite_config_hidden("customer.goods_cards")
+
+
+def test_goods_card_product_permission_requires_tenant_flag():
+    from app.services.menu_permission_service import _has_goods_card_product_permission
+
+    identity = SimpleNamespace(id=9, identity_type="CUSTOMER", tenant_id=3)
+    tenant_on = SimpleNamespace(id=3, deleted=False, goods_card_enabled=True)
+    tenant_off = SimpleNamespace(id=3, deleted=False, goods_card_enabled=False)
+
+    class FakeSession:
+        def __init__(self, tenant):
+            self._tenant = tenant
+
+        def get(self, model, key):
+            name = getattr(model, "__name__", str(model))
+            if "UserIdentity" in name or key == 9:
+                return identity
+            if "Tenant" in name or key == 3:
+                return self._tenant
+            return None
+
+    assert _has_goods_card_product_permission(FakeSession(tenant_on), 9, "can_export") is True
+    assert _has_goods_card_product_permission(FakeSession(tenant_on), 9, "can_update") is False
+    assert _has_goods_card_product_permission(FakeSession(tenant_off), 9, "can_export") is False
 
 
 def test_filter_menu_config_visibility_keeps_settings_children():
@@ -269,6 +306,42 @@ def test_filter_menu_config_visibility_keeps_settings_children():
     assert "platform.settings.secrets" in codes
     assert "platform.reports" in codes
     assert "customer.links" not in codes
+
+
+def test_merge_grant_flags_keeps_parent_sidebar_flag():
+    parent = MenuInfo(
+        id=1,
+        menu_code="platform.settings",
+        menu_name="系统配置",
+        identity_type="PLATFORM",
+        route_path="/portal/settings",
+        icon="Setting",
+        sort_order=90,
+        can_create=False,
+        can_update=False,
+        can_delete=False,
+        can_export=False,
+        show_in_sidebar=True,
+    )
+    child = MenuInfo(
+        id=2,
+        menu_code="platform.settings.secrets",
+        menu_name="接口密钥",
+        identity_type="PLATFORM",
+        route_path="/portal/settings",
+        icon="Key",
+        sort_order=91,
+        can_create=False,
+        can_update=True,
+        can_delete=False,
+        can_export=True,
+        show_in_sidebar=False,
+    )
+    merged = merge_grant_flags(parent, child)
+    assert merged.show_in_sidebar is True
+    assert merged.sort_order == 90
+    assert merged.can_update is True
+    assert merged.can_export is True
 
 
 def test_credit_ops_board_allows_update_flag():
