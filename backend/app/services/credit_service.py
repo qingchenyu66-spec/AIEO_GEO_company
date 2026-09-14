@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, case, func, literal, select
+from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2247,10 +2247,60 @@ def list_credit_ledger(
     }
 
 
+def parse_ledger_window_day(window_key: str | None) -> str | None:
+    """从 window_key 解析窗口日 YYYY-MM-DD；无法解析返回 None。
+
+    兼容 `20260914-0241` / `bw20260914-0900` 等前缀。
+    """
+    text = str(window_key or "").strip()
+    if not text:
+        return None
+    body = text[2:] if text.lower().startswith("bw") else text
+    digits: list[str] = []
+    for ch in body:
+        if ch.isdigit():
+            digits.append(ch)
+            if len(digits) == 8:
+                break
+        elif digits:
+            break
+    if len(digits) != 8:
+        return None
+    ymd = "".join(digits)
+    return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
+
+
+def _ledger_window_day_sql_expr():
+    """SQL：有可解析 window_key 时取窗口日，否则回退记账日。"""
+    wk = TenantCreditLedger.window_key
+    ymd8 = case(
+        (wk.like("bw%"), func.substring(wk, 3, 8)),
+        else_=func.substring(wk, 1, 8),
+    )
+    window_day = func.concat(
+        func.substring(ymd8, 1, 4),
+        literal("-"),
+        func.substring(ymd8, 5, 2),
+        literal("-"),
+        func.substring(ymd8, 7, 2),
+    )
+    return case(
+        (
+            and_(
+                TenantCreditLedger.entry_type == "settle",
+                wk.isnot(None),
+                wk != "",
+            ),
+            window_day,
+        ),
+        else_=func.date(TenantCreditLedger.created_at),
+    )
+
+
 def _ledger_group_key_expr(group_by: str):
-    """窗口：有 window_key 的 settle 合并；其余单条。按日：同自然日合并。"""
+    """窗口：有 window_key 的 settle 合并；其余单条。按日：按窗口日归账。"""
     if group_by == "day":
-        return func.concat(literal("d:"), func.date(TenantCreditLedger.created_at))
+        return func.concat(literal("d:"), _ledger_window_day_sql_expr())
     return case(
         (
             and_(
@@ -2320,7 +2370,7 @@ def list_credit_ledger_grouped(
     page_size: int = 20,
     exclude_internal: bool = True,
 ) -> dict[str, Any]:
-    """客户对账视图：按监测窗口或自然日聚合，金额可直接加总。"""
+    """客户对账视图：按监测窗口或窗口日聚合，金额可直接加总。"""
     if group_by not in ("window", "day"):
         raise ValueError("group_by 仅支持 window 或 day")
     tenant_ids = _ledger_tenant_filter_ids(db, tenant_id=tenant_id, tenant_name=None)
@@ -2355,13 +2405,13 @@ def list_credit_ledger_grouped(
     count_stmt = select(func.count()).select_from(base.subquery())
     total = int(db.scalar(count_stmt) or 0)
     offset = (page - 1) * page_size
-    rows = list(
-        db.execute(
-            base.order_by(func.max(TenantCreditLedger.created_at).desc(), func.max(TenantCreditLedger.id).desc())
-            .offset(offset)
-            .limit(page_size)
-        ).mappings()
+    # 按日：按窗口日倒序；按批：按最近入账时间
+    order_stmt = (
+        base.order_by(group_expr.desc(), func.max(TenantCreditLedger.id).desc())
+        if group_by == "day"
+        else base.order_by(func.max(TenantCreditLedger.created_at).desc(), func.max(TenantCreditLedger.id).desc())
     )
+    rows = list(db.execute(order_stmt.offset(offset).limit(page_size)).mappings())
 
     balance_map: dict[int, Decimal] = {}
     if exclude_internal:
@@ -2391,9 +2441,17 @@ def list_credit_ledger_grouped(
         ended = row.get("ended_at")
         day_label = None
         if group_by == "day" and group_key.startswith("d:"):
-            day_label = group_key[2:]
-            if len(day_label) >= 10:
-                day_label = f"{day_label[5:7]}-{day_label[8:10]}"
+            day_iso = group_key[2:]
+            day_label = day_iso
+            if len(day_iso) >= 10:
+                day_label = f"{day_iso[5:7]}-{day_iso[8:10]}"
+            # 展示锚到窗口日，避免晚结算把时间显示成回补当天
+            try:
+                day_anchor = datetime.strptime(day_iso[:10], "%Y-%m-%d")
+                started = day_anchor
+                ended = day_anchor
+            except ValueError:
+                pass
         window_key = (row.get("window_key") or None) if group_by == "window" else None
         if group_key.startswith("w:"):
             window_key = group_key[2:]
@@ -2463,8 +2521,32 @@ def list_credit_ledger_group_lines(
             raise ValueError("无效的 group_key") from exc
         stmt = stmt.where(TenantCreditLedger.id == ledger_id)
     elif group_by == "day" and key.startswith("d:"):
-        day = key[2:]
-        stmt = stmt.where(func.date(TenantCreditLedger.created_at) == day)
+        day = key[2:].strip()
+        ymd = day.replace("-", "")[:8]
+        if len(ymd) != 8 or not ymd.isdigit():
+            raise ValueError("无效的 group_key")
+        # 有窗口的 settle 按窗口日；无窗口/充值调整仍按记账日
+        stmt = stmt.where(
+            or_(
+                and_(
+                    TenantCreditLedger.entry_type == "settle",
+                    TenantCreditLedger.window_key.isnot(None),
+                    TenantCreditLedger.window_key != "",
+                    or_(
+                        TenantCreditLedger.window_key.like(f"{ymd}%"),
+                        TenantCreditLedger.window_key.like(f"bw{ymd}%"),
+                    ),
+                ),
+                and_(
+                    or_(
+                        TenantCreditLedger.entry_type != "settle",
+                        TenantCreditLedger.window_key.is_(None),
+                        TenantCreditLedger.window_key == "",
+                    ),
+                    func.date(TenantCreditLedger.created_at) == day,
+                ),
+            )
+        )
     elif group_by == "window" and key.startswith("w:"):
         window_key = key[2:]
         stmt = stmt.where(

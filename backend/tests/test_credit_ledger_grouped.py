@@ -1,6 +1,5 @@
 """客户算力流水按窗口/按日聚合。"""
 
-from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -80,6 +79,13 @@ def test_list_credit_ledger_grouped_by_window(db):
 
 
 def test_list_credit_ledger_grouped_by_day(db):
+    """按日按窗口日归账：同窗口日合并；晚入账仍归到窗口日。"""
+    from app.services.credit_service import parse_ledger_window_day
+
+    assert parse_ledger_window_day("20260914-0241") == "2026-09-14"
+    assert parse_ledger_window_day("bw20260914-0900") == "2026-09-14"
+    assert parse_ledger_window_day("") is None
+
     tenant = _seed_credit_tenant(db, balance=Decimal("80"))
     settle_credits(
         db,
@@ -99,16 +105,38 @@ def test_list_credit_ledger_grouped_by_day(db):
         keyword="乙",
         window_key="bw20260914-0900",
     )
+    # 晚结算：记账在今天，窗口属于 09-12
+    settle_credits(
+        db,
+        tenant_id=tenant.id,
+        ref_id="day-late",
+        credits=Decimal("1"),
+        platform_code="yuanbao",
+        keyword="丙",
+        window_key="20260912-0241",
+    )
     db.flush()
 
     grouped = list_credit_ledger_grouped(db, tenant_id=tenant.id, group_by="day", page=1, page_size=20)
     assert grouped["view"] == "day"
-    assert grouped["total"] >= 1
-    today = datetime.now().strftime("%Y-%m-%d")
-    day_rows = [row for row in grouped["items"] if row["group_key"] == f"d:{today}"]
-    assert len(day_rows) == 1
-    assert day_rows[0]["settle_sum"] == -5.0
-    assert day_rows[0]["entry_count"] == 2
+    by_key = {row["group_key"]: row for row in grouped["items"]}
+    assert "d:2026-09-14" in by_key
+    assert "d:2026-09-12" in by_key
+    assert by_key["d:2026-09-14"]["settle_sum"] == -5.0
+    assert by_key["d:2026-09-14"]["entry_count"] == 2
+    assert by_key["d:2026-09-12"]["settle_sum"] == -1.0
+    assert by_key["d:2026-09-12"]["entry_count"] == 1
+
+    lines = list_credit_ledger_group_lines(
+        db,
+        tenant_id=tenant.id,
+        group_key="d:2026-09-12",
+        group_by="day",
+        page=1,
+        page_size=50,
+    )
+    assert lines["total"] == 1
+    assert lines["items"][0]["window_key"] == "20260912-0241"
 
 
 def test_list_credit_ledger_detail_view_unchanged(db):
