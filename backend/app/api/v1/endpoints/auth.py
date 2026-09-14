@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -78,7 +80,14 @@ def identity_info(identity: UserIdentity, db: Session) -> dict:
     ).model_dump()
 
 
-def session_payload(db: Session, user: User, identity: UserIdentity, identities: list[UserIdentity]) -> dict:
+def session_payload(
+    db: Session,
+    user: User,
+    identity: UserIdentity,
+    identities: list[UserIdentity],
+    *,
+    auth_time: datetime | None = None,
+) -> dict:
     # 菜单权限随会话返回，前端只渲染数据库授权菜单，不再写死平台/客户菜单。
     if ensure_identity_menus_from_position(db, identity):
         db.commit()
@@ -95,7 +104,7 @@ def session_payload(db: Session, user: User, identity: UserIdentity, identities:
         except Exception:
             customer_includes_today = False
     return {
-        "access_token": create_access_token(user, identity),
+        "access_token": create_access_token(user, identity, auth_time=auth_time),
         "token_type": "bearer",
         "user": _user_public(user),
         "identity": identity_info(identity, db),
@@ -205,6 +214,35 @@ def logout(response: Response) -> ApiResponse[dict]:
     return ApiResponse(data={"ok": True})
 
 
+@router.post("/refresh", response_model=ApiResponse[dict])
+def refresh_session(
+    response: Response,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """Sliding renew: extend idle TTL from last real activity; keep original auth_time."""
+    identities = list(
+        db.scalars(
+            select(UserIdentity)
+            .options(joinedload(UserIdentity.tenant))
+            .where(
+                UserIdentity.user_id == current.user.id,
+                UserIdentity.status.is_(True),
+                UserIdentity.deleted.is_(False),
+            )
+        )
+    )
+    session = session_payload(
+        db,
+        current.user,
+        current.identity,
+        identities,
+        auth_time=current.auth_time,
+    )
+    _attach_session_cookie(response, session)
+    return ApiResponse(data={"ok": True})
+
+
 @router.get("/me", response_model=ApiResponse[dict])
 def me(current: CurrentSession = Depends(get_current_session), db: Session = Depends(get_db)) -> ApiResponse[dict]:
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
@@ -274,6 +312,12 @@ def switch_identity(
     if identity is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权使用该身份")
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == current.user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
-    session = session_payload(db, current.user, identity, identities)
+    session = session_payload(
+        db,
+        current.user,
+        identity,
+        identities,
+        auth_time=current.auth_time,
+    )
     _attach_session_cookie(response, session)
     return ApiResponse(data=public_session(session))

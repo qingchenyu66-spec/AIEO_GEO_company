@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
@@ -91,7 +93,16 @@ def create_identity_ticket(user: User) -> str:
     return create_token(user.id, "identity_selection", settings.identity_ticket_expire_minutes)
 
 
-def create_access_token(user: User, identity: UserIdentity) -> str:
+def create_access_token(
+    user: User,
+    identity: UserIdentity,
+    *,
+    auth_time: datetime | None = None,
+) -> str:
+    """Issue access JWT. auth_time is original login instant; omit to start a new session."""
+    at = auth_time or datetime.now(UTC)
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
     return create_token(
         user.id,
         "access",
@@ -100,6 +111,7 @@ def create_access_token(user: User, identity: UserIdentity) -> str:
         identity_type=identity.identity_type,
         tenant_id=identity.tenant_id,
         role_code=identity.role_code,
+        auth_time=int(at.timestamp()),
     )
 
 

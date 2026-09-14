@@ -4,6 +4,7 @@ import {
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
 import { invalidatePortalMonitorReadCaches } from '../services/monitor'
+import { markSessionRenewed, startSessionKeepAlive, stopSessionKeepAlive } from '../utils/sessionKeepAlive'
 
 const STORAGE_KEY = 'geo-auth-session'
 
@@ -51,6 +52,8 @@ export const useAuthStore = defineStore('auth', {
       this.pendingTicket = ''
       this.pendingUser = null
       this.pendingIdentities = []
+      markSessionRenewed()
+      startSessionKeepAlive()
     },
     async login(username: string, password: string) {
       const result = await loginApi(username, password)
@@ -95,6 +98,7 @@ export const useAuthStore = defineStore('auth', {
       this.pendingTicket = ''
       this.pendingIdentities = []
       localStorage.removeItem(STORAGE_KEY)
+      stopSessionKeepAlive()
       invalidatePortalMonitorReadCaches()
     },
   },

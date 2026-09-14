@@ -87,6 +87,14 @@ export async function meApi(): Promise<Omit<AuthSession, 'access_token' | 'token
   return response.data.data
 }
 
+/** Sliding renew: extends idle cookie TTL; polling must not call this. */
+export async function refreshSessionApi(): Promise<void> {
+  await http.post('/v1/auth/refresh', null, {
+    silentError: true,
+    skipLoading: true,
+  } as GeoHttpRequestConfig)
+}
+
 export async function logoutApi(): Promise<void> {
   await http.post('/v1/auth/logout')
 }

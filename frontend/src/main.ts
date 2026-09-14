@@ -15,13 +15,16 @@ import './styles/workspace-board.css'
 import './styles/monitor-realtime.css'
 import App from './App.vue'
 import router from './router'
+import { useAuthStore } from './stores/auth'
+import { startSessionKeepAlive } from './utils/sessionKeepAlive'
 import { applyPlatformFaviconFromServer } from './utils/platformFavicon'
 
 void applyPlatformFaviconFromServer()
 
 const app = createApp(App)
 
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
 app.use(ElDialog)
 app.use(ElDropdown)
@@ -29,3 +32,7 @@ app.use(ElDropdownMenu)
 app.use(ElDropdownItem)
 app.use(ElTooltip)
 app.mount('#app')
+
+if (useAuthStore().isLoggedIn) {
+  startSessionKeepAlive()
+}

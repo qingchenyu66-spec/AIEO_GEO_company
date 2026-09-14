@@ -48,8 +48,19 @@ def set_csrf_cookie(response: Response, token: str) -> None:
 
 
 def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    # Match Secure/SameSite with set_auth_cookie or some browsers keep the old cookie
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path="/",
+        secure=_cookie_secure(),
+        samesite=settings.auth_cookie_samesite,
+    )
 
 
 def clear_csrf_cookie(response: Response) -> None:
-    response.delete_cookie(key=CSRF_COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path="/",
+        secure=_cookie_secure(),
+        samesite=settings.auth_cookie_samesite,
+    )

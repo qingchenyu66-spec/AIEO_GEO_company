@@ -16,11 +16,28 @@ export const http = axios.create({
 export type GeoHttpRequestConfig = AxiosRequestConfig & {
   silentError?: boolean
   noCache?: boolean
+  skipLoading?: boolean
+}
+
+let redirectingToLogin = false
+
+function redirectToLoginForExpiredSession() {
+  if (redirectingToLogin) return
+  if (window.location.pathname.includes('/login')) return
+  redirectingToLogin = true
+  localStorage.removeItem('geo-auth-session')
+  ElMessage.warning('登录已过期，请重新登录')
+  // Brief delay so the toast can paint before full navigation tears down the app
+  window.setTimeout(() => {
+    window.location.href = '/login'
+  }, 80)
 }
 
 http.interceptors.request.use(
   (config) => {
-    useLoadingStore().start()
+    if (!(config as GeoHttpRequestConfig).skipLoading) {
+      useLoadingStore().start()
+    }
 
     // FormData 必须由浏览器自带 multipart boundary；默认 json Content-Type 会导致上传无响应
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
@@ -47,11 +64,15 @@ http.interceptors.request.use(
 
 http.interceptors.response.use(
   (response) => {
-    useLoadingStore().end()
+    if (!(response.config as GeoHttpRequestConfig).skipLoading) {
+      useLoadingStore().end()
+    }
     return response
   },
   (error) => {
-    useLoadingStore().end()
+    if (!(error.config as GeoHttpRequestConfig | undefined)?.skipLoading) {
+      useLoadingStore().end()
+    }
 
     const status = error.response?.status
     const url = error.config?.url || ''
@@ -62,9 +83,7 @@ http.interceptors.response.use(
         const message = error.response?.data?.detail || error.message || '账号或密码错误'
         ElMessage.error(message)
       } else {
-        ElMessage.warning('登录已过期，请重新登录')
-        localStorage.removeItem('geo-auth-session')
-        window.location.href = '/login'
+        redirectToLoginForExpiredSession()
       }
       return Promise.reject(error)
     }

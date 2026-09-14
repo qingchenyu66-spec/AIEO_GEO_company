@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     secret_key: str
-    access_token_expire_minutes: int = 480
+    # Sliding idle window: cookie/JWT TTL; /auth/refresh extends while user is active
+    access_token_expire_minutes: int = 120
+    # Hard cap from original login (auth_time); refresh cannot extend beyond this
+    access_token_absolute_expire_minutes: int = 720
     identity_ticket_expire_minutes: int = 30
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"

@@ -39,6 +39,7 @@ _SKIP_PATHS = frozenset({
     "/",
     "/api/v1/auth/login",
     "/api/v1/auth/select-identity",
+    "/api/v1/auth/refresh",
     # 2026-07-31 - 模力回调无登录态会被标成「匿名请求」噪音 - 整段不记审计（与匿名 logout 同策略）
     "/api/v1/monitor/molizhishu/callback",
 })
