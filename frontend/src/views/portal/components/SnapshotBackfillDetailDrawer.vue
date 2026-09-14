@@ -6,6 +6,7 @@ import { ExternalLink } from '@lucide/vue'
 import PlatformBadge from '../../../components/PlatformBadge.vue'
 import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
 import type { SnapshotBackfillPendingItem } from '../../../services/snapshotBackfill'
+import { buildSourceTrackRows } from '../../../utils/sourceSiteLabel'
 import { monitorStatusLabelMap, platformLabelMap, sentimentLabelMap } from '../portalMaps'
 import { formatDateTime, formatMonitorSubtaskRankDetail } from '../portalUtils'
 import { snapshotBackfillBatchLabel, snapshotBackfillRankDisplay } from '../snapshotBackfillDisplay'
@@ -17,6 +18,8 @@ const props = defineProps<{
   item: SnapshotBackfillPendingItem | null
   subtask: MonitorSubtask | null
   canSubmit?: boolean
+  /** 从「补录前」格子打开：详情优先展示补录前快照 */
+  preferBefore?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -35,20 +38,81 @@ const headline = computed(() => props.item?.tenant_name || props.item?.brand_nam
 
 const rankDisplay = computed(() => snapshotBackfillRankDisplay(props.item, props.subtask))
 
-const snapshotLink = computed(() => externalLink(props.subtask?.page_screenshot))
+const beforeSnap = computed(() => {
+  const top = props.subtask?.before_backfill
+  if (top && typeof top === 'object') return top
+  const raw = props.subtask?.raw_result
+  const nested = raw && typeof raw === 'object' ? (raw as { before_backfill?: MonitorSubtask['before_backfill'] }).before_backfill : null
+  return nested && typeof nested === 'object' ? nested : null
+})
+
+const hasBeforeSnap = computed(() => Boolean(beforeSnap.value))
+
+const viewingBefore = computed(() => Boolean(props.preferBefore && hasBeforeSnap.value))
+
+/** 补录前对照：排名/提及必须以 before 快照为准，不能再用补录后的 subtask */
+const displayRank = computed(() => {
+  if (!viewingBefore.value || !beforeSnap.value) return rankDisplay.value
+  const pos = beforeSnap.value.mention_position
+  let mention: number | null = null
+  if (pos != null && Number.isFinite(Number(pos))) mention = Number(pos)
+  return {
+    prompt_intent: rankDisplay.value.prompt_intent,
+    mention_position: mention,
+    brand_mentioned: mention != null ? true : Boolean(beforeSnap.value.has_answer),
+    rank_source: null,
+    rank_category: null,
+  }
+})
+
+const displaySentiment = computed(() => {
+  if (viewingBefore.value && beforeSnap.value) {
+    return beforeSnap.value.sentiment || null
+  }
+  return props.subtask?.sentiment || props.item?.sentiment || null
+})
+
+const displayTaskStatus = computed(() => {
+  if (viewingBefore.value && beforeSnap.value) {
+    return beforeSnap.value.status || null
+  }
+  return props.subtask?.status || null
+})
+
+const displayStatusTag = computed(() => {
+  if (viewingBefore.value && beforeSnap.value) {
+    if (beforeSnap.value.has_answer) return '已有结果'
+    const st = String(beforeSnap.value.status || '').toLowerCase()
+    if (st === 'failed' || st === 'stopped') return '待补录'
+    return beforeSnap.value.status || '—'
+  }
+  return statusLabel(props.item)
+})
+
+const snapshotLink = computed(() => {
+  if (viewingBefore.value) {
+    return externalLink(beforeSnap.value?.page_screenshot_url || beforeSnap.value?.page_screenshot)
+  }
+  return externalLink(props.subtask?.page_screenshot)
+})
 
 const parsePending = computed(() => String(props.subtask?.backfill_parse_status || '').toLowerCase() === 'pending')
 
 // 2026-09-02 - 解析中/截图未出都不得露旧快照链接
-const screenshotPending = computed(() => Boolean(props.subtask?.screenshot_pending) || parsePending.value)
+const screenshotPending = computed(() => {
+  if (viewingBefore.value) return false
+  return Boolean(props.subtask?.screenshot_pending) || parsePending.value
+})
 
 const screenshotFailed = computed(() => {
   if (snapshotLink.value || screenshotPending.value) return false
+  if (viewingBefore.value) return false
   return props.subtask?.screenshot_ok === false
 })
 
 const snapshotEmptyHint = computed(() => {
   // 2026-08-07 - 「暂无快照请填 URL」误导异步截图中的运营 - 按状态分文案
+  if (viewingBefore.value) return '补录前无快照'
   if (parsePending.value) return '正文解析中，快照稍后生成'
   if (props.subtask?.screenshot_pending) return '快照生成中，稍后将自动可用'
   if (screenshotFailed.value) return '快照生成失败，可重新补录分享链接'
@@ -82,7 +146,7 @@ async function refreshSubtaskOnce() {
 
 function startShotPoll() {
   stopShotPoll()
-  if (!props.visible || !screenshotPending.value) return
+  if (!props.visible || !screenshotPending.value || viewingBefore.value) return
   void refreshSubtaskOnce()
   pollTimer.value = setInterval(() => {
     void refreshSubtaskOnce()
@@ -90,9 +154,9 @@ function startShotPoll() {
 }
 
 watch(
-  () => [props.visible, screenshotPending.value, props.subtask?.subtask_id] as const,
+  () => [props.visible, screenshotPending.value, props.subtask?.subtask_id, viewingBefore.value] as const,
   () => {
-    if (props.visible && screenshotPending.value) startShotPoll()
+    if (props.visible && screenshotPending.value && !viewingBefore.value) startShotPoll()
     else stopShotPoll()
   },
 )
@@ -100,9 +164,10 @@ watch(
 onUnmounted(stopShotPoll)
 
 function showRankNote() {
+  if (viewingBefore.value) return false
   if (props.subtask?.prompt_intent !== 'ranking' && props.item?.prompt_intent !== 'ranking') return false
   const raw = props.subtask?.raw_mention_position ?? props.item?.raw_mention_position
-  const rank = rankDisplay.value.mention_position
+  const rank = displayRank.value.mention_position
   return raw != null && raw !== rank
 }
 
@@ -132,10 +197,39 @@ function actionLabel(item: SnapshotBackfillPendingItem | null) {
 }
 
 const answerPreview = computed(() => {
-  const text = props.subtask?.answer_content?.trim()
+  const text = (viewingBefore.value
+    ? beforeSnap.value?.answer_content
+    : props.subtask?.answer_content)?.trim()
   if (!text) return null
   return text.length > 280 ? `${text.slice(0, 280)}…` : text
 })
+
+const afterSourceTracks = computed(() =>
+  buildSourceTrackRows(props.subtask, { limit: 20, linkOf: externalLink }),
+)
+
+const beforeSourceTracks = computed(() =>
+  buildSourceTrackRows(beforeSnap.value, { limit: 20, linkOf: externalLink }),
+)
+
+const beforeSourcesCaptured = computed(() => {
+  const snap = beforeSnap.value
+  if (!snap) return false
+  if (snap.has_reference_list === false && snap.has_citation_list === false) return false
+  if (snap.has_reference_list === true || snap.has_citation_list === true) return true
+  // 兼容：字段直接存在时也视为已快照
+  return Array.isArray(snap.reference_list) || Array.isArray(snap.citation_list)
+})
+
+const beforeSourceCount = computed(
+  () => beforeSourceTracks.value.citations.length + beforeSourceTracks.value.references.length,
+)
+const afterSourceCount = computed(
+  () => afterSourceTracks.value.citations.length + afterSourceTracks.value.references.length,
+)
+
+const showBeforeSourcesBlock = computed(() => viewingBefore.value && hasBeforeSnap.value)
+const showAfterSourcesBlock = computed(() => !viewingBefore.value)
 </script>
 
 <template>
@@ -152,12 +246,12 @@ const answerPreview = computed(() => {
         <span
           class="snapshot-detail-tag"
           :class="{
-            pending: item.needs_backfill && !isDismissed,
-            done: item.has_answer && !item.needs_backfill && !isDismissed,
+            pending: item.needs_backfill && !isDismissed && !viewingBefore,
+            done: ((viewingBefore && beforeSnap?.has_answer) || (!viewingBefore && item.has_answer && !item.needs_backfill)) && !isDismissed,
             dismissed: isDismissed,
           }"
         >
-          {{ statusLabel(item) }}
+          {{ displayStatusTag }}
         </span>
       </div>
 
@@ -191,19 +285,19 @@ const answerPreview = computed(() => {
           <dd>{{ formatDateTime(subtask.updated_at || item.updated_at) }}</dd>
         </div>
         <div>
-          <dt>{{ rankDisplay.prompt_intent === 'ranking' ? '品牌排名' : '品牌提及' }}</dt>
+          <dt>{{ displayRank.prompt_intent === 'ranking' ? '品牌排名' : '品牌提及' }}</dt>
           <dd>
-            <strong>{{ formatMonitorSubtaskRankDetail(rankDisplay) }}</strong>
+            <strong>{{ formatMonitorSubtaskRankDetail(displayRank) }}</strong>
             <small v-if="showRankNote()">原始解析排名 {{ rawRankNote() }}</small>
           </dd>
         </div>
         <div>
           <dt>情感</dt>
-          <dd>{{ sentimentLabelMap[String(subtask.sentiment || '').toLowerCase()] || subtask.sentiment || '—' }}</dd>
+          <dd>{{ sentimentLabelMap[String(displaySentiment || '').toLowerCase()] || displaySentiment || '—' }}</dd>
         </div>
         <div>
           <dt>任务状态</dt>
-          <dd>{{ monitorStatusLabelMap[subtask.status] || subtask.status }}</dd>
+          <dd>{{ monitorStatusLabelMap[String(displayTaskStatus || '')] || displayTaskStatus || '—' }}</dd>
         </div>
         <div class="is-wide">
           <dt>监测问题</dt>
@@ -222,6 +316,93 @@ const answerPreview = computed(() => {
         <div v-if="answerPreview" class="is-wide">
           <dt>回答摘要</dt>
           <dd class="snapshot-detail-answer">{{ answerPreview }}</dd>
+        </div>
+        <div v-if="showBeforeSourcesBlock" class="is-wide snapshot-detail-sources">
+          <dt>信源 · {{ beforeSourceCount }}</dt>
+          <dd>
+            <p v-if="!beforeSourcesCaptured" class="snapshot-detail-muted">
+              历史补录未快照信源
+            </p>
+            <template v-else>
+              <div v-if="beforeSourceTracks.citations.length" class="snapshot-detail-source-group">
+                <div class="snapshot-detail-source-head">正文引用 · {{ beforeSourceTracks.citations.length }}</div>
+                <a
+                  v-for="row in beforeSourceTracks.citations"
+                  :key="`before-${row.key}`"
+                  class="snapshot-detail-source-link"
+                  :class="{ 'is-plain': !row.href }"
+                  :href="row.href || undefined"
+                  :target="row.href ? '_blank' : undefined"
+                  :rel="row.href ? 'noopener noreferrer' : undefined"
+                >
+                  <span class="snapshot-detail-source-title">{{ row.title }}</span>
+                  <span v-if="row.site" class="snapshot-detail-source-site">{{ row.site }}</span>
+                </a>
+              </div>
+              <div v-if="beforeSourceTracks.references.length" class="snapshot-detail-source-group">
+                <div class="snapshot-detail-source-head">参考来源 · {{ beforeSourceTracks.references.length }}</div>
+                <a
+                  v-for="row in beforeSourceTracks.references"
+                  :key="`before-${row.key}`"
+                  class="snapshot-detail-source-link"
+                  :class="{ 'is-plain': !row.href }"
+                  :href="row.href || undefined"
+                  :target="row.href ? '_blank' : undefined"
+                  :rel="row.href ? 'noopener noreferrer' : undefined"
+                >
+                  <span class="snapshot-detail-source-title">{{ row.title }}</span>
+                  <span v-if="row.site" class="snapshot-detail-source-site">{{ row.site }}</span>
+                </a>
+              </div>
+              <p
+                v-if="!beforeSourceTracks.citations.length && !beforeSourceTracks.references.length"
+                class="snapshot-detail-muted"
+              >
+                暂无信源
+              </p>
+            </template>
+          </dd>
+        </div>
+        <div v-if="showAfterSourcesBlock" class="is-wide snapshot-detail-sources">
+          <dt>信源 · {{ afterSourceCount }}</dt>
+          <dd>
+            <div v-if="afterSourceTracks.citations.length" class="snapshot-detail-source-group">
+              <div class="snapshot-detail-source-head">正文引用 · {{ afterSourceTracks.citations.length }}</div>
+              <a
+                v-for="row in afterSourceTracks.citations"
+                :key="`after-${row.key}`"
+                class="snapshot-detail-source-link"
+                :class="{ 'is-plain': !row.href }"
+                :href="row.href || undefined"
+                :target="row.href ? '_blank' : undefined"
+                :rel="row.href ? 'noopener noreferrer' : undefined"
+              >
+                <span class="snapshot-detail-source-title">{{ row.title }}</span>
+                <span v-if="row.site" class="snapshot-detail-source-site">{{ row.site }}</span>
+              </a>
+            </div>
+            <div v-if="afterSourceTracks.references.length" class="snapshot-detail-source-group">
+              <div class="snapshot-detail-source-head">参考来源 · {{ afterSourceTracks.references.length }}</div>
+              <a
+                v-for="row in afterSourceTracks.references"
+                :key="`after-${row.key}`"
+                class="snapshot-detail-source-link"
+                :class="{ 'is-plain': !row.href }"
+                :href="row.href || undefined"
+                :target="row.href ? '_blank' : undefined"
+                :rel="row.href ? 'noopener noreferrer' : undefined"
+              >
+                <span class="snapshot-detail-source-title">{{ row.title }}</span>
+                <span v-if="row.site" class="snapshot-detail-source-site">{{ row.site }}</span>
+              </a>
+            </div>
+            <p
+              v-if="!afterSourceTracks.citations.length && !afterSourceTracks.references.length"
+              class="snapshot-detail-muted"
+            >
+              暂无信源
+            </p>
+          </dd>
         </div>
         <div class="is-wide">
           <dt>子任务 ID</dt>
@@ -287,6 +468,46 @@ const answerPreview = computed(() => {
   background: rgba(100, 116, 139, 0.12);
   color: #475569;
 }
+.snapshot-detail-sources {
+  margin-top: 2px;
+}
+.snapshot-detail-source-group + .snapshot-detail-source-group {
+  margin-top: 10px;
+}
+.snapshot-detail-source-head {
+  margin: 0 0 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.snapshot-detail-source-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fbff;
+  border: 1px solid #e2eef9;
+  text-decoration: none;
+  color: inherit;
+}
+.snapshot-detail-source-link:hover {
+  border-color: #93c5fd;
+}
+.snapshot-detail-source-link.is-plain {
+  cursor: default;
+}
+.snapshot-detail-source-title {
+  color: #153052;
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.snapshot-detail-source-site {
+  color: #64748b;
+  font-size: 12px;
+}
 .snapshot-detail-dismiss-hint {
   margin: 0 0 16px;
   padding: 10px 12px;
@@ -328,9 +549,9 @@ const answerPreview = computed(() => {
 .snapshot-detail-grid dd small {
   display: block;
   margin-top: 4px;
-  color: #64748b;
+  color: #94a3b8;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
 }
 .snapshot-detail-link {
   display: inline-flex;

@@ -661,6 +661,9 @@ def enrich_subtask_display_backfill_flags(
     if parse_status == "pending" and _backfill_parse_display_stale(raw):
         display["backfill_parse_status"] = "failed"
         display["backfill_parse_error"] = str(raw.get("backfill_parse_error") or "上次解析未启动或已超时，请重新提交")[:240]
+        before = raw.get("before_backfill")
+        if isinstance(before, dict):
+            display["before_backfill"] = _public_before_backfill_snapshot(before)
         return display
     if parse_status:
         display["backfill_parse_status"] = parse_status
@@ -670,6 +673,9 @@ def enrich_subtask_display_backfill_flags(
     if parse_status == "pending":
         display["page_screenshot"] = None
         display["screenshot_pending"] = True
+    before = raw.get("before_backfill")
+    if isinstance(before, dict):
+        display["before_backfill"] = _public_before_backfill_snapshot(before)
     return display
 
 
@@ -677,8 +683,42 @@ def enrich_subtask_display_backfill_flags(
 _BEFORE_BACKFILL_ANSWER_MAX = 4000
 
 
+def _public_before_backfill_snapshot(before: dict[str, Any]) -> dict[str, Any]:
+    """详情/补录响应对外暴露的 before_backfill（截图代理 + 信源过滤）。"""
+    from app.services.monitor_service import _filter_citation_sources
+
+    shot = str(before.get("page_screenshot_url") or before.get("page_screenshot") or "").strip() or None
+    out = {
+        "captured_at": before.get("captured_at"),
+        "status": before.get("status"),
+        "mention_position": before.get("mention_position"),
+        "sentiment": before.get("sentiment"),
+        "error_message": before.get("error_message"),
+        "page_screenshot": public_screenshot_url(shot) if shot else None,
+        "page_screenshot_url": public_screenshot_url(shot) if shot else None,
+        "answer_content": before.get("answer_content"),
+        "answer_truncated": bool(before.get("answer_truncated")),
+        "source": before.get("source"),
+        "has_answer": bool(before.get("has_answer")),
+    }
+    # 2026-09-14 - 历史补录可能无信源字段；用 has_* 让前端区分「未快照」与「当时为空」
+    if "reference_list" in before:
+        out["reference_list"] = _filter_citation_sources(before.get("reference_list"))
+        out["has_reference_list"] = True
+    else:
+        out["has_reference_list"] = False
+    if "citation_list" in before:
+        out["citation_list"] = _filter_citation_sources(before.get("citation_list"))
+        out["has_citation_list"] = True
+    else:
+        out["has_citation_list"] = False
+    return out
+
+
 def build_before_backfill_snapshot(subtask: GeoMonitorSubtask) -> dict[str, Any]:
     """补录写入前抓一份可读快照，供矩阵「显示补录前」与详情对照。"""
+    from app.services.monitor_service import _filter_citation_sources
+
     answer = str(subtask.answer_content or "")
     truncated = len(answer) > _BEFORE_BACKFILL_ANSWER_MAX
     if truncated:
@@ -697,6 +737,9 @@ def build_before_backfill_snapshot(subtask: GeoMonitorSubtask) -> dict[str, Any]
         "answer_truncated": truncated,
         "source": raw.get("source"),
         "has_answer": bool((subtask.answer_content or "").strip()),
+        # 2026-09-14 - 补录前后信源对照：快照必须带上当时引用，否则详情只能看到补录后
+        "reference_list": _filter_citation_sources(subtask.reference_list_json),
+        "citation_list": _filter_citation_sources(subtask.citation_list_json),
     }
 
 

@@ -1730,6 +1730,74 @@ def test_matrix_sample_exposes_before_backfill_fields() -> None:
     assert sample["mention_position"] == 2
 
 
+def test_before_backfill_snapshot_includes_sources() -> None:
+    """补录前快照须带上当时信源，详情才能对照补录前后。"""
+    from app.services.snapshot_backfill_service import (
+        build_before_backfill_snapshot,
+        enrich_subtask_display_backfill_flags,
+    )
+
+    refs = [{"index": 1, "url": "https://example.com/a", "title": "来源A"}]
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-src-1",
+        task_id="task-src-1",
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="品牌推荐",
+        status="completed",
+        answer_content="旧回答",
+        reference_list_json=refs,
+        citation_list_json=[],
+        raw_result_json={"source": "molizhishu"},
+    )
+    snap = build_before_backfill_snapshot(subtask)
+    assert snap["reference_list"] == refs
+    assert snap["citation_list"] == []
+
+    subtask.answer_content = "新回答"
+    subtask.reference_list_json = [{"index": 1, "url": "https://example.com/b", "title": "来源B"}]
+    subtask.raw_result_json = {"source": "manual_snapshot", "before_backfill": snap}
+    display = enrich_subtask_display_backfill_flags(
+        {
+            "mention_position": 1,
+            "brand_mentioned": True,
+            "page_screenshot": "https://cdn.example/new.png",
+        },
+        subtask,
+    )
+    before = display["before_backfill"]
+    assert before["has_reference_list"] is True
+    assert before["reference_list"][0]["url"] == "https://example.com/a"
+    assert before["answer_content"] == "旧回答"
+
+
+def test_before_backfill_public_marks_missing_sources() -> None:
+    """历史补录没有信源字段时，详情需标明无法对照。"""
+    from app.services.snapshot_backfill_service import enrich_subtask_display_backfill_flags
+
+    subtask = GeoMonitorSubtask(
+        subtask_id="st-src-legacy",
+        task_id="task-src-legacy",
+        platform="doubao_mobile",
+        mode="standard",
+        prompt="品牌推荐",
+        status="completed",
+        answer_content="新回答",
+        reference_list_json=[{"index": 1, "url": "https://example.com/new", "title": "新"}],
+        raw_result_json={
+            "before_backfill": {
+                "status": "failed",
+                "has_answer": False,
+                "answer_content": None,
+            }
+        },
+    )
+    display = enrich_subtask_display_backfill_flags({"mention_position": None}, subtask)
+    before = display["before_backfill"]
+    assert before["has_reference_list"] is False
+    assert "reference_list" not in before
+
+
 def test_matrix_sample_rank_matches_display_when_answer_lacks_brand() -> None:
     """2026-09-02 - 热力裸库内 3、详情无排名 - 矩阵样本须与 serialize 展示位次一致。"""
     from types import SimpleNamespace

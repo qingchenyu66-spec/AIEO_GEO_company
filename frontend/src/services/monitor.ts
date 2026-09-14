@@ -98,6 +98,11 @@ export interface MonitorSubtask {
     answer_truncated?: boolean
     source?: string | null
     has_answer?: boolean
+    reference_list?: Array<{ title?: string; url?: string; site?: string; index?: number }>
+    citation_list?: Array<{ title?: string; url?: string; site?: string; index?: number }>
+    /** false = 历史补录未写入信源快照 */
+    has_reference_list?: boolean
+    has_citation_list?: boolean
   } | null
   raw_result?: Record<string, unknown> | null
   tenant_name?: string | null

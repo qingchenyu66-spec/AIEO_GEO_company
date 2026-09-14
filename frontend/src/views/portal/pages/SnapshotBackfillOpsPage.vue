@@ -437,7 +437,10 @@ function selectPlatform(id: string) {
 }
 
 function openCell(word: string, date: string, platform?: string, pane?: ComparePaneId) {
-  const cell = getCell(word, date, platform)
+  // 2026-09-14 - 从「补录前」点开必须用 before 格子，否则侧栏/详情入口位次全是补录后
+  const cell = pane === 'before'
+    ? (getCellForPane('before', word, date, platform) || getCell(word, date, platform))
+    : getCell(word, date, platform)
   if (!cell) return
   // 2026-09-01 - 补录前对照可点开看，但不允许补录/忽略
   openCellDirect(cell, pane !== 'before')
@@ -2060,6 +2063,7 @@ watch(
       :item="detailItem"
       :subtask="detailSubtask"
       :can-submit="canSubmitBackfill && cellDrawerAllowBackfill"
+      :prefer-before="!cellDrawerAllowBackfill"
       @update:subtask="detailSubtask = $event"
       @backfill="openBackfillFromDetail"
       @undismiss="undismissFromDetail"
