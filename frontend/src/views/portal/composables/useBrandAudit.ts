@@ -563,6 +563,23 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     return Boolean(menuGrant(enterprisePermissionCodeMap.purge)?.can_delete)
   }
 
+  function isPlatformAdminIdentity() {
+    const identity = auth.session?.identity
+    if (!identity) return false
+    return identity.position_code === 'PLATFORM_ADMIN' || identity.role_code === 'PLATFORM_ADMIN'
+  }
+
+  async function ensurePurgeMenuInSession() {
+    // 职位勾了彻底删除但本地会话菜单仍是旧的：进企业列表时补一次 /me
+    if (customerEnterpriseMode || previewReadonly.value) return
+    if (!isPlatformAdminIdentity() || canPurgeTenant()) return
+    try {
+      await auth.refreshSession()
+    } catch {
+      // 刷新失败不挡列表；按钮仍按当前会话权限隐藏
+    }
+  }
+
   function stopTenantActionLabel(tenant: TenantInfo) {
     return isTenantPending(tenant) ? '取消服务' : '停止服务'
   }
@@ -1044,6 +1061,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     if (!isPlatform.value) return
     loadingBrand.value = true
     try {
+      await ensurePurgeMenuInSession()
       tenants.value = await withRetry(() => getTenants())
       if (canFilterBySales.value && !tenantSalesOwners.value.length) {
         try {

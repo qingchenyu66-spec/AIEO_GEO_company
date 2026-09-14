@@ -85,7 +85,8 @@ export const useAuthStore = defineStore('auth', {
     async refreshSession() {
       if (!this.session?.identity) return
       const latest = await meApi()
-      this.saveSession(latest)
+      // 保留内存里的 token 等字段，只覆盖 /me 返回的用户/身份/菜单
+      this.saveSession({ ...this.session, ...latest })
     },
     async logout() {
       // 先调服务端（仍带当前 Bearer/Cookie），再清本地，便于审计记到真实操作人

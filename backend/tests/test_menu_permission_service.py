@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from app.services.menu_permission_service import (
     ROUTE_ONLY_MENU_CODES,
+    _filter_items_by_menu_config_visibility,
+    _keep_in_session_despite_config_hidden,
     ensure_identity_menus_from_position,
     heal_empty_identity_menus,
     sanitize_menu_grant_flags,
@@ -228,3 +230,59 @@ def test_sync_menu_row_from_config_overwrites_sys_menu_name():
     assert menu.icon == "LayoutDashboard"
     assert menu.route_path == "/customer/workspace"
     assert menu.sort_order == 10
+
+
+def test_session_keeps_nested_permissions_when_config_hidden():
+    assert _keep_in_session_despite_config_hidden("platform.settings.secrets")
+    assert _keep_in_session_despite_config_hidden("platform.audit.purge")
+    assert _keep_in_session_despite_config_hidden("platform.tenant_credit")
+    assert _keep_in_session_despite_config_hidden("customer.enterprise_credit")
+    assert not _keep_in_session_despite_config_hidden("customer.links")
+    assert not _keep_in_session_despite_config_hidden("customer.diagnosis")
+
+
+def test_filter_menu_config_visibility_keeps_settings_children():
+    items = [
+        SimpleNamespace(menu_code="platform.settings.secrets", menu_name="接口密钥"),
+        SimpleNamespace(menu_code="customer.links", menu_name="推广链接"),
+        SimpleNamespace(menu_code="platform.reports", menu_name="报告中心"),
+    ]
+    configs = {
+        "platform.settings.secrets": SimpleNamespace(menu_code="platform.settings.secrets", is_visible=False),
+        "customer.links": SimpleNamespace(menu_code="customer.links", is_visible=False),
+        "platform.reports": SimpleNamespace(menu_code="platform.reports", is_visible=True),
+    }
+
+    class FakeScalars:
+        def __init__(self, values):
+            self._values = values
+
+        def __iter__(self):
+            return iter(self._values)
+
+    class FakeSession:
+        def scalars(self, _stmt):
+            return FakeScalars(configs.values())
+
+    kept = _filter_items_by_menu_config_visibility(FakeSession(), items, "PLATFORM")
+    codes = [item.menu_code for item in kept]
+    assert "platform.settings.secrets" in codes
+    assert "platform.reports" in codes
+    assert "customer.links" not in codes
+
+
+def test_credit_ops_board_allows_update_flag():
+    flags = sanitize_menu_grant_flags(
+        "platform.credit_ops_board",
+        "PLATFORM",
+        can_create=True,
+        can_update=True,
+        can_delete=True,
+        can_export=True,
+    )
+    assert flags == {
+        "can_create": False,
+        "can_update": True,
+        "can_delete": False,
+        "can_export": True,
+    }

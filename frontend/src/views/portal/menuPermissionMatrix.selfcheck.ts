@@ -28,6 +28,10 @@ const menus = [
   menu({ id: 1, menu_code: 'platform.reports' }),
   menu({ id: 2, menu_code: 'platform.competitor' }),
   menu({ id: 3, menu_code: 'platform.sources' }),
+  menu({ id: 4, menu_code: 'platform.tenant_credit' }),
+  menu({ id: 5, menu_code: 'platform.credit_ops_board' }),
+  menu({ id: 6, menu_code: 'customer.links', identity_type: 'CUSTOMER' }),
+  menu({ id: 7, menu_code: 'customer.diagnosis', identity_type: 'CUSTOMER' }),
 ]
 
 const assignable = assignablePermissionMenus('PLATFORM', menus)
@@ -37,16 +41,28 @@ if (assignable.some(item => item.menu_code === 'platform.competitor' || item.men
 if (!assignable.some(item => item.menu_code === 'platform.reports')) {
   throw new Error('platform.reports should remain assignable')
 }
+if (!assignable.some(item => item.menu_code === 'platform.tenant_credit')) {
+  throw new Error('tenant_credit should stay assignable even when sidebar-hidden')
+}
+if (!assignable.some(item => item.menu_code === 'platform.credit_ops_board')) {
+  throw new Error('credit_ops_board should remain assignable')
+}
+
+const customerAssignable = assignablePermissionMenus('CUSTOMER', menus)
+if (customerAssignable.some(item => item.menu_code === 'customer.links' || item.menu_code === 'customer.diagnosis')) {
+  throw new Error('disabled customer.links/diagnosis must not be assignable')
+}
 
 const preserved = preserveHiddenAssignableGrants(menus, [
   { menu_id: 2, menu_code: 'platform.competitor', can_export: true },
   { menu_id: 3, menu_code: 'platform.sources', can_export: true },
   { menu_id: 1, menu_code: 'platform.reports', can_export: true },
+  { menu_id: 6, menu_code: 'customer.links', can_export: true },
 ])
-if (preserved.length !== 2) {
-  throw new Error(`expected 2 preserved grants, got ${preserved.length}`)
+if (preserved.length !== 3) {
+  throw new Error(`expected 3 preserved grants, got ${preserved.length}`)
 }
-if (!preserved.every(item => ['platform.competitor', 'platform.sources'].includes(item.menu_code))) {
+if (!preserved.every(item => ['platform.competitor', 'platform.sources', 'customer.links'].includes(item.menu_code))) {
   throw new Error(`unexpected preserved codes: ${preserved.map(item => item.menu_code).join(',')}`)
 }
 
@@ -58,6 +74,16 @@ const filesGrant = sanitizeGrantForMenu('platform.audit.files', 'PLATFORM', {
 })
 if (!filesGrant.can_export || !filesGrant.can_create || filesGrant.can_update || filesGrant.can_delete) {
   throw new Error(`audit.files sanitize mismatch: ${JSON.stringify(filesGrant)}`)
+}
+
+const creditGrant = sanitizeGrantForMenu('platform.credit_ops_board', 'PLATFORM', {
+  can_export: true,
+  can_create: true,
+  can_update: true,
+  can_delete: true,
+})
+if (!creditGrant.can_export || !creditGrant.can_update || creditGrant.can_create || creditGrant.can_delete) {
+  throw new Error(`credit_ops sanitize mismatch: ${JSON.stringify(creditGrant)}`)
 }
 
 console.log('menuPermissionMatrix.selfcheck ok')

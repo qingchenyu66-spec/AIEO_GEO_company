@@ -13,6 +13,7 @@ import {
   USER_LIST_MENU,
   hiddenFromAssignablePermissionMenus,
   hiddenPlatformMenus,
+  sidebarHiddenAssignableCreditMenus,
 } from './constants'
 import { permissionGroupKey, permissionGroupNote, permissionGroupTitle } from './permissionGroups'
 
@@ -61,6 +62,10 @@ const MENU_ACTIONS: Record<string, PermissionAction[]> = {
   [POSITION_MENU]: ['can_export', 'can_update', 'can_delete'],
   'platform.approvals': ['can_export', 'can_update'],
   'platform.announcements': ['can_export', 'can_create', 'can_update', 'can_delete'],
+  // 2026-09-14 - 算力运营充值挂 can_update；缺省会只剩查看，职位一保存就丢编辑权
+  'platform.credit_ops_board': ['can_export', 'can_update'],
+  'platform.tenant_credit': ['can_export', 'can_update'],
+  'platform.tenant_credit_blocks': ['can_export'],
 
   'customer.workspace': ['can_export'],
   'customer.brand_analysis': ['can_export'],
@@ -100,6 +105,9 @@ const MENU_ACTION_LABELS: Record<string, Partial<Record<PermissionAction, string
   [POSITION_MENU]: { can_export: '查看', can_update: '编辑', can_delete: '停用' },
   'platform.approvals': { can_export: '查看申请', can_update: '审批通过/驳回' },
   'platform.announcements': { can_export: '查看', can_create: '新建', can_update: '编辑/下线', can_delete: '删除' },
+  'platform.credit_ops_board': { can_export: '查看', can_update: '充值/调账/改策略' },
+  'platform.tenant_credit': { can_export: '查看', can_update: '充值/调账' },
+  'platform.tenant_credit_blocks': { can_export: '查看拦截' },
   'customer.knowledge': { can_export: '查看', can_create: '上传文件', can_update: '编辑资料' },
   'customer.reports': { can_export: '查看/导出' },
 }
@@ -127,13 +135,17 @@ export type PermissionMenuRow = {
 }
 
 const HIDDEN_ASSIGNABLE = new Set([
-  ...hiddenPlatformMenus,
+  // 算力子页仍要在矩阵里勾选，不能跟着 hiddenPlatformMenus 一起藏掉
+  ...hiddenPlatformMenus.filter(code => !(sidebarHiddenAssignableCreditMenus as readonly string[]).includes(code)),
   ...hiddenFromAssignablePermissionMenus,
   'customer.assets',
   'customer.batch',
   'customer.geo',
   'customer.sentiment',
   'platform.sentiment',
+  // 菜单配置已停用：职位里勾了也不会出侧栏，避免假勾选
+  'customer.links',
+  'customer.diagnosis',
 ])
 
 function emptyGrant(): MenuGrantFlags {
@@ -335,7 +347,11 @@ export function preserveHiddenAssignableGrants(
     can_export?: boolean
   }> | undefined,
 ) {
-  const hiddenCodes = new Set(hiddenFromAssignablePermissionMenus)
+  const hiddenCodes = new Set([
+    ...hiddenFromAssignablePermissionMenus,
+    'customer.links',
+    'customer.diagnosis',
+  ])
   const byId = new Map(allMenus.map(menu => [menu.id, menu]))
   return (existingGrants || [])
     .map(grant => {

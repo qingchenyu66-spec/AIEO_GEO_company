@@ -113,6 +113,9 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.positions": frozenset({"can_export", "can_update", "can_delete"}),
     "platform.approvals": frozenset({"can_export", "can_update"}),
     "platform.announcements": frozenset({"can_export", "can_create", "can_update", "can_delete"}),
+    "platform.credit_ops_board": frozenset({"can_export", "can_update"}),
+    "platform.tenant_credit": frozenset({"can_export", "can_update"}),
+    "platform.tenant_credit_blocks": frozenset({"can_export"}),
     "customer.workspace": frozenset({"can_export"}),
     "customer.brand_analysis": frozenset({"can_export"}),
     "customer.realtime": frozenset({"can_export"}),
@@ -251,6 +254,22 @@ def _is_enterprise_config_child_menu(menu_code: str) -> bool:
     return menu_code.startswith("customer.enterprise_") and menu_code != "customer.enterprise_config"
 
 
+# 侧栏不单独露出、但会话里必须保留的页内权限（Tab / 按钮），与 MenuConfig.is_visible=0 不冲突
+_SESSION_KEEP_WHEN_CONFIG_HIDDEN = frozenset({
+    *SETTINGS_CHILD_MENU_CODES,
+    "platform.audit.purge",
+    "platform.tenant_credit",
+    "platform.tenant_credit_blocks",
+})
+
+
+def _keep_in_session_despite_config_hidden(menu_code: str) -> bool:
+    """页内权限项：配置里停用侧栏入口，不等于从会话权限里抹掉。"""
+    if _is_enterprise_config_child_menu(menu_code):
+        return True
+    return menu_code in _SESSION_KEEP_WHEN_CONFIG_HIDDEN
+
+
 def _filter_items_by_menu_config_visibility(
     db: Session,
     items: list[MenuInfo],
@@ -258,8 +277,8 @@ def _filter_items_by_menu_config_visibility(
 ) -> list[MenuInfo]:
     """MenuConfig.is_visible=false 的菜单不进侧栏会话。
 
-    企业配置子项（监测/成员/算力/操作记录）靠会话做页内权限，侧栏由前端隐藏，
-    不受 is_visible 裁切。
+    企业配置 / 系统配置子项、算力运营子页、彻底删除等靠会话做页内权限，
+    侧栏由前端隐藏，不受 is_visible 裁切。
     """
     if not items:
         return items
@@ -274,7 +293,7 @@ def _filter_items_by_menu_config_visibility(
     }
     out: list[MenuInfo] = []
     for item in items:
-        if _is_enterprise_config_child_menu(item.menu_code):
+        if _keep_in_session_despite_config_hidden(item.menu_code):
             out.append(item)
             continue
         cfg = configs.get(item.menu_code)
@@ -1023,7 +1042,7 @@ def _customer_menus_from_admin_position(db: Session, tenant) -> list[MenuInfo]:
             can_export=bool(grant.can_export),
         ):
             continue
-        if config is not None and not bool(config.is_visible) and not _is_enterprise_config_child_menu(menu.menu_code):
+        if config is not None and not bool(config.is_visible) and not _keep_in_session_despite_config_hidden(menu.menu_code):
             continue
         base = _menu_display(menu, config)
         item = _menu_with_grant(
