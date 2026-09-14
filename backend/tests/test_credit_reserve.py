@@ -15,6 +15,7 @@ from app.services.credit_service import (
     reserve_credits,
     scan_stale_reserves,
     settle_credits,
+    settle_open_credit_reserves,
     tenant_available_credits,
 )
 
@@ -1032,3 +1033,142 @@ def test_estimate_brand_words_empty_platforms_on_pydantic_object(db):
         [SimpleNamespace(run_immediately=True, status=True, platforms=[], monitor_keywords=["词C"])],
     )
     assert out3["group_count"] == 0
+
+
+def test_settle_open_reserves_charges_late_amount_after_completed(db):
+    """根因回归：主任务已 completed、amount 已落库但漏 settle 时，开放预扣扫描应扣到账。"""
+    from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("20"))
+    ref = f"late-open-{uuid4().hex[:8]}"
+    task_id = f"task-{uuid4().hex[:12]}"
+    assert reserve_credits(
+        db,
+        tenant,
+        Decimal("1"),
+        ref_id=ref,
+        ref_type="reserve_batch",
+        detail_json={"shares_by_platform": {"doubao": 1.0}, "default_cell_share": 1.0},
+    )
+    db.add(
+        GeoMonitorTask(
+            task_id=task_id,
+            tenant_id=tenant.id,
+            status="completed",
+            total_items=1,
+            completed_items=1,
+            failed_items=0,
+            prompts_json=["词晚到"],
+            platforms_json=[{"platform": "doubao"}],
+            raw_request_json={"_geo_credit": {"reserve_ref": ref}},
+            raw_response_json={},
+        )
+    )
+    db.add(
+        GeoMonitorScheduleRun(
+            tenant_id=tenant.id,
+            schedule_key=ref,
+            task_id=task_id,
+            status="submitted",
+            prompt_count=1,
+            platform_count=1,
+        )
+    )
+    db.add(
+        GeoMonitorSubtask(
+            subtask_id=f"st-{uuid4().hex[:10]}",
+            task_id=task_id,
+            platform="doubao",
+            mode="search",
+            prompt="词晚到",
+            status="completed",
+            amount=Decimal("0.18"),
+            answer_content="ok",
+            raw_result_json={"status": "completed", "amount": 0.18},
+        )
+    )
+    db.flush()
+
+    settled = settle_open_credit_reserves(db)
+    assert settled >= 1
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("19")
+    assert tenant.credit_reserved == Decimal("0")
+
+
+def test_callback_settles_when_amount_arrives_after_completed(db):
+    """根因回归：回调写入 completed+amount 时必须 settle，不能等已退出队列的 sync。"""
+    from unittest.mock import patch
+
+    from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+    from app.services.molizhishu_callback_service import _apply_callback_payload
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("10"))
+    ref = f"cb-late-{uuid4().hex[:8]}"
+    task_id = f"task-{uuid4().hex[:12]}"
+    sub_id = f"st-{uuid4().hex[:10]}"
+    assert reserve_credits(
+        db,
+        tenant,
+        Decimal("1"),
+        ref_id=ref,
+        ref_type="reserve_batch",
+        detail_json={"shares_by_platform": {"doubao": 1.0}, "default_cell_share": 1.0},
+    )
+    task = GeoMonitorTask(
+        task_id=task_id,
+        tenant_id=tenant.id,
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["回调晚到"],
+        platforms_json=[{"platform": "doubao", "mode": "search"}],
+        raw_request_json={"_geo_credit": {"reserve_ref": ref}},
+        raw_response_json={},
+    )
+    db.add(task)
+    db.add(
+        GeoMonitorSubtask(
+            subtask_id=sub_id,
+            task_id=task_id,
+            platform="doubao",
+            mode="search",
+            prompt="回调晚到",
+            status="completed",
+            amount=None,
+            answer_content="先有正文",
+            raw_result_json={"status": "completed"},
+        )
+    )
+    db.flush()
+
+    payload = {
+        "taskId": task_id,
+        "status": "completed",
+        "totalItems": 1,
+        "completedItems": 1,
+        "failedItems": 0,
+        "subTaskList": [
+            {
+                "subTaskId": sub_id,
+                "platform": "doubao",
+                "mode": "search",
+                "prompt": "回调晚到",
+                "status": "completed",
+                "answerContent": "先有正文",
+                "amount": 0.18,
+            }
+        ],
+    }
+    with (
+        patch("app.services.molizhishu_callback_service.fill_missing_subtask_ranks_for_task", return_value=0),
+        patch("app.services.monitor_auto_retry_service.apply_auto_retry_results"),
+        patch("app.services.monitor_auto_retry_service.launch_auto_retries_for_task"),
+        patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task"),
+    ):
+        _apply_callback_payload(db, task, payload)
+    db.flush()
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("9")
+    assert tenant.credit_reserved == Decimal("0")

@@ -93,6 +93,10 @@ def _apply_callback_payload(db: Session, task: GeoMonitorTask, data: dict[str, A
     )
     launch_auto_retries_for_task(db, task)
     notify_failed_subtasks_for_task(db, task)
+    # 2026-09-14 - 回调晚到 amount 时主任务可能已 completed 退出同步；此处必须 settle，否则预扣悬挂
+    from app.services.credit_service import settle_ready_credit_cells_for_task
+
+    settle_ready_credit_cells_for_task(db, task)
 
 
 def _post_commit_side_effects(db: Session, task: GeoMonitorTask) -> None:

@@ -451,12 +451,22 @@ def list_pending_monitor_task_ids(
         stmt = stmt.where(GeoMonitorTask.task_id == task_id)
     else:
         grace_cutoff = datetime.now() - timedelta(hours=max(0, terminal_grace_hours))
+        # 算力调度任务：completed 后仍可能晚到 amount，grace 内继续同步以便 settle
+        credit_reserve_ref = func.json_unquote(
+            func.json_extract(GeoMonitorTask.raw_request_json, "$._geo_credit.reserve_ref")
+        )
         stmt = stmt.where(
             or_(
                 GeoMonitorTask.status.notin_(TERMINAL_STATUSES),
                 and_(
                     GeoMonitorTask.status.in_(("partial_completed", "failed", "stopped")),
                     GeoMonitorTask.updated_at >= grace_cutoff,
+                ),
+                and_(
+                    GeoMonitorTask.status == "completed",
+                    GeoMonitorTask.updated_at >= grace_cutoff,
+                    credit_reserve_ref.is_not(None),
+                    credit_reserve_ref != "",
                 ),
             )
         )

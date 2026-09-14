@@ -1941,6 +1941,40 @@ def upsert_price_rule(
     return row
 
 
+def settle_open_credit_reserves(db: Session, *, limit: int = 80) -> int:
+    """对仍有开放预扣的批次再跑按格 settle。
+
+    覆盖：主任务已 completed 退出同步后 amount 晚到、回调路径漏 settle、以及历史悬挂预扣自愈。
+    """
+    rows = list(
+        db.scalars(
+            select(TenantCreditLedger)
+            .where(TenantCreditLedger.entry_type == "reserve")
+            .order_by(TenantCreditLedger.id.desc())
+            .limit(max(1, min(limit * 5, 500)))
+        )
+    )
+    seen: set[tuple[int, str]] = set()
+    open_handled = 0
+    finalized = 0
+    for row in rows:
+        ref_id = str(row.ref_id or "").strip()
+        key = (int(row.tenant_id), ref_id)
+        if not ref_id or key in seen:
+            continue
+        seen.add(key)
+        if not has_open_credit_reserve(db, key[0], ref_id):
+            continue
+        for task in _tasks_linked_to_reserve_ref(db, key[0], ref_id):
+            finalized += settle_ready_credit_cells_for_task(db, task)
+        open_handled += 1
+        if open_handled >= limit:
+            break
+    if finalized:
+        db.flush()
+    return finalized
+
+
 def scan_stale_reserves(db: Session) -> int:
     now = datetime.now()
     rows = list(

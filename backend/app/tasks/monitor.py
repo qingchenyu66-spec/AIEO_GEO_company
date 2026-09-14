@@ -1024,16 +1024,18 @@ def label_unknown_source_categories(items: list[dict[str, Any]]) -> dict[str, An
 
 @celery_app.task(name="app.tasks.monitor.scan_stale_credit_reserves", ignore_result=True)
 def scan_stale_credit_reserves() -> dict[str, Any]:
-    """预扣 TTL 到期自动 release。"""
+    """开放预扣再 settle 一次，再对 TTL 到期的孤儿预扣 release。"""
     if not settings.celery_enabled:
         return {"status": "disabled"}
-    from app.services.credit_service import scan_stale_reserves
+    from app.services.credit_service import scan_stale_reserves, settle_open_credit_reserves
 
     db = SessionLocal()
     try:
+        # 先 settle 晚到格，再 TTL 清孤儿，避免可结算格子被拖成悬挂
+        settled = settle_open_credit_reserves(db)
         released = scan_stale_reserves(db)
         db.commit()
-        return {"status": "ok", "released": released}
+        return {"status": "ok", "settled_cells": settled, "released": released}
     except Exception:
         db.rollback()
         raise
