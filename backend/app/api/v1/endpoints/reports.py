@@ -17,7 +17,14 @@ from app.services.report_export_service import (
     content_disposition,
     read_or_build_report_html_preview,
 )
-from app.services.report_service import generate_report, get_report_detail, list_reports, publish_report, update_report
+from app.services.report_service import (
+    ensure_report_refresh_access,
+    generate_report,
+    get_report_detail,
+    list_reports,
+    publish_report,
+    update_report,
+)
 
 router = APIRouter(prefix="/reports")
 
@@ -73,6 +80,73 @@ def generate_report_endpoint(
     except Exception as exc:
         raise_write_endpoint_error(exc, context="reports.generate")
     return ApiResponse(data=result)
+
+
+@router.post("/{report_id}/refresh", response_model=ApiResponse[dict])
+def refresh_report_endpoint(
+    report_id: int,
+    request: Request,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """运营端提交报告重算任务（异步）。能进报告中心即可；切页不影响后台执行。"""
+    from app.services.report_refresh_job_service import start_report_refresh_job
+
+    try:
+        summary = ensure_report_refresh_access(db, report_id, current)
+        job = start_report_refresh_job(
+            report_id=report_id,
+            tenant_id=summary.get("tenant_id"),
+            report_title=summary.get("report_title"),
+            owner_user_id=current.user.id,
+        )
+        write_business_audit(
+            db,
+            current,
+            "报告重算",
+            f"提交重算任务：{summary.get('report_title') or report_id}",
+            request=request,
+            target_module="报告中心",
+            target_id=report_id,
+            tenant_id=summary.get("tenant_id"),
+            risk_level="关注",
+        )
+        db.commit()
+        return ApiResponse(data=job)
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message or "仅平台" in message else status.HTTP_400_BAD_REQUEST
+        if "不存在" in message:
+            code = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=message) from exc
+    except Exception as exc:
+        raise_write_endpoint_error(exc, context="reports.refresh")
+
+
+@router.get("/refresh-jobs/{job_id}", response_model=ApiResponse[dict])
+def get_report_refresh_job_endpoint(
+    job_id: str,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """查询报告重算任务状态。"""
+    from app.services.menu_permission_service import require_report_access
+    from app.services.report_refresh_job_service import get_report_refresh_job
+
+    try:
+        if current.identity.identity_type != "PLATFORM":
+            raise ValueError("无权操作")
+        require_report_access(db, current)
+        job = get_report_refresh_job(job_id)
+    except ValueError as exc:
+        message = str(exc)
+        code = status.HTTP_403_FORBIDDEN if "无权" in message else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message) from exc
+    except Exception as exc:
+        raise_read_endpoint_error(exc, context="reports.refresh_job_status")
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="重算任务不存在")
+    return ApiResponse(data=job)
 
 
 @router.put("/{report_id}", response_model=ApiResponse[dict])

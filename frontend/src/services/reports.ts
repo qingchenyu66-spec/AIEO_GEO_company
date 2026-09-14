@@ -151,6 +151,47 @@ export async function createReport(data: GenerateReportPayload): Promise<ReportL
   return response.data.data
 }
 
+/** 运营端提交报告重算任务（异步，切页不断）。 */
+export async function startReportRefreshJob(reportId: number): Promise<ReportRefreshJob> {
+  const response = await http.post(`/v1/reports/${reportId}/refresh`, null, { timeout: 30000 })
+  return response.data.data
+}
+
+export interface ReportRefreshJob {
+  job_id: string
+  status: 'queued' | 'running' | 'ready' | 'failed' | string
+  report_id?: number
+  tenant_id?: number | null
+  report_title?: string | null
+  progress?: string
+  error?: string | null
+  result?: ReportListItem | null
+}
+
+export async function getReportRefreshJob(jobId: string): Promise<ReportRefreshJob> {
+  const response = await http.get(`/v1/reports/refresh-jobs/${encodeURIComponent(jobId)}`, { timeout: 30000 })
+  return response.data.data
+}
+
+/** 等待重算任务完成；离开页面只停轮询，服务端仍继续。 */
+export async function waitReportRefreshJob(
+  jobId: string,
+  onProgress?: (label: string) => void,
+): Promise<ReportRefreshJob> {
+  const started = Date.now()
+  const maxWaitMs = 10 * 60 * 1000
+  while (Date.now() - started < maxWaitMs) {
+    const job = await getReportRefreshJob(jobId)
+    onProgress?.(String(job.progress || ''))
+    if (job.status === 'ready') return job
+    if (job.status === 'failed') {
+      throw new Error(String(job.error || '报告重算失败'))
+    }
+    await new Promise(resolve => setTimeout(resolve, 1200))
+  }
+  throw new Error('报告重算超时，请稍后刷新列表查看')
+}
+
 export async function downloadReportExport(
   reportId: number,
   format: ReportExportFormat,

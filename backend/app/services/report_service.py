@@ -22,8 +22,16 @@ from app.services.monitor_service import TERMINAL_STATUSES, _is_valid_citation_s
 from app.services.monitor_sample_metrics import SUCCESS_STATUSES, compute_brand_rank_rates, is_success_status
 from app.services.report_ai_service import enrich_report_narrative
 from app.services.report_period_content_service import build_premium_content, build_report_modules
-from app.services.report_period_service import MANUAL_REPORT_TYPES, period_label as build_period_label
+from app.services.report_period_service import (
+    AUTO_REPORT_TYPES,
+    COMPLETION_REPORT_TYPES,
+    MANUAL_REPORT_TYPES,
+    bounds_from_period_key,
+    period_label as build_period_label,
+)
 from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
+
+REFRESHABLE_REPORT_TYPES = MANUAL_REPORT_TYPES | AUTO_REPORT_TYPES | COMPLETION_REPORT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -888,6 +896,82 @@ def refresh_scheduled_report_for_tenant(
     db.commit()
     db.refresh(report)
     _materialize_report_preview_html(db, report)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
+    return _serialize_report_row(report, tenant.name if tenant else None)
+
+
+def _resolve_report_period_bounds(report: GeoReport) -> tuple[date, date] | None:
+    content = dict(report.report_content_json or {})
+    start: date | None = None
+    end: date | None = None
+    if content.get("period_start"):
+        try:
+            start = date.fromisoformat(str(content["period_start"])[:10])
+        except ValueError:
+            start = None
+    if content.get("period_end"):
+        try:
+            end = date.fromisoformat(str(content["period_end"])[:10])
+        except ValueError:
+            end = None
+    if start is None or end is None:
+        bounds = bounds_from_period_key(report.report_type, str(report.period_key or ""))
+        if bounds:
+            start, end = bounds
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def refresh_report_content(db: Session, report_id: int) -> dict[str, Any]:
+    """原地重算报告正文。无鉴权，调用方须先校验运营端访问权。"""
+    report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
+    if report is None:
+        raise ValueError("报告不存在")
+    if report.report_type not in REFRESHABLE_REPORT_TYPES:
+        raise ValueError("该报告类型不支持重新计算")
+
+    if report.report_type == "diagnosis":
+        row = refresh_diagnosis_report_for_tenant(db, report_id=report.id, tenant_id=report.tenant_id)
+    else:
+        bounds = _resolve_report_period_bounds(report)
+        if bounds is None:
+            raise ValueError("无法解析报告周期，不能重新计算")
+        period_start, period_end = bounds
+        row = refresh_scheduled_report_for_tenant(
+            db,
+            report_id=report.id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        if row is None:
+            raise ValueError("周期内暂无可用监测数据，未能重新计算")
+    if row is None:
+        raise ValueError("报告重算失败")
+    return row
+
+
+def refresh_report(db: Session, report_id: int, current: CurrentSession) -> dict[str, Any]:
+    """运营端原地重算当前报告。只要求能进报告中心，不再额外卡 create/update。"""
+    _ensure_platform_operator(current)
+    _check_report_access(db, current)
+    report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
+    if report is None:
+        raise ValueError("报告不存在")
+    guard_tenant_resource_access(db, current, report.tenant_id)
+    return refresh_report_content(db, report_id)
+
+
+def ensure_report_refresh_access(db: Session, report_id: int, current: CurrentSession) -> dict[str, Any]:
+    """校验运营端可重算该报告，返回序列化摘要供入队。"""
+    _ensure_platform_operator(current)
+    _check_report_access(db, current)
+    report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
+    if report is None:
+        raise ValueError("报告不存在")
+    guard_tenant_resource_access(db, current, report.tenant_id)
+    if report.report_type not in REFRESHABLE_REPORT_TYPES:
+        raise ValueError("该报告类型不支持重新计算")
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 

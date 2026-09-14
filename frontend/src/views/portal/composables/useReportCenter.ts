@@ -1,6 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../../stores/auth'
 import { withRetry } from '../../../composables/useRetry'
 import {
@@ -9,6 +9,8 @@ import {
   getReportDetail,
   getReportList,
   isHtmlTemplateReportType,
+  startReportRefreshJob,
+  waitReportRefreshJob,
   type ReportDetail,
   type ReportListItem,
   type ReportType,
@@ -49,6 +51,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
   ))
   const previewTenantId = computed(() => parsePreviewTenantId(route))
   const loading = ref(false)
+  const refreshing = ref(false)
   const exporting = ref(false)
   const exportingFormat = ref<ReportExportFormat | null>(null)
   const exportProgress = ref('')
@@ -129,6 +132,23 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   const canGenerateReport = computed(() => !isPreviewMode.value && Boolean(reportMenuGrant.value?.can_create))
   const canExportReport = computed(() => Boolean(reportMenuGrant.value?.can_export))
+  // 运营端报告中心可见即可重算；客户/预览不露
+  const canRefreshReport = computed(() => (
+    options.isPlatform()
+    && !isPreviewMode.value
+    && Boolean(selectedReportId.value)
+  ))
+
+  function invalidatePreviewCache(reportId: number) {
+    const cached = previewHtmlBlobById.get(reportId)
+    if (cached) {
+      URL.revokeObjectURL(cached)
+      previewHtmlBlobById.delete(reportId)
+    }
+    if (previewHtmlBlobUrl.value && selectedReportId.value === reportId) {
+      previewHtmlBlobUrl.value = null
+    }
+  }
 
   const visibleReportTypeOptions = computed(() => {
     if (options.isPlatform() && !isPreviewMode.value) return reportTypeOptions
@@ -310,6 +330,58 @@ export function useReportCenter(options: UseReportCenterOptions) {
     }
   }
 
+  async function refreshCurrentReport() {
+    if (!canRefreshReport.value || !selectedReportId.value) {
+      ElMessage.warning('请先选择一份报告')
+      return
+    }
+    const reportId = selectedReportId.value
+    const title = selectedReport.value ? displayReportTitle(selectedReport.value) : `报告 #${reportId}`
+    try {
+      await ElMessageBox.confirm(
+        `将按最新监测数据重新计算「${title}」，并覆盖当前预览与导出内容。任务在后台执行，可离开本页。是否继续？`,
+        '重新计算报告',
+        { type: 'warning', confirmButtonText: '开始重算', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+    refreshing.value = true
+    try {
+      const job = await startReportRefreshJob(reportId)
+      ElMessage.info('开始后台重算')
+      const finished = await waitReportRefreshJob(job.job_id, (label) => {
+        if (label) exportProgress.value = label
+      })
+      const updated = finished.result
+      if (updated) {
+        const idx = reports.value.findIndex(item => item.id === reportId)
+        if (idx >= 0) {
+          reports.value[idx] = { ...reports.value[idx], ...updated }
+        }
+      } else {
+        await loadReports()
+      }
+      invalidatePreviewCache(reportId)
+      if (selectedReportId.value === reportId) {
+        const reportType = updated?.report_type
+          || reports.value.find(item => item.id === reportId)?.report_type
+        if (isHtmlTemplateReportType(reportType)) {
+          reportDetail.value = null
+          await loadPreviewHtml(reportId)
+        } else {
+          await loadReportDetail(reportId)
+        }
+      }
+      ElMessage.success('报告已重新计算')
+    } catch (error: unknown) {
+      ElMessage.error(`报告重算失败：${errorMessage(error)}`)
+    } finally {
+      refreshing.value = false
+      exportProgress.value = ''
+    }
+  }
+
   watch(selectedReportId, reportId => {
     if (reportId) {
       const reportType = reports.value.find(item => item.id === reportId)?.report_type
@@ -365,6 +437,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
 
   return {
     loading,
+    refreshing,
     exporting,
     exportingFormat,
     exportProgress,
@@ -383,6 +456,7 @@ export function useReportCenter(options: UseReportCenterOptions) {
     heroMetrics,
     canGenerateReport,
     canExportReport,
+    canRefreshReport,
     previewContent,
     previewKpis,
     previewDiagnosis,
@@ -400,5 +474,6 @@ export function useReportCenter(options: UseReportCenterOptions) {
     selectReport,
     printReport,
     exportReport,
+    refreshCurrentReport,
   }
 }

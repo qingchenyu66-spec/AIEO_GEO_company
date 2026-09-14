@@ -27,6 +27,7 @@ const pageMenuName = computed(() => (
 
 const {
   loading,
+  refreshing,
   exporting,
   exportingFormat,
   exportProgress,
@@ -45,6 +46,7 @@ const {
   heroTitle,
   displayReportTitle,
   canExportReport,
+  canRefreshReport,
   previewContent,
   previewKpis,
   previewDiagnosis,
@@ -57,6 +59,7 @@ const {
   loadReports,
   selectReport,
   exportReport,
+  refreshCurrentReport,
 } = useReportCenter({
   isPlatform: () => props.isPlatform,
 })
@@ -123,12 +126,8 @@ function diagnosisTitleText(title: string | null | undefined) {
             </ElSelect>
           </div>
 
-          <div class="report-sticky-actions">
-            <span v-if="loading || detailLoading" class="competitor-loading-dot">更新中…</span>
-            <button type="button" class="filter-reset-btn tiny-btn" :disabled="loading" @click="loadReports()">
-              <RefreshCw />
-              刷新
-            </button>
+          <div v-if="loading || detailLoading || refreshing" class="report-sticky-actions">
+            <span class="competitor-loading-dot">更新中…</span>
           </div>
         </div>
       </div>
@@ -171,6 +170,17 @@ function diagnosisTitleText(title: string | null | undefined) {
             <h3>报告列表</h3>
             <p>{{ filteredReports.length }} 份报告</p>
           </div>
+          <button
+            v-if="isPlatform"
+            type="button"
+            class="filter-reset-btn tiny-btn"
+            :disabled="loading"
+            title="刷新列表"
+            @click="loadReports()"
+          >
+            <RefreshCw />
+            刷新
+          </button>
         </div>
         <div v-if="loading && !filteredReports.length" class="report-empty-panel">
           <p>报告加载中…</p>
@@ -221,7 +231,17 @@ function diagnosisTitleText(title: string | null | undefined) {
             <p>{{ selectedReport ? '在线阅读 · 支持导出与打印' : '从左侧选择一份报告' }}</p>
           </div>
           <div v-if="selectedReport" class="report-preview-actions">
-            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting" @click="exportReport('pdf')">
+            <button
+              v-if="canRefreshReport"
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="refreshing || exporting"
+              @click="refreshCurrentReport()"
+            >
+              <RefreshCw />
+              {{ refreshing ? '重算中…' : '刷新' }}
+            </button>
+            <button v-if="canExportReport" type="button" class="filter-reset-btn tiny-btn" :disabled="exporting || refreshing" @click="exportReport('pdf')">
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : 'PDF' }}
             </button>
@@ -243,7 +263,17 @@ function diagnosisTitleText(title: string | null | undefined) {
             title="报告 HTML 预览"
           />
           <div class="report-preview-actions">
-            <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
+            <button
+              v-if="canRefreshReport"
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="refreshing || exporting"
+              @click="refreshCurrentReport()"
+            >
+              <RefreshCw />
+              {{ refreshing ? '重算中…' : '刷新' }}
+            </button>
+            <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting || refreshing" @click="exportReport('pdf')">
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
             </button>
@@ -391,7 +421,17 @@ function diagnosisTitleText(title: string | null | undefined) {
           </section>
 
           <div class="report-preview-actions">
-            <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting" @click="exportReport('pdf')">
+            <button
+              v-if="canRefreshReport"
+              type="button"
+              class="filter-reset-btn tiny-btn"
+              :disabled="refreshing || exporting"
+              @click="refreshCurrentReport()"
+            >
+              <RefreshCw />
+              {{ refreshing ? '重算中…' : '刷新' }}
+            </button>
+            <button v-if="canExportReport" type="button" class="primary-btn small-btn" :disabled="exporting || refreshing" @click="exportReport('pdf')">
               <Download />
               {{ exportingFormat === 'pdf' ? (exportProgress || '导出中…') : '导出 PDF' }}
             </button>
