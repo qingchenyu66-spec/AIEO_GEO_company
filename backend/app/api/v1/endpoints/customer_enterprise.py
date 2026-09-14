@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,7 +36,9 @@ from app.services.credit_service import (
     estimate_brand_words_immediate_credits,
     is_credit_tenant,
     get_ledger_entry_detail,
-    ledger_row_to_dict,
+    list_credit_ledger,
+    list_credit_ledger_group_lines,
+    list_credit_ledger_grouped,
     merge_credit_policy,
     tenant_today_credit_deduct,
     tenant_total_credit_deduct,
@@ -127,10 +130,27 @@ def enterprise_credit_summary(
     )
 
 
+def _csv_row(cells: list[object]) -> str:
+    import csv
+    from io import StringIO
+
+    buf = StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
+    safe: list[object] = []
+    for cell in cells:
+        text = "" if cell is None else str(cell)
+        if text[:1] in ("=", "+", "-", "@"):
+            text = f"'{text}"
+        safe.append(text)
+    writer.writerow(safe)
+    return buf.getvalue()
+
+
 @router.get("/credit/ledger", response_model=ApiResponse[dict])
 def enterprise_credit_ledger(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    view: str = Query(default="window", pattern="^(window|day|detail)$"),
     tenant_id: int | None = Query(default=None),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
@@ -138,17 +158,161 @@ def enterprise_credit_ledger(
     _require_enterprise_read(db, current, "customer.enterprise_credit")
     tenant_id = _resolve_enterprise_tenant_id(db, current, tenant_id)
     _require_credit_tenant(db, tenant_id)
-    from app.services.credit_service import list_credit_ledger
-
-    return ApiResponse(
-        data=list_credit_ledger(
-            db,
-            tenant_id=tenant_id,
-            page=page,
-            page_size=page_size,
-            exclude_internal=True,
+    if view == "detail":
+        return ApiResponse(
+            data=list_credit_ledger(
+                db,
+                tenant_id=tenant_id,
+                page=page,
+                page_size=page_size,
+                exclude_internal=True,
+            )
         )
+    try:
+        return ApiResponse(
+            data=list_credit_ledger_grouped(
+                db,
+                tenant_id=tenant_id,
+                group_by=view,
+                page=page,
+                page_size=page_size,
+                exclude_internal=True,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/credit/ledger/export")
+def enterprise_credit_ledger_export(
+    view: str = Query(default="window", pattern="^(window|day|detail)$"),
+    tenant_id: int | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+):
+    _require_enterprise_read(db, current, "customer.enterprise_credit")
+    tenant_id = _resolve_enterprise_tenant_id(db, current, tenant_id)
+    _require_credit_tenant(db, tenant_id)
+
+    def _iter_detail():
+        yield _csv_row(
+            ["id", "amount", "balance_after", "entry_type", "reason", "window_key", "platform_code", "keyword", "created_at"]
+        )
+        page = 1
+        while True:
+            chunk = list_credit_ledger(
+                db,
+                tenant_id=tenant_id,
+                page=page,
+                page_size=100,
+                exclude_internal=True,
+            )
+            rows = chunk.get("items") or []
+            if not rows:
+                break
+            for row in rows:
+                yield _csv_row(
+                    [
+                        row.get("id"),
+                        row.get("amount"),
+                        row.get("balance_after"),
+                        row.get("entry_type"),
+                        row.get("reason") or "",
+                        row.get("window_key") or "",
+                        row.get("platform_code") or "",
+                        row.get("keyword") or "",
+                        row.get("created_at") or "",
+                    ]
+                )
+            if page * 100 >= int(chunk.get("total") or 0):
+                break
+            page += 1
+
+    def _iter_grouped():
+        yield _csv_row(
+            [
+                "group_key",
+                "title",
+                "amount_sum",
+                "settle_sum",
+                "entry_count",
+                "keyword_count",
+                "platform_count",
+                "window_key",
+                "started_at",
+                "ended_at",
+                "balance_after",
+            ]
+        )
+        page = 1
+        while True:
+            chunk = list_credit_ledger_grouped(
+                db,
+                tenant_id=tenant_id,
+                group_by=view,
+                page=page,
+                page_size=100,
+                exclude_internal=True,
+            )
+            rows = chunk.get("items") or []
+            if not rows:
+                break
+            for row in rows:
+                yield _csv_row(
+                    [
+                        row.get("group_key"),
+                        row.get("title"),
+                        row.get("amount_sum"),
+                        row.get("settle_sum"),
+                        row.get("entry_count"),
+                        row.get("keyword_count"),
+                        row.get("platform_count"),
+                        row.get("window_key") or "",
+                        row.get("started_at") or "",
+                        row.get("ended_at") or "",
+                        row.get("balance_after"),
+                    ]
+                )
+            if page * 100 >= int(chunk.get("total") or 0):
+                break
+            page += 1
+
+    fname = f"credit-ledger-{view}-{tenant_id}.csv"
+    body = _iter_detail() if view == "detail" else _iter_grouped()
+    return StreamingResponse(
+        body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
+
+
+@router.get("/credit/ledger/groups/{group_key}/lines", response_model=ApiResponse[dict])
+def enterprise_credit_ledger_group_lines(
+    group_key: str,
+    group_by: str = Query(default="window", pattern="^(window|day)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
+    tenant_id: int | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    _require_enterprise_read(db, current, "customer.enterprise_credit")
+    tenant_id = _resolve_enterprise_tenant_id(db, current, tenant_id)
+    _require_credit_tenant(db, tenant_id)
+    try:
+        return ApiResponse(
+            data=list_credit_ledger_group_lines(
+                db,
+                tenant_id=tenant_id,
+                group_key=group_key,
+                group_by=group_by,
+                page=page,
+                page_size=page_size,
+                exclude_internal=True,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/credit/ledger/{ledger_id}", response_model=ApiResponse[dict])

@@ -30,6 +30,33 @@ export interface CreditLedgerItem {
   has_detail?: boolean
 }
 
+export type CreditLedgerView = 'window' | 'day' | 'detail'
+
+export interface CreditLedgerGroupItem {
+  group_key: string
+  group_by: 'window' | 'day'
+  title: string
+  primary_entry_type: string
+  amount_sum: number
+  settle_sum: number
+  entry_count: number
+  keyword_count: number
+  platform_count: number
+  window_key?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  balance_after?: number | null
+  has_lines?: boolean
+}
+
+export interface CreditLedgerListResult {
+  items: CreditLedgerItem[] | CreditLedgerGroupItem[]
+  total?: number
+  page: number
+  page_size: number
+  view?: CreditLedgerView
+}
+
 export interface CreditLedgerSubtaskItem {
   subtask_id?: string
   platform_code?: string | null
@@ -63,11 +90,39 @@ export async function getEnterpriseCreditSummary(tenantId?: number): Promise<Cre
   return response.data.data
 }
 
-export async function getEnterpriseCreditLedger(page = 1, pageSize = 20, tenantId?: number) {
+export async function getEnterpriseCreditLedger(
+  page = 1,
+  pageSize = 20,
+  tenantId?: number,
+  view: CreditLedgerView = 'window',
+) {
   const response = await http.get('/v1/customer/enterprise/credit/ledger', {
-    params: { page, page_size: pageSize, ...enterpriseTenantParams(tenantId) },
+    params: { page, page_size: pageSize, view, ...enterpriseTenantParams(tenantId) },
   })
-  return response.data.data as { items: CreditLedgerItem[]; total?: number; page: number; page_size: number }
+  return response.data.data as CreditLedgerListResult
+}
+
+export async function getEnterpriseCreditLedgerGroupLines(
+  groupKey: string,
+  groupBy: 'window' | 'day',
+  page = 1,
+  pageSize = 100,
+  tenantId?: number,
+) {
+  const response = await http.get(
+    `/v1/customer/enterprise/credit/ledger/groups/${encodeURIComponent(groupKey)}/lines`,
+    {
+      params: { group_by: groupBy, page, page_size: pageSize, ...enterpriseTenantParams(tenantId) },
+    },
+  )
+  return response.data.data as {
+    items: CreditLedgerItem[]
+    total: number
+    page: number
+    page_size: number
+    group_key: string
+    group_by: string
+  }
 }
 
 export async function getEnterpriseCreditLedgerDetail(ledgerId: number, tenantId?: number) {
@@ -75,6 +130,12 @@ export async function getEnterpriseCreditLedgerDetail(ledgerId: number, tenantId
     params: enterpriseTenantParams(tenantId),
   })
   return response.data.data as CreditLedgerDetail
+}
+
+export function enterpriseCreditLedgerExportUrl(view: CreditLedgerView = 'window', tenantId?: number) {
+  const params = new URLSearchParams({ view })
+  if (tenantId) params.set('tenant_id', String(tenantId))
+  return `/api/v1/customer/enterprise/credit/ledger/export?${params.toString()}`
 }
 
 export async function getEnterpriseMonitor(tenantId?: number) {

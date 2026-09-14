@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2209,6 +2209,263 @@ def list_credit_ledger(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "view": "detail",
+    }
+
+
+def _ledger_group_key_expr(group_by: str):
+    """窗口：有 window_key 的 settle 合并；其余单条。按日：同自然日合并。"""
+    if group_by == "day":
+        return func.concat(literal("d:"), func.date(TenantCreditLedger.created_at))
+    return case(
+        (
+            and_(
+                TenantCreditLedger.entry_type == "settle",
+                TenantCreditLedger.window_key.isnot(None),
+                TenantCreditLedger.window_key != "",
+            ),
+            func.concat(literal("w:"), TenantCreditLedger.window_key),
+        ),
+        else_=func.concat(literal("solo:"), TenantCreditLedger.id),
+    )
+
+
+def _apply_ledger_visibility_filters(
+    stmt,
+    *,
+    tenant_ids: list[int] | None,
+    exclude_internal: bool,
+):
+    if tenant_ids is not None:
+        stmt = stmt.where(TenantCreditLedger.tenant_id.in_(tenant_ids))
+    if exclude_internal:
+        stmt = stmt.where(TenantCreditLedger.entry_type.in_(CUSTOMER_VISIBLE_LEDGER_TYPES))
+    return stmt
+
+
+def _ledger_group_title(
+    *,
+    group_by: str,
+    group_key: str,
+    entry_types: set[str],
+    sample_keyword: str | None,
+    keyword_count: int,
+    window_key: str | None,
+    sample_reason: str | None,
+    day_label: str | None,
+) -> str:
+    if group_by == "day" and day_label:
+        return f"{day_label} 账单"
+    if "settle" in entry_types and len(entry_types) == 1:
+        kw = (sample_keyword or "").strip()
+        if kw and keyword_count > 1:
+            return f"{kw} 等{keyword_count}个词"
+        if kw:
+            return kw
+        if window_key:
+            return f"监测扣费 · {window_key}"
+        return "监测扣费"
+    if entry_types == {"recharge"}:
+        reason = (sample_reason or "").strip()
+        return reason if reason else "充值"
+    if entry_types == {"adjust"}:
+        reason = (sample_reason or "").strip()
+        return reason if reason else "调整"
+    if group_key.startswith("solo:"):
+        reason = (sample_reason or "").strip()
+        return reason if reason else "账单变动"
+    return "账单汇总"
+
+
+def list_credit_ledger_grouped(
+    db: Session,
+    *,
+    tenant_id: int,
+    group_by: str = "window",
+    page: int = 1,
+    page_size: int = 20,
+    exclude_internal: bool = True,
+) -> dict[str, Any]:
+    """客户对账视图：按监测窗口或自然日聚合，金额可直接加总。"""
+    if group_by not in ("window", "day"):
+        raise ValueError("group_by 仅支持 window 或 day")
+    tenant_ids = _ledger_tenant_filter_ids(db, tenant_id=tenant_id, tenant_name=None)
+    if tenant_ids is not None and not tenant_ids:
+        return {"items": [], "total": 0, "page": page, "page_size": page_size, "view": group_by}
+
+    group_expr = _ledger_group_key_expr(group_by)
+    settle_amount = case(
+        (TenantCreditLedger.entry_type == "settle", TenantCreditLedger.amount),
+        else_=literal(0),
+    )
+    base = _apply_ledger_visibility_filters(
+        select(
+            group_expr.label("group_key"),
+            func.sum(TenantCreditLedger.amount).label("amount_sum"),
+            func.sum(settle_amount).label("settle_sum"),
+            func.count().label("entry_count"),
+            func.count(func.distinct(TenantCreditLedger.keyword)).label("keyword_count"),
+            func.count(func.distinct(TenantCreditLedger.platform_code)).label("platform_count"),
+            func.min(TenantCreditLedger.created_at).label("started_at"),
+            func.max(TenantCreditLedger.created_at).label("ended_at"),
+            func.max(TenantCreditLedger.id).label("latest_id"),
+            func.min(TenantCreditLedger.keyword).label("sample_keyword"),
+            func.min(TenantCreditLedger.reason).label("sample_reason"),
+            func.max(TenantCreditLedger.window_key).label("window_key"),
+            func.group_concat(func.distinct(TenantCreditLedger.entry_type)).label("entry_types_raw"),
+        ).select_from(TenantCreditLedger),
+        tenant_ids=tenant_ids,
+        exclude_internal=exclude_internal,
+    ).group_by(group_expr)
+
+    count_stmt = select(func.count()).select_from(base.subquery())
+    total = int(db.scalar(count_stmt) or 0)
+    offset = (page - 1) * page_size
+    rows = list(
+        db.execute(
+            base.order_by(func.max(TenantCreditLedger.created_at).desc(), func.max(TenantCreditLedger.id).desc())
+            .offset(offset)
+            .limit(page_size)
+        ).mappings()
+    )
+
+    balance_map: dict[int, Decimal] = {}
+    if exclude_internal:
+        balance_map = _recompute_customer_ledger_balances(db, tenant_id)
+    latest_ids = [int(r["latest_id"]) for r in rows if r.get("latest_id") is not None]
+    latest_rows = {
+        row.id: row
+        for row in db.scalars(select(TenantCreditLedger).where(TenantCreditLedger.id.in_(latest_ids or [0])))
+    }
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        group_key = str(row["group_key"] or "")
+        entry_types = {
+            part.strip()
+            for part in str(row.get("entry_types_raw") or "").split(",")
+            if part.strip()
+        }
+        latest = latest_rows.get(int(row["latest_id"])) if row.get("latest_id") is not None else None
+        balance_after = None
+        if latest is not None:
+            if latest.id in balance_map:
+                balance_after = float(balance_map[latest.id])
+            else:
+                balance_after = float(latest.balance_after)
+        started = row.get("started_at")
+        ended = row.get("ended_at")
+        day_label = None
+        if group_by == "day" and group_key.startswith("d:"):
+            day_label = group_key[2:]
+            if len(day_label) >= 10:
+                day_label = f"{day_label[5:7]}-{day_label[8:10]}"
+        window_key = (row.get("window_key") or None) if group_by == "window" else None
+        if group_key.startswith("w:"):
+            window_key = group_key[2:]
+        primary_type = next(iter(entry_types)) if len(entry_types) == 1 else "mixed"
+        items.append(
+            {
+                "group_key": group_key,
+                "group_by": group_by,
+                "title": _ledger_group_title(
+                    group_by=group_by,
+                    group_key=group_key,
+                    entry_types=entry_types,
+                    sample_keyword=row.get("sample_keyword"),
+                    keyword_count=int(row.get("keyword_count") or 0),
+                    window_key=window_key,
+                    sample_reason=row.get("sample_reason"),
+                    day_label=day_label,
+                ),
+                "primary_entry_type": primary_type,
+                "amount_sum": float(row["amount_sum"] or 0),
+                "settle_sum": float(row["settle_sum"] or 0),
+                "entry_count": int(row["entry_count"] or 0),
+                "keyword_count": int(row.get("keyword_count") or 0),
+                "platform_count": int(row.get("platform_count") or 0),
+                "window_key": window_key,
+                "started_at": started.isoformat(sep=" ", timespec="minutes") if started else None,
+                "ended_at": ended.isoformat(sep=" ", timespec="minutes") if ended else None,
+                "balance_after": balance_after,
+                "has_lines": int(row["entry_count"] or 0) > 0,
+            }
+        )
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "view": group_by,
+    }
+
+
+def list_credit_ledger_group_lines(
+    db: Session,
+    *,
+    tenant_id: int,
+    group_key: str,
+    group_by: str = "window",
+    page: int = 1,
+    page_size: int = 100,
+    exclude_internal: bool = True,
+) -> dict[str, Any]:
+    """展开某批次/某日的明细流水。"""
+    if group_by not in ("window", "day"):
+        raise ValueError("group_by 仅支持 window 或 day")
+    key = str(group_key or "").strip()
+    if not key:
+        raise ValueError("group_key 不能为空")
+
+    stmt = select(TenantCreditLedger).where(TenantCreditLedger.tenant_id == tenant_id)
+    if exclude_internal:
+        stmt = stmt.where(TenantCreditLedger.entry_type.in_(CUSTOMER_VISIBLE_LEDGER_TYPES))
+
+    if key.startswith("solo:"):
+        try:
+            ledger_id = int(key.split(":", 1)[1])
+        except ValueError as exc:
+            raise ValueError("无效的 group_key") from exc
+        stmt = stmt.where(TenantCreditLedger.id == ledger_id)
+    elif group_by == "day" and key.startswith("d:"):
+        day = key[2:]
+        stmt = stmt.where(func.date(TenantCreditLedger.created_at) == day)
+    elif group_by == "window" and key.startswith("w:"):
+        window_key = key[2:]
+        stmt = stmt.where(
+            TenantCreditLedger.entry_type == "settle",
+            TenantCreditLedger.window_key == window_key,
+        )
+    else:
+        raise ValueError("无效的 group_key")
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int(db.scalar(count_stmt) or 0)
+    offset = (page - 1) * page_size
+    rows = list(
+        db.scalars(
+            stmt.order_by(TenantCreditLedger.created_at.desc(), TenantCreditLedger.id.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+    )
+    balance_map = _recompute_customer_ledger_balances(db, tenant_id) if exclude_internal else {}
+    tenant = db.get(Tenant, tenant_id)
+    tenant_name = tenant.name if tenant else None
+    items = []
+    for row in rows:
+        payload = ledger_row_to_dict(row, tenant_name=tenant_name)
+        if row.id in balance_map:
+            payload["balance_after"] = float(balance_map[row.id])
+        items.append(payload)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "group_key": key,
+        "group_by": group_by,
     }
 
 

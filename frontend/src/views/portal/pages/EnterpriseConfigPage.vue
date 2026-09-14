@@ -8,16 +8,20 @@ import { PreviewCustomerMenusKey } from '../injectionKeys'
 import {
   createEnterpriseMember,
   deleteEnterpriseMember,
+  enterpriseCreditLedgerExportUrl,
   getCurrentCreditTerms,
   getEnterpriseAudit,
   getEnterpriseCreditLedger,
   getEnterpriseCreditLedgerDetail,
+  getEnterpriseCreditLedgerGroupLines,
   getEnterpriseCreditSummary,
   getEnterpriseMembers,
   resetEnterpriseMemberPassword,
   updateEnterpriseMember,
   type CreditLedgerDetail,
+  type CreditLedgerGroupItem,
   type CreditLedgerItem,
+  type CreditLedgerView,
   type EnterpriseMemberItem,
 } from '../../../services/credit'
 import { useAuthStore } from '../../../stores/auth'
@@ -50,6 +54,7 @@ const summary = ref<Awaited<ReturnType<typeof getEnterpriseCreditSummary>> | nul
 const ledger = ref<Awaited<ReturnType<typeof getEnterpriseCreditLedger>> | null>(null)
 const ledgerPage = ref(1)
 const ledgerPageSize = 20
+const ledgerView = ref<CreditLedgerView>('window')
 const members = ref<Awaited<ReturnType<typeof getEnterpriseMembers>> | null>(null)
 const audit = ref<Awaited<ReturnType<typeof getEnterpriseAudit>> | null>(null)
 const terms = ref<Awaited<ReturnType<typeof getCurrentCreditTerms>> | null>(null)
@@ -58,6 +63,10 @@ const ledgerDetail = ref<CreditLedgerDetail | null>(null)
 const ledgerDetailVisible = ref(false)
 const ledgerDetailLoading = ref(false)
 const ledgerDetailRowId = ref<number | null>(null)
+const expandedGroupKey = ref<string | null>(null)
+const groupLines = ref<CreditLedgerItem[]>([])
+const groupLinesLoading = ref(false)
+const groupLinesTotal = ref(0)
 
 const memberFormVisible = ref(false)
 const memberSaving = ref(false)
@@ -200,8 +209,34 @@ function ledgerSecondary(row: CreditLedgerItem) {
   return parts.filter(Boolean).join(' · ')
 }
 
+const canExportCredit = computed(() => Boolean(menuGrant('customer.enterprise_credit')?.can_export) || props.previewReadonly)
+
 const ledgerTotal = computed(() => Number((ledger.value as { total?: number } | null)?.total || 0))
 const ledgerTotalPages = computed(() => Math.max(1, Math.ceil(ledgerTotal.value / ledgerPageSize) || 1))
+const isGroupedLedger = computed(() => ledgerView.value === 'window' || ledgerView.value === 'day')
+const ledgerGroupItems = computed(() => (
+  isGroupedLedger.value ? ((ledger.value?.items || []) as CreditLedgerGroupItem[]) : []
+))
+const ledgerDetailItems = computed(() => (
+  ledgerView.value === 'detail' ? ((ledger.value?.items || []) as CreditLedgerItem[]) : []
+))
+const ledgerMetaLabel = computed(() => {
+  if (!ledgerTotal.value) return ''
+  if (ledgerView.value === 'window') return `共 ${ledgerTotal.value} 批`
+  if (ledgerView.value === 'day') return `共 ${ledgerTotal.value} 天`
+  return `共 ${ledgerTotal.value} 条明细`
+})
+
+function groupSecondary(row: CreditLedgerGroupItem) {
+  const parts = [
+    formatLedgerTime(row.ended_at || row.started_at),
+    entryTypeLabel[row.primary_entry_type] || (row.primary_entry_type === 'mixed' ? '汇总' : row.primary_entry_type),
+  ]
+  if (row.entry_count > 1) parts.push(`${row.entry_count} 条`)
+  if (row.platform_count > 0 && row.primary_entry_type === 'settle') parts.push(`${row.platform_count} 个平台`)
+  if (row.window_key) parts.push(row.window_key)
+  return parts.filter(Boolean).join(' · ')
+}
 
 async function loadCreditLedger(page = ledgerPage.value) {
   const tenantId = enterpriseTenantId.value
@@ -209,7 +244,25 @@ async function loadCreditLedger(page = ledgerPage.value) {
   ledgerDetailVisible.value = false
   ledgerDetailRowId.value = null
   ledgerDetail.value = null
-  ledger.value = await getEnterpriseCreditLedger(page, ledgerPageSize, tenantId)
+  expandedGroupKey.value = null
+  groupLines.value = []
+  groupLinesTotal.value = 0
+  ledger.value = await getEnterpriseCreditLedger(page, ledgerPageSize, tenantId, ledgerView.value)
+}
+
+async function changeLedgerView(view: CreditLedgerView) {
+  if (ledgerView.value === view) return
+  ledgerView.value = view
+  loading.value = true
+  try {
+    await loadCreditLedger(1)
+  } catch (error) {
+    if (!isRequestCanceled(error)) {
+      ElMessage.error(extractErrorDetail(error, '加载流水失败'))
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
 async function changeLedgerPage(delta: number) {
@@ -225,6 +278,38 @@ async function changeLedgerPage(delta: number) {
   } finally {
     loading.value = false
   }
+}
+
+async function toggleLedgerGroup(row: CreditLedgerGroupItem) {
+  if (expandedGroupKey.value === row.group_key) {
+    expandedGroupKey.value = null
+    groupLines.value = []
+    groupLinesTotal.value = 0
+    return
+  }
+  expandedGroupKey.value = row.group_key
+  groupLinesLoading.value = true
+  groupLines.value = []
+  try {
+    const data = await getEnterpriseCreditLedgerGroupLines(
+      row.group_key,
+      row.group_by,
+      1,
+      100,
+      enterpriseTenantId.value,
+    )
+    groupLines.value = data.items || []
+    groupLinesTotal.value = Number(data.total || 0)
+  } catch (error) {
+    ElMessage.error(extractErrorDetail(error, '加载批次明细失败'))
+    expandedGroupKey.value = null
+  } finally {
+    groupLinesLoading.value = false
+  }
+}
+
+function exportCreditLedger() {
+  window.open(enterpriseCreditLedgerExportUrl(ledgerView.value, enterpriseTenantId.value), '_blank')
 }
 
 type AuditListDiff = {
@@ -550,13 +635,77 @@ watch(visibleTabs, () => ensureAllowedTab())
 
         <section class="credit-ledger">
           <div class="credit-ledger-head">
-            <h3 class="credit-ledger-title">算力流水</h3>
-            <span v-if="ledgerTotal" class="credit-ledger-meta">共 {{ ledgerTotal }} 条</span>
+            <div class="credit-ledger-head-main">
+              <h3 class="credit-ledger-title">算力流水</h3>
+              <span v-if="ledgerMetaLabel" class="credit-ledger-meta">{{ ledgerMetaLabel }}</span>
+            </div>
+            <div class="credit-ledger-toolbar">
+              <div class="credit-ledger-views" role="tablist" aria-label="流水视图">
+                <button type="button" :class="{ on: ledgerView === 'window' }" @click="changeLedgerView('window')">按批次</button>
+                <button type="button" :class="{ on: ledgerView === 'day' }" @click="changeLedgerView('day')">按日</button>
+                <button type="button" :class="{ on: ledgerView === 'detail' }" @click="changeLedgerView('detail')">明细</button>
+              </div>
+              <button
+                v-if="canExportCredit"
+                type="button"
+                class="plain-btn credit-export-btn"
+                @click="exportCreditLedger"
+              >导出 CSV</button>
+            </div>
           </div>
 
-          <div v-if="ledger?.items?.length" class="credit-ledger-list">
+          <div v-if="isGroupedLedger && ledgerGroupItems.length" class="credit-ledger-list">
             <div
-              v-for="row in ledger.items"
+              v-for="row in ledgerGroupItems"
+              :key="row.group_key"
+              class="credit-ledger-block"
+              :class="{ open: expandedGroupKey === row.group_key }"
+            >
+              <button
+                type="button"
+                class="credit-ledger-item"
+                :class="{ 'is-active': expandedGroupKey === row.group_key }"
+                @click="toggleLedgerGroup(row)"
+              >
+                <div class="credit-ledger-main">
+                  <strong class="credit-ledger-primary" :title="row.title">{{ row.title }}</strong>
+                  <span class="credit-ledger-secondary">{{ groupSecondary(row) }}</span>
+                </div>
+                <div class="credit-ledger-side">
+                  <strong
+                    class="credit-ledger-amount"
+                    :class="{ plus: row.amount_sum > 0, minus: row.amount_sum < 0 }"
+                  >{{ formatLedgerAmount(row.amount_sum) }}</strong>
+                  <span v-if="row.balance_after != null" class="credit-ledger-balance">
+                    余额 {{ formatCreditNumber(row.balance_after) }}
+                  </span>
+                </div>
+              </button>
+              <div
+                v-if="expandedGroupKey === row.group_key"
+                v-loading="groupLinesLoading"
+                class="credit-ledger-expand"
+              >
+                <ul v-if="groupLines.length" class="credit-group-lines">
+                  <li v-for="line in groupLines" :key="line.id">
+                    <div>
+                      <strong>{{ ledgerPrimary(line) }}</strong>
+                      <span>{{ ledgerSecondary(line) }}</span>
+                    </div>
+                    <em :class="{ plus: line.amount > 0, minus: line.amount < 0 }">{{ formatLedgerAmount(line.amount) }}</em>
+                  </li>
+                </ul>
+                <p v-else-if="!groupLinesLoading" class="hint credit-expand-empty">暂无明细</p>
+                <p v-if="groupLinesTotal > groupLines.length" class="hint credit-expand-empty">
+                  已展示 {{ groupLines.length }} / {{ groupLinesTotal }} 条
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="ledgerView === 'detail' && ledgerDetailItems.length" class="credit-ledger-list">
+            <div
+              v-for="row in ledgerDetailItems"
               :key="row.id"
               class="credit-ledger-block"
               :class="{ open: ledgerDetailVisible && ledgerDetailRowId === row.id }"
@@ -807,10 +956,17 @@ watch(visibleTabs, () => ensureAllowedTab())
 }
 .credit-ledger-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.credit-ledger-head-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
 }
 .credit-ledger-title {
   margin: 0;
@@ -822,6 +978,37 @@ watch(visibleTabs, () => ensureAllowedTab())
   color: #94a3b8;
   font-size: 12px;
 }
+.credit-ledger-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.credit-ledger-views {
+  display: inline-flex;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.credit-ledger-views button {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+}
+.credit-ledger-views button + button {
+  border-left: 1px solid #e2e8f0;
+}
+.credit-ledger-views button.on {
+  background: #0f172a;
+  color: #fff;
+}
+.credit-export-btn {
+  font-size: 13px;
+}
 .credit-ledger-list {
   border-top: 1px solid #eef2f7;
 }
@@ -831,6 +1018,42 @@ watch(visibleTabs, () => ensureAllowedTab())
 .credit-ledger-block.open {
   background: #f8fafc;
 }
+.credit-group-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.credit-group-lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+.credit-group-lines li div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.credit-group-lines li strong {
+  font-weight: 600;
+  color: #0f172a;
+}
+.credit-group-lines li span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+.credit-group-lines li em {
+  font-style: normal;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.credit-group-lines li em.plus { color: #047857; }
+.credit-group-lines li em.minus { color: #b45309; }
 .credit-ledger-item {
   display: flex;
   align-items: flex-start;
