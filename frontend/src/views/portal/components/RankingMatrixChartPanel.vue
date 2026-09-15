@@ -246,9 +246,26 @@ async function renderChart() {
     })
   const renderHeight = ('height' in built && built.height) ? built.height : chartHeight.value
   const labels = built.labels || []
+  const labelWidth = built.labelWidth ?? estimateMatrixAxisLabelWidth(labels, props.chartType === 'bar' ? 13 : 12)
   const gridTop = built.gridTop ?? 12
   const gridBottom = built.gridBottom ?? 12
   const option = built.option
+
+  // 先落 HTML 词叠层，再按「整宽 canvas」resize，避免词列+整宽图横向撑出滚动条
+  axisOverlay.value = labels.length
+    ? {
+      labels,
+      top: gridTop,
+      bottom: gridBottom,
+      width: labelWidth,
+      height: renderHeight,
+    }
+    : null
+  await nextTick()
+  await waitForLayout()
+  if (!chartRef.value || version !== renderVersion) return
+
+  chartRef.value.style.width = '100%'
   chartRef.value.style.height = `${renderHeight}px`
 
   if (!chartInstance) {
@@ -258,17 +275,6 @@ async function renderChart() {
 
   chartInstance.setOption(option, { notMerge: true })
   chartInstance.resize({ width: chartRef.value.clientWidth, height: renderHeight })
-
-  axisOverlay.value = labels.length
-    ? {
-      labels,
-      top: gridTop,
-      bottom: gridBottom,
-      width: estimateMatrixAxisLabelWidth(labels, props.chartType === 'bar' ? 13 : 12),
-      height: renderHeight,
-    }
-    : null
-
   chartInstance.off('click')
   chartInstance.on('click', (params: unknown) => {
     const event = params as {

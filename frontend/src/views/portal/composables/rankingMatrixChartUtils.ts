@@ -863,6 +863,8 @@ export function buildMatrixBarOption(
     return left.rank - right.rank
   })
 
+  const labels = items.map(item => item.label)
+  const labelWidth = estimateMatrixAxisLabelWidth(labels, 13)
   const chartHeight = layoutHint?.chartHeight ?? matrixBarChartHeight(items.length)
   const rowPitch = layoutHint?.rowPitch ?? BAR_ROW_PITCH
   const grid = matrixBarGridMargins(items.length, chartHeight, rowPitch)
@@ -871,12 +873,13 @@ export function buildMatrixBarOption(
 
   return {
     height: chartHeight,
-    labels: items.map(item => item.label),
+    labels,
+    labelWidth,
     gridTop: grid.top,
     gridBottom: grid.bottom + 8,
     option: {
       grid: {
-        left: 8,
+        left: labelWidth,
         right: 64,
         top: grid.top,
         bottom: grid.bottom + 8,
@@ -925,10 +928,10 @@ export function buildMatrixBarOption(
     },
     yAxis: {
       type: 'category',
-      data: items.map(item => item.label),
+      data: labels,
       axisLine: { show: false },
       axisTick: { show: false },
-      // 左侧词改由 HTML 渲染，便于选中/复制
+      // 左侧词改由 HTML 叠在 grid.left 预留区，整图仍单宽不横向撑开
       axisLabel: { show: false },
     },
     series: [{
@@ -1029,13 +1032,15 @@ export function buildMatrixHeatOption(
     })
   })
 
+  const labelWidth = estimateMatrixAxisLabelWidth(keywords, 12)
   return {
     labels: keywords,
+    labelWidth,
     gridTop: 12,
     gridBottom: axisRotate ? 8 : 12,
     option: {
     grid: {
-      left: 8,
+      left: labelWidth,
       right: 48,
       top: 12,
       bottom: axisRotate ? 8 : 12,
@@ -1071,7 +1076,7 @@ export function buildMatrixHeatOption(
       data: keywords,
       axisLine: { show: false },
       axisTick: { show: false },
-      // 左侧词改由 HTML 渲染，便于选中/复制
+      // 左侧词改由 HTML 叠在 grid.left 预留区，整图仍单宽不横向撑开
       axisLabel: { show: false },
     },
     visualMap: {
@@ -1115,9 +1120,12 @@ export function estimateMatrixAxisLabelWidth(labels: string[], fontSize = 13) {
 {
   console.assert(estimateMatrixAxisLabelWidth(['板材']) >= 108)
   console.assert(estimateMatrixAxisLabelWidth(['公交广告公司哪家好']) > 108)
-  console.assert((buildMatrixHeatOption({
+  const heatBuilt = buildMatrixHeatOption({
     platform: 'doubao',
     columns: [{ prompt: 'p1', group_name: null, monitor_keyword: '板材品牌哪个好' }],
     rows: [],
-  }).option.yAxis as { axisLabel?: { show?: boolean } }).axisLabel?.show === false)
+  })
+  console.assert((heatBuilt.option.yAxis as { axisLabel?: { show?: boolean } }).axisLabel?.show === false)
+  console.assert((heatBuilt.option.grid as { left?: number }).left === heatBuilt.labelWidth)
+  console.assert(heatBuilt.labelWidth >= 108)
 }

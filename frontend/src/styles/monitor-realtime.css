@@ -737,23 +737,28 @@
 .matrix-chart-wrap {
   padding: 4px 12px 16px 18px;
   background: linear-gradient(180deg, #fff, #f8fbff);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   max-height: min(78vh, 900px);
 }
 
 .matrix-chart-plot {
-  display: flex;
-  align-items: stretch;
+  position: relative;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
 }
 
 .matrix-axis-label-col {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column-reverse;
-  flex: 0 0 auto;
   box-sizing: border-box;
-  min-width: 0;
+  pointer-events: none;
 }
 
 .matrix-axis-label-row {
@@ -777,6 +782,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: auto;
 }
 
 .matrix-axis-label-row:hover {
@@ -785,11 +791,12 @@
 }
 
 .matrix-chart-canvas {
-  flex: 1 1 auto;
-  width: auto;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 400px;
   display: block;
+  box-sizing: border-box;
 }
 
 .matrix-chart-legend {
