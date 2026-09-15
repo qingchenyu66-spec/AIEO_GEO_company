@@ -19,6 +19,7 @@ import {
   resolveMatrixBarLayoutHint,
   resolveColumnCell,
   resolveColumnRow,
+  resolveMatrixAxisKeywordAtPixel,
   sliceMatrixByPlatform,
   type MatrixChartType,
   type MatrixHeatDataItem,
@@ -53,6 +54,89 @@ const stageBodyRef = ref<HTMLDivElement | null>(null)
 let chartInstance: ECharts | null = null
 let runtime: EchartsRuntime | null = null
 let renderVersion = 0
+let axisKeywordLabels: string[] = []
+let unbindAxisKeywordCopy: (() => void) | null = null
+
+async function copyAxisKeyword(raw: unknown) {
+  const text = String(raw ?? '').trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制监测词')
+  } catch {
+    ElMessage.error('复制失败，请手动选择右侧词表复制')
+  }
+}
+
+function readGridRect(chart: ECharts): { x: number; y: number; width: number; height: number } | null {
+  try {
+    const component = (chart as unknown as {
+      getModel?: () => { getComponent?: (name: string, index: number) => {
+        coordinateSystem?: { getRect?: () => { x: number; y: number; width: number; height: number } }
+      } }
+    }).getModel?.().getComponent?.('grid', 0)
+    const rect = component?.coordinateSystem?.getRect?.()
+    if (!rect) return null
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+  } catch {
+    return null
+  }
+}
+
+function keywordAtChartPointer(event: MouseEvent): string {
+  if (!chartInstance || !chartRef.value || !axisKeywordLabels.length) return ''
+  const box = chartRef.value.getBoundingClientRect()
+  const offsetX = event.clientX - box.left
+  const offsetY = event.clientY - box.top
+  const point: [number, number] = [offsetX, offsetY]
+  const rect = readGridRect(chartInstance)
+  if (!rect) return ''
+  let yAxisValue: number | string | null = null
+  try {
+    yAxisValue = chartInstance.convertFromPixel({ yAxisIndex: 0 }, point) as number | string
+  } catch {
+    return ''
+  }
+  return resolveMatrixAxisKeywordAtPixel({
+    labels: axisKeywordLabels,
+    offsetX,
+    offsetY,
+    gridLeft: rect.x,
+    gridTop: rect.y,
+    gridHeight: rect.height,
+    yAxisValue,
+  })
+}
+
+function bindAxisKeywordCopy(el: HTMLDivElement) {
+  unbindAxisKeywordCopy?.()
+  const onClick = (event: MouseEvent) => {
+    const keyword = keywordAtChartPointer(event)
+    if (!keyword) return
+    event.preventDefault()
+    void copyAxisKeyword(keyword)
+  }
+  const onContextMenu = (event: MouseEvent) => {
+    const keyword = keywordAtChartPointer(event)
+    if (!keyword) return
+    event.preventDefault()
+    event.stopPropagation()
+    void copyAxisKeyword(keyword)
+  }
+  const onMove = (event: MouseEvent) => {
+    el.style.cursor = keywordAtChartPointer(event) ? 'copy' : ''
+  }
+  el.addEventListener('click', onClick)
+  el.addEventListener('contextmenu', onContextMenu, true)
+  el.addEventListener('mousemove', onMove)
+  unbindAxisKeywordCopy = () => {
+    el.removeEventListener('click', onClick)
+    el.removeEventListener('contextmenu', onContextMenu, true)
+    el.removeEventListener('mousemove', onMove)
+    el.style.cursor = ''
+    unbindAxisKeywordCopy = null
+  }
+}
 
 function platformHasRows(code: string) {
   if (!props.matrix?.all_platforms) return (props.matrix?.rows.length || 0) > 0
@@ -236,25 +320,9 @@ async function renderChart() {
   chartInstance.setOption(option, { notMerge: true })
   chartInstance.resize({ width: chartRef.value.clientWidth, height: renderHeight })
 
-  async function copyAxisKeyword(raw: unknown) {
-    const text = String(raw ?? '').trim()
-    if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-      ElMessage.success('已复制监测词')
-    } catch {
-      ElMessage.error('复制失败，请手动选择右侧词表复制')
-    }
-  }
-
-  function axisKeywordFromEvent(params: {
-    componentType?: string
-    value?: unknown
-    name?: unknown
-  }) {
-    if (params.componentType !== 'yAxis') return ''
-    return String(params.value ?? params.name ?? '').trim()
-  }
+  const yAxisOption = (option as { yAxis?: { data?: string[] } }).yAxis
+  axisKeywordLabels = Array.isArray(yAxisOption?.data) ? yAxisOption.data.map(item => String(item || '')) : []
+  bindAxisKeywordCopy(chartRef.value)
 
   chartInstance.off('click')
   chartInstance.off('contextmenu')
@@ -263,16 +331,9 @@ async function renderChart() {
       componentType?: string
       seriesType?: string
       dataIndex?: number
-      value?: unknown
-      name?: unknown
       data?: { prompt?: string } | [number, number, number]
     }
     if (!slice) return
-    const axisKeyword = axisKeywordFromEvent(event)
-    if (axisKeyword) {
-      void copyAxisKeyword(axisKeyword)
-      return
-    }
     if (props.chartType === 'bar' && event.seriesType === 'bar') {
       const seriesData = (option.series as Array<{ data: Array<{ prompt?: string; row?: RankingMatrixRow | null }> }>)[0]?.data || []
       const point = seriesData[event.dataIndex ?? -1]
@@ -310,18 +371,6 @@ async function renderChart() {
       })
     }
   })
-  chartInstance.on('contextmenu', (params: unknown) => {
-    const event = params as {
-      componentType?: string
-      value?: unknown
-      name?: unknown
-      event?: { event?: Event }
-    }
-    const axisKeyword = axisKeywordFromEvent(event)
-    if (!axisKeyword) return
-    event.event?.event?.preventDefault?.()
-    void copyAxisKeyword(axisKeyword)
-  })
 }
 
 function resizeChart() {
@@ -330,6 +379,8 @@ function resizeChart() {
 }
 
 function disposeChart() {
+  unbindAxisKeywordCopy?.()
+  axisKeywordLabels = []
   chartInstance?.dispose()
   chartInstance = null
 }
@@ -427,8 +478,8 @@ defineExpose({ resizeChart })
               <span class="legend-top3">1~3 靠前</span>
               <span class="legend-mid">4+ 待提升</span>
               <span class="legend-none">— 未提及</span>
-              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；点左侧词可复制</span>
-              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；点左侧词可复制</span>
+              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；点/右键左侧监测词可复制</span>
+              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；点/右键左侧监测词可复制</span>
             </p>
           </div>
         </article>

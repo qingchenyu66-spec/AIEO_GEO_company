@@ -1105,3 +1105,45 @@ export function matrixChartHeight(chartType: MatrixChartType, slice: MatrixPlatf
   }
   return matrixHeatChartHeight(slice.columns.length)
 }
+
+/** 矩阵图左侧词是画布字，不可框选；按指针是否落在 grid 左侧词带解析监测词。 */
+export function resolveMatrixAxisKeywordAtPixel(params: {
+  labels: string[]
+  offsetX: number
+  offsetY: number
+  gridLeft: number
+  gridTop: number
+  gridHeight: number
+  yAxisValue: number | string | null | undefined
+}): string {
+  const labels = params.labels
+  if (!labels.length) return ''
+  if (params.offsetX >= params.gridLeft - 2) return ''
+  if (params.offsetY < params.gridTop || params.offsetY > params.gridTop + params.gridHeight) return ''
+  const raw = params.yAxisValue
+  if (raw == null || raw === '') return ''
+  const yIndex = typeof raw === 'number' ? Math.round(raw) : labels.indexOf(String(raw))
+  if (yIndex < 0 || yIndex >= labels.length) return ''
+  return String(labels[yIndex] || '').trim()
+}
+
+{
+  console.assert(resolveMatrixAxisKeywordAtPixel({
+    labels: ['板材品牌哪个好', '环保板推荐'],
+    offsetX: 20,
+    offsetY: 120,
+    gridLeft: 160,
+    gridTop: 10,
+    gridHeight: 400,
+    yAxisValue: 0,
+  }) === '板材品牌哪个好')
+  console.assert(resolveMatrixAxisKeywordAtPixel({
+    labels: ['板材品牌哪个好', '环保板推荐'],
+    offsetX: 200,
+    offsetY: 120,
+    gridLeft: 160,
+    gridTop: 10,
+    gridHeight: 400,
+    yAxisValue: 0,
+  }) === '')
+}
