@@ -236,15 +236,43 @@ async function renderChart() {
   chartInstance.setOption(option, { notMerge: true })
   chartInstance.resize({ width: chartRef.value.clientWidth, height: renderHeight })
 
+  async function copyAxisKeyword(raw: unknown) {
+    const text = String(raw ?? '').trim()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('已复制监测词')
+    } catch {
+      ElMessage.error('复制失败，请手动选择右侧词表复制')
+    }
+  }
+
+  function axisKeywordFromEvent(params: {
+    componentType?: string
+    value?: unknown
+    name?: unknown
+  }) {
+    if (params.componentType !== 'yAxis') return ''
+    return String(params.value ?? params.name ?? '').trim()
+  }
+
   chartInstance.off('click')
+  chartInstance.off('contextmenu')
   chartInstance.on('click', (params: unknown) => {
     const event = params as {
       componentType?: string
       seriesType?: string
       dataIndex?: number
+      value?: unknown
+      name?: unknown
       data?: { prompt?: string } | [number, number, number]
     }
     if (!slice) return
+    const axisKeyword = axisKeywordFromEvent(event)
+    if (axisKeyword) {
+      void copyAxisKeyword(axisKeyword)
+      return
+    }
     if (props.chartType === 'bar' && event.seriesType === 'bar') {
       const seriesData = (option.series as Array<{ data: Array<{ prompt?: string; row?: RankingMatrixRow | null }> }>)[0]?.data || []
       const point = seriesData[event.dataIndex ?? -1]
@@ -281,6 +309,18 @@ async function renderChart() {
         cell,
       })
     }
+  })
+  chartInstance.on('contextmenu', (params: unknown) => {
+    const event = params as {
+      componentType?: string
+      value?: unknown
+      name?: unknown
+      event?: { event?: Event }
+    }
+    const axisKeyword = axisKeywordFromEvent(event)
+    if (!axisKeyword) return
+    event.event?.event?.preventDefault?.()
+    void copyAxisKeyword(axisKeyword)
   })
 }
 
@@ -387,8 +427,8 @@ defineExpose({ resizeChart })
               <span class="legend-top3">1~3 靠前</span>
               <span class="legend-mid">4+ 待提升</span>
               <span class="legend-none">— 未提及</span>
-              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推</span>
-              <span v-else class="legend-axis">词多时在图内向下滚动即可看全</span>
+              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；点左侧词可复制</span>
+              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；点左侧词可复制</span>
             </p>
           </div>
         </article>

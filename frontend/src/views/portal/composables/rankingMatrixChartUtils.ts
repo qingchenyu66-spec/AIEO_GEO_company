@@ -512,6 +512,7 @@ export function selfCheckMatrixRankScope() {
   const heatAxis = (heatOpt.xAxis as { data?: string[]; axisLabel?: { interval?: number } }).data || []
   console.assert(heatAxis.length === 3 && heatAxis[0] === '06-01' && heatAxis[1] === '06-02' && heatAxis[2] === '06-03')
   console.assert((heatOpt.xAxis as { axisLabel?: { interval?: number } }).axisLabel?.interval === 0)
+  console.assert((heatOpt.yAxis as { axisLabel?: { triggerEvent?: boolean } }).axisLabel?.triggerEvent === true)
   const periodKpis = matrixScopedPeriodKpis(
     kpiSlice,
     buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01'),
@@ -926,6 +927,8 @@ export function buildMatrixBarOption(
         color: '#153052',
         fontSize: 13,
         fontWeight: 700,
+        // 画布文字不可框选，开事件后由面板绑定点击/右键复制
+        triggerEvent: true,
       },
     },
     series: [{
@@ -1064,7 +1067,13 @@ export function buildMatrixHeatOption(
       data: keywords,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: '#153052', fontSize: 12, fontWeight: 700 },
+      axisLabel: {
+        color: '#153052',
+        fontSize: 12,
+        fontWeight: 700,
+        // 画布文字不可框选，开事件后由面板绑定点击/右键复制
+        triggerEvent: true,
+      },
     },
     visualMap: {
       show: false,
