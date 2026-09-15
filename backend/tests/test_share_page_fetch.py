@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from app.services.share_page_fetch_service import (
@@ -334,3 +335,124 @@ def test_doubao_browser_chrome_raises(monkeypatch) -> None:
         raise AssertionError("expected chrome shell to fail")
     except ValueError as exc:
         assert str(exc) == share_page_unusable_message()
+
+
+def test_extract_answer_preserves_ol_markers_over_inner_text() -> None:
+    """豆包 ol 序号在 CSS marker；即使 body inner_text 无编号，也要从 HTML 还原 1.2.3."""
+    from app.services.share_page_fetch_service import _extract_answer_from_html
+
+    page_html = """
+    <html><body>
+    <h2>品牌板材门店</h2>
+    <ol class="container-RLBpOb" style="list-style: decimal">
+      <li><strong>莫干山板材（呼市总店）</strong><div>地址：新城区</div></li>
+      <li><strong>福庆板材（澳赢店）</strong><div>地址：回民区</div></li>
+      <li><strong>千年舟生态板批发（通达店）</strong><div>地址：通达</div></li>
+      <li><strong>大王椰板材（闽兴店）</strong><div>地址：玉泉区闽兴建材市场</div></li>
+      <li><strong>原筑全屋定制（润宇店）</strong><div>地址：润宇</div></li>
+    </ol>
+    <p>呼市板材大本营，大王椰、泰山石膏板等很多板材商户都在这里，适合集中比价。</p>
+    </body></html>
+    """
+    # 模拟 Playwright inner_text：无序号
+    body_text = (
+        "品牌板材门店\n"
+        "莫干山板材（呼市总店）\n地址：新城区\n"
+        "福庆板材（澳赢店）\n地址：回民区\n"
+        "千年舟生态板批发（通达店）\n地址：通达\n"
+        "大王椰板材（闽兴店）\n地址：玉泉区闽兴建材市场\n"
+        "原筑全屋定制（润宇店）\n地址：润宇\n"
+        "呼市板材大本营，大王椰、泰山石膏板等很多板材商户都在这里，适合集中比价。"
+    )
+    out = _extract_answer_from_html(page_html, body_text)
+    assert "1. 莫干山板材" in out or re.search(r"1\.\s*莫干山板材", out)
+    assert re.search(r"4\.\s*大王椰板材", out)
+    assert "2. 福庆板材" in out or re.search(r"2\.\s*福庆板材", out)
+
+
+def test_huhhot_ol_html_rank_resolves_to_4() -> None:
+    """呼和浩特结构：还原编号后规则应把大王椰计为第4（不再被旁述虚成1）。"""
+    import re as _re
+
+    from app.services.monitor_service import BrandRankResolution, _resolve_brand_rank_detail
+    from app.services.share_page_fetch_service import _extract_answer_from_html
+    from app.models.monitor import GeoMonitorSubtask
+
+    page_html = """
+    <html><body>
+    <h1>呼和浩特板材门店 & 市场推荐</h1>
+    <h2>品牌板材门店（生态板 / ENF / 欧松板，家装首选）</h2>
+    <ol>
+      <li><strong>莫干山板材（呼市总店）</strong><div>地址：新城区海拉尔东街</div>
+        <div>主营：生态板、多层板</div></li>
+      <li><strong>福庆板材（澳赢店）</strong><div>地址：回民区</div></li>
+      <li><strong>千年舟生态板批发（通达店）</strong><div>地址：通达建材市场</div></li>
+      <li><strong>大王椰板材（闽兴店）</strong><div>地址：玉泉区闽兴建材市场</div>
+        <div>主营：国标环保生态板</div></li>
+      <li><strong>原筑全屋定制（润宇店）</strong><div>地址：润宇装饰城</div></li>
+    </ol>
+    <h2>板材集中大市场</h2>
+    <ol>
+      <li><strong>闽兴家居建材城（玉泉区）</strong>
+        呼市板材大本营，大王椰、泰山石膏板等很多板材商户都在这里</li>
+      <li><strong>海兴建材城（新城区）</strong>基础板材</li>
+    </ol>
+    </body></html>
+    """
+    body_no_num = "呼和浩特板材门店推荐\n" + ("门店介绍" * 20)
+    answer = _extract_answer_from_html(page_html, body_no_num)
+    assert _re.search(r"(?m)^4\.\s*大王椰板材", answer)
+
+    st = GeoMonitorSubtask(
+        subtask_id="t-huhhot-ol",
+        task_id="task-t",
+        platform="doubao",
+        mode="standard",
+        prompt="呼和浩特板材门店推荐",
+        status="completed",
+        answer_content=answer,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(st, st.prompt, ["大王椰", "大王椰板材"], None)
+    assert isinstance(detail, BrandRankResolution)
+    assert detail.rank == 4, detail
+
+
+def test_jinhua_split_ol_continues_numbering_to_rank_3() -> None:
+    """金华：豆包把门店拆成多个相邻 ol 时，序号续计且大王椰为第3。"""
+    from app.models.monitor import GeoMonitorSubtask
+    from app.services.monitor_service import _resolve_brand_rank_detail
+    from app.services.share_page_fetch_service import _extract_answer_from_html
+
+    page_html = """
+    <html><body>
+    <h2>浙中建材市场</h2>
+    <ol><li><strong>千年舟（金华店）</strong><div>地址：北-08</div></li></ol>
+    <ol>
+      <li><strong>韩宇来板材（金华旗舰店）</strong><div>地址：B座</div></li>
+      <li><strong>大王椰板材（金华总代）</strong><div>主营：森芯板</div></li>
+    </ol>
+    <h2>江南建材市场</h2>
+    <ol>
+      <li><strong>莫干山板材专卖店</strong><div>地址：7幢</div></li>
+      <li><strong>团团圆圆板材</strong><div>地址：6-10号</div></li>
+    </ol>
+    </body></html>
+    """
+    body = "金华板材门店推荐\n" + ("门店" * 30)
+    answer = _extract_answer_from_html(page_html, body)
+    assert re.search(r"(?m)^1\.\s*千年舟", answer)
+    assert re.search(r"(?m)^2\.\s*韩宇来", answer)
+    assert re.search(r"(?m)^3\.\s*大王椰", answer)
+    st = GeoMonitorSubtask(
+        subtask_id="t-jinhua-ol",
+        task_id="task-t",
+        platform="doubao",
+        mode="standard",
+        prompt="金华板材门店推荐",
+        status="completed",
+        answer_content=answer,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(st, st.prompt, ["大王椰", "大王椰板材"], None)
+    assert detail.rank == 3, detail

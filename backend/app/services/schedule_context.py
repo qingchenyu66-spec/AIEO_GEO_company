@@ -22,6 +22,9 @@ SCHEDULE_TYPE_LABELS = {
 
 NON_RANKING_PROMPT_MARKERS = (
     "是做什么的",
+    "做什么的",
+    "是干什么的",
+    "干什么的",
     "这家公司怎么样",
     "有哪些优势和不足",
     "值得推荐吗",

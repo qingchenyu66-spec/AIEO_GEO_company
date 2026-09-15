@@ -26,12 +26,12 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     def fake_normalize(st) -> None:
         return None
 
-    def fake_optional_llm(*, subtask, task, resolution, brand_terms, asset):
-        seen["mp_during_resolve"] = subtask.mention_position
-        seen["raw"] = dict(subtask.raw_result_json or {})
-        return BrandRankResolution(rank=1, mentioned=True, source="llm", confidence=0.95)
+    def fake_rules(st, *_args, **_kwargs):
+        seen["mp_during_resolve"] = st.mention_position
+        seen["raw"] = dict(st.raw_result_json or {})
+        return BrandRankResolution(rank=1, mentioned=True, source="structured", confidence=0.95)
 
-    def fake_persist(st, resolution) -> None:
+    def fake_persist(st, resolution, **_kwargs) -> None:
         raw = dict(st.raw_result_json or {})
         raw["rank_resolution"] = {
             "rank": resolution.rank,
@@ -42,7 +42,8 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
         st.raw_result_json = raw
 
     monkeypatch.setattr("app.services.monitor_service._normalize_subtask_rankings_on_write", fake_normalize)
-    monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_optional_llm)
+    monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", fake_rules)
+    monkeypatch.setattr("app.services.monitor_service._brand_in_answer_for_rank", lambda *_a, **_k: True)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
 
     recompute_subtask_rank_from_answer(
@@ -56,8 +57,8 @@ def test_recompute_clears_stale_mention_before_auto_parse(monkeypatch) -> None:
     assert subtask.raw_result_json.get("rank_resolution", {}).get("rank") == 1
 
 
-def test_recompute_llm_engine_merges_better_rule(monkeypatch) -> None:
-    """2026-08-31 - 方案A：rank_engine=llm 仍跑规则，更靠前时压过 LLM。"""
+def test_recompute_uses_rules_even_when_rank_engine_llm(monkeypatch) -> None:
+    """2026-09-15 - mention_position 只认规则，不再与 LLM 合并。"""
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "rank_engine", "llm")
@@ -74,31 +75,14 @@ def test_recompute_llm_engine_merges_better_rule(monkeypatch) -> None:
     def fake_rules(*_args, **_kwargs):
         return BrandRankResolution(rank=2, mentioned=True, source="appearance", confidence=0.7)
 
-    def fake_llm(*, subtask, task, resolution, brand_terms, asset):
-        assert resolution.rank == 2
-        # 模拟 LLM 虚高；合并后应保留规则
-        from app.services.rank_llm_service import apply_llm_rank_fallback, LlmBrandRankResult
-
-        return apply_llm_rank_fallback(
-            resolution,
-            LlmBrandRankResult(
-                rank=9,
-                mentioned=True,
-                category="中国市场",
-                rank_basis="section_list",
-                confidence=0.9,
-                evidence=None,
-            ),
-        )
-
-    def fake_persist(st, resolution) -> None:
+    def fake_persist(st, resolution, **_kwargs) -> None:
         raw = dict(st.raw_result_json or {})
         raw["rank_resolution"] = {"rank": resolution.rank, "source": resolution.source}
         st.raw_result_json = raw
 
     monkeypatch.setattr("app.services.monitor_service._normalize_subtask_rankings_on_write", lambda st: None)
     monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", fake_rules)
-    monkeypatch.setattr("app.services.rank_llm_service.resolve_rank_with_optional_llm", fake_llm)
+    monkeypatch.setattr("app.services.monitor_service._brand_in_answer_for_rank", lambda *_a, **_k: True)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
     recompute_subtask_rank_from_answer(MagicMock(), subtask, task, force=True)
     assert subtask.mention_position == 2
@@ -208,7 +192,7 @@ def test_recompute_override_syncs_rank_resolution(monkeypatch) -> None:
         lambda _st: None,
     )
 
-    def fake_persist(st, resolution) -> None:
+    def fake_persist(st, resolution, **_kwargs) -> None:
         raw = dict(st.raw_result_json or {})
         raw["rank_resolution"] = {
             "rank": resolution.rank,
@@ -220,6 +204,10 @@ def test_recompute_override_syncs_rank_resolution(monkeypatch) -> None:
         st.raw_result_json = raw
 
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
+    monkeypatch.setattr(
+        "app.services.monitor_service._resolve_brand_rank_detail",
+        lambda *_a, **_k: BrandRankResolution(rank=5, mentioned=True, source="structured", confidence=0.9),
+    )
 
     recompute_subtask_rank_from_answer(
         MagicMock(), subtask, task, override_mention_position=3, force=False

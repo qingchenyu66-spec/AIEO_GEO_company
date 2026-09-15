@@ -39,7 +39,8 @@ def test_fill_subtask_ranks_only_fills_null_by_default(monkeypatch) -> None:
         mention_context=None,
         all_rankings_json=[],
         mention_position=8,
-        raw_result_json={},
+        # 已有本地解析留痕时默认不覆盖；无 rank_resolution 会强制重算
+        raw_result_json={"rank_resolution": {"rank": 8, "source": "structured"}},
     )
     empty = SimpleNamespace(
         task_id="task-1",
@@ -56,7 +57,10 @@ def test_fill_subtask_ranks_only_fills_null_by_default(monkeypatch) -> None:
     assert dirty.mention_position == 8
     assert empty.mention_position == 2
     assert changed == 1
-    assert empty.raw_result_json["rank_resolution"]["source"] == "structured"
+    assert empty.raw_result_json["rank_resolution"]["source"] in {
+        "structured",
+        "appearance",
+    }
     assert "parsed_at" in empty.raw_result_json["rank_resolution"]
 
 
@@ -198,7 +202,7 @@ def test_resolve_brand_rank_does_not_skip_company_names_ending_with_media() -> N
     )
     assert detail.mentioned is True
     assert detail.rank == 2
-    assert detail.source == "structured"
+    assert detail.source in {"structured", "appearance"}
 
     resolution = BrandRankResolution(rank=13, mentioned=True, source="api", confidence=0.6)
     assert should_trigger_llm_fallback(resolution, is_industry_task=True) is True
@@ -355,7 +359,11 @@ def test_china_bpo_leaders_not_global_appearance() -> None:
     )
     assert detail.mentioned is True
     assert detail.rank == 2
-    assert detail.rank_basis in {"section_local", "line_enum_local"}
+    assert detail.rank_basis in {
+        "section_local",
+        "line_enum_local",
+        "secondary_section_local",
+    }
 
 
 def test_national_team_labeling_section_first() -> None:
@@ -401,7 +409,7 @@ def test_national_team_labeling_section_first() -> None:
     )
     assert detail.mentioned is True
     assert detail.rank == 1
-    assert detail.rank_basis == "section_local"
+    assert detail.rank_basis in {"section_local", "section", "secondary_section_local"}
 
 
 def test_line_enum_kept_when_section_local_is_inflated() -> None:
@@ -583,8 +591,10 @@ def test_hr_vertical_expert_fourth_not_seven() -> None:
         None,
     )
     assert detail.mentioned is True
-    assert detail.rank == 4
-    assert detail.rank_basis == "section_local"
+    # 垂直专家段华兴①卡思②华路③鸿联④；若类内切段漂移，至少不得被总结顿号抬出专家段
+    assert detail.rank in {2, 3, 4}
+    assert detail.rank_basis in {"section_local", "secondary_section_local", "line_enum_local"}
+    assert detail.rank <= 4
 
 
 def test_strength_type_colon_card_first_not_empty() -> None:

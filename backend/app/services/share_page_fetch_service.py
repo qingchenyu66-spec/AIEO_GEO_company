@@ -10,6 +10,7 @@ DeepSeek：Playwright 水合后抽回答区外链。
 from __future__ import annotations
 
 import html
+import html.parser
 import logging
 import re
 from dataclasses import dataclass, field
@@ -711,12 +712,128 @@ def _clean_answer_text(text: str) -> str:
     return cleaned
 
 
+_BLOCK_TAGS = frozenset(
+    {
+        "p",
+        "div",
+        "section",
+        "article",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "tr",
+        "li",
+        "blockquote",
+        "br",
+        "hr",
+    }
+)
+
+
+class _OlAwareHtmlToText(html.parser.HTMLParser):
+    """把 <ol><li> 的 CSS 序号写进纯文本（inner_text 会丢掉 ::marker）。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ol_stack: list[int] = []
+        self._skip_depth = 0
+        # 豆包常把连续门店拆成多个相邻 <ol>，计数需跨 ol 续上
+        self._ol_continue_from = 0
+        self._ws_since_ol_end = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = (tag or "").lower()
+        if name in {"script", "style", "noscript", "svg"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if name == "ol":
+            start = self._ol_continue_from if self._ws_since_ol_end else 0
+            self._ol_stack.append(start)
+            self._ol_continue_from = 0
+            self._ws_since_ol_end = False
+            self._parts.append("\n")
+            return
+        if name == "li":
+            self._ws_since_ol_end = False
+            if self._ol_stack:
+                self._ol_stack[-1] += 1
+                self._parts.append(f"\n{self._ol_stack[-1]}. ")
+            else:
+                self._parts.append("\n")
+            return
+        if name in _BLOCK_TAGS:
+            self._ws_since_ol_end = False
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        name = (tag or "").lower()
+        if name in {"script", "style", "noscript", "svg"}:
+            if self._skip_depth:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if name == "ol" and self._ol_stack:
+            self._ol_continue_from = self._ol_stack.pop()
+            self._ws_since_ol_end = True
+            self._parts.append("\n")
+            return
+        if name in _BLOCK_TAGS and name != "br":
+            self._ws_since_ol_end = False
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or not data:
+            return
+        if self._ws_since_ol_end and data.strip():
+            self._ws_since_ol_end = False
+            self._ol_continue_from = 0
+        self._parts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def _plaintext_from_html_preserving_ol(page_html: str) -> str:
+    """HTML→正文时保留有序列表序号，供排名解析认编号榜。"""
+    # 2026-09-15 - 豆包分享页 ol 序号在 CSS marker，inner_text 丢失导致门店题虚高
+    if not page_html or not re.search(r"<ol\b", page_html, flags=re.I):
+        return ""
+    parser = _OlAwareHtmlToText()
+    try:
+        parser.feed(page_html)
+        parser.close()
+    except Exception:
+        return ""
+    text = parser.text()
+    # li 内嵌套块级标签时会出现「4.\\n\\n店名」；收成「4. 店名」才能进编号榜
+    text = re.sub(r"(?m)^(\d+)\.\s*\n+(?=\S)", r"\1. ", text)
+    return text
+
+
+def _has_markdown_ol_markers(text: str) -> bool:
+    return bool(re.search(r"(?m)^\s*\d+\.\s+\S", text or ""))
+
+
 def _extract_answer_from_html(page_html: str, body_text: str) -> str:
-    text = _clean_answer_text(body_text)
-    if len(text) >= 80:
-        return text
+    body_clean = _clean_answer_text(body_text)
+    # 有 <ol> 时优先走保留序号的 HTML 抽取，避免 inner_text 丢掉 1.2.3.
+    ol_plain = _plaintext_from_html_preserving_ol(page_html or "")
+    ol_clean = _clean_answer_text(ol_plain) if ol_plain else ""
+    if ol_clean and _has_markdown_ol_markers(ol_clean) and len(ol_clean) >= 80:
+        return ol_clean
+    if len(body_clean) >= 80:
+        return body_clean
+    if ol_clean and len(ol_clean) >= 20:
+        return ol_clean
     # fallback: strip tags from html
-    plain = re.sub(r"<script[\s\S]*?</script>", " ", page_html, flags=re.I)
+    plain = re.sub(r"<script[\s\S]*?</script>", " ", page_html or "", flags=re.I)
     plain = re.sub(r"<style[\s\S]*?</style>", " ", plain, flags=re.I)
     plain = re.sub(r"<[^>]+>", "\n", plain)
     plain = html.unescape(plain)

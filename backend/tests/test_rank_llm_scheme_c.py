@@ -56,6 +56,39 @@ def test_strip_search_chrome_without_organize_marker() -> None:
     assert "正式推荐" in cleaned
 
 
+def test_strip_chinese_share_thought_cuts_at_gehaizi_anchor() -> None:
+    """DeepSeek 中文分享：已思考后无「开始组织回答」时，从「给孩子选」起算。"""
+    raw = """
+来自分享的对话
+该对话来自分享，由 AI 生成，请仔细甄别。
+儿童DHA品牌推荐
+已思考（用时 4 秒）
+
+用户需要儿童DHA品牌推荐。我将搜索奇鹤和倍启智。
+
+搜索到 52 个网页
+
+现在需要整理回答。回答将涵盖品牌推荐。
+
+给孩子选DHA，关键不是找最好的牌子。
+
+综合实力型（配方与科研并重）
+植物诀：复合配方
+元素力：孕童专用
+
+102 个网页
+和 DeepSeek 继续聊
+浏览页面
+奇鹤官网测评
+"""
+    cleaned = strip_pre_answer_noise_for_rank(raw)
+    assert cleaned.startswith("给孩子选DHA")
+    assert "用户需要" not in cleaned
+    assert "奇鹤" not in cleaned.split("植物诀", 1)[0]
+    assert "浏览页面" not in cleaned
+    assert "奇鹤官网" not in cleaned
+
+
 def test_parse_ordered_brands_corrects_off_by_one_rank() -> None:
     """LLM 报 4，但 ordered_brands 里宝得聪是第 3 → 校正为 3。"""
     result = parse_llm_rank_payload(
