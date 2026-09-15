@@ -93,7 +93,13 @@ function keywordAtChartPointer(event: MouseEvent): string {
   if (!rect) return ''
   let yAxisValue: number | string | null = null
   try {
-    yAxisValue = chartInstance.convertFromPixel({ yAxisIndex: 0 }, point) as number | string
+    const raw = chartInstance.convertFromPixel({ yAxisIndex: 0 }, point) as unknown
+    if (typeof raw === 'number' || typeof raw === 'string') {
+      yAxisValue = raw
+    } else if (Array.isArray(raw) && raw.length) {
+      const first = raw[0]
+      if (typeof first === 'number' || typeof first === 'string') yAxisValue = first
+    }
   } catch {
     return ''
   }
