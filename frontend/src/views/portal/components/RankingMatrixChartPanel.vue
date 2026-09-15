@@ -436,7 +436,6 @@ defineExpose({ resizeChart })
                   :key="`${idx}-${text}`"
                   type="button"
                   class="matrix-axis-label-row"
-                  :title="`点击或右键复制：${text}`"
                   @click.stop="copyAxisKeyword(text)"
                   @contextmenu.prevent.stop="copyAxisKeyword(text)"
                 >
