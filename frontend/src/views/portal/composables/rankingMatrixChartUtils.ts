@@ -466,7 +466,8 @@ export function selfCheckMatrixRankScope() {
   console.assert(heatDays.length === 3 && heatDays[0] === '2026-06-01')
   console.assert(matrixDayKeys(kpiSlice.rows).length === 1)
   console.assert(matrixHeatDayKeys(kpiSlice.rows)[0] === '2026-06-01')
-  const heatOpt = buildMatrixHeatOption(kpiSlice, { startDate: '2026-06-01', endDate: '2026-06-03' })
+  const heatBuilt = buildMatrixHeatOption(kpiSlice, { startDate: '2026-06-01', endDate: '2026-06-03' })
+  const heatOpt = heatBuilt.option
   const heatData = (heatOpt.series as Array<{ data: MatrixHeatDataItem[] }>)[0]?.data || []
   console.assert(heatData.length === 3 && heatData[0]?.dayKey === '2026-06-01' && heatData[0]?.prompt === 'p1')
   console.assert(heatData[0]?.value[2] > 0)
@@ -512,7 +513,8 @@ export function selfCheckMatrixRankScope() {
   const heatAxis = (heatOpt.xAxis as { data?: string[]; axisLabel?: { interval?: number } }).data || []
   console.assert(heatAxis.length === 3 && heatAxis[0] === '06-01' && heatAxis[1] === '06-02' && heatAxis[2] === '06-03')
   console.assert((heatOpt.xAxis as { axisLabel?: { interval?: number } }).axisLabel?.interval === 0)
-  console.assert((heatOpt.yAxis as { axisLabel?: { triggerEvent?: boolean } }).axisLabel?.triggerEvent === true)
+  console.assert((heatOpt.yAxis as { axisLabel?: { show?: boolean } }).axisLabel?.show === false)
+  console.assert(heatBuilt.labels[0] === 'p1')
   const periodKpis = matrixScopedPeriodKpis(
     kpiSlice,
     buildMatrixRankScope(kpiSlice.rows, '2026-06-01', '2026-06-01'),
@@ -869,13 +871,16 @@ export function buildMatrixBarOption(
 
   return {
     height: chartHeight,
+    labels: items.map(item => item.label),
+    gridTop: grid.top,
+    gridBottom: grid.bottom + 8,
     option: {
       grid: {
-        left: 12,
+        left: 8,
         right: 64,
         top: grid.top,
         bottom: grid.bottom + 8,
-        containLabel: true,
+        containLabel: false,
       },
     tooltip: {
       trigger: 'axis',
@@ -923,13 +928,8 @@ export function buildMatrixBarOption(
       data: items.map(item => item.label),
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: {
-        color: '#153052',
-        fontSize: 13,
-        fontWeight: 700,
-        // 画布文字不可框选，开事件后由面板绑定点击/右键复制
-        triggerEvent: true,
-      },
+      // 左侧词改由 HTML 渲染，便于选中/复制
+      axisLabel: { show: false },
     },
     series: [{
       type: 'bar',
@@ -1030,12 +1030,16 @@ export function buildMatrixHeatOption(
   })
 
   return {
+    labels: keywords,
+    gridTop: 12,
+    gridBottom: axisRotate ? 8 : 12,
+    option: {
     grid: {
-      left: 12,
+      left: 8,
       right: 48,
       top: 12,
       bottom: axisRotate ? 8 : 12,
-      containLabel: true,
+      containLabel: false,
     },
     tooltip: {
       backgroundColor: 'rgba(21,48,82,.92)',
@@ -1067,13 +1071,8 @@ export function buildMatrixHeatOption(
       data: keywords,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: {
-        color: '#153052',
-        fontSize: 12,
-        fontWeight: 700,
-        // 画布文字不可框选，开事件后由面板绑定点击/右键复制
-        triggerEvent: true,
-      },
+      // 左侧词改由 HTML 渲染，便于选中/复制
+      axisLabel: { show: false },
     },
     visualMap: {
       show: false,
@@ -1096,6 +1095,7 @@ export function buildMatrixHeatOption(
       // ponytail: 热力悬停 emphasis 会清掉格子数字；禁用后 tooltip 仍可用
       emphasis: { disabled: true },
     }],
+  },
   }
 }
 
@@ -1106,44 +1106,18 @@ export function matrixChartHeight(chartType: MatrixChartType, slice: MatrixPlatf
   return matrixHeatChartHeight(slice.columns.length)
 }
 
-/** 矩阵图左侧词是画布字，不可框选；按指针是否落在 grid 左侧词带解析监测词。 */
-export function resolveMatrixAxisKeywordAtPixel(params: {
-  labels: string[]
-  offsetX: number
-  offsetY: number
-  gridLeft: number
-  gridTop: number
-  gridHeight: number
-  yAxisValue: number | string | null | undefined
-}): string {
-  const labels = params.labels
-  if (!labels.length) return ''
-  if (params.offsetX >= params.gridLeft - 2) return ''
-  if (params.offsetY < params.gridTop || params.offsetY > params.gridTop + params.gridHeight) return ''
-  const raw = params.yAxisValue
-  if (raw == null || raw === '') return ''
-  const yIndex = typeof raw === 'number' ? Math.round(raw) : labels.indexOf(String(raw))
-  if (yIndex < 0 || yIndex >= labels.length) return ''
-  return String(labels[yIndex] || '').trim()
+/** 左侧 HTML 监测词列宽：按最长词估算，避免截断或空太宽。 */
+export function estimateMatrixAxisLabelWidth(labels: string[], fontSize = 13) {
+  const longest = labels.reduce((max, text) => Math.max(max, Array.from(String(text || '')).length), 0)
+  return Math.min(280, Math.max(108, longest * fontSize + 20))
 }
 
 {
-  console.assert(resolveMatrixAxisKeywordAtPixel({
-    labels: ['板材品牌哪个好', '环保板推荐'],
-    offsetX: 20,
-    offsetY: 120,
-    gridLeft: 160,
-    gridTop: 10,
-    gridHeight: 400,
-    yAxisValue: 0,
-  }) === '板材品牌哪个好')
-  console.assert(resolveMatrixAxisKeywordAtPixel({
-    labels: ['板材品牌哪个好', '环保板推荐'],
-    offsetX: 200,
-    offsetY: 120,
-    gridLeft: 160,
-    gridTop: 10,
-    gridHeight: 400,
-    yAxisValue: 0,
-  }) === '')
+  console.assert(estimateMatrixAxisLabelWidth(['板材']) >= 108)
+  console.assert(estimateMatrixAxisLabelWidth(['公交广告公司哪家好']) > 108)
+  console.assert((buildMatrixHeatOption({
+    platform: 'doubao',
+    columns: [{ prompt: 'p1', group_name: null, monitor_keyword: '板材品牌哪个好' }],
+    rows: [],
+  }).option.yAxis as { axisLabel?: { show?: boolean } }).axisLabel?.show === false)
 }

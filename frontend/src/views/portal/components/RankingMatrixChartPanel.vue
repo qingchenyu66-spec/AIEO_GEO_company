@@ -14,12 +14,12 @@ import {
   buildMatrixBarOption,
   buildMatrixHeatOption,
   buildMatrixRankScope,
+  estimateMatrixAxisLabelWidth,
   matrixChartHeight,
   matrixPlatformKpi,
   resolveMatrixBarLayoutHint,
   resolveColumnCell,
   resolveColumnRow,
-  resolveMatrixAxisKeywordAtPixel,
   sliceMatrixByPlatform,
   type MatrixChartType,
   type MatrixHeatDataItem,
@@ -51,11 +51,16 @@ const emit = defineEmits<{
 
 const chartRef = ref<HTMLDivElement | null>(null)
 const stageBodyRef = ref<HTMLDivElement | null>(null)
+const axisOverlay = ref<{
+  labels: string[]
+  top: number
+  bottom: number
+  width: number
+  height: number
+} | null>(null)
 let chartInstance: ECharts | null = null
 let runtime: EchartsRuntime | null = null
 let renderVersion = 0
-let axisKeywordLabels: string[] = []
-let unbindAxisKeywordCopy: (() => void) | null = null
 
 async function copyAxisKeyword(raw: unknown) {
   const text = String(raw ?? '').trim()
@@ -64,83 +69,7 @@ async function copyAxisKeyword(raw: unknown) {
     await navigator.clipboard.writeText(text)
     ElMessage.success('已复制监测词')
   } catch {
-    ElMessage.error('复制失败，请手动选择右侧词表复制')
-  }
-}
-
-function readGridRect(chart: ECharts): { x: number; y: number; width: number; height: number } | null {
-  try {
-    const component = (chart as unknown as {
-      getModel?: () => { getComponent?: (name: string, index: number) => {
-        coordinateSystem?: { getRect?: () => { x: number; y: number; width: number; height: number } }
-      } }
-    }).getModel?.().getComponent?.('grid', 0)
-    const rect = component?.coordinateSystem?.getRect?.()
-    if (!rect) return null
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-  } catch {
-    return null
-  }
-}
-
-function keywordAtChartPointer(event: MouseEvent): string {
-  if (!chartInstance || !chartRef.value || !axisKeywordLabels.length) return ''
-  const box = chartRef.value.getBoundingClientRect()
-  const offsetX = event.clientX - box.left
-  const offsetY = event.clientY - box.top
-  const point: [number, number] = [offsetX, offsetY]
-  const rect = readGridRect(chartInstance)
-  if (!rect) return ''
-  let yAxisValue: number | string | null = null
-  try {
-    const raw = chartInstance.convertFromPixel({ yAxisIndex: 0 }, point) as unknown
-    if (typeof raw === 'number' || typeof raw === 'string') {
-      yAxisValue = raw
-    } else if (Array.isArray(raw) && raw.length) {
-      const first = raw[0]
-      if (typeof first === 'number' || typeof first === 'string') yAxisValue = first
-    }
-  } catch {
-    return ''
-  }
-  return resolveMatrixAxisKeywordAtPixel({
-    labels: axisKeywordLabels,
-    offsetX,
-    offsetY,
-    gridLeft: rect.x,
-    gridTop: rect.y,
-    gridHeight: rect.height,
-    yAxisValue,
-  })
-}
-
-function bindAxisKeywordCopy(el: HTMLDivElement) {
-  unbindAxisKeywordCopy?.()
-  const onClick = (event: MouseEvent) => {
-    const keyword = keywordAtChartPointer(event)
-    if (!keyword) return
-    event.preventDefault()
-    void copyAxisKeyword(keyword)
-  }
-  const onContextMenu = (event: MouseEvent) => {
-    const keyword = keywordAtChartPointer(event)
-    if (!keyword) return
-    event.preventDefault()
-    event.stopPropagation()
-    void copyAxisKeyword(keyword)
-  }
-  const onMove = (event: MouseEvent) => {
-    el.style.cursor = keywordAtChartPointer(event) ? 'copy' : ''
-  }
-  el.addEventListener('click', onClick)
-  el.addEventListener('contextmenu', onContextMenu, true)
-  el.addEventListener('mousemove', onMove)
-  unbindAxisKeywordCopy = () => {
-    el.removeEventListener('click', onClick)
-    el.removeEventListener('contextmenu', onContextMenu, true)
-    el.removeEventListener('mousemove', onMove)
-    el.style.cursor = ''
-    unbindAxisKeywordCopy = null
+    ElMessage.error('复制失败，请手动框选左侧监测词')
   }
 }
 
@@ -297,6 +226,7 @@ async function renderChart() {
   const version = ++renderVersion
   if (props.chartType === 'table' || !activeSlice.value?.columns.length || !activeSlice.value.rows.length) {
     chartInstance?.clear()
+    axisOverlay.value = null
     return
   }
   await nextTick()
@@ -310,8 +240,15 @@ async function renderChart() {
   const layoutHint = measureBarLayoutHint(slice.columns.length)
   const built = props.chartType === 'bar'
     ? buildMatrixBarOption(slice, runtime, scopeScheduleLabel.value, rankScope.value, layoutHint)
-    : null
-  const renderHeight = built?.height ?? chartHeight.value
+    : buildMatrixHeatOption(slice, {
+      startDate: props.filterStartDate,
+      endDate: props.filterEndDate,
+    })
+  const renderHeight = ('height' in built && built.height) ? built.height : chartHeight.value
+  const labels = built.labels || []
+  const gridTop = built.gridTop ?? 12
+  const gridBottom = built.gridBottom ?? 12
+  const option = built.option
   chartRef.value.style.height = `${renderHeight}px`
 
   if (!chartInstance) {
@@ -319,19 +256,20 @@ async function renderChart() {
   }
   if (version !== renderVersion) return
 
-  const option = built?.option ?? buildMatrixHeatOption(slice, {
-    startDate: props.filterStartDate,
-    endDate: props.filterEndDate,
-  })
   chartInstance.setOption(option, { notMerge: true })
   chartInstance.resize({ width: chartRef.value.clientWidth, height: renderHeight })
 
-  const yAxisOption = (option as { yAxis?: { data?: string[] } }).yAxis
-  axisKeywordLabels = Array.isArray(yAxisOption?.data) ? yAxisOption.data.map(item => String(item || '')) : []
-  bindAxisKeywordCopy(chartRef.value)
+  axisOverlay.value = labels.length
+    ? {
+      labels,
+      top: gridTop,
+      bottom: gridBottom,
+      width: estimateMatrixAxisLabelWidth(labels, props.chartType === 'bar' ? 13 : 12),
+      height: renderHeight,
+    }
+    : null
 
   chartInstance.off('click')
-  chartInstance.off('contextmenu')
   chartInstance.on('click', (params: unknown) => {
     const event = params as {
       componentType?: string
@@ -385,8 +323,7 @@ function resizeChart() {
 }
 
 function disposeChart() {
-  unbindAxisKeywordCopy?.()
-  axisKeywordLabels = []
+  axisOverlay.value = null
   chartInstance?.dispose()
   chartInstance = null
 }
@@ -479,13 +416,41 @@ defineExpose({ resizeChart })
             </div>
           </div>
           <div class="matrix-chart-wrap">
-            <div ref="chartRef" class="matrix-chart-canvas" />
+            <div
+              class="matrix-chart-plot"
+              :style="axisOverlay ? { minHeight: `${axisOverlay.height}px` } : undefined"
+            >
+              <div
+                v-if="axisOverlay"
+                class="matrix-axis-label-col"
+                data-testid="matrix-axis-labels"
+                :style="{
+                  width: `${axisOverlay.width}px`,
+                  height: `${axisOverlay.height}px`,
+                  paddingTop: `${axisOverlay.top}px`,
+                  paddingBottom: `${axisOverlay.bottom}px`,
+                }"
+              >
+                <button
+                  v-for="(text, idx) in axisOverlay.labels"
+                  :key="`${idx}-${text}`"
+                  type="button"
+                  class="matrix-axis-label-row"
+                  :title="`点击或右键复制：${text}`"
+                  @click.stop="copyAxisKeyword(text)"
+                  @contextmenu.prevent.stop="copyAxisKeyword(text)"
+                >
+                  {{ text }}
+                </button>
+              </div>
+              <div ref="chartRef" class="matrix-chart-canvas" />
+            </div>
             <p class="matrix-chart-legend">
               <span class="legend-top3">1~3 靠前</span>
               <span class="legend-mid">4+ 待提升</span>
               <span class="legend-none">— 未提及</span>
-              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；点/右键左侧监测词可复制</span>
-              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；点/右键左侧监测词可复制</span>
+              <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；左侧监测词可框选或点复制</span>
+              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；左侧监测词可框选或点复制</span>
             </p>
           </div>
         </article>
