@@ -23,13 +23,25 @@ git checkout main
 git pull --ff-only origin main
 AFTER_REV="$(git rev-parse HEAD)"
 
+# 当次进程读的是旧脚本；deploy_prod.sh 自己变了就换成新文件再跑
+if [[ -z "${DEPLOY_PROD_REEXEC:-}" && "$BEFORE_REV" != "$AFTER_REV" ]]; then
+  if git diff --name-only "$BEFORE_REV" "$AFTER_REV" | grep -qE '^scripts/deploy_prod\.sh$'; then
+    echo "==> re-exec updated deploy_prod.sh"
+    export DEPLOY_PROD_REEXEC=1
+    exec bash "$ROOT/scripts/deploy_prod.sh"
+  fi
+fi
+
+RESTART_API=0
 RESTART_CELERY=0
 if [[ "$BEFORE_REV" != "$AFTER_REV" ]]; then
   if git diff --name-only "$BEFORE_REV" "$AFTER_REV" | grep -qE '^(backend/|scripts/setup_api_split_services\.sh|scripts/deploy_prod\.sh|deploy/)'; then
+    RESTART_API=1
     RESTART_CELERY=1
   fi
 else
   # 同 commit 再跑：新 unit / drop-in 仍可能需要落地
+  RESTART_API=1
   RESTART_CELERY=1
 fi
 
@@ -94,10 +106,19 @@ PY
 echo "==> frontend build"
 cd "$ROOT/frontend"
 npm ci --legacy-peer-deps
-npm run build
+# 先写到 dist-next，再同步进 dist，避免 vite 清空正在被访问的目录
+rm -rf dist-next
+npm run build -- --outDir dist-next
+if [[ ! -f dist-next/index.html ]]; then
+  echo "ERROR: frontend build missing dist-next/index.html" >&2
+  exit 1
+fi
+mkdir -p dist
+rsync -a --exclude index.html dist-next/ dist/
+rsync -a dist-next/index.html dist/index.html
+rsync -a --delete dist-next/ dist/
 
 echo "==> API 快/重/回调双实例"
-bash "$ROOT/scripts/setup_api_split_services.sh"
 cp "$ROOT/deploy/nginx/geo-http-prod-split.conf" /etc/nginx/sites-available/geo-http.conf
 nginx -t
 systemctl reload nginx
@@ -105,13 +126,13 @@ systemctl reload nginx
 wait_health() {
   local port="$1"
   local i
-  for i in $(seq 1 15); do
+  for i in $(seq 1 20); do
     if curl -sf "http://127.0.0.1:${port}/api/v1/health" >/dev/null; then
       return 0
     fi
     sleep 1
   done
-  echo "WARN: health timeout on :${port}" >&2
+  echo "ERROR: health timeout on :${port}" >&2
   return 1
 }
 
@@ -119,29 +140,40 @@ rolling_pair() {
   local unit_a="$1" port_a="$2" unit_b="$3" port_b="$4"
   echo "==> restart ${unit_a} then ${unit_b}"
   systemctl restart "$unit_a"
-  wait_health "$port_a" || true
+  if ! wait_health "$port_a"; then
+    echo "ERROR: ${unit_a} 未起来，保留 ${unit_b} 继续服务" >&2
+    exit 1
+  fi
   systemctl restart "$unit_b"
-  wait_health "$port_b" || true
+  if ! wait_health "$port_b"; then
+    echo "ERROR: ${unit_b} 未起来，${unit_a} 仍在服务" >&2
+    exit 1
+  fi
 }
 
-# 旧单实例让出 A 端口后，再轮转 A/B
-for old in geo-api geo-api-heavy geo-api-callback; do
-  if [[ -f "/etc/systemd/system/${old}.service" ]]; then
-    systemctl stop "$old" 2>/dev/null || true
-    systemctl disable "$old" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${old}.service"
-  fi
-done
-systemctl daemon-reload
-systemctl start geo-api-a geo-api-heavy-a geo-api-callback-a || true
-wait_health 8001 || true
-wait_health 8002 || true
-wait_health 8003 || true
+if [[ "$RESTART_API" == "1" ]]; then
+  bash "$ROOT/scripts/setup_api_split_services.sh"
+  # 旧单实例让出 A 端口后，再轮转 A/B
+  for old in geo-api geo-api-heavy geo-api-callback; do
+    if [[ -f "/etc/systemd/system/${old}.service" ]]; then
+      systemctl stop "$old" 2>/dev/null || true
+      systemctl disable "$old" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${old}.service"
+    fi
+  done
+  systemctl daemon-reload
+  systemctl start geo-api-a geo-api-heavy-a geo-api-callback-a
+  wait_health 8001
+  wait_health 8002
+  wait_health 8003
 
-echo "==> rolling restart API pairs"
-rolling_pair geo-api-a 8001 geo-api-b 8011
-rolling_pair geo-api-heavy-a 8002 geo-api-heavy-b 8012
-rolling_pair geo-api-callback-a 8003 geo-api-callback-b 8013
+  echo "==> rolling restart API pairs"
+  rolling_pair geo-api-a 8001 geo-api-b 8011
+  rolling_pair geo-api-heavy-a 8002 geo-api-heavy-b 8012
+  rolling_pair geo-api-callback-a 8003 geo-api-callback-b 8013
+else
+  echo "==> skip API restart (frontend-only change)"
+fi
 
 ensure_celery_graceful() {
   local unit="$1"
