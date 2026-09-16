@@ -12,6 +12,8 @@ e2e/.env.rpa
 backend/storage/
 backend/data/tenant_purge_backups/
 backend/data/backfill_screenshots/
+backend/scripts/prod_store_rank_sample.json
+backend/scripts/*_rank_sample.json
 backend/celerybeat-schedule*
 frontend/node_modules/
 frontend/dist/

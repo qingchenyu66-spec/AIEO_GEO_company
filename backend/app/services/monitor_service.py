@@ -5595,27 +5595,67 @@ def _glued_dash_bold_cards_text_rank(text: str, brand_terms: list[str]) -> int |
 
 
 _STORE_CARD_ATTR_RE = re.compile(
-    r"^(?:地址|位置|主营|适合|电话|主打|业务范围|本地优势|服务能力)\s*[:：]"
+    r"^(?:地址|位置|主营|适合|电话|主打|业务范围|本地优势|服务能力|亮点|优势|推荐理由)\s*[:：]"
 )
+_STORE_CARD_BODY_LABEL_RE = re.compile(
+    r"^✅?\s*(?:主营|亮点|优势|适合|推荐理由|一句话)\s*[:：]"
+)
+# 真正分区：结构 emoji / 中文序号 / markdown；✅卖点行不得进此
 _STORE_CARD_SECTION_RE = re.compile(
-    r"^(?:[✅📍📌🪵🛋️]|[一二三四五六七八九十]+[、.．]|#{1,4}\s+\S)"
+    r"^(?:[🏪🪵🛋️📌]|[一二三四五六七八九十]+[、.．]|#{1,4}\s+\S)"
 )
 _STORE_CARD_TIP_RE = re.compile(
-    r"避坑|选购要点|总结与建议|如果需要|可以一次性对比|优先去|探店要点|选购板材|怎么逛"
+    r"避坑|选购要点|总结与建议|如果需要|可以一次性对比|优先去|探店要点|选购板材|怎么逛|逛店路线|快速选型"
+)
+_STORE_CARD_SECTION_TEXT_RE = re.compile(
+    r"(?:主流品牌门店|一线品牌|本地(?:板材)?工厂|品牌授权|品牌裸板|一站式|"
+    r"仓储批发|授权专卖|工厂\s*/\s*定制)"
 )
 
 
 def _is_store_card_attr_line(line: str) -> bool:
+    """店名片体内行：地址/卖点/适合；绝不拿来切段。"""
     plain = re.sub(r"\*\*", "", str(line or "")).strip()
     if not plain:
         return False
     if _STORE_CARD_ATTR_RE.match(plain):
         return True
-    # 南昌豆包：📍地址行 / ✅主营：卖点
-    if plain.startswith("📍") and len(plain) <= 80:
+    # 📍逛店路线等收束标题不当属性
+    if plain.startswith("📍") and _STORE_CARD_TIP_RE.search(plain):
+        return False
+    # 南昌/邢台豆包：📍地址（不限短行）；✅主营/亮点/优势；👉适合
+    if plain.startswith("📍"):
         return True
-    if re.match(r"^✅?\s*主营\s*[:：]", plain):
+    if _STORE_CARD_BODY_LABEL_RE.match(plain):
         return True
+    if plain.startswith("👉"):
+        return True
+    return False
+
+
+def _is_store_card_section_header(line: str) -> bool:
+    """显式分区标题；✅亮点/👉适合等卡内正文除外。"""
+    plain = re.sub(r"\*\*", "", str(line or "")).strip()
+    if not plain or _is_store_card_attr_line(plain):
+        return False
+    if _STORE_CARD_SECTION_RE.match(plain):
+        return True
+    if _STORE_CARD_SECTION_TEXT_RE.search(plain):
+        return True
+    # ✅ 仅市场/品类标题可切段（✅亮点已在 attr 排除）
+    if plain.startswith("✅"):
+        rest = plain.lstrip("✅ ").strip()
+        if _STORE_CARD_BODY_LABEL_RE.match(plain) or _STORE_CARD_BODY_LABEL_RE.match(
+            f"✅{rest}"
+        ):
+            return False
+        if re.search(
+            r"市场|装饰城|专卖|授权|工厂|批发|仓储|探店|避坑|裸板|一站式|品牌门店",
+            rest,
+        ):
+            return True
+        if "：" not in rest and ":" not in rest and 2 <= len(rest) <= 40:
+            return True
     return False
 
 
@@ -5624,9 +5664,9 @@ def _looks_like_store_card_title(line: str) -> bool:
     plain = re.sub(r"\*\*", "", str(line or "")).strip()
     if not plain or len(plain) > 48:
         return False
-    if _STORE_CARD_ATTR_RE.match(plain):
+    if _is_store_card_attr_line(plain):
         return False
-    if _STORE_CARD_SECTION_RE.match(plain):
+    if _is_store_card_section_header(plain):
         return False
     if re.match(r"^\d{1,2}\s*[.、．)]\s*\S", plain):
         return False
@@ -5646,36 +5686,35 @@ def _looks_like_store_card_title(line: str) -> bool:
     return True
 
 
-def _store_guide_card_brand_rank(
-    text: str,
-    brand_terms: list[str],
-    *,
-    prompt: str | None = None,
-) -> int | None:
-    """无编号门店卡片序：店名行 + 地址/主营，取品牌首次所在段内位次。
+def _brand_rank_in_store_cards(cards: list[str], brand_terms: list[str]) -> int | None:
+    if not cards:
+        return None
+    for rank, title in enumerate(cards, 1):
+        if _configured_exposure_term_in_text(title, brand_terms):
+            return rank
+    return None
 
-    2026-09-15 - 豆包门店题 inner_text 丢 ol 后，appearance/token 把贴士并列虚抬；
-    人手按「千年舟→韩宇来→大王椰」卡片序锁位。本规则对齐该金标准。
+
+def _extract_store_guide_cards(
+    lines: list[str],
+    *,
+    split_sections: bool,
+) -> tuple[list[list[str]], list[str]]:
+    """先抽齐「店名+属性」卡；装饰行永不切段。
+
+    返回 (按分区的卡列表, 拍平卡列表)。split_sections=False 时只在贴士处收束。
     """
-    if not text or not brand_terms:
-        return None
-    prompt_text = str(prompt or "")
-    body = str(text)
-    # 仅门店导购场景启用，避免 HR/广告等 bullet 列表误伤
-    store_prompt = bool(re.search(r"门店|专卖店|板材店|建材店", prompt_text))
-    store_body = bool(
-        re.search(r"[✅📍]", body)
-        and (
-            re.search(r"(?m)^(?:地址|位置|主营)\s*[:：]", body)
-            or re.search(r"(?m)^📍\s*\S", body)
-            or re.search(r"(?m)^✅?\s*主营\s*[:：]", body)
-        )
-    )
-    if not store_prompt and not store_body:
-        return None
-    lines = [re.sub(r"\*\*", "", ln).strip() for ln in str(text).splitlines()]
+    sections: list[list[str]] = []
     section_cards: list[str] = []
+    flat_cards: list[str] = []
     idx = 0
+
+    def close_section() -> None:
+        nonlocal section_cards
+        if section_cards:
+            sections.append(section_cards)
+            section_cards = []
+
     while idx < len(lines):
         line = lines[idx]
         if not line:
@@ -5685,20 +5724,15 @@ def _store_guide_card_brand_rank(
             idx += 1
             continue
         if _STORE_CARD_TIP_RE.search(line) and (
-            line.startswith(("✅", "📍", "📌", "⚠️")) or line.startswith("#") or len(line) < 40
+            line.startswith(("✅", "📍", "📌", "⚠️"))
+            or line.startswith("#")
+            or len(line) < 40
+            or _is_store_card_section_header(line)
         ):
-            if section_cards:
-                for rank, title in enumerate(section_cards, 1):
-                    if _configured_exposure_term_in_text(title, brand_terms):
-                        return rank
+            close_section()
             break
-        if _STORE_CARD_SECTION_RE.match(line) and not _is_store_card_attr_line(line):
-            # 新分区：若上一段已命中品牌则直接返回；否则清空续收
-            if section_cards:
-                for rank, title in enumerate(section_cards, 1):
-                    if _configured_exposure_term_in_text(title, brand_terms):
-                        return rank
-                section_cards = []
+        if split_sections and _is_store_card_section_header(line):
+            close_section()
             idx += 1
             continue
         if not _looks_like_store_card_title(line):
@@ -5711,7 +5745,7 @@ def _store_guide_card_brand_rank(
             idx += 1
             continue
         section_cards.append(line)
-        # 跳过紧随属性行，避免「主营」被当成下一店名
+        flat_cards.append(line)
         nxt = idx + 1
         while nxt < len(lines):
             nxt_line = lines[nxt]
@@ -5723,17 +5757,77 @@ def _store_guide_card_brand_rank(
                 continue
             break
         idx = nxt
-        continue
-    if len(section_cards) >= 2:
-        for rank, title in enumerate(section_cards, 1):
-            if _configured_exposure_term_in_text(title, brand_terms):
-                return rank
-    elif len(section_cards) == 1 and _configured_exposure_term_in_text(
-        section_cards[0], brand_terms
+    close_section()
+    return sections, flat_cards
+
+
+def _reconcile_store_card_rank(
+    section_rank: int | None,
+    section_size: int,
+    flat_rank: int | None,
+) -> int | None:
+    """D：段内只剩单卡却拍平序>1 → 多半是误切段虚抬，改用拍平序。"""
+    if section_rank is None:
+        return flat_rank
+    if (
+        section_rank == 1
+        and section_size <= 1
+        and flat_rank is not None
+        and flat_rank > 1
     ):
-        # 单卡段且品牌即该店：仍计第1（少见）
-        return 1
-    return None
+        return int(flat_rank)
+    return int(section_rank)
+
+
+def _store_guide_card_brand_rank(
+    text: str,
+    brand_terms: list[str],
+    *,
+    prompt: str | None = None,
+) -> int | None:
+    """无编号门店卡片序：先抽齐店名卡再数位次（C），单卡虚抬用拍平序纠偏（D）。
+
+    2026-09-15 - 豆包门店题 inner_text 丢 ol 后，appearance/token 把贴士并列虚抬；
+    人手按「千年舟→韩宇来→大王椰」卡片序锁位。本规则对齐该金标准。
+    2026-09-15 - ✅亮点/👉适合不得切段（邢台第三虚抬成第一）。
+    """
+    if not text or not brand_terms:
+        return None
+    prompt_text = str(prompt or "")
+    body = str(text)
+    # 仅门店导购场景启用，避免 HR/广告等 bullet 列表误伤
+    store_prompt = bool(re.search(r"门店|专卖店|板材店|建材店", prompt_text))
+    store_body = bool(
+        re.search(r"[✅📍👉🏪]", body)
+        and (
+            re.search(r"(?m)^(?:地址|位置|主营|亮点|优势)\s*[:：]", body)
+            or re.search(r"(?m)^📍\s*\S", body)
+            or re.search(r"(?m)^✅?\s*(?:主营|亮点|优势)\s*[:：]", body)
+            or re.search(r"(?m)^👉", body)
+        )
+    )
+    if not store_prompt and not store_body:
+        return None
+    lines = [re.sub(r"\*\*", "", ln).strip() for ln in str(text).splitlines()]
+    sections, flat_cards = _extract_store_guide_cards(lines, split_sections=True)
+    flat_rank = _brand_rank_in_store_cards(flat_cards, brand_terms)
+
+    section_rank: int | None = None
+    section_size = 0
+    for cards in sections:
+        hit = _brand_rank_in_store_cards(cards, brand_terms)
+        if hit is None:
+            continue
+        section_rank = hit
+        section_size = len(cards)
+        break
+
+    if section_rank is None and flat_rank is None:
+        return None
+    # 段内未命中时用拍平序；命中则走 D 对账
+    if section_rank is None:
+        return flat_rank
+    return _reconcile_store_card_rank(section_rank, section_size, flat_rank)
 
 
 def _is_continued_subtier_boundary(lines: list[str], index: int) -> bool:
@@ -5833,7 +5927,9 @@ def _numbered_list_brand_rank(text: str, brand_terms: list[str]) -> int | None:
         rank_items = [
             body
             for body in items
-            if body and not _ADVICE_NUMBERED_ITEM_RE.search(re.sub(r"\*\*", "", body))
+            if body
+            and not _ADVICE_NUMBERED_ITEM_RE.search(re.sub(r"\*\*", "", body))
+            and _looks_like_numbered_catalog_peer(body)
         ]
         if len(rank_items) < 2:
             continue
@@ -6078,6 +6174,66 @@ def _company_markdown_table_row_rank(text: str, brand_terms: list[str]) -> int |
     return None
 
 
+_NUMBERED_MARKET_VENUE_RE = re.compile(
+    r"市场|建材城|家具城|商城|卖场|广场|五金城|装饰城|博览中心|智慧城|石材城|家居城"
+)
+
+
+def _looks_like_numbered_catalog_peer(heading: str) -> bool:
+    """编号榜同伴：品牌/店名片；纯市场/路线/选购 tip 排除。"""
+    plain = re.sub(r"\*\*", "", str(heading or "")).strip()
+    plain = re.sub(r"^#+\s*", "", plain).strip()
+    if not plain or len(plain) > 80:
+        return False
+    if _ADVICE_NUMBERED_ITEM_RE.search(plain):
+        return False
+    if re.search(r"优先【|逛店参考|选购路线|选购小建议|路线建议", plain):
+        return False
+    # 2026-09-16 - 「1.儿童房优先…选大王椰」选购 tip 勿进编号同伴
+    if re.match(
+        r"^(优先|预算|自装|儿童房|问清楚|如果|想要|游客|打卡|追求)",
+        plain,
+    ):
+        return False
+    lead = re.split(r"[（(：:｜|]", plain, maxsplit=1)[0].strip()
+    lead = re.sub(r"^[^\w\u4e00-\u9fff]+", "", lead).strip()
+    # 只看主体：宏大五金城剔除；千里马烧烤(南市场店) 主体无「市场」保留
+    if _NUMBERED_MARKET_VENUE_RE.search(lead) and not re.search(
+        r"板材|专卖|门店|旗舰|经销|木业", lead
+    ):
+        return False
+    # 长句且不像店名
+    if len(plain) > 36 and not re.search(
+        r"板材|专卖|门店|旗舰|经销|木业|烧烤|烤肉|店\)|店）",
+        plain,
+    ):
+        return False
+    return True
+
+
+def _numbered_heading_is_brand_catalog_entry(heading: str, brand_terms: list[str]) -> bool:
+    """编号主榜条目须是本品品牌/店名主体，市场标题里顺带点名不算。
+
+    2026-09-16 - 「### 5.宏大五金城（…大王椰运营中心）」勿当大王椰第5。
+    """
+    plain = re.sub(r"\*\*", "", str(heading or "")).strip()
+    plain = re.sub(r"^#+\s*", "", plain).strip()
+    if not plain or not _configured_exposure_term_in_text(plain, brand_terms):
+        return False
+    if not _looks_like_numbered_catalog_peer(plain):
+        return False
+    lead = re.split(r"[（(：:｜|]", plain, maxsplit=1)[0].strip()
+    lead = re.sub(r"^[^\w\u4e00-\u9fff]+", "", lead).strip()
+    if lead and _configured_exposure_term_in_text(lead, brand_terms):
+        return True
+    # 配置词带括号店名时：标题主体含词干即可（千里马烧烤一部(市妇婴店)）
+    for term in brand_terms:
+        stem = re.split(r"[（(]", str(term or ""), maxsplit=1)[0].strip()
+        if stem and len(stem) >= 2 and stem in lead:
+            return True
+    return False
+
+
 def _numbered_subheading_brand_rank(text: str, brand_terms: list[str]) -> int | None:
     """### 1. / ### 2. 分档小标题：品牌为该档主推（标题或书名行）→ 返回标题序号。
 
@@ -6093,7 +6249,7 @@ def _numbered_subheading_brand_rank(text: str, brand_terms: list[str]) -> int | 
     for num, heading, parts in blocks:
         if _is_advice_numbered_block_heading(heading):
             continue
-        if _configured_exposure_term_in_text(heading, brand_terms):
+        if _numbered_heading_is_brand_catalog_entry(heading, brand_terms):
             return num
         for line in parts:
             text_line = str(line or "").strip()
@@ -6101,6 +6257,8 @@ def _numbered_subheading_brand_rank(text: str, brand_terms: list[str]) -> int | 
                 continue
             # 卖场/方案里的多品牌顿号并列 ≠ 该编号档的主推书
             if text_line.count("、") >= 2:
+                continue
+            if not _numbered_heading_is_brand_catalog_entry(text_line, brand_terms):
                 continue
             return num
     return None
@@ -6117,7 +6275,7 @@ def _numbered_subheading_title_rank(text: str, brand_terms: list[str]) -> int | 
     for num, heading, _parts in blocks:
         if _is_advice_numbered_block_heading(heading):
             continue
-        if _configured_exposure_term_in_text(heading, brand_terms):
+        if _numbered_heading_is_brand_catalog_entry(heading, brand_terms):
             return num
     return None
 
@@ -6178,6 +6336,18 @@ def _iter_numbered_subsection_blocks(text: str) -> list[tuple[int, str, list[str
             in_tip_scope = True
             continue
         if _is_chapter_scope_boundary_line(plain) or _is_continued_subtier_boundary(lines, idx):
+            # 2026-09-16 - ## 1.品牌 / ## 2.品牌 是编号主榜，勿当空大章直接丢掉
+            boundary_parsed = _parse_numbered_subsection_header(
+                re.sub(r"^#{0,6}\s*", "", bare)
+            )
+            if boundary_parsed and not _is_advice_numbered_block_heading(
+                boundary_parsed[1]
+            ):
+                flush_current_block_to_tier()
+                current_num, current_heading = boundary_parsed
+                current_parts = []
+                in_tip_scope = False
+                continue
             flush_tier_to_blocks()
             in_tip_scope = False
             continue
@@ -7597,7 +7767,22 @@ def _resolve_brand_rank_detail(
                     or str(item.rank_basis or "") in _peer_bases
                 )
             ]
+            # 2026-09-16 - 门店卡虚抬的更小数字不得挡住编号榜进池（九江4被卡序2挡掉）
             if not peer_ranks or int(numbered) < min(peer_ranks):
+                candidates.append(
+                    BrandRankResolution(
+                        rank=int(numbered),
+                        mentioned=True,
+                        source="appearance",
+                        confidence=0.86,
+                        rank_basis="numbered_list",
+                    )
+                )
+                mentioned = True
+            elif any(
+                str(item.rank_basis or "") == "store_card_local" and item.rank is not None
+                for item in candidates
+            ):
                 candidates.append(
                     BrandRankResolution(
                         rank=int(numbered),
@@ -7711,22 +7896,32 @@ def _resolve_brand_rank_detail(
 
     # 2026-09-03 - 公司主表行序优先于选购提示编号段/并列句
     # 2026-09-15 - ###N.品牌 / 正文 1.品牌 主榜优先于决策表/推荐矩阵（高铁###2、动码1.）
+    # 2026-09-16 - 编号主榜优先于门店卡（九江1..4=4 勿被碎卡虚成2）
+    heading_hits = [
+        c
+        for c in candidates
+        if str(c.rank_basis or "") == "numbered_subheading" and c.rank is not None
+    ]
+    numbered_list_hits = [
+        c
+        for c in candidates
+        if str(c.rank_basis or "") == "numbered_list" and c.rank is not None
+    ]
+    store_card_hits = [
+        c
+        for c in candidates
+        if str(c.rank_basis or "") == "store_card_local" and c.rank is not None
+    ]
+    if (heading_hits or numbered_list_hits) and store_card_hits:
+        catalog = heading_hits or numbered_list_hits
+        return min(catalog, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
+
     table_row_hits = [
         c for c in candidates if str(c.rank_basis or "") == "company_table_row" and c.rank is not None
     ]
     if table_row_hits:
-        heading_hits = [
-            c
-            for c in candidates
-            if str(c.rank_basis or "") == "numbered_subheading" and c.rank is not None
-        ]
         if heading_hits:
             return min(heading_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
-        numbered_list_hits = [
-            c
-            for c in candidates
-            if str(c.rank_basis or "") == "numbered_list" and c.rank is not None
-        ]
         if numbered_list_hits:
             best_list = min(numbered_list_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
             best_table = min(table_row_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
