@@ -372,3 +372,45 @@ def test_china_bpo_bullet_not_closing_if_cluster() -> None:
     )
     assert detail.rank == 1, detail
 
+
+def test_emoji_company_cards_beats_scene_tsv_table() -> None:
+    """DeepSeek 分享：🏢 主榜鸿联九五第1，勿被按场景 TSV 抬成第5。"""
+    answer = """
+一、头部数据标注服务商图谱
+
+🏢 鸿联九五——全栈合规与大规模交付型
+央企背景，全国交付网络，适合政企类项目。
+
+🏢 海天瑞声——巨头生态与底层基建型
+数据标注行业首家主板上市公司。
+
+🏢 云测数据——垂直定制与技术探索型
+AI预标注+专家质检。
+
+🏢 景联文科技——高质量数据集生产型
+自研SolarSense数据工程平台。
+
+🏢 菲利信科技——规模化产能与双轮驱动型
+2026年TOP20榜单全国第二。
+
+🏢 科路人工智能——弹性产能与头部客户背书型
+自有全职标注专业人员1000余名。
+
+三、按场景的选型建议
+你的场景	优先考虑方向
+大模型训练/RLHF	菲利信科技、科路人工智能
+自动驾驶/点云标注	云测数据、菲利信
+医疗/金融等高壁垒语义标注	海天瑞声、景联文科技
+政企/合规敏感型项目	鸿联九五（央企背景+三级质检+全栈安全）
+具身智能/机器人	景联文科技
+超大规模产能需求	科路人工智能、鸿联九五
+"""
+    detail = _resolve_brand_rank_detail(
+        _sub("数据标注公司哪家好", answer, platform="deepseek"),
+        "数据标注公司哪家好",
+        ["鸿联九五", "北京鸿联九五信息产业有限公司"],
+        None,
+    )
+    assert detail.rank == 1, detail
+    assert detail.rank_basis == "emoji_lead_company"
+

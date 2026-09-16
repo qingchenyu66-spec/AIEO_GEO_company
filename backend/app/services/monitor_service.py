@@ -5222,6 +5222,42 @@ def _bold_lead_company_rank(text: str, brand_terms: list[str]) -> int | None:
     return None
 
 
+_EMOJI_LEAD_COMPANY_CARD_RE = re.compile(
+    r"^[✅🔥📍📌📺💡⚡️🏢🎯📋💰💎🪵🛋️🏆🚀⭐🌟✨💪🏅🎖️🇨🇳🌍]\s+(.+)$"
+)
+
+
+def _emoji_lead_company_card_rank(text: str, brand_terms: list[str]) -> int | None:
+    """DeepSeek 分享页「🏢 公司名——卖点型」主榜互比位次。
+
+    2026-09-16 - 数据标注答鸿联九五开篇第1，勿被按场景 TSV/决策表抬成第5。
+    """
+    if not text or not brand_terms:
+        return None
+    names: list[str] = []
+    for raw in str(text).splitlines():
+        if _line_is_aside_example_for_rank(raw, brand_terms):
+            continue
+        bare = re.sub(r"\*\*", "", str(raw or "").strip())
+        match = _EMOJI_LEAD_COMPANY_CARD_RE.match(bare)
+        if not match:
+            continue
+        head = match.group(1).strip()
+        lead = re.split(r"[—–\-｜|]", head, maxsplit=1)[0].strip()
+        lead = re.sub(r"[（(].*$", "", lead).strip()
+        if len(lead) < 2:
+            continue
+        if re.search(r"^(适合|亮点|优势|主营|代表公司|代表企业)", lead):
+            continue
+        names.append(lead)
+    if len(names) < 2:
+        return None
+    for index, name in enumerate(names, 1):
+        if _configured_exposure_term_in_text(name, brand_terms):
+            return index
+    return None
+
+
 def _drop_soft_ranks_beaten_by_structured(
     candidates: list[BrandRankResolution],
 ) -> list[BrandRankResolution]:
@@ -5236,7 +5272,8 @@ def _drop_soft_ranks_beaten_by_structured(
         item.source == "structured" and item.rank is not None for item in candidates
     )
     has_company_heading = any(
-        str(item.rank_basis or "") in {"company_heading", "cn_chapter", "bold_lead_company"}
+        str(item.rank_basis or "")
+        in {"company_heading", "cn_chapter", "bold_lead_company", "emoji_lead_company"}
         and item.rank is not None
         for item in candidates
     )
@@ -5249,6 +5286,7 @@ def _drop_soft_ranks_beaten_by_structured(
                 "company_heading",
                 "cn_chapter",
                 "bold_lead_company",
+                "emoji_lead_company",
                 "section_local",
                 "secondary_section_local",
                 "table",
@@ -5274,6 +5312,7 @@ def _drop_soft_ranks_beaten_by_structured(
                 "company_heading",
                 "cn_chapter",
                 "bold_lead_company",
+                "emoji_lead_company",
                 "section_local",
                 "table",
                 "preferred_column",
@@ -6027,6 +6066,13 @@ def _tsv_brand_table_rank(text: str, brand_terms: list[str]) -> int | None:
         if any(len(c) <= 12 and ("首选" in c or "备选" in c) for c in norms):
             i += 1
             continue
+        joined_head = "".join(norms)
+        if any(
+            k in joined_head
+            for k in ("你的场景", "优先考虑", "建议权重", "核心考察点", "评估矩阵")
+        ):
+            i += 1
+            continue
         # 2026-09-15 - 「企业类型|优先推荐」对照表走 numbered 主榜，勿抢 TSV 行序
         if _is_scenario_recommend_matrix_cols(cols):
             i += 1
@@ -6108,6 +6154,19 @@ def _tsv_brand_table_rank(text: str, brand_terms: list[str]) -> int | None:
             continue
         joined = "".join(cells)
         if any(h in joined for h in ("类型服务商", "服务商核心", "适合场景", "首选推荐")):
+            continue
+        # 2026-09-16 - 场景/评估矩阵勿走无表头 TSV 行序（鸿联九五主榜第1被抬成5/7）
+        if any(
+            h in joined
+            for h in (
+                "你的场景",
+                "优先考虑",
+                "建议权重",
+                "核心考察点",
+                "六维交付",
+                "评估矩阵",
+            )
+        ):
             continue
         short_cells = [c for c in cells if 2 <= len(re.sub(r"\s+", "", c)) <= 24]
         if not short_cells:
@@ -7664,6 +7723,18 @@ def _resolve_brand_rank_detail(
                 )
             )
             mentioned = True
+        emoji_lead = _emoji_lead_company_card_rank(rankable_text, brand_terms)
+        if emoji_lead is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=int(emoji_lead),
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.9,
+                    rank_basis="emoji_lead_company",
+                )
+            )
+            mentioned = True
 
     # 2026-08-11 - 方案C：分档小类内点名序优先于全文出场序，并带回类名
     # 2026-08-12 - 其他值得关注/实力品牌参考：点名也算排名（小节内序）
@@ -7919,6 +7990,13 @@ def _resolve_brand_rank_detail(
     table_row_hits = [
         c for c in candidates if str(c.rank_basis or "") == "company_table_row" and c.rank is not None
     ]
+    main_card_hits = [
+        c
+        for c in candidates
+        if str(c.rank_basis or "")
+        in {"emoji_lead_company", "bold_lead_company", "company_heading"}
+        and c.rank is not None
+    ]
     if table_row_hits:
         if heading_hits:
             return min(heading_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
@@ -7927,6 +8005,11 @@ def _resolve_brand_rank_detail(
             best_table = min(table_row_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
             if _rank_sort_key(best_list.rank) <= _rank_sort_key(best_table.rank):
                 return best_list
+        if main_card_hits:
+            best_main = min(main_card_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
+            best_table = min(table_row_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
+            if _rank_sort_key(best_main.rank) <= _rank_sort_key(best_table.rank):
+                return best_main
         return min(table_row_hits, key=lambda item: _rank_sort_key(item.rank))  # type: ignore[arg-type]
 
     return _pick_frontmost_resolution(candidates, mentioned=mentioned)
