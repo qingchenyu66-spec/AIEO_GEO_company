@@ -198,6 +198,7 @@ fi
 systemctl is-active geo-celery-backfill || echo "WARN: geo-celery-backfill not active" >&2
 
 echo "==> prune weak-rank backfill bells"
+cd "$ROOT/backend"
 python - <<'PY' || echo "WARN: backfill notification prune failed" >&2
 from app.core.database import SessionLocal
 from app.services.snapshot_backfill_service import rebuild_empty_answer_backfill_notifications
