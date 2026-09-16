@@ -568,7 +568,7 @@ def process_molizhishu_callback_task(self, event_id: int) -> dict[str, Any]:
         event = db.get(GeoMonitorCallbackEvent, int(event_id))
         if event is None:
             return {"status": "missing", "event_id": event_id}
-        if event.process_status in {"processed", "ignored"}:
+        if event.process_status in {"processed", "ignored", "ignored_deleted", "ignored_unknown"}:
             return {
                 "status": event.process_status,
                 "event_id": event_id,

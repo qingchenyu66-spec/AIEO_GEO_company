@@ -198,6 +198,7 @@ export async function getSnapshotBackfillMatrix(
 ): Promise<SnapshotBackfillMatrixResult> {
   const response = await http.get('/v1/monitor/snapshot-backfill/matrix', {
     signal: options?.signal,
+    timeout: 90000,
     params: {
       tenant_id: query.tenant_id || undefined,
       all_tenants: query.tenant_id ? undefined : (query.all_tenants ?? true),

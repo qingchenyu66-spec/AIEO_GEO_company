@@ -1650,10 +1650,9 @@ def build_source_analysis_summary(
         get_brand_asset,
         tenant_purchased_platforms,
     )
-    from app.services.monitor_source_rollup_service import _bundle_from_day_rows
+    from app.services.monitor_source_rollup_service import _bundle_from_day_rows, ensure_source_daily_range
     from app.services.observer_account import observer_platforms_for_session
     from app.services.tenant_scope import resolve_and_guard_analytics_tenant
-    from app.models.monitor import GeoMonitorSourceDaily
 
     resolved = resolve_and_guard_analytics_tenant(
         db,
@@ -1673,21 +1672,14 @@ def build_source_analysis_summary(
     if start_d is not None and start_d > end_d:
         start_d = end_d
 
-    # 先暖全日物化缓存（截止昨日），再按区间合并，保证缺日会被补齐
-    get_customer_source_stats_bundle(
+    # 只补查询区间缺日，禁止每次先暖全历史
+    day_rows = ensure_source_daily_range(
         db,
         resolved,
+        start_day=start_d,
+        end_day=end_d,
         purchased_platforms=purchased,
         exposure_terms=exposure,
-    )
-    day_rows = list(
-        db.scalars(
-            select(GeoMonitorSourceDaily).where(
-                GeoMonitorSourceDaily.tenant_id == resolved,
-                GeoMonitorSourceDaily.stat_date <= end_d,
-                *([GeoMonitorSourceDaily.stat_date >= start_d] if start_d is not None else []),
-            )
-        )
     )
     bundle = _bundle_from_day_rows(
         day_rows,

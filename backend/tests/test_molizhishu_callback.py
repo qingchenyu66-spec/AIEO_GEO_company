@@ -17,10 +17,13 @@ from app.main import app
 from app.models.monitor import GeoMonitorCallbackEvent, GeoMonitorSubtask, GeoMonitorTask
 from app.schemas.monitor import FAST_MONITOR_MODE, MonitorTaskCreateRequest, PlatformConfig
 from app.services.molizhishu_callback_service import (
+    accept_molizhishu_callback,
     expected_callback_token,
     ingest_molizhishu_callback,
+    process_molizhishu_callback_event,
     verify_callback_token,
 )
+from app.services.stability_metrics_service import callback_ignore_snapshot
 from app.services.monitor_service import _build_submit_payload
 
 CALLBACK_PATH = "/api/v1/monitor/molizhishu/callback"
@@ -36,6 +39,7 @@ def _patch_callback_side_effects():
         patch("app.services.monitor_auto_retry_service.apply_auto_retry_results"),
         patch("app.services.monitor_auto_retry_service.launch_auto_retries_for_task"),
         patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task"),
+        patch("app.services.credit_service.settle_ready_credit_cells_for_task"),
     ):
         yield
 
@@ -162,7 +166,7 @@ def test_ingest_unknown_task_is_ignored(cb_db) -> None:
     assert result["status"] == "ignored"
     event = cb_db.scalar(select(GeoMonitorCallbackEvent))
     assert event is not None
-    assert event.process_status == "ignored"
+    assert event.process_status == "ignored_unknown"
 
 
 def test_ingest_processes_subtasks(cb_db) -> None:
@@ -234,6 +238,7 @@ def test_http_callback_unknown_task_returns_200(callback_client, cb_db, monkeypa
         body = resp.json()
         assert body["code"] == 0
         assert body["data"]["status"] == "ignored"
+        assert body["data"]["process_status"] == "ignored_unknown"
     finally:
         app.dependency_overrides.pop(get_db, None)
 
@@ -290,3 +295,106 @@ def test_http_callback_accepts_when_celery_enqueues(callback_client, cb_db, monk
         assert sub is None
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_ingest_deleted_task_is_ignored_deleted(cb_db) -> None:
+    task = _monitor_task(task_id="deleted-task")
+    task.deleted = True
+    cb_db.add(task)
+    cb_db.commit()
+    with _patch_callback_side_effects():
+        result = ingest_molizhishu_callback(cb_db, _sample_callback(task_id="deleted-task"))
+    assert result["status"] == "ignored"
+    assert result["process_status"] == "ignored_deleted"
+    event = cb_db.scalar(select(GeoMonitorCallbackEvent))
+    assert event is not None
+    assert event.process_status == "ignored_deleted"
+
+
+def test_accept_unknown_without_celery_classifies(cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", False)
+    with _patch_callback_side_effects():
+        result = accept_molizhishu_callback(cb_db, _sample_callback(task_id="no-celery-ghost"))
+    assert result["status"] == "ignored"
+    assert result["process_status"] == "ignored_unknown"
+    event = cb_db.scalar(select(GeoMonitorCallbackEvent))
+    assert event is not None
+    assert event.process_status == "ignored_unknown"
+
+
+def test_retry_unknown_processes_after_task_lands(cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", True)
+    with (
+        _patch_callback_side_effects(),
+        patch(
+            "app.services.molizhishu_callback_service._enqueue_callback_event",
+            return_value=True,
+        ),
+    ):
+        first = accept_molizhishu_callback(cb_db, _sample_callback(task_id="race-land"))
+    assert first["process_status"] == "retry_unknown"
+    event_id = first["event_id"]
+    cb_db.add(_monitor_task(task_id="race-land"))
+    cb_db.commit()
+    with _patch_callback_side_effects():
+        second = process_molizhishu_callback_event(cb_db, event_id)
+    assert second["status"] == "processed"
+    sub = cb_db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == "sub_cb_1"))
+    assert sub is not None
+
+
+def test_callback_ignore_snapshot_counts(cb_db) -> None:
+    from datetime import datetime
+
+    cb_db.add(
+        GeoMonitorCallbackEvent(
+            task_id="ign-1",
+            payload_hash="h1",
+            process_status="ignored_unknown",
+            payload_json={},
+            received_at=datetime.now(),
+        )
+    )
+    cb_db.add(
+        GeoMonitorCallbackEvent(
+            task_id="ign-2",
+            payload_hash="h2",
+            process_status="ignored_deleted",
+            payload_json={},
+            received_at=datetime.now(),
+        )
+    )
+    cb_db.add(
+        GeoMonitorCallbackEvent(
+            task_id="ign-3",
+            payload_hash="h3",
+            process_status="retry_unknown",
+            payload_json={},
+            received_at=datetime.now(),
+        )
+    )
+    cb_db.commit()
+    snap = callback_ignore_snapshot(cb_db, days=7)
+    assert snap["ignored_unknown"] == 1
+    assert snap["ignored_deleted"] == 1
+    assert snap["retry_unknown"] == 1
+
+
+def test_accept_unknown_task_enqueues_retry(cb_db, monkeypatch) -> None:
+    monkeypatch.setattr(config_mod.settings, "celery_enabled", True)
+    with (
+        _patch_callback_side_effects(),
+        patch(
+            "app.services.molizhishu_callback_service._enqueue_callback_event",
+            return_value=True,
+        ) as enqueue,
+    ):
+        result = accept_molizhishu_callback(cb_db, _sample_callback(task_id="race-task"))
+    assert result["status"] == "accepted"
+    assert result["process_status"] == "retry_unknown"
+    enqueue.assert_called_once()
+    assert enqueue.call_args.kwargs.get("countdown") == 30
+    event = cb_db.scalar(select(GeoMonitorCallbackEvent))
+    assert event is not None
+    assert event.process_status == "retry_unknown"
+

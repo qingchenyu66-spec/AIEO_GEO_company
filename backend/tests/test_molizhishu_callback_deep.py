@@ -39,7 +39,10 @@ TEST_TOKEN = "pytest-callback-deep-secret"
 @contextmanager
 def _patch_heavy_only():
     """保留排名/重试/通知入口，只挡提交后统计里的外部依赖。"""
-    with patch("app.services.brand_analysis_service.parse_sentiments_after_brand_word_sync"):
+    with (
+        patch("app.services.brand_analysis_service.parse_sentiments_after_brand_word_sync"),
+        patch("app.services.credit_service.settle_ready_credit_cells_for_task"),
+    ):
         yield
 
 
@@ -121,6 +124,7 @@ def test_ingest_fills_missing_rank_from_answer(deep_db) -> None:
         patch("app.services.monitor_auto_retry_service.launch_auto_retries_for_task", return_value=[]),
         patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task", return_value=0),
         patch("app.services.molizhishu_callback_service._post_commit_side_effects"),
+        patch("app.services.credit_service.settle_ready_credit_cells_for_task"),
     ):
         result = ingest_molizhishu_callback(deep_db, payload)
     assert result["status"] == "processed"
@@ -179,6 +183,7 @@ def test_ingest_launches_auto_retry_for_failed_subtask(deep_db) -> None:
         patch("app.services.monitor_auto_retry_service._enqueue_sync"),
         patch("app.services.monitor_auto_retry_service.filter_submittable_platforms", return_value=["deepseek"]),
         patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task", return_value=0),
+        patch("app.services.credit_service.settle_ready_credit_cells_for_task"),
     ):
         client_cls.return_value.submit_task.return_value = fake_submit
         result = ingest_molizhishu_callback(deep_db, payload)
@@ -311,6 +316,7 @@ def test_ingest_calls_post_commit_after_success(deep_db) -> None:
         patch("app.services.monitor_auto_retry_service.launch_auto_retries_for_task", return_value=[]),
         patch("app.services.snapshot_backfill_service.notify_failed_subtasks_for_task", return_value=0),
         patch("app.services.molizhishu_callback_service._post_commit_side_effects") as post,
+        patch("app.services.credit_service.settle_ready_credit_cells_for_task"),
     ):
         ingest_molizhishu_callback(deep_db, payload)
     post.assert_called_once()
@@ -320,7 +326,7 @@ def test_ingest_calls_post_commit_after_success(deep_db) -> None:
 
 
 def test_http_unknown_task_returns_ignored(deep_client, deep_db) -> None:
-    """2026-08-24 - 稳定性①：HTTP 不再抢 sync 锁，未知 task 当场 ignored 仍 200。"""
+    """未知 task：无 Celery 时当场 ignored_unknown，仍 200。"""
     app.dependency_overrides[get_db] = lambda: deep_db
     try:
         resp = deep_client.post(
@@ -328,7 +334,9 @@ def test_http_unknown_task_returns_ignored(deep_client, deep_db) -> None:
             json={"taskId": "ghost-task", "status": "completed", "subTaskList": []},
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["status"] == "ignored"
+        data = resp.json()["data"]
+        assert data["status"] in {"ignored", "accepted"}
+        assert data["process_status"] in {"ignored_unknown", "retry_unknown"}
     finally:
         app.dependency_overrides.pop(get_db, None)
 

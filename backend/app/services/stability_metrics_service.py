@@ -29,6 +29,7 @@ HEAVY_MARKERS = (
     "/api/v1/monitor/workspace-brief",
     "/api/v1/monitor/summary",
     "/api/v1/monitor/source-stats",
+    "/api/v1/monitor/snapshot-backfill",
     "/api/v1/analytics/",
 )
 
@@ -197,6 +198,27 @@ def callback_failure_rate(db: Session, *, hours: int = 24) -> dict[str, Any]:
     }
 
 
+def callback_ignore_snapshot(db: Session, *, days: int = 7) -> dict[str, Any]:
+    from app.models.monitor import GeoMonitorCallbackEvent
+
+    since = datetime.now() - timedelta(days=max(1, int(days)))
+    rows = db.execute(
+        select(GeoMonitorCallbackEvent.process_status, func.count())
+        .where(GeoMonitorCallbackEvent.received_at >= since)
+        .group_by(GeoMonitorCallbackEvent.process_status)
+    ).all()
+    by_status = {str(status): int(count) for status, count in rows}
+    unknown = int(by_status.get("ignored_unknown") or 0) + int(by_status.get("ignored") or 0)
+    return {
+        "days": int(days),
+        "ignored_unknown": unknown,
+        "ignored_deleted": int(by_status.get("ignored_deleted") or 0),
+        "retry_unknown": int(by_status.get("retry_unknown") or 0),
+        "processed": int(by_status.get("processed") or 0),
+        "failed": int(by_status.get("failed") or 0),
+    }
+
+
 def collect_stability_metrics(db: Session | None = None) -> dict[str, Any]:
     close = False
     if db is None:
@@ -208,6 +230,7 @@ def collect_stability_metrics(db: Session | None = None) -> dict[str, Any]:
         return {
             "latency": latency_snapshot(),
             "callback": callback_failure_rate(db),
+            "callback_ignored": callback_ignore_snapshot(db),
             "matrix_jobs": matrix_job_duration_snapshot(),
             "checked_at": datetime.now().isoformat(timespec="seconds"),
         }

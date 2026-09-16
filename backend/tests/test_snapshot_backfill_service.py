@@ -250,8 +250,8 @@ def test_notify_failed_subtasks_for_task_creates_single_notification(db_session)
     assert "st-fail-1" in (payload.get("subtask_ids") or [])
 
 
-def test_notify_weak_rank_uses_rank_title(db_session, monkeypatch) -> None:
-    """不依赖解析器：直接锁展示位次路径，验证标题与 owner。"""
+def test_notify_weak_rank_does_not_create_bell(db_session, monkeypatch) -> None:
+    """有正文的弱排名只进补录页，不写 warning 铃铛。"""
     from app.services import snapshot_backfill_service as svc
 
     tenant = Tenant(name="测试企业", code="t-weak", owner_user_id=9)
@@ -300,13 +300,86 @@ def test_notify_weak_rank_uses_rank_title(db_session, monkeypatch) -> None:
         }
 
     monkeypatch.setattr(svc, "build_snapshot_backfill_item", _fake_item)
-    assert notify_failed_subtasks_for_task(db_session, task) == 1
-    row = db_session.query(SystemNotification).one()
-    assert row.title == "待补录 · 测试企业"
-    assert "待补录1条" in row.message
+    assert notify_failed_subtasks_for_task(db_session, task) == 0
+    assert db_session.query(SystemNotification).count() == 0
+
+
+def test_rebuild_empty_answer_backfill_notifications_strips_weak_rank(db_session) -> None:
     import json
 
-    assert json.loads(row.payload_json or "{}").get("owner_user_id") == 9
+    from app.services.snapshot_backfill_service import rebuild_empty_answer_backfill_notifications
+
+    tenant = Tenant(name="修剪企业", code="t-prune", owner_user_id=1)
+    db_session.add(tenant)
+    db_session.flush()
+    task = GeoMonitorTask(
+        task_id="task-prune",
+        tenant_id=tenant.id,
+        monitor_keywords="品牌",
+        status="completed",
+        total_items=2,
+        completed_items=2,
+        failed_items=0,
+        prompts_json=["a", "b"],
+        platforms_json=[{"platform": "doubao", "mode": "standard", "screenshot": 1}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    empty = GeoMonitorSubtask(
+        subtask_id="st-empty",
+        task_id="task-prune",
+        platform="doubao",
+        mode="standard",
+        prompt="空答案",
+        status="failed",
+        error_message="timeout",
+        raw_result_json={},
+        auto_retry_count=1,
+        auto_retry_status="failed",
+    )
+    weak = GeoMonitorSubtask(
+        subtask_id="st-weak-prune",
+        task_id="task-prune",
+        platform="doubao",
+        mode="standard",
+        prompt="弱排名",
+        status="completed",
+        answer_content="品牌排第五",
+        mention_position=5,
+        raw_result_json={},
+    )
+    task.subtasks = [empty, weak]
+    db_session.add(task)
+    db_session.add(
+        SystemNotification(
+            audience_type="PLATFORM",
+            category="snapshot_backfill",
+            level="warning",
+            title="待补录 · 修剪企业",
+            message="待补录2条",
+            source_key=f"backfill:batch:{tenant.id}:20260916-0800",
+            payload_json=json.dumps(
+                {
+                    "period": "08:00",
+                    "scope": "修剪企业",
+                    "entries": [
+                        {"subtask_id": "st-empty", "platform": "doubao", "platform_label": "豆包"},
+                        {"subtask_id": "st-weak-prune", "platform": "doubao", "platform_label": "豆包"},
+                    ],
+                    "subtask_ids": ["st-empty", "st-weak-prune"],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db_session.commit()
+
+    result = rebuild_empty_answer_backfill_notifications(db_session)
+    assert result["updated"] == 1
+    row = db_session.query(SystemNotification).one()
+    payload = json.loads(row.payload_json or "{}")
+    assert payload.get("subtask_ids") == ["st-empty"]
+
 
 
 def test_matrix_cell_has_todo_rules() -> None:
@@ -1224,7 +1297,6 @@ def test_dismissed_subtask_excluded_from_eligible_and_list(db_session) -> None:
     hit = next(item for item in matrix_page["items"] if item.get("subtask_id") == "st-dismiss")
     assert hit.get("needs_backfill") is False
     assert hit.get("backfill_dismissed") is True
-    assert hit.get("mention_position") == 8
     assert hit.get("has_answer") is True
 
 

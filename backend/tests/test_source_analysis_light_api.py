@@ -13,12 +13,6 @@ def test_build_source_analysis_summary_uses_source_bundle_only():
         identity=SimpleNamespace(id=1, identity_type="CUSTOMER", tenant_id=6),
         user=SimpleNamespace(id=1, username="demo"),
     )
-    bundle = {
-        "source_stats": [{"url": "https://a.com", "count": 2, "platforms": ["doubao"]}],
-        "source_stats_all": [{"url": "https://b.com", "count": 3, "platforms": ["doubao"]}],
-        "source_citation_trend": {"points": [{"label": "07-29", "value": 1}]},
-        "source_citation_trend_by_platform": {"doubao": {"points": []}},
-    }
     ranged = {
         "source_stats": [{"url": "https://a.com", "count": 1, "platforms": ["doubao"]}],
         "source_stats_all": [{"url": "https://b.com", "count": 1, "platforms": ["doubao"]}],
@@ -48,9 +42,9 @@ def test_build_source_analysis_summary_uses_source_bundle_only():
             return_value=["doubao"],
         ),
         patch(
-            "app.services.monitor_service.get_customer_source_stats_bundle",
-            return_value=bundle,
-        ) as mock_bundle,
+            "app.services.monitor_source_rollup_service.ensure_source_daily_range",
+            return_value=[],
+        ) as mock_ensure,
         patch(
             "app.services.monitor_service.customer_display_cutoff",
             return_value=SimpleNamespace(date=lambda: date(2026, 8, 13)),
@@ -73,8 +67,10 @@ def test_build_source_analysis_summary_uses_source_bundle_only():
             end_date=date(2026, 8, 13),
         )
 
-    mock_bundle.assert_called_once()
     mock_range.assert_called_once()
+    mock_ensure.assert_called_once()
+    assert mock_ensure.call_args.kwargs["start_day"] == date(2026, 8, 7)
+    assert mock_ensure.call_args.kwargs["end_day"] == date(2026, 8, 13)
     assert data["tenant_id"] == 6
     assert data["source_stats"][0]["count"] == 1
     assert data["end_date"] == "2026-08-13"
@@ -108,7 +104,7 @@ def test_build_source_analysis_summary_filters_platform():
         patch("app.services.brand_service.active_keyword_groups", return_value=[]),
         patch("app.services.brand_service.brand_exposure_terms", return_value=["品牌"]),
         patch("app.services.brand_service.tenant_purchased_platforms", return_value=["doubao", "deepseek"]),
-        patch("app.services.monitor_service.get_customer_source_stats_bundle", return_value=ranged),
+        patch("app.services.monitor_source_rollup_service.ensure_source_daily_range", return_value=[]),
         patch(
             "app.services.monitor_service.customer_display_cutoff",
             return_value=SimpleNamespace(date=lambda: date(2026, 8, 13)),

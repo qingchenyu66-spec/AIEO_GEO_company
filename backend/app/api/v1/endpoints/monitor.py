@@ -782,7 +782,7 @@ def monitor_snapshot_backfill_matrix(
         keyword_group=keyword_group,
         purpose=purpose,
     )
-    set_json_cache(cache_key, data, ttl_seconds=30)
+    set_json_cache(cache_key, data, ttl_seconds=120)
     return ApiResponse(data=data)
 
 

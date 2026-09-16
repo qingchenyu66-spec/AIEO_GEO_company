@@ -54,12 +54,64 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _load_task(db: Session, task_id: str) -> GeoMonitorTask | None:
-    return db.scalar(
-        select(GeoMonitorTask).where(
-            GeoMonitorTask.task_id == task_id,
-            GeoMonitorTask.deleted.is_(False),
+_CALLBACK_TERMINAL = frozenset({"processed", "ignored", "ignored_deleted", "ignored_unknown"})
+
+
+def _load_task(db: Session, task_id: str, *, include_deleted: bool = False) -> GeoMonitorTask | None:
+    stmt = select(GeoMonitorTask).where(GeoMonitorTask.task_id == task_id)
+    if not include_deleted:
+        stmt = stmt.where(GeoMonitorTask.deleted.is_(False))
+    return db.scalar(stmt)
+
+
+def _mark_callback_ignored(
+    db: Session,
+    event: GeoMonitorCallbackEvent,
+    *,
+    process_status: str,
+    error_message: str,
+) -> dict[str, Any]:
+    event.process_status = process_status
+    event.error_message = error_message
+    event.processed_at = datetime.now()
+    db.commit()
+    logger.info(
+        "molizhishu callback %s task_id=%s event_id=%s",
+        process_status,
+        event.task_id,
+        event.id,
+    )
+    return {
+        "task_id": str(event.task_id or "").strip(),
+        "status": "ignored",
+        "process_status": process_status,
+        "event_id": event.id,
+    }
+
+
+def _resolve_missing_callback_task(
+    db: Session,
+    event: GeoMonitorCallbackEvent,
+    *,
+    allow_retry: bool,
+) -> dict[str, Any] | None:
+    """本地无活跃任务时分类；需要延迟重试则返回 None 由调用方入队。"""
+    task_id = str(event.task_id or "").strip()
+    existing = _load_task(db, task_id, include_deleted=True)
+    if existing is not None and existing.deleted:
+        return _mark_callback_ignored(
+            db,
+            event,
+            process_status="ignored_deleted",
+            error_message="本地任务已删除",
         )
+    if allow_retry and str(event.process_status or "") != "retry_unknown":
+        return None
+    return _mark_callback_ignored(
+        db,
+        event,
+        process_status="ignored_unknown",
+        error_message="本地无此任务",
     )
 
 
@@ -168,7 +220,7 @@ def process_molizhishu_callback_event(db: Session, event_id: int) -> dict[str, A
         raise ValueError(f"回调事件不存在: {event_id}")
 
     task_id = str(event.task_id or "").strip()
-    if event.process_status in {"processed", "ignored"}:
+    if event.process_status in _CALLBACK_TERMINAL:
         return {
             "task_id": task_id,
             "status": event.process_status,
@@ -179,17 +231,13 @@ def process_molizhishu_callback_event(db: Session, event_id: int) -> dict[str, A
     payload = event.payload_json if isinstance(event.payload_json, dict) else {}
     task = _load_task(db, task_id)
     if task is None:
-        event.process_status = "ignored"
-        event.error_message = "本地无此任务"
-        event.processed_at = datetime.now()
-        db.commit()
-        logger.warning("molizhishu callback ignored unknown task_id=%s", task_id)
-        return {
-            "task_id": task_id,
-            "status": "ignored",
-            "process_status": "ignored",
-            "event_id": event.id,
-        }
+        ignored = _resolve_missing_callback_task(db, event, allow_retry=False)
+        return ignored or _mark_callback_ignored(
+            db,
+            event,
+            process_status="ignored_unknown",
+            error_message="本地无此任务",
+        )
 
     try:
         _apply_callback_payload(db, task, payload)
@@ -218,16 +266,21 @@ def process_molizhishu_callback_event(db: Session, event_id: int) -> dict[str, A
     }
 
 
-def _enqueue_callback_event(event_id: int, task_id: str) -> bool:
+def _enqueue_callback_event(event_id: int, task_id: str, *, countdown: int = 0) -> bool:
     """投递 Celery；成功 True。失败由调用方同步兜底。"""
     from app.tasks.monitor import process_molizhishu_callback_task
 
     celery_task_id = f"molizhishu-callback-{event_id}"
+    if countdown:
+        celery_task_id = f"molizhishu-callback-{event_id}-retry"
     try:
-        process_molizhishu_callback_task.apply_async(
-            kwargs={"event_id": int(event_id)},
-            task_id=celery_task_id,
-        )
+        kwargs: dict[str, Any] = {
+            "kwargs": {"event_id": int(event_id)},
+            "task_id": celery_task_id,
+        }
+        if countdown:
+            kwargs["countdown"] = int(countdown)
+        process_molizhishu_callback_task.apply_async(**kwargs)
         return True
     except Exception as exc:
         message = str(exc).lower()
@@ -259,19 +312,22 @@ def accept_molizhishu_callback(db: Session, payload: dict[str, Any]) -> dict[str
         db.commit()
         return _duplicate_result(event, task_id)
 
-    # 未知任务：当场忽略，不占队列
+    # 未知任务：延迟 30s 再查一次，覆盖提交落库赛跑；仍没有再分类忽略
     if _load_task(db, task_id) is None:
-        event.process_status = "ignored"
-        event.error_message = "本地无此任务"
-        event.processed_at = datetime.now()
+        delayed = _resolve_missing_callback_task(db, event, allow_retry=True)
+        if delayed is not None:
+            return delayed
+        event.process_status = "retry_unknown"
+        event.error_message = "unknown_retry"
         db.commit()
-        logger.warning("molizhishu callback ignored unknown task_id=%s", task_id)
-        return {
-            "task_id": task_id,
-            "status": "ignored",
-            "process_status": "ignored",
-            "event_id": event.id,
-        }
+        if settings.celery_enabled and _enqueue_callback_event(event.id, task_id, countdown=30):
+            return {
+                "task_id": task_id,
+                "status": "accepted",
+                "process_status": "retry_unknown",
+                "event_id": event.id,
+            }
+        return process_molizhishu_callback_event(db, event.id)
 
     db.commit()
 

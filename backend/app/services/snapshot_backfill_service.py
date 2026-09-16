@@ -15,7 +15,7 @@ from sqlalchemy import and_, case, false, func, or_, select, text, update
 from sqlalchemy import insert as sa_insert
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.api.dependencies import CurrentSession
 from app.models.brand import BrandAsset
@@ -74,6 +74,7 @@ from app.services.schedule_context import (
     schedule_runs_for_tasks,
 )
 from app.services.system_notification_service import (
+    rebuild_empty_answer_backfill_notifications,
     resolve_subtask_backfill_notification,
     upsert_batch_backfill_notification as persist_batch_backfill_notification,
 )
@@ -851,6 +852,9 @@ def notify_failed_subtasks_for_task(db: Session, task: GeoMonitorTask) -> int:
             continue
         ctx = build_snapshot_backfill_item(db, subtask, task)
         if not ctx.get("needs_backfill"):
+            continue
+        # 铃铛只保留空答案硬失败；弱排名待办仍在快照补录页
+        if ctx.get("has_answer") or (subtask.answer_content or "").strip():
             continue
         slot_key, slot_label = parse_schedule_slot(
             ctx.get("schedule_window_key"), ctx.get("schedule_label")
@@ -2953,6 +2957,7 @@ def list_snapshot_backfill_page(
     limit: int = 50,
     include_summary: bool = True,
     light: bool = False,
+    matrix_scan: bool = False,
 ) -> dict[str, Any]:
     """运营端快照补录列表（含汇总统计），可按企业/检测日(区间)/来源/平台/关键词筛选。
 
@@ -3100,7 +3105,10 @@ def list_snapshot_backfill_page(
         or keyword_group_filter
         or source_filter
     )
-    if tenant_id is None and not tenant_ids:
+    if matrix_scan:
+        # 矩阵专用：SQL 上限，避免企业区间把全部子任务灌进内存
+        scan_cap = min(max(int(limit or 4000), 400), 4000)
+    elif tenant_id is None and not tenant_ids:
         # ponytail: 无筛选时收紧扫描上限，避免 2500~4000 行全进内存再 slice
         scan_cap = min(max(limit * 12, 400), 800) if not has_scope_filter else min(max(limit * 20, 800), 1500)
     else:
@@ -3117,12 +3125,30 @@ def list_snapshot_backfill_page(
     ordered_ids = list(db.scalars(id_stmt))
     rows: list[GeoMonitorSubtask] = []
     if ordered_ids:
-        by_id = {
-            item.id: item
-            for item in db.scalars(
-                select(GeoMonitorSubtask).where(GeoMonitorSubtask.id.in_(ordered_ids))
+        load_stmt = select(GeoMonitorSubtask).where(GeoMonitorSubtask.id.in_(ordered_ids))
+        if matrix_scan:
+            load_stmt = load_stmt.options(
+                load_only(
+                    GeoMonitorSubtask.id,
+                    GeoMonitorSubtask.subtask_id,
+                    GeoMonitorSubtask.task_id,
+                    GeoMonitorSubtask.platform,
+                    GeoMonitorSubtask.prompt,
+                    GeoMonitorSubtask.status,
+                    GeoMonitorSubtask.error_message,
+                    GeoMonitorSubtask.answer_content,
+                    GeoMonitorSubtask.mention_position,
+                    GeoMonitorSubtask.all_rankings_json,
+                    GeoMonitorSubtask.competitor_rankings_json,
+                    GeoMonitorSubtask.raw_result_json,
+                    GeoMonitorSubtask.backfill_dismissed_at,
+                    GeoMonitorSubtask.updated_at,
+                    GeoMonitorSubtask.auto_retry_count,
+                    GeoMonitorSubtask.auto_retry_status,
+                    GeoMonitorSubtask.auto_retry_task_id,
+                )
             )
-        }
+        by_id = {item.id: item for item in db.scalars(load_stmt)}
         rows = [by_id[i] for i in ordered_ids if i in by_id]
     task_ids = {item.task_id for item in rows}
     tasks = {
@@ -3296,6 +3322,7 @@ def list_snapshot_backfill_matrix(
         limit=4000,
         include_summary=True,
         light=True,
+        matrix_scan=True,
     )
     items = payload.get("items") or []
     platform_names = _platform_display_names()

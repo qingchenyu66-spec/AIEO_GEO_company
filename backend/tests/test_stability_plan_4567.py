@@ -11,7 +11,7 @@ from app.services.window_snapshot_service import match_workspace_window_days
 
 def test_classify_api_lane():
     assert classify_api_lane("/api/v1/auth/me") == "fast"
-    assert classify_api_lane("/api/v1/monitor/ranking-matrix") == "heavy"
+    assert classify_api_lane("/api/v1/monitor/snapshot-backfill/matrix") == "heavy"
     assert classify_api_lane("/api/v1/monitor/molizhishu/callback") == "callback"
     assert classify_api_lane("/api/v1/analytics/competitor-compare") == "heavy"
 
@@ -53,3 +53,19 @@ def test_evaluate_stability_alerts_callback_rate():
     }
     alerts = evaluate_stability_alerts(metrics)
     assert any(a["queue"] == "callback_fail_rate" for a in alerts)
+
+
+def test_evaluate_stability_alerts_skips_ignored_callbacks():
+    metrics = {
+        "latency": {"lanes": {}},
+        "callback": {"hours": 24, "total": 100, "failed": 0, "failure_rate": 0},
+        "callback_ignored": {
+            "ignored_unknown": 40,
+            "ignored_deleted": 8,
+            "retry_unknown": 3,
+        },
+        "matrix_jobs": {"max_ms": 1000},
+    }
+    alerts = evaluate_stability_alerts(metrics)
+    assert not any(a["queue"] == "callback_fail_rate" for a in alerts)
+    assert not any("ignored" in str(a.get("queue") or "") for a in alerts)

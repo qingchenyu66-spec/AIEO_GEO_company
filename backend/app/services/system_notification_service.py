@@ -1321,6 +1321,101 @@ def upsert_approval_result_notification(
     return row
 
 
+def rebuild_empty_answer_backfill_notifications(db: Session) -> dict[str, int]:
+    """把待补录铃铛收成空答案硬失败；弱排名条目删除，N=0 整条去掉。"""
+    from app.models.monitor import GeoMonitorSubtask
+
+    rows = list(
+        db.scalars(
+            select(SystemNotification).where(
+                SystemNotification.audience_type == "PLATFORM",
+                SystemNotification.category == "snapshot_backfill",
+            )
+        )
+    )
+    deleted = 0
+    updated = 0
+    kept = 0
+    entry_ids: list[str] = []
+    parsed: list[tuple[SystemNotification, dict[str, Any]]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json or "{}")
+        except Exception:
+            payload = {}
+        parsed.append((row, payload))
+        for item in list(payload.get("entries") or []):
+            sid = str((item or {}).get("subtask_id") or "").strip()
+            if sid:
+                entry_ids.append(sid)
+        for sid in list(payload.get("subtask_ids") or []):
+            text = str(sid or "").strip()
+            if text:
+                entry_ids.append(text)
+    empty_ids: set[str] = set()
+    if entry_ids:
+        unique_ids = list(dict.fromkeys(entry_ids))
+        for chunk_start in range(0, len(unique_ids), 500):
+            chunk = unique_ids[chunk_start:chunk_start + 500]
+            for st in db.scalars(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id.in_(chunk))):
+                if not (st.answer_content or "").strip():
+                    empty_ids.add(str(st.subtask_id))
+    for row, payload in parsed:
+        entries = [
+            {
+                "subtask_id": str((item or {}).get("subtask_id") or "").strip(),
+                "platform": str((item or {}).get("platform") or "unknown"),
+                "platform_label": str(
+                    (item or {}).get("platform_label") or (item or {}).get("platform") or "unknown"
+                ),
+            }
+            for item in list(payload.get("entries") or [])
+            if str((item or {}).get("subtask_id") or "").strip()
+        ]
+        if not entries:
+            old_platform = str(payload.get("platform") or "unknown")
+            old_label = str(payload.get("platform_label") or old_platform)
+            entries = [
+                {
+                    "subtask_id": str(sid).strip(),
+                    "platform": old_platform,
+                    "platform_label": old_label,
+                }
+                for sid in list(payload.get("subtask_ids") or [])
+                if str(sid or "").strip()
+            ]
+        remain = [item for item in entries if item["subtask_id"] in empty_ids]
+        if not remain:
+            _delete_notification(db, row, auto_commit=False)
+            deleted += 1
+            continue
+        if len(remain) == len(entries):
+            kept += 1
+            continue
+        period = str(payload.get("period") or "时段")
+        scope = str(payload.get("scope") or "监测任务")
+        owner_user_id = _payload_owner_user_id(payload)
+        title, message, platform_counts = _compose_batch_backfill_copy(
+            scope=scope,
+            period=period,
+            entries=remain,
+            owner_user_id=owner_user_id,
+        )
+        remain_ids = [item["subtask_id"] for item in remain]
+        payload["entries"] = remain
+        payload["subtask_ids"] = remain_ids
+        payload["pending_count"] = len(remain)
+        payload["subtask_id"] = remain_ids[0]
+        payload["platform_counts"] = platform_counts
+        row.title = title
+        row.message = message
+        row.payload_json = json.dumps(payload, ensure_ascii=False)
+        row.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        updated += 1
+    db.commit()
+    return {"kept": kept, "deleted": deleted, "updated": updated}
+
+
 def resolve_subtask_backfill_notification(db: Session, subtask_id: str) -> None:
     """补录成功后移除单条通知，并从汇总批中剔除该子任务（N 递减，0 删除）。"""
     sid = str(subtask_id or "").strip()

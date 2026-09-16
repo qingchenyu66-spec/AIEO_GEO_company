@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -578,6 +578,72 @@ def build_customer_source_stats_from_daily(
             raise
 
     return _bundle_from_day_rows(day_rows, cutoff_day=cutoff_day)
+
+
+def ensure_source_daily_range(
+    db: Session,
+    tenant_id: int,
+    *,
+    start_day: date | None,
+    end_day: date,
+    purchased_platforms: set[str],
+    exposure_terms: list[str],
+) -> list[GeoMonitorSourceDaily]:
+    """只保证查询区间内日物化可用，不先算全历史。"""
+    cutoff = end_day
+    start = start_day or cutoff
+    if start > cutoff:
+        start = cutoff
+    config_fp = source_stats_config_fingerprint(exposure_terms, purchased_platforms)
+    existing = {
+        row.stat_date: row
+        for row in db.scalars(
+            select(GeoMonitorSourceDaily).where(
+                GeoMonitorSourceDaily.tenant_id == tenant_id,
+                GeoMonitorSourceDaily.stat_date >= start,
+                GeoMonitorSourceDaily.stat_date <= cutoff,
+            )
+        )
+    }
+    days: list[date] = []
+    cursor = start
+    while cursor <= cutoff:
+        days.append(cursor)
+        cursor += timedelta(days=1)
+    stale = [
+        day
+        for day in days
+        if day not in existing or str(existing[day].config_fp or "") != config_fp
+    ]
+    if len(stale) > 3 and _try_enqueue_source_daily_warm(tenant_id):
+        return [
+            existing[day]
+            for day in days
+            if day in existing and str(existing[day].config_fp or "") == config_fp
+        ]
+    wrote = False
+    out: list[GeoMonitorSourceDaily] = []
+    for day in days:
+        row = existing.get(day)
+        if row is None or str(row.config_fp or "") != config_fp:
+            row = rebuild_source_daily_for_day(
+                db,
+                tenant_id=tenant_id,
+                stat_date=day,
+                purchased_platforms=purchased_platforms,
+                exposure_terms=exposure_terms,
+                config_fp=config_fp,
+            )
+            wrote = True
+        out.append(row)
+    if wrote:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("commit source daily range failed tenant_id=%s", tenant_id)
+            raise
+    return out
 
 
 def _try_enqueue_source_daily_warm(tenant_id: int) -> bool:
