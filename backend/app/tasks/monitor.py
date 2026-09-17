@@ -24,6 +24,7 @@ from app.services.lead_diagnosis_service import (
     persist_lead_run_failure,
     submit_due_lead_run,
 )
+from app.services.celery_result_sanitize import summarize_schedule_submit_for_celery
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import (
     list_pending_monitor_task_ids,
@@ -223,7 +224,8 @@ def submit_schedule_group_task(
         result = execute_schedule_group(db, current, item)
         if result.get("status") == "skipped":
             raise Ignore()
-        return result
+        # 2026-09-17 - Celery 成功日志会打印返回值；禁止带回 serialize_task 的 callback_url
+        return summarize_schedule_submit_for_celery(result)
     except Ignore:
         raise
     except ScheduleSubmitBusy as exc:
@@ -236,17 +238,19 @@ def submit_schedule_group_task(
             self.max_retries,
         )
         if self.request.retries >= self.max_retries:
-            return {
-                "tenant_id": tenant_id,
-                "schedule_key": group_key,
-                "status": "busy",
-                "keyword": keyword,
-                "message": str(exc),
-            }
+            return summarize_schedule_submit_for_celery(
+                {
+                    "tenant_id": tenant_id,
+                    "schedule_key": group_key,
+                    "status": "busy",
+                    "keyword": keyword,
+                    "message": str(exc),
+                }
+            )
         raise self.retry(exc=exc, countdown=min(60, 5 * (self.request.retries + 1)))
     except RuntimeError as exc:
         logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
-        return {"status": "skipped", "message": str(exc)}
+        return summarize_schedule_submit_for_celery({"status": "skipped", "message": str(exc)})
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
@@ -265,13 +269,15 @@ def submit_schedule_group_task(
                 error_message=str(exc),
                 created_by=created_by,
             )
-            return {
-                "tenant_id": tenant_id,
-                "schedule_key": group_key,
-                "status": "failed",
-                "keyword": keyword,
-                "message": str(exc),
-            }
+            return summarize_schedule_submit_for_celery(
+                {
+                    "tenant_id": tenant_id,
+                    "schedule_key": group_key,
+                    "status": "failed",
+                    "keyword": keyword,
+                    "message": str(exc),
+                }
+            )
         raise self.retry(exc=exc)
     except Exception as exc:
         # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
