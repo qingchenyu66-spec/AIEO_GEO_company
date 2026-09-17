@@ -18,8 +18,15 @@ import router from './router'
 import { useAuthStore } from './stores/auth'
 import { startSessionKeepAlive } from './utils/sessionKeepAlive'
 import { applyPlatformFaviconFromServer } from './utils/platformFavicon'
+import { installStaleChunkReload } from './utils/reloadOnStaleChunk'
 
 void applyPlatformFaviconFromServer()
+
+installStaleChunkReload({
+  onRouterError: (handler) => {
+    router.onError(handler)
+  },
+})
 
 const app = createApp(App)
 
