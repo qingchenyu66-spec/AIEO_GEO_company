@@ -201,16 +201,29 @@ def create_precreate_qr_code(
         "biz_content": json.dumps(biz, ensure_ascii=False, separators=(",", ":")),
     }
     params["sign"] = _sign_content(_ordered_sign_content(params))
+    # Alipay gateway requires charset in the URL query string for request验签;
+    # body-only form posts commonly return isv.invalid-signature.
+    gateway = f"{_ALIPAY_GATEWAY}?charset={quote_plus(params['charset'])}"
     with httpx.Client(timeout=30.0) as client:
-        resp = client.post(_ALIPAY_GATEWAY, data=params)
+        resp = client.post(
+            gateway,
+            data=params,
+            headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
+        )
     try:
         data = resp.json()
-    except Exception as exc:
-        raise AlipayPayError(f"支付宝当面付响应异常: {resp.status_code} {resp.text[:200]}") from exc
+    except Exception:
+        try:
+            data = json.loads(resp.content.decode("utf-8"))
+        except Exception as exc:
+            raise AlipayPayError(
+                f"支付宝当面付响应异常: {resp.status_code} {resp.text[:200]}"
+            ) from exc
     inner = data.get("alipay_trade_precreate_response") or {}
     if str(inner.get("code") or "") != "10000":
         raise AlipayPayError(
-            f"支付宝当面付下单失败: {inner.get('sub_msg') or inner.get('msg') or inner}"
+            f"支付宝当面付下单失败: {inner.get('sub_code') or ''} "
+            f"{inner.get('sub_msg') or inner.get('msg') or inner}".strip()
         )
     qr_code = str(inner.get("qr_code") or "").strip()
     if not qr_code:
