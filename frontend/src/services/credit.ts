@@ -331,12 +331,13 @@ export async function adjustTenantCredit(
 export async function getTenantCreditLedger(
   tenantId: number,
   page = 1,
-  options?: { excludeInternal?: boolean },
+  options?: { excludeInternal?: boolean; pageSize?: number },
 ) {
+  const pageSize = options?.pageSize ?? 20
   const response = await http.get(`/v1/management/credit/tenants/${tenantId}/ledger`, {
     params: {
       page,
-      page_size: 20,
+      page_size: pageSize,
       exclude_internal: options?.excludeInternal ? 1 : undefined,
     },
   })

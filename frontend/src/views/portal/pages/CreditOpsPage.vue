@@ -61,6 +61,8 @@ const summary = ref<Record<string, unknown> | null>(null)
 const TENANT_INLINE_LIMIT = 30
 const TENANT_PAGE_SIZE = 20
 const LEDGER_PAGE_SIZE = 20
+/** 充值页只展示短列表，完整巡检走概览全平台流水 */
+const RECHARGE_LEDGER_PAGE_SIZE = 5
 const LEDGER_FILTER_DEBOUNCE_MS = 300
 const DEFAULT_CREDITS_PER_YUAN = 4.2
 
@@ -304,7 +306,7 @@ const ledgerHasNextPage = computed(() => (
   (platformLedger.value?.items.length || 0) >= (platformLedger.value?.page_size || LEDGER_PAGE_SIZE)
 ))
 
-const rechargeTenantLedgerHasNext = computed(() => rechargeTenantLedger.value.length >= LEDGER_PAGE_SIZE)
+const rechargeTenantLedgerHasNext = computed(() => rechargeTenantLedger.value.length >= RECHARGE_LEDGER_PAGE_SIZE)
 
 const filteredModeTenants = computed(() => {
   const q = modeTenantSearch.value.trim().toLowerCase()
@@ -557,6 +559,7 @@ async function loadRechargeTenantLedger(page = rechargeTenantLedgerPage.value) {
   rechargeTenantLedgerPage.value = Math.max(1, page)
   const data = await getTenantCreditLedger(selectedRechargeTenantId.value, page, {
     excludeInternal: !showInternalLedger.value,
+    pageSize: RECHARGE_LEDGER_PAGE_SIZE,
   })
   rechargeTenantLedger.value = data.items || []
 }
@@ -1108,9 +1111,12 @@ onUnmounted(() => {
               </div>
               <p v-else class="mini-empty">当前账号无充值权限</p>
 
-              <article class="panel credit-section-panel">
+              <article class="panel credit-section-panel credit-recharge-recent-ledger">
                 <div class="panel-head">
-                  <h2>算力流水</h2>
+                  <div>
+                    <h2>近期流水</h2>
+                    <p class="credit-recharge-ledger-hint">仅本企业最近 {{ RECHARGE_LEDGER_PAGE_SIZE }} 条，核对充值到账；全平台巡检请回「概览」</p>
+                  </div>
                   <label class="credit-check-inline">
                     <input v-model="showInternalLedger" type="checkbox">
                     显示内部账务（预扣/释放）
@@ -1129,7 +1135,7 @@ onUnmounted(() => {
                   </div>
                   <div v-if="!rechargeTenantLedger.length" class="mini-empty">暂无流水</div>
                 </div>
-                <div class="log-pagination">
+                <div v-if="rechargeTenantLedgerPage > 1 || rechargeTenantLedgerHasNext" class="log-pagination">
                   <span class="log-pagination-meta">第 {{ rechargeTenantLedgerPage }} 页</span>
                   <div class="log-pagination-actions">
                     <button type="button" class="filter-reset-btn tiny-btn" :disabled="rechargeTenantLedgerPage <= 1" @click="loadRechargeTenantLedger(rechargeTenantLedgerPage - 1)">上一页</button>
@@ -1699,6 +1705,16 @@ onUnmounted(() => {
 .credit-form-grow { flex: 1; min-width: 200px; }
 .credit-deduct-toggle { padding: 0 16px 8px; }
 .credit-check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #64748b; cursor: pointer; white-space: nowrap; }
+.credit-recharge-recent-ledger .panel-head {
+  align-items: flex-start;
+}
+.credit-recharge-ledger-hint {
+  margin: 4px 0 0;
+  color: #8aa0ba;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
 .plus { color: #059669; font-weight: 700; }
 .minus { color: #dc2626; font-weight: 700; }
 .credit-ledger-drawer-body { min-height: 120px; }
