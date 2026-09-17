@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from celery.exceptions import Retry
 
 from app.services.celery_result_sanitize import (
     celery_result_contains_secrets,
@@ -266,3 +267,106 @@ def test_sync_one_monitor_task_redacts_runtime_error_log(
     assert "https://" not in caplog.text
     assert result["status"] == "skipped"
     assert celery_result_contains_secrets(result) is False
+
+
+def test_submit_schedule_group_task_redacts_retry_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Celery Retry 自身也会被 Worker 记录，不能继续携带原始上游异常。"""
+    from app.tasks import monitor as monitor_tasks
+
+    monkeypatch.setattr(monitor_tasks.settings, "celery_enabled", True)
+    monkeypatch.setattr(monitor_tasks, "SessionLocal", lambda: MagicMock())
+    monkeypatch.setattr(
+        monitor_tasks,
+        "load_platform_session",
+        lambda _db: SimpleNamespace(user=SimpleNamespace(id=1)),
+    )
+    monkeypatch.setattr(
+        monitor_tasks,
+        "due_item_from_group_key",
+        lambda **_kwargs: SimpleNamespace(
+            tenant_id=1,
+            schedule_key="20260917-0900-kw0",
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+            region_code=None,
+        ),
+    )
+
+    leaked = "RETRY-LEAK-TOKEN"
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise TimeoutError(f"upstream https://api.example/retry?token={leaked} failed")
+
+    monkeypatch.setattr(monitor_tasks, "execute_schedule_group", _raise)
+
+    captured: dict[str, object] = {}
+
+    def _retry(*, exc: BaseException, **_kwargs: object) -> Retry:
+        captured["exc"] = exc
+        return Retry(exc=exc)
+
+    monkeypatch.setattr(monitor_tasks.submit_schedule_group_task, "retry", _retry)
+
+    with pytest.raises(Retry) as retry_info:
+        monitor_tasks.submit_schedule_group_task.run(
+            tenant_id=1,
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+        )
+
+    retry_text = f"{retry_info.value} {captured['exc']}"
+    assert leaked not in retry_text
+    assert "https://" not in retry_text
+    assert "[redacted-url]" in retry_text
+
+
+def test_submit_schedule_group_task_redacts_unexpected_raised_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未预期失败最终会进入 Celery failure 日志，抛出前必须脱敏。"""
+    from app.tasks import monitor as monitor_tasks
+
+    monkeypatch.setattr(monitor_tasks.settings, "celery_enabled", True)
+    monkeypatch.setattr(monitor_tasks, "SessionLocal", lambda: MagicMock())
+    monkeypatch.setattr(
+        monitor_tasks,
+        "load_platform_session",
+        lambda _db: SimpleNamespace(user=SimpleNamespace(id=1)),
+    )
+    monkeypatch.setattr(
+        monitor_tasks,
+        "due_item_from_group_key",
+        lambda **_kwargs: SimpleNamespace(
+            tenant_id=1,
+            schedule_key="20260917-0900-kw0",
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+            region_code=None,
+        ),
+    )
+    monkeypatch.setattr(monitor_tasks, "persist_schedule_group_failure", lambda *_a, **_k: None)
+
+    leaked = "UNEXPECTED-LEAK-TOKEN"
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise ValueError(f"callback https://example.com/cb?token={leaked} rejected")
+
+    monkeypatch.setattr(monitor_tasks, "execute_schedule_group", _raise)
+
+    with pytest.raises(RuntimeError) as error_info:
+        monitor_tasks.submit_schedule_group_task.run(
+            tenant_id=1,
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+        )
+
+    error_text = str(error_info.value)
+    assert leaked not in error_text
+    assert "https://" not in error_text
+    assert "[redacted-url]" in error_text

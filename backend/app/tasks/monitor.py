@@ -233,6 +233,7 @@ def submit_schedule_group_task(
     except Ignore:
         raise
     except ScheduleSubmitBusy as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         # 2026-09-07 - 企业串行锁未抢到：退避重试；耗尽则返回 busy，留给回收扫描再投，勿 Unexpected
         logger.info(
             "submit_schedule_group busy tenant=%s key=%s attempt=%s/%s",
@@ -248,10 +249,13 @@ def submit_schedule_group_task(
                     "schedule_key": group_key,
                     "status": "busy",
                     "keyword": keyword,
-                    "message": str(exc),
+                    "message": safe_error,
                 }
             )
-        raise self.retry(exc=exc, countdown=min(60, 5 * (self.request.retries + 1)))
+        raise self.retry(
+            exc=RuntimeError(safe_error),
+            countdown=min(60, 5 * (self.request.retries + 1)),
+        ) from None
     except RuntimeError as exc:
         safe_error = redact_secrets_in_text(str(exc))
         logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, safe_error)
@@ -284,7 +288,7 @@ def submit_schedule_group_task(
                     "message": safe_error,
                 }
             )
-        raise self.retry(exc=exc)
+        raise self.retry(exc=RuntimeError(safe_error)) from None
     except Exception as exc:
         # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
         created_by = current.user.id if current else None
@@ -297,13 +301,14 @@ def submit_schedule_group_task(
                 error_message=safe_error,
                 created_by=created_by,
             )
-        except Exception:
-            logger.exception(
-                "persist_schedule_group_failure after unexpected error failed tenant=%s key=%s",
+        except Exception as persist_exc:
+            logger.error(
+                "persist_schedule_group_failure after unexpected error failed tenant=%s key=%s error=%s",
                 tenant_id,
                 group_key,
+                redact_secrets_in_text(str(persist_exc)),
             )
-        raise
+        raise RuntimeError(safe_error) from None
     finally:
         db.close()
 
@@ -468,7 +473,7 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
                 "schedule_key": schedule_key,
                 "message": safe_error,
             }
-        raise self.retry(exc=exc)
+        raise self.retry(exc=RuntimeError(safe_error)) from None
     except PermissionError:
         logger.warning("submit_lead_diagnosis_run skipped lead=%s no platform session", lead_id)
         return {"status": "skipped", "message": "无可用平台运营身份"}
@@ -672,7 +677,7 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
         except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
             safe_error = redact_secrets_in_text(str(exc))
             logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, safe_error)
-            raise self.retry(exc=exc)
+            raise self.retry(exc=RuntimeError(safe_error)) from None
         finally:
             clear_sync_live()
             _clear_enqueued_mark(f"sync:{task_id}")
