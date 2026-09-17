@@ -256,11 +256,8 @@ def submit_schedule_group_task(
             exc=RuntimeError(safe_error),
             countdown=min(60, 5 * (self.request.retries + 1)),
         ) from None
-    except RuntimeError as exc:
-        safe_error = redact_secrets_in_text(str(exc))
-        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, safe_error)
-        return summarize_schedule_submit_for_celery({"status": "skipped", "message": safe_error})
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+        # 2026-09-17 - MolizhishuApiError 继承 RuntimeError，必须排在 RuntimeError 之前才能重试
         safe_error = redact_secrets_in_text(str(exc))
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
@@ -289,6 +286,10 @@ def submit_schedule_group_task(
                 }
             )
         raise self.retry(exc=RuntimeError(safe_error)) from None
+    except RuntimeError as exc:
+        safe_error = redact_secrets_in_text(str(exc))
+        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, safe_error)
+        return summarize_schedule_submit_for_celery({"status": "skipped", "message": safe_error})
     except Exception as exc:
         # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
         created_by = current.user.id if current else None
@@ -670,14 +671,15 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
             )
             finalize_due_lead_diagnoses(db)
             return {"task_id": task_id, "status": "synced", "task_status": task.status, "detail": detail}
+        except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+            # 2026-09-17 - MolizhishuApiError 继承 RuntimeError，必须排在 RuntimeError 之前才能重试
+            safe_error = redact_secrets_in_text(str(exc))
+            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, safe_error)
+            raise self.retry(exc=RuntimeError(safe_error)) from None
         except RuntimeError as exc:
             safe_error = redact_secrets_in_text(str(exc))
             logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, safe_error)
             return {"task_id": task_id, "status": "skipped", "message": safe_error}
-        except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
-            safe_error = redact_secrets_in_text(str(exc))
-            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, safe_error)
-            raise self.retry(exc=RuntimeError(safe_error)) from None
         finally:
             clear_sync_live()
             _clear_enqueued_mark(f"sync:{task_id}")
