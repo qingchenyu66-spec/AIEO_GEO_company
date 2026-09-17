@@ -114,9 +114,11 @@ if [[ ! -f dist-next/index.html ]]; then
   exit 1
 fi
 mkdir -p dist
+# 先铺新文件再切 index.html；不要 --delete，否则在线旧标签页懒加载旧 hash 会 404 白屏
 rsync -a --exclude index.html dist-next/ dist/
 rsync -a dist-next/index.html dist/index.html
-rsync -a --delete dist-next/ dist/
+# 清理 14 天前未被引用的旧 hash 资源，控制磁盘
+find dist/assets -type f -mtime +14 -delete 2>/dev/null || true
 
 echo "==> API 快/重/回调双实例"
 cp "$ROOT/deploy/nginx/geo-http-prod-split.conf" /etc/nginx/sites-available/geo-http.conf

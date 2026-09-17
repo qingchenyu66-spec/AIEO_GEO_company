@@ -1,9 +1,11 @@
-/** After deploy, hashed chunks are deleted; open tabs still reference old URLs. */
+/** After deploy, hashed chunks may be gone; open tabs still reference old URLs. */
+
+import { defineAsyncComponent, type AsyncComponentLoader, type Component } from 'vue'
 
 const RELOAD_KEY = 'geo:stale-chunk-reload'
 const RELOAD_TTL_MS = 15_000
 
-function isChunkLoadError(error: unknown): boolean {
+export function isChunkLoadError(error: unknown): boolean {
   const message = String((error as { message?: string })?.message ?? error ?? '')
   return (
     /Failed to fetch dynamically imported module/i.test(message) ||
@@ -28,7 +30,25 @@ function reloadOnce(): void {
   window.location.reload()
 }
 
-/** Listen for Vite preload failures and router dynamic-import failures. */
+/** True if this error triggered a reload. */
+export function reloadOnceOnChunkError(error: unknown): boolean {
+  if (!isChunkLoadError(error)) return false
+  reloadOnce()
+  return true
+}
+
+/** Portal menu pages: catch lazy-import 404 that router.onError never sees. */
+export function defineAsyncPage(loader: AsyncComponentLoader): Component {
+  return defineAsyncComponent({
+    loader,
+    onError(error, _retry, fail) {
+      if (reloadOnceOnChunkError(error)) return
+      fail()
+    },
+  })
+}
+
+/** Listen for Vite preload / router / unhandled dynamic-import failures. */
 export function installStaleChunkReload(options?: {
   onRouterError?: (handler: (error: unknown) => void) => void
 }): void {
@@ -37,9 +57,13 @@ export function installStaleChunkReload(options?: {
     reloadOnce()
   })
 
-  options?.onRouterError?.((error) => {
-    if (isChunkLoadError(error)) {
-      reloadOnce()
+  window.addEventListener('unhandledrejection', (event) => {
+    if (reloadOnceOnChunkError(event.reason)) {
+      event.preventDefault()
     }
+  })
+
+  options?.onRouterError?.((error) => {
+    reloadOnceOnChunkError(error)
   })
 }

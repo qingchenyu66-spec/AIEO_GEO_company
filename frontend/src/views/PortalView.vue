@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, provide, ref, watch } from 'vue'
+import { computed, onMounted, provide, ref, watch } from 'vue'
+import { defineAsyncPage } from '../utils/reloadOnStaleChunk'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
@@ -53,30 +54,30 @@ import { useApprovalPendingCount } from './portal/composables/useApprovalPending
 import { resolveAccessibleTenantId, shouldPrefetchBrandForMenu } from './portal/tenantQueryScope'
 import '../styles/menu-config.css'
 
-const PositionPage = defineAsyncComponent(() => import('./portal/PositionPage.vue'))
-const PlatformDashboardPage = defineAsyncComponent(() => import('./portal/PlatformDashboardPage.vue'))
-const UserCreatePage = defineAsyncComponent(() => import('./portal/UserCreatePage.vue'))
-const UserListPage = defineAsyncComponent(() => import('./portal/UserListPage.vue'))
-const BrandAuditPage = defineAsyncComponent(() => import('./portal/pages/BrandAuditPage.vue'))
-const MonitorRealtimePage = defineAsyncComponent(() => import('./portal/pages/MonitorRealtimePage.vue'))
-const CompetitorAnalysisPage = defineAsyncComponent(() => import('./portal/pages/CompetitorAnalysisPage.vue'))
-const SourceAnalysisPage = defineAsyncComponent(() => import('./portal/pages/SourceAnalysisPage.vue'))
-const ReportCenterPage = defineAsyncComponent(() => import('./portal/pages/ReportCenterPage.vue'))
-const LeadDiagnosisPage = defineAsyncComponent(() => import('./portal/pages/LeadDiagnosisPage.vue'))
-const H5DiagnosisOrdersPage = defineAsyncComponent(() => import('./portal/pages/H5DiagnosisOrdersPage.vue'))
-const SnapshotBackfillOpsPage = defineAsyncComponent(() => import('./portal/pages/SnapshotBackfillOpsPage.vue'))
-const AlertThresholdsPage = defineAsyncComponent(() => import('./portal/pages/AlertThresholdsPage.vue'))
-const KnowledgeBasePage = defineAsyncComponent(() => import('./portal/pages/KnowledgeBasePage.vue'))
-const CustomerWorkspacePage = defineAsyncComponent(() => import('./portal/pages/CustomerWorkspacePage.vue'))
-const CustomerGoodsCardsPage = defineAsyncComponent(() => import('./portal/pages/CustomerGoodsCardsPage.vue'))
-const BrandAnalysisPage = defineAsyncComponent(() => import('./portal/pages/BrandAnalysisPage.vue'))
-const ApprovalCenterPage = defineAsyncComponent(() => import('./portal/pages/ApprovalCenterPage.vue'))
-const AnnouncementManagePage = defineAsyncComponent(() => import('./portal/pages/AnnouncementManagePage.vue'))
-const FunctionalFeaturePage = defineAsyncComponent(() => import('./portal/pages/FunctionalFeaturePage.vue'))
-const AnnouncementModal = defineAsyncComponent(() => import('./portal/components/AnnouncementModal.vue'))
+const PositionPage = defineAsyncPage(() => import('./portal/PositionPage.vue'))
+const PlatformDashboardPage = defineAsyncPage(() => import('./portal/PlatformDashboardPage.vue'))
+const UserCreatePage = defineAsyncPage(() => import('./portal/UserCreatePage.vue'))
+const UserListPage = defineAsyncPage(() => import('./portal/UserListPage.vue'))
+const BrandAuditPage = defineAsyncPage(() => import('./portal/pages/BrandAuditPage.vue'))
+const MonitorRealtimePage = defineAsyncPage(() => import('./portal/pages/MonitorRealtimePage.vue'))
+const CompetitorAnalysisPage = defineAsyncPage(() => import('./portal/pages/CompetitorAnalysisPage.vue'))
+const SourceAnalysisPage = defineAsyncPage(() => import('./portal/pages/SourceAnalysisPage.vue'))
+const ReportCenterPage = defineAsyncPage(() => import('./portal/pages/ReportCenterPage.vue'))
+const LeadDiagnosisPage = defineAsyncPage(() => import('./portal/pages/LeadDiagnosisPage.vue'))
+const H5DiagnosisOrdersPage = defineAsyncPage(() => import('./portal/pages/H5DiagnosisOrdersPage.vue'))
+const SnapshotBackfillOpsPage = defineAsyncPage(() => import('./portal/pages/SnapshotBackfillOpsPage.vue'))
+const AlertThresholdsPage = defineAsyncPage(() => import('./portal/pages/AlertThresholdsPage.vue'))
+const KnowledgeBasePage = defineAsyncPage(() => import('./portal/pages/KnowledgeBasePage.vue'))
+const CustomerWorkspacePage = defineAsyncPage(() => import('./portal/pages/CustomerWorkspacePage.vue'))
+const CustomerGoodsCardsPage = defineAsyncPage(() => import('./portal/pages/CustomerGoodsCardsPage.vue'))
+const BrandAnalysisPage = defineAsyncPage(() => import('./portal/pages/BrandAnalysisPage.vue'))
+const ApprovalCenterPage = defineAsyncPage(() => import('./portal/pages/ApprovalCenterPage.vue'))
+const AnnouncementManagePage = defineAsyncPage(() => import('./portal/pages/AnnouncementManagePage.vue'))
+const FunctionalFeaturePage = defineAsyncPage(() => import('./portal/pages/FunctionalFeaturePage.vue'))
+const AnnouncementModal = defineAsyncPage(() => import('./portal/components/AnnouncementModal.vue'))
 // 2026-09-08 - 算力运营 / 企业配置（credit）页挂载
-const CreditOpsPage = defineAsyncComponent(() => import('./portal/pages/CreditOpsPage.vue'))
-const EnterpriseConfigPage = defineAsyncComponent(() => import('./portal/pages/EnterpriseConfigPage.vue'))
+const CreditOpsPage = defineAsyncPage(() => import('./portal/pages/CreditOpsPage.vue'))
+const EnterpriseConfigPage = defineAsyncPage(() => import('./portal/pages/EnterpriseConfigPage.vue'))
 
 const auth = useAuthStore()
 const router = useRouter()
