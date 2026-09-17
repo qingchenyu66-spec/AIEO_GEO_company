@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 
 from urllib.parse import urlparse
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import CurrentSession, get_current_session
 from app.core.config import settings
 from app.core.database import get_db
+
+logger = logging.getLogger(__name__)
 from app.schemas.common import ApiResponse
 from app.schemas.h5_diagnosis import (
     H5DiagnosisOrderCreateRequest,
@@ -351,9 +354,21 @@ async def alipay_notify(request: Request, db: Session = Depends(get_db)) -> Resp
     params = {str(k): str(v) for k, v in form.items()}
     try:
         result = process_alipay_notify(db, params=params)
-    except PaymentNotifyReject:
+    except PaymentNotifyReject as exc:
+        seller = str(params.get("seller_id") or "").strip()
+        logger.warning(
+            "alipay_notify_reject out_trade_no=%s trade_status=%s seller_suffix=%s detail=%s",
+            str(params.get("out_trade_no") or "-"),
+            str(params.get("trade_status") or "-"),
+            seller[-4:] if seller else "-",
+            str(exc),
+        )
         return Response(content="fail", media_type="text/plain")
     except Exception:
+        logger.exception(
+            "alipay_notify_error out_trade_no=%s",
+            str(params.get("out_trade_no") or "-"),
+        )
         return Response(content="fail", media_type="text/plain")
     if result is None:
         return Response(content="success", media_type="text/plain")

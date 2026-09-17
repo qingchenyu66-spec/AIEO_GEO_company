@@ -320,9 +320,16 @@ def process_alipay_notify(db: Session, *, params: dict[str, Any]) -> NotifyFulfi
     if not expected_seller:
         raise PaymentNotifyReject("未配置 ALIPAY_SELLER_ID")
     if app_id != expected_app:
-        raise PaymentNotifyReject("app_id 不匹配")
+        _log_security("app_id_mismatch", channel="alipay", out_trade_no=out_trade_no, detail=app_id[-4:])
+        raise PaymentNotifyReject("app_id 不匹配", security_event="app_id_mismatch")
     if seller_id != expected_seller:
-        raise PaymentNotifyReject("seller_id 不匹配")
+        _log_security(
+            "seller_id_mismatch",
+            channel="alipay",
+            out_trade_no=out_trade_no,
+            detail=(seller_id[-4:] if seller_id else "empty"),
+        )
+        raise PaymentNotifyReject("seller_id 不匹配", security_event="seller_id_mismatch")
 
     paid_fen = _yuan_to_fen(str(params.get("total_amount") or ""))
     kind = resolve_order_kind(out_trade_no)
