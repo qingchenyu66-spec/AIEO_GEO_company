@@ -24,6 +24,7 @@ from app.services.lead_diagnosis_service import (
     persist_lead_run_failure,
     submit_due_lead_run,
 )
+from app.services.celery_result_sanitize import redact_secrets_in_text, summarize_schedule_submit_for_celery
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import (
     list_pending_monitor_task_ids,
@@ -77,7 +78,11 @@ def _mark_enqueued_once(key: str, *, ttl_seconds: int = 600) -> bool:
     try:
         return bool(client.set(prefixed_key(f"celery:enqueued:{key}"), "1", ex=ttl_seconds, nx=True))
     except RedisError as exc:
-        logger.warning("mark celery enqueue key failed, key=%s, error=%s", key, exc)
+        logger.warning(
+            "mark celery enqueue key failed, key=%s, error=%s",
+            key,
+            redact_secrets_in_text(str(exc)),
+        )
         return False
 
 
@@ -223,10 +228,12 @@ def submit_schedule_group_task(
         result = execute_schedule_group(db, current, item)
         if result.get("status") == "skipped":
             raise Ignore()
-        return result
+        # 2026-09-17 - Celery 成功日志会打印返回值；禁止带回 serialize_task 的 callback_url
+        return summarize_schedule_submit_for_celery(result)
     except Ignore:
         raise
     except ScheduleSubmitBusy as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         # 2026-09-07 - 企业串行锁未抢到：退避重试；耗尽则返回 busy，留给回收扫描再投，勿 Unexpected
         logger.info(
             "submit_schedule_group busy tenant=%s key=%s attempt=%s/%s",
@@ -236,25 +243,32 @@ def submit_schedule_group_task(
             self.max_retries,
         )
         if self.request.retries >= self.max_retries:
-            return {
-                "tenant_id": tenant_id,
-                "schedule_key": group_key,
-                "status": "busy",
-                "keyword": keyword,
-                "message": str(exc),
-            }
-        raise self.retry(exc=exc, countdown=min(60, 5 * (self.request.retries + 1)))
+            return summarize_schedule_submit_for_celery(
+                {
+                    "tenant_id": tenant_id,
+                    "schedule_key": group_key,
+                    "status": "busy",
+                    "keyword": keyword,
+                    "message": safe_error,
+                }
+            )
+        raise self.retry(
+            exc=RuntimeError(safe_error),
+            countdown=min(60, 5 * (self.request.retries + 1)),
+        ) from None
     except RuntimeError as exc:
-        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
-        return {"status": "skipped", "message": str(exc)}
+        safe_error = redact_secrets_in_text(str(exc))
+        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, safe_error)
+        return summarize_schedule_submit_for_celery({"status": "skipped", "message": safe_error})
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
             tenant_id,
             group_key,
             self.request.retries,
             self.max_retries,
-            exc,
+            safe_error,
         )
         if self.request.retries >= self.max_retries:
             created_by = current.user.id if current else None
@@ -262,35 +276,39 @@ def submit_schedule_group_task(
                 db,
                 tenant_id=tenant_id,
                 group_key=group_key,
-                error_message=str(exc),
+                error_message=safe_error,
                 created_by=created_by,
             )
-            return {
-                "tenant_id": tenant_id,
-                "schedule_key": group_key,
-                "status": "failed",
-                "keyword": keyword,
-                "message": str(exc),
-            }
-        raise self.retry(exc=exc)
+            return summarize_schedule_submit_for_celery(
+                {
+                    "tenant_id": tenant_id,
+                    "schedule_key": group_key,
+                    "status": "failed",
+                    "keyword": keyword,
+                    "message": safe_error,
+                }
+            )
+        raise self.retry(exc=RuntimeError(safe_error)) from None
     except Exception as exc:
         # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
         created_by = current.user.id if current else None
+        safe_error = redact_secrets_in_text(str(exc), max_len=500)
         try:
             persist_schedule_group_failure(
                 db,
                 tenant_id=tenant_id,
                 group_key=group_key,
-                error_message=str(exc)[:500],
+                error_message=safe_error,
                 created_by=created_by,
             )
-        except Exception:
-            logger.exception(
-                "persist_schedule_group_failure after unexpected error failed tenant=%s key=%s",
+        except Exception as persist_exc:
+            logger.error(
+                "persist_schedule_group_failure after unexpected error failed tenant=%s key=%s error=%s",
                 tenant_id,
                 group_key,
+                redact_secrets_in_text(str(persist_exc)),
             )
-        raise
+        raise RuntimeError(safe_error) from None
     finally:
         db.close()
 
@@ -433,28 +451,29 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
     except Ignore:
         raise
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         logger.warning(
             "submit_lead_diagnosis_run retry lead=%s key=%s attempt=%s/%s error=%s",
             lead_id,
             schedule_key,
             self.request.retries,
             self.max_retries,
-            exc,
+            safe_error,
         )
         if self.request.retries >= self.max_retries:
             persist_lead_run_failure(
                 db,
                 lead_id=lead_id,
                 schedule_key=schedule_key,
-                error_message=str(exc),
+                error_message=safe_error,
             )
             return {
                 "status": "failed",
                 "lead_id": lead_id,
                 "schedule_key": schedule_key,
-                "message": str(exc),
+                "message": safe_error,
             }
-        raise self.retry(exc=exc)
+        raise self.retry(exc=RuntimeError(safe_error)) from None
     except PermissionError:
         logger.warning("submit_lead_diagnosis_run skipped lead=%s no platform session", lead_id)
         return {"status": "skipped", "message": "无可用平台运营身份"}
@@ -652,11 +671,13 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
             finalize_due_lead_diagnoses(db)
             return {"task_id": task_id, "status": "synced", "task_status": task.status, "detail": detail}
         except RuntimeError as exc:
-            logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, exc)
-            return {"task_id": task_id, "status": "skipped", "message": str(exc)}
+            safe_error = redact_secrets_in_text(str(exc))
+            logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, safe_error)
+            return {"task_id": task_id, "status": "skipped", "message": safe_error}
         except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
-            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, exc)
-            raise self.retry(exc=exc)
+            safe_error = redact_secrets_in_text(str(exc))
+            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, safe_error)
+            raise self.retry(exc=RuntimeError(safe_error)) from None
         finally:
             clear_sync_live()
             _clear_enqueued_mark(f"sync:{task_id}")
