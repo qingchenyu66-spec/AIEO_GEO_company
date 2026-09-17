@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Gauge, TrendingDown, Wallet } from '@lucide/vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
+import 'element-plus/es/components/drawer/style/css'
 import {
   adjustTenantCredit,
   cancelPendingBillingMode,
@@ -736,11 +737,20 @@ function onPlatformLedgerDrawerClosed() {
   ledgerDetail.value = null
 }
 
+function closePlatformLedgerDrawer() {
+  ledgerDrawerVisible.value = false
+  onPlatformLedgerDrawerClosed()
+}
+
 async function switchPageTab(tab: IncomingTab, tenantId?: number) {
   // 2026-09-08 - 旧链接 credit_tab=zero → 概览并打开「仅零余额」
   if (tab === 'zero') {
     tenantZeroOnly.value = true
     tab = 'overview'
+  }
+  // 流水明细抽屉只服务概览；切走其他 Tab 时关掉，避免页底残留
+  if (tab !== 'overview') {
+    closePlatformLedgerDrawer()
   }
   pageTab.value = tab
   if (tab === 'overview') {
@@ -1307,32 +1317,67 @@ onUnmounted(() => {
       </template>
     </article>
 
-    <el-drawer
+    <ElDrawer
       v-model="ledgerDrawerVisible"
-      size="520px"
+      size="560px"
       title="流水明细"
       direction="rtl"
+      destroy-on-close
+      class="credit-ledger-drawer"
       @closed="onPlatformLedgerDrawerClosed"
     >
-      <div v-loading="ledgerDetailLoading">
+      <div v-loading="ledgerDetailLoading" class="credit-ledger-drawer-body">
         <template v-if="ledgerDetail">
-          <p>企业：{{ ledgerDetail.tenant_name || ledgerDetail.tenant_id }}</p>
-          <p>类型：{{ entryTypeLabel[ledgerDetail.entry_type] || ledgerDetail.entry_type }}</p>
-          <p>金额：{{ ledgerDetail.amount }} · 余额：{{ ledgerDetail.balance_after }}</p>
-          <table v-if="ledgerDetail.subtasks?.length" class="table">
-            <thead><tr><th>平台</th><th>关键词</th><th>状态</th><th>算力</th></tr></thead>
-            <tbody>
-              <tr v-for="(st, idx) in ledgerDetail.subtasks" :key="st.subtask_id || idx">
-                <td>{{ st.platform_code || '—' }}</td>
-                <td>{{ st.keyword || '—' }}</td>
-                <td>{{ formatSubtaskStatus(st.status) }}</td>
-                <td>{{ st.credits ?? '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <dl class="credit-ledger-meta">
+            <div>
+              <dt>企业</dt>
+              <dd>{{ ledgerDetail.tenant_name || ledgerDetail.tenant_id || '—' }}</dd>
+            </div>
+            <div>
+              <dt>类型</dt>
+              <dd>{{ entryTypeLabel[ledgerDetail.entry_type] || ledgerDetail.entry_type }}</dd>
+            </div>
+            <div>
+              <dt>金额</dt>
+              <dd>{{ ledgerDetail.amount }}</dd>
+            </div>
+            <div>
+              <dt>余额</dt>
+              <dd>{{ ledgerDetail.balance_after }}</dd>
+            </div>
+            <div v-if="ledgerDetail.reason" class="is-full">
+              <dt>说明</dt>
+              <dd>{{ ledgerDetail.reason }}</dd>
+            </div>
+            <div v-if="ledgerDetail.created_at" class="is-full">
+              <dt>时间</dt>
+              <dd>{{ ledgerDetail.created_at }}</dd>
+            </div>
+          </dl>
+
+          <div v-if="ledgerDetail.subtasks?.length" class="credit-ledger-subtasks">
+            <h4>关联子任务</h4>
+            <div class="credit-data-table">
+              <div class="credit-data-head credit-ledger-subtask-cols">
+                <span>平台</span><span>关键词</span><span>状态</span><span>算力</span>
+              </div>
+              <div
+                v-for="(st, idx) in ledgerDetail.subtasks"
+                :key="st.subtask_id || idx"
+                class="credit-data-row credit-ledger-subtask-cols"
+              >
+                <span>{{ st.platform_code || '—' }}</span>
+                <span class="cell-name">{{ st.keyword || '—' }}</span>
+                <span>{{ formatSubtaskStatus(st.status) }}</span>
+                <span>{{ st.credits ?? '—' }}</span>
+              </div>
+            </div>
+          </div>
+          <p v-else class="mini-empty">本条流水无关联子任务</p>
         </template>
+        <p v-else-if="!ledgerDetailLoading" class="mini-empty">暂无明细</p>
       </div>
-    </el-drawer>
+    </ElDrawer>
   </section>
 </template>
 
@@ -1656,6 +1701,41 @@ onUnmounted(() => {
 .credit-check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #64748b; cursor: pointer; white-space: nowrap; }
 .plus { color: #059669; font-weight: 700; }
 .minus { color: #dc2626; font-weight: 700; }
+.credit-ledger-drawer-body { min-height: 120px; }
+.credit-ledger-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin: 0 0 20px;
+}
+.credit-ledger-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.credit-ledger-meta > div.is-full { grid-column: 1 / -1; }
+.credit-ledger-meta dt {
+  margin: 0;
+  color: #6a7f9a;
+  font-size: 12px;
+  font-weight: 700;
+}
+.credit-ledger-meta dd {
+  margin: 0;
+  color: #153052;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.credit-ledger-subtasks h4 {
+  margin: 0 0 10px;
+  color: #153052;
+  font-size: 14px;
+}
+.credit-ledger-subtask-cols {
+  grid-template-columns: 88px minmax(0, 1.6fr) 88px 64px;
+}
 @media (max-width: 900px) {
   /* 2026-09-07 - 算力运营窄屏：侧栏横排 + 表格可横滑 */
   .enterprise-config-page.credit-recharge-layout,
@@ -1677,7 +1757,9 @@ onUnmounted(() => {
   .credit-ledger-cols,
   .credit-recharge-ledger-cols,
   .credit-blocks-cols,
-  .credit-mode-history-cols { min-width: 640px; }
+  .credit-mode-history-cols,
+  .credit-ledger-subtask-cols { min-width: 640px; }
   .enterprise-main { overflow-x: auto; }
+  .credit-ledger-meta { grid-template-columns: 1fr; }
 }
 </style>
