@@ -227,3 +227,42 @@ def test_submit_schedule_group_task_redacts_runtime_error_log(
     assert "[redacted-url]" in caplog.text
     assert result["message"] == "callback [redacted-url] rejected"
     assert celery_result_contains_secrets(result) is False
+
+
+def test_sync_one_monitor_task_redacts_runtime_error_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.tasks import monitor as monitor_tasks
+
+    monkeypatch.setattr(monitor_tasks.settings, "celery_enabled", True)
+    monkeypatch.setattr(monitor_tasks, "SessionLocal", lambda: MagicMock())
+    monkeypatch.setattr(
+        monitor_tasks,
+        "load_platform_session",
+        lambda _db: SimpleNamespace(user=SimpleNamespace(id=1)),
+    )
+    monkeypatch.setattr(monitor_tasks, "summarize_monitor_tasks_for_ops", lambda *_a, **_k: [])
+    monkeypatch.setattr(monitor_tasks, "set_sync_live", lambda *_a, **_k: None)
+    monkeypatch.setattr(monitor_tasks, "clear_sync_live", lambda *_a, **_k: None)
+    monkeypatch.setattr(monitor_tasks, "_clear_enqueued_mark", lambda *_a, **_k: None)
+
+    leaked = "SYNC-LEAK-TOKEN"
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise RuntimeError(f"poll https://api.example/task?access_token={leaked} failed")
+
+    monkeypatch.setattr(monitor_tasks, "sync_monitor_task", _raise)
+    monkeypatch.setattr(
+        monitor_tasks,
+        "redis_lock",
+        lambda *_a, **_k: MagicMock(__enter__=lambda _s: True, __exit__=lambda *_x: False),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = monitor_tasks.sync_one_monitor_task.run("task-sync-1")
+
+    assert leaked not in caplog.text
+    assert "https://" not in caplog.text
+    assert result["status"] == "skipped"
+    assert celery_result_contains_secrets(result) is False

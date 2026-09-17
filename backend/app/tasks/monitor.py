@@ -78,7 +78,11 @@ def _mark_enqueued_once(key: str, *, ttl_seconds: int = 600) -> bool:
     try:
         return bool(client.set(prefixed_key(f"celery:enqueued:{key}"), "1", ex=ttl_seconds, nx=True))
     except RedisError as exc:
-        logger.warning("mark celery enqueue key failed, key=%s, error=%s", key, exc)
+        logger.warning(
+            "mark celery enqueue key failed, key=%s, error=%s",
+            key,
+            redact_secrets_in_text(str(exc)),
+        )
         return False
 
 
@@ -284,12 +288,13 @@ def submit_schedule_group_task(
     except Exception as exc:
         # 2026-09-07 - 未预期异常若已 commit running，必须落 failed，否则窗口外永不回收
         created_by = current.user.id if current else None
+        safe_error = redact_secrets_in_text(str(exc), max_len=500)
         try:
             persist_schedule_group_failure(
                 db,
                 tenant_id=tenant_id,
                 group_key=group_key,
-                error_message=str(exc)[:500],
+                error_message=safe_error,
                 created_by=created_by,
             )
         except Exception:
@@ -441,26 +446,27 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
     except Ignore:
         raise
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         logger.warning(
             "submit_lead_diagnosis_run retry lead=%s key=%s attempt=%s/%s error=%s",
             lead_id,
             schedule_key,
             self.request.retries,
             self.max_retries,
-            exc,
+            safe_error,
         )
         if self.request.retries >= self.max_retries:
             persist_lead_run_failure(
                 db,
                 lead_id=lead_id,
                 schedule_key=schedule_key,
-                error_message=str(exc),
+                error_message=safe_error,
             )
             return {
                 "status": "failed",
                 "lead_id": lead_id,
                 "schedule_key": schedule_key,
-                "message": str(exc),
+                "message": safe_error,
             }
         raise self.retry(exc=exc)
     except PermissionError:
@@ -660,10 +666,12 @@ def sync_one_monitor_task(self, task_id: str) -> dict[str, Any]:
             finalize_due_lead_diagnoses(db)
             return {"task_id": task_id, "status": "synced", "task_status": task.status, "detail": detail}
         except RuntimeError as exc:
-            logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, exc)
-            return {"task_id": task_id, "status": "skipped", "message": str(exc)}
+            safe_error = redact_secrets_in_text(str(exc))
+            logger.warning("sync_one_monitor_task skipped task_id=%s error=%s", task_id, safe_error)
+            return {"task_id": task_id, "status": "skipped", "message": safe_error}
         except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
-            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, exc)
+            safe_error = redact_secrets_in_text(str(exc))
+            logger.warning("sync_one_monitor_task retry task_id=%s error=%s", task_id, safe_error)
             raise self.retry(exc=exc)
         finally:
             clear_sync_live()
