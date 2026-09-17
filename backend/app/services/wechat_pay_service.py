@@ -183,6 +183,90 @@ def decrypt_notify_resource(resource: dict[str, Any]) -> dict[str, Any]:
     return json.loads(plaintext.decode("utf-8"))
 
 
+def _header_value(headers: Any, name: str) -> str:
+    if headers is None:
+        return ""
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        for key in (name, name.lower(), name.upper(), name.title()):
+            value = getter(key)
+            if value:
+                return str(value).strip()
+        return ""
+    if isinstance(headers, dict):
+        lowered = {str(k).lower(): v for k, v in headers.items()}
+        return str(lowered.get(name.lower()) or "").strip()
+    return ""
+
+
+def _parse_serial_material_map(raw: str) -> dict[str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise WechatPayError("平台证书/公钥映射不是合法 JSON") from exc
+    if not isinstance(data, dict):
+        raise WechatPayError("平台证书/公钥映射必须是 JSON 对象")
+    out: dict[str, str] = {}
+    for key, value in data.items():
+        serial = str(key or "").strip()
+        material = str(value or "").strip()
+        if serial and material:
+            out[serial] = material
+    return out
+
+
+def _load_pem_bytes(material: str) -> bytes:
+    raw = material.strip()
+    if "BEGIN" in raw:
+        return raw.encode("utf-8")
+    path = Path(raw)
+    if path.is_file():
+        return path.read_bytes()
+    raise WechatPayError("平台证书/公钥既不是 PEM 正文也不是可读文件路径")
+
+
+def _platform_public_key_for_serial(serial: str):
+    serial = str(serial or "").strip()
+    if not serial:
+        raise WechatPayError("缺少 Wechatpay-Serial")
+    cert_map = _parse_serial_material_map(settings.wechat_pay_platform_cert_map)
+    key_map = _parse_serial_material_map(settings.wechat_pay_platform_public_key_map)
+    if serial in cert_map:
+        cert = x509.load_pem_x509_certificate(_load_pem_bytes(cert_map[serial]), default_backend())
+        return cert.public_key()
+    if serial in key_map:
+        return serialization.load_pem_public_key(_load_pem_bytes(key_map[serial]), backend=default_backend())
+    if not cert_map and not key_map:
+        raise WechatPayError("未配置 WECHAT_PAY_PLATFORM_CERT_MAP / WECHAT_PAY_PLATFORM_PUBLIC_KEY_MAP")
+    raise WechatPayError("未知 Wechatpay-Serial，不在已配置平台证书/公钥列表中")
+
+
+def verify_wechat_platform_notify(*, headers: Any, body: bytes) -> None:
+    """验微信支付平台回调签名（必须用平台证书/公钥，不能用商户证书）。"""
+    timestamp = _header_value(headers, "Wechatpay-Timestamp")
+    nonce = _header_value(headers, "Wechatpay-Nonce")
+    signature = _header_value(headers, "Wechatpay-Signature")
+    serial = _header_value(headers, "Wechatpay-Serial")
+    if not timestamp or not nonce or not signature or not serial:
+        raise WechatPayError("缺少 Wechatpay-Timestamp/Nonce/Signature/Serial")
+    try:
+        ts = int(timestamp)
+    except ValueError as exc:
+        raise WechatPayError("Wechatpay-Timestamp 非法") from exc
+    skew = max(0, int(settings.wechat_pay_notify_skew_seconds or 300))
+    if abs(int(time.time()) - ts) > skew:
+        raise WechatPayError("Wechatpay-Timestamp 超出允许时间窗")
+    message = f"{timestamp}\n{nonce}\n{body.decode('utf-8')}\n".encode("utf-8")
+    public_key = _platform_public_key_for_serial(serial)
+    try:
+        public_key.verify(base64.b64decode(signature), message, padding.PKCS1v15(), hashes.SHA256())
+    except Exception as exc:
+        raise WechatPayError("微信平台签名校验失败") from exc
+
+
 def notify_url_path() -> str:
     raw = (settings.wechat_pay_notify_url or "").strip()
     if not raw:
