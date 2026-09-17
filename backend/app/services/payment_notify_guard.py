@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from sqlalchemy import select
@@ -75,10 +76,14 @@ def _yuan_to_fen(total_amount: str) -> int:
     if not text:
         raise PaymentNotifyReject("缺少 total_amount")
     try:
-        # 支付宝金额为元，两位小数
-        fen = int(round(float(text) * 100))
-    except ValueError as exc:
+        # 支付宝金额为元；资金校验禁止经由 float，且不接受超过两位小数。
+        amount = Decimal(text)
+        fen_value = amount * 100
+    except InvalidOperation as exc:
         raise PaymentNotifyReject("total_amount 非法") from exc
+    if not amount.is_finite() or fen_value != fen_value.to_integral_value():
+        raise PaymentNotifyReject("total_amount 非法")
+    fen = int(fen_value)
     if fen < 0:
         raise PaymentNotifyReject("total_amount 非法")
     return fen

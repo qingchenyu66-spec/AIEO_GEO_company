@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.services.payment_notify_guard import (
     PaymentNotifyReject,
@@ -77,6 +82,53 @@ def test_wechat_platform_verify_requires_headers(monkeypatch: pytest.MonkeyPatch
         verify_wechat_platform_notify(headers={}, body=b"{}")
 
 
+def test_wechat_platform_verify_accepts_valid_signature_and_rejects_tamper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    serial = "PUB_KEY_ID_TEST_1"
+    timestamp = str(int(time.time()))
+    nonce = "notify-nonce"
+    body = b'{"id":"notify-1","resource":{}}'
+    message = f"{timestamp}\n{nonce}\n{body.decode('utf-8')}\n".encode("utf-8")
+    signature = base64.b64encode(
+        private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+    ).decode("ascii")
+    headers = {
+        "Wechatpay-Timestamp": timestamp,
+        "Wechatpay-Nonce": nonce,
+        "Wechatpay-Serial": serial,
+        "Wechatpay-Signature": signature,
+    }
+    monkeypatch.setattr(
+        "app.services.wechat_pay_service.settings.wechat_pay_platform_public_key_map",
+        json.dumps({serial: public_pem}),
+    )
+    monkeypatch.setattr("app.services.wechat_pay_service.settings.wechat_pay_platform_cert_map", "")
+    monkeypatch.setattr("app.services.wechat_pay_service.settings.wechat_pay_notify_skew_seconds", 300)
+
+    verify_wechat_platform_notify(headers=headers, body=body)
+
+    with pytest.raises(WechatPayError, match="签名校验失败"):
+        verify_wechat_platform_notify(headers=headers, body=body + b" ")
+
+
+def test_wechat_platform_verify_rejects_expired_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.wechat_pay_service.settings.wechat_pay_notify_skew_seconds", 300)
+    headers = {
+        "Wechatpay-Timestamp": str(int(time.time()) - 301),
+        "Wechatpay-Nonce": "nonce",
+        "Wechatpay-Serial": "PUB_KEY_ID_TEST_1",
+        "Wechatpay-Signature": "unused",
+    }
+    with pytest.raises(WechatPayError, match="时间窗"):
+        verify_wechat_platform_notify(headers=headers, body=b"{}")
+
+
 def test_process_wechat_rejects_amount_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.services.payment_notify_guard.settings.wechat_pay_dev_mode", True)
     monkeypatch.setattr("app.services.payment_notify_guard.settings.wechat_pay_app_id", "wxapp")
@@ -113,6 +165,30 @@ def test_process_wechat_rejects_amount_mismatch(monkeypatch: pytest.MonkeyPatch)
         process_wechat_pay_notify(db, body=b'{"resource":{}}', headers={})
 
 
+def test_process_wechat_rejects_app_identity_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.payment_notify_guard.settings.wechat_pay_dev_mode", False)
+    monkeypatch.setattr("app.services.payment_notify_guard.settings.wechat_pay_app_id", "expected-app")
+    monkeypatch.setattr("app.services.payment_notify_guard.settings.wechat_pay_mch_id", "expected-mch")
+    monkeypatch.setattr(
+        "app.services.payment_notify_guard.verify_wechat_platform_notify",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.payment_notify_guard.decrypt_notify_resource",
+        lambda _resource: {
+            "trade_state": "SUCCESS",
+            "out_trade_no": "CRIDENTITY1",
+            "transaction_id": "TX-IDENTITY-1",
+            "appid": "wrong-app",
+            "mchid": "expected-mch",
+            "amount": {"total": 100, "currency": "CNY"},
+        },
+    )
+
+    with pytest.raises(PaymentNotifyReject, match="appid"):
+        process_wechat_pay_notify(MagicMock(), body=b'{"resource":{}}', headers={})
+
+
 def test_process_alipay_requires_seller_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.services.payment_notify_guard.settings.alipay_seller_id", "")
     monkeypatch.setattr(
@@ -129,5 +205,27 @@ def test_process_alipay_requires_seller_id(monkeypatch: pytest.MonkeyPatch) -> N
                 "app_id": "app",
                 "seller_id": "s",
                 "total_amount": "1.00",
+            },
+        )
+
+
+def test_process_alipay_rejects_fractional_fen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.payment_notify_guard.settings.alipay_app_id", "app-1")
+    monkeypatch.setattr("app.services.payment_notify_guard.settings.alipay_seller_id", "seller-1")
+    monkeypatch.setattr(
+        "app.services.payment_notify_guard.verify_notify_signature",
+        lambda _params: True,
+    )
+
+    with pytest.raises(PaymentNotifyReject, match="total_amount"):
+        process_alipay_notify(
+            MagicMock(),
+            params={
+                "trade_status": "TRADE_SUCCESS",
+                "out_trade_no": "CR1",
+                "trade_no": "ALI1",
+                "app_id": "app-1",
+                "seller_id": "seller-1",
+                "total_amount": "1.001",
             },
         )
