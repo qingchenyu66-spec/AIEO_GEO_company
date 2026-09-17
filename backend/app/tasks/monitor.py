@@ -24,7 +24,7 @@ from app.services.lead_diagnosis_service import (
     persist_lead_run_failure,
     submit_due_lead_run,
 )
-from app.services.celery_result_sanitize import summarize_schedule_submit_for_celery
+from app.services.celery_result_sanitize import redact_secrets_in_text, summarize_schedule_submit_for_celery
 from app.services.molizhishu_client import MolizhishuApiError
 from app.services.monitor_service import (
     list_pending_monitor_task_ids,
@@ -249,16 +249,18 @@ def submit_schedule_group_task(
             )
         raise self.retry(exc=exc, countdown=min(60, 5 * (self.request.retries + 1)))
     except RuntimeError as exc:
-        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, exc)
-        return summarize_schedule_submit_for_celery({"status": "skipped", "message": str(exc)})
+        safe_error = redact_secrets_in_text(str(exc))
+        logger.warning("submit_schedule_group skipped tenant=%s key=%s error=%s", tenant_id, group_key, safe_error)
+        return summarize_schedule_submit_for_celery({"status": "skipped", "message": safe_error})
     except (MolizhishuApiError, KombuOperationalError, SQLOperationalError, TimeoutError) as exc:
+        safe_error = redact_secrets_in_text(str(exc))
         logger.warning(
             "submit_schedule_group retry tenant=%s key=%s attempt=%s/%s error=%s",
             tenant_id,
             group_key,
             self.request.retries,
             self.max_retries,
-            exc,
+            safe_error,
         )
         if self.request.retries >= self.max_retries:
             created_by = current.user.id if current else None
@@ -266,7 +268,7 @@ def submit_schedule_group_task(
                 db,
                 tenant_id=tenant_id,
                 group_key=group_key,
-                error_message=str(exc),
+                error_message=safe_error,
                 created_by=created_by,
             )
             return summarize_schedule_submit_for_celery(
@@ -275,7 +277,7 @@ def submit_schedule_group_task(
                     "schedule_key": group_key,
                     "status": "failed",
                     "keyword": keyword,
-                    "message": str(exc),
+                    "message": safe_error,
                 }
             )
         raise self.retry(exc=exc)

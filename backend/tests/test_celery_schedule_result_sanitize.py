@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -176,4 +177,53 @@ def test_submit_schedule_group_task_return_is_sanitized(monkeypatch: pytest.Monk
     assert result["total_items"] == 3
     assert "callback_url" not in result
     assert "task" not in result
+    assert celery_result_contains_secrets(result) is False
+
+
+def test_submit_schedule_group_task_redacts_runtime_error_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """异常文本可能携带回调 URL；写 Worker 日志前必须脱敏。"""
+    from app.tasks import monitor as monitor_tasks
+
+    monkeypatch.setattr(monitor_tasks.settings, "celery_enabled", True)
+    monkeypatch.setattr(monitor_tasks, "SessionLocal", lambda: MagicMock())
+    monkeypatch.setattr(
+        monitor_tasks,
+        "load_platform_session",
+        lambda _db: SimpleNamespace(user=SimpleNamespace(id=1)),
+    )
+    monkeypatch.setattr(
+        monitor_tasks,
+        "due_item_from_group_key",
+        lambda **_kwargs: SimpleNamespace(
+            tenant_id=1,
+            schedule_key="20260917-0900-kw0",
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+            region_code=None,
+        ),
+    )
+
+    leaked_token = "MUST-NOT-LOG"
+
+    def _raise_runtime_error(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(f"callback https://example.com/cb?token={leaked_token} rejected")
+
+    monkeypatch.setattr(monitor_tasks, "execute_schedule_group", _raise_runtime_error)
+
+    with caplog.at_level(logging.WARNING):
+        result = monitor_tasks.submit_schedule_group_task.run(
+            tenant_id=1,
+            group_key="20260917-0900-kw0",
+            max_prompts=50,
+            keyword="词",
+        )
+
+    assert leaked_token not in caplog.text
+    assert "https://" not in caplog.text
+    assert "[redacted-url]" in caplog.text
+    assert result["message"] == "callback [redacted-url] rejected"
     assert celery_result_contains_secrets(result) is False
