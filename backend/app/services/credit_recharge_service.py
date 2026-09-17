@@ -170,10 +170,18 @@ def fulfill_credit_recharge_order_paid(
     if tenant is None:
         raise ValueError("企业不存在")
 
+    tx_id = str(transaction_id or "").strip()
     if order.status == "paid" and order.ledger_id:
+        stored = str(order.transaction_id or "").strip()
+        if stored and tx_id and stored != tx_id:
+            raise ValueError("已支付订单交易号不一致")
+        if not stored and tx_id:
+            # 兼容：历史已支付但交易号为空时允许补绑，禁止静默覆盖非空值
+            order.transaction_id = tx_id
+            db.commit()
+            db.refresh(order)
         return _order_status_payload(order, tenant)
 
-    tx_id = str(transaction_id or "").strip()
     if tx_id:
         order.transaction_id = tx_id
 

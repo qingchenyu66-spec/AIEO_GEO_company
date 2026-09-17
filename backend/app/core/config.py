@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     wechat_pay_cert_key_path: str = ""
     wechat_pay_cert_path: str = ""
     wechat_pay_notify_url: str = ""
+    # 2026-09-17 - 平台证书/公钥（按 Wechatpay-Serial）；JSON {"SERIAL":"/path.pem 或 PEM 正文"}
+    # 商户证书 WECHAT_PAY_CERT_PATH 不能用于验平台回调签名
+    wechat_pay_platform_cert_map: str = ""
+    wechat_pay_platform_public_key_map: str = ""
+    wechat_pay_notify_skew_seconds: int = 300
     wechat_app_secret: str = ""
     wechat_h5_base_url: str = "https://www.aieokj.com/h5/diagnosis/"
     # 本地联调：跳过微信下单，直接 mock 支付成功
@@ -121,6 +126,7 @@ class Settings(BaseSettings):
 
     # 2026-09-01 - H5 支付宝手机网站支付（艾迪亚 AppID）
     alipay_app_id: str = ""
+    alipay_seller_id: str = ""
     alipay_private_key_path: str = ""
     alipay_private_key: str = ""
     alipay_public_key_path: str = ""

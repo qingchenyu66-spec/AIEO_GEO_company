@@ -319,7 +319,7 @@ def test_fulfill_idempotent_same_lead(monkeypatch) -> None:
         second = fulfill_h5_order_paid(
             db,
             out_trade_no=out_trade_no,
-            wx_transaction_id="DEV-REPEAT",
+            wx_transaction_id=f"DEV-{out_trade_no}",
         )
         assert second["status"] == "paid"
         assert second["lead_diagnosis_id"] == lead_id
@@ -367,7 +367,7 @@ def test_fulfill_repairs_paid_without_lead(monkeypatch) -> None:
         repaired = fulfill_h5_order_paid(
             db,
             out_trade_no=out_trade_no,
-            wx_transaction_id="DEV-GAP-RETRY",
+            wx_transaction_id="DEV-GAP",
         )
         assert repaired["status"] == "paid"
         assert repaired["lead_diagnosis_id"]

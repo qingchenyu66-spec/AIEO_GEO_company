@@ -298,16 +298,29 @@ def fulfill_h5_order_paid(
 ) -> dict[str, Any]:
     # 2026-09-01 - 兼容微信旧参数名 wx_transaction_id
     tx_id = str(transaction_id or wx_transaction_id or "").strip()
-    order = db.scalar(select(H5DiagnosisOrder).where(H5DiagnosisOrder.out_trade_no == out_trade_no))
+    order = db.scalar(
+        select(H5DiagnosisOrder).where(H5DiagnosisOrder.out_trade_no == out_trade_no).with_for_update()
+    )
     if order is None:
         raise ValueError("订单不存在")
-    if order.status == "paid" and order.lead_diagnosis_id:
-        return get_h5_order_status(db, out_trade_no)
 
-    order.status = "paid"
-    if tx_id:
-        order.wx_transaction_id = tx_id
-    order.paid_at = datetime.utcnow()
+    stored = str(order.wx_transaction_id or "").strip()
+    if order.status == "paid":
+        if stored and tx_id and stored != tx_id:
+            raise ValueError("已支付订单交易号不一致")
+        if order.lead_diagnosis_id:
+            if not stored and tx_id:
+                order.wx_transaction_id = tx_id
+                db.commit()
+            return get_h5_order_status(db, out_trade_no)
+        # paid 但缺 lead：继续补建，不覆盖已有交易号
+        if not stored and tx_id:
+            order.wx_transaction_id = tx_id
+    else:
+        order.status = "paid"
+        if tx_id:
+            order.wx_transaction_id = tx_id
+        order.paid_at = datetime.utcnow()
 
     if not order.lead_diagnosis_id:
         lead_id = create_lead_diagnosis_from_h5_order(db, order)

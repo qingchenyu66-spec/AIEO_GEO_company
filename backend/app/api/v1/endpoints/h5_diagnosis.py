@@ -23,7 +23,6 @@ from app.schemas.h5_diagnosis import (
 from app.services.h5_diagnosis_service import (
     _H5_OPENID_COOKIE,
     create_h5_diagnosis_order,
-    fulfill_h5_order_paid,
     get_h5_diagnosis_public_config,
     get_h5_order_status,
     list_h5_diagnosis_orders,
@@ -31,10 +30,7 @@ from app.services.h5_diagnosis_service import (
     mask_openid,
     require_h5_order_admin_access,
 )
-from app.services.credit_recharge_service import (
-    fulfill_credit_recharge_order_paid,
-    is_credit_recharge_out_trade_no,
-)
+from app.services.payment_notify_guard import PaymentNotifyReject, process_alipay_notify, process_wechat_pay_notify
 from app.services.h5_result_service import (
     build_h5_result_report_html,
     get_h5_diagnosis_result,
@@ -44,7 +40,6 @@ from app.services.h5_result_service import (
 )
 from app.services.alipay_pay_service import verify_notify_signature
 from app.services.wechat_oauth_service import build_oauth_redirect_url, exchange_code_for_openid
-from app.services.wechat_pay_service import decrypt_notify_resource
 
 router = APIRouter(prefix="/h5/diagnosis")
 wechat_pay_router = APIRouter(prefix="/wechat-pay")
@@ -328,56 +323,40 @@ def dev_mark_paid(out_trade_no: str, db: Session = Depends(get_db)) -> ApiRespon
 async def wechat_pay_notify(request: Request, db: Session = Depends(get_db)) -> Response:
     body = await request.body()
     try:
-        payload = json.loads(body.decode("utf-8"))
-        resource = payload.get("resource") or {}
-        plain = decrypt_notify_resource(resource)
+        result = process_wechat_pay_notify(db, body=body, headers=request.headers)
+    except PaymentNotifyReject:
+        return Response(
+            status_code=400,
+            content=json.dumps({"code": "FAIL", "message": "失败"}),
+            media_type="application/json",
+        )
     except Exception:
         return Response(status_code=400, content="invalid notify")
 
-    if plain.get("trade_state") != "SUCCESS":
-        return Response(content=json.dumps({"code": "SUCCESS", "message": "ignored"}), media_type="application/json")
-
-    out_trade_no = str(plain.get("out_trade_no") or "").strip()
-    transaction_id = str(plain.get("transaction_id") or "").strip()
-    if not out_trade_no:
-        return Response(status_code=400, content="missing out_trade_no")
-
-    try:
-        if is_credit_recharge_out_trade_no(out_trade_no):
-            fulfill_credit_recharge_order_paid(
-                db, out_trade_no=out_trade_no, transaction_id=transaction_id
-            )
-        else:
-            fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=transaction_id)
-    except ValueError:
-        return Response(status_code=404, content="order not found")
-
-    return Response(content=json.dumps({"code": "SUCCESS", "message": "成功"}), media_type="application/json")
+    if result is None:
+        return Response(
+            content=json.dumps({"code": "SUCCESS", "message": "ignored"}),
+            media_type="application/json",
+        )
+    return Response(
+        content=json.dumps({"code": "SUCCESS", "message": "成功"}),
+        media_type="application/json",
+    )
 
 
 @alipay_router.post("/notify")
 async def alipay_notify(request: Request, db: Session = Depends(get_db)) -> Response:
-    # 2026-09-01 - 支付宝异步通知：form 字段 + RSA2 验签
+    # 2026-09-01 - 支付宝异步通知：form 字段 + RSA2 验签 + 业务对账
     form = await request.form()
     params = {str(k): str(v) for k, v in form.items()}
-    if not verify_notify_signature(params):
-        return Response(content="fail", media_type="text/plain")
-    trade_status = str(params.get("trade_status") or "").strip()
-    if trade_status not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
-        return Response(content="success", media_type="text/plain")
-    out_trade_no = str(params.get("out_trade_no") or "").strip()
-    trade_no = str(params.get("trade_no") or "").strip()
-    if not out_trade_no:
-        return Response(content="fail", media_type="text/plain")
     try:
-        if is_credit_recharge_out_trade_no(out_trade_no):
-            fulfill_credit_recharge_order_paid(
-                db, out_trade_no=out_trade_no, transaction_id=trade_no
-            )
-        else:
-            fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=trade_no)
-    except ValueError:
+        result = process_alipay_notify(db, params=params)
+    except PaymentNotifyReject:
         return Response(content="fail", media_type="text/plain")
+    except Exception:
+        return Response(content="fail", media_type="text/plain")
+    if result is None:
+        return Response(content="success", media_type="text/plain")
     return Response(content="success", media_type="text/plain")
 
 

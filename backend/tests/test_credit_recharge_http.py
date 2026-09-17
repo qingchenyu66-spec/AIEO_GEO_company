@@ -250,14 +250,24 @@ def test_wechat_notify_fulfills_credit_recharge(monkeypatch: pytest.MonkeyPatch)
             json={"yuan_amount": 40, "pay_channel": "wechat"},
         )
         assert create_resp.status_code == 200, create_resp.text
-        out_trade_no = create_resp.json()["data"]["out_trade_no"]
+        data = create_resp.json()["data"]
+        out_trade_no = data["out_trade_no"]
+        amount_fen = int(round(float(data["yuan_amount"]) * 100))
+
+        from app.core.config import settings as app_settings
+        from uuid import uuid4
+
+        tx_id = f"WX-{uuid4().hex[:12].upper()}"
 
         monkeypatch.setattr(
-            "app.api.v1.endpoints.h5_diagnosis.decrypt_notify_resource",
+            "app.services.payment_notify_guard.decrypt_notify_resource",
             lambda resource: {
                 "trade_state": "SUCCESS",
                 "out_trade_no": out_trade_no,
-                "transaction_id": "WX-NOTIFY-1",
+                "transaction_id": tx_id,
+                "appid": app_settings.wechat_pay_app_id,
+                "mchid": app_settings.wechat_pay_mch_id,
+                "amount": {"total": amount_fen, "currency": "CNY"},
             },
         )
         notify = client.post("/api/v1/wechat-pay/notify", json={"resource": {"ciphertext": "x"}})
@@ -279,8 +289,9 @@ def test_wechat_notify_fulfills_credit_recharge(monkeypatch: pytest.MonkeyPatch)
 def test_alipay_notify_fulfills_credit_recharge(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.core.config.settings.alipay_dev_mode", True)
     monkeypatch.setattr("app.core.config.settings.wechat_pay_dev_mode", False)
+    monkeypatch.setattr("app.core.config.settings.alipay_seller_id", "2088123456789012")
     monkeypatch.setattr(
-        "app.api.v1.endpoints.h5_diagnosis.verify_notify_signature",
+        "app.services.payment_notify_guard.verify_notify_signature",
         lambda params: True,
     )
     ctx = _make_customer(billing_mode=BILLING_MODE_CREDIT, as_admin=True)
@@ -292,15 +303,23 @@ def test_alipay_notify_fulfills_credit_recharge(monkeypatch: pytest.MonkeyPatch)
             json={"yuan_amount": 25, "pay_channel": "alipay"},
         )
         assert create_resp.status_code == 200, create_resp.text
-        out_trade_no = create_resp.json()["data"]["out_trade_no"]
-        assert create_resp.json()["data"]["dev_auto_paid"] is True
+        data = create_resp.json()["data"]
+        out_trade_no = data["out_trade_no"]
+        assert data["dev_auto_paid"] is True
 
+        from app.core.config import settings as app_settings
+        from uuid import uuid4
+
+        trade_no = f"ALI-{uuid4().hex[:12].upper()}"
         notify = client.post(
             "/api/v1/alipay/notify",
             data={
                 "trade_status": "TRADE_SUCCESS",
                 "out_trade_no": out_trade_no,
-                "trade_no": "ALI-NOTIFY-1",
+                "trade_no": trade_no,
+                "app_id": app_settings.alipay_app_id,
+                "seller_id": "2088123456789012",
+                "total_amount": "25.00",
             },
         )
         assert notify.status_code == 200, notify.text
