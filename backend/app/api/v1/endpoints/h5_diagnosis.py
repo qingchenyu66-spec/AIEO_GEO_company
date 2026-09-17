@@ -31,6 +31,10 @@ from app.services.h5_diagnosis_service import (
     mask_openid,
     require_h5_order_admin_access,
 )
+from app.services.credit_recharge_service import (
+    fulfill_credit_recharge_order_paid,
+    is_credit_recharge_out_trade_no,
+)
 from app.services.h5_result_service import (
     build_h5_result_report_html,
     get_h5_diagnosis_result,
@@ -339,7 +343,12 @@ async def wechat_pay_notify(request: Request, db: Session = Depends(get_db)) -> 
         return Response(status_code=400, content="missing out_trade_no")
 
     try:
-        fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=transaction_id)
+        if is_credit_recharge_out_trade_no(out_trade_no):
+            fulfill_credit_recharge_order_paid(
+                db, out_trade_no=out_trade_no, transaction_id=transaction_id
+            )
+        else:
+            fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=transaction_id)
     except ValueError:
         return Response(status_code=404, content="order not found")
 
@@ -361,7 +370,12 @@ async def alipay_notify(request: Request, db: Session = Depends(get_db)) -> Resp
     if not out_trade_no:
         return Response(content="fail", media_type="text/plain")
     try:
-        fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=trade_no)
+        if is_credit_recharge_out_trade_no(out_trade_no):
+            fulfill_credit_recharge_order_paid(
+                db, out_trade_no=out_trade_no, transaction_id=trade_no
+            )
+        else:
+            fulfill_h5_order_paid(db, out_trade_no=out_trade_no, transaction_id=trade_no)
     except ValueError:
         return Response(content="fail", media_type="text/plain")
     return Response(content="success", media_type="text/plain")

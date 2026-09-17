@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BrandAuditPage from './BrandAuditPage.vue'
 import { resolveEnterprisePreviewTenantId } from '../customerPreview'
 import { PreviewCustomerMenusKey } from '../injectionKeys'
 import {
+  createEnterpriseCreditRechargeOrder,
   createEnterpriseMember,
   deleteEnterpriseMember,
   enterpriseCreditLedgerExportUrl,
@@ -14,20 +15,27 @@ import {
   getEnterpriseCreditLedger,
   getEnterpriseCreditLedgerDetail,
   getEnterpriseCreditLedgerGroupLines,
+  getEnterpriseCreditRechargeOrderStatus,
   getEnterpriseCreditSummary,
   getEnterpriseMembers,
+  markEnterpriseCreditRechargeDevPaid,
   resetEnterpriseMemberPassword,
   updateEnterpriseMember,
   type CreditLedgerDetail,
   type CreditLedgerGroupItem,
   type CreditLedgerItem,
   type CreditLedgerView,
+  type CreditRechargeOrder,
   type EnterpriseMemberItem,
 } from '../../../services/credit'
 import { useAuthStore } from '../../../stores/auth'
 import type { MenuInfo } from '../../../services/auth'
 import { extractErrorDetail, isRequestCanceled } from '../../../utils/requestError'
 import { getPlatformMeta } from '../platformMeta'
+import {
+  createCreditRechargePoll,
+  type CreditRechargePollController,
+} from '../composables/creditRechargePoll'
 
 const props = defineProps<{ initialTab?: string; previewReadonly?: boolean }>()
 const route = useRoute()
@@ -210,6 +218,166 @@ function ledgerSecondary(row: CreditLedgerItem) {
 }
 
 const canExportCredit = computed(() => Boolean(menuGrant('customer.enterprise_credit')?.can_export) || props.previewReadonly)
+const canOnlineRecharge = computed(() => (
+  !props.previewReadonly
+  && isCreditBilling.value
+  && Boolean(menuGrant('customer.enterprise_credit')?.can_create)
+))
+const creditsPerYuan = computed(() => {
+  const rate = Number(summary.value?.credits_per_yuan)
+  return Number.isFinite(rate) && rate > 0 ? rate : 4.2
+})
+
+const rechargeVisible = ref(false)
+const rechargeYuan = ref('')
+const rechargeChannel = ref<'wechat' | 'alipay'>('wechat')
+const rechargeSubmitting = ref(false)
+const rechargePolling = ref(false)
+const rechargeError = ref('')
+const rechargeOrder = ref<CreditRechargeOrder | null>(null)
+let rechargePoll: CreditRechargePollController | null = null
+
+const rechargeYuanValue = computed(() => {
+  const num = Number(rechargeYuan.value)
+  return Number.isFinite(num) ? num : NaN
+})
+const rechargeCreditsPreview = computed(() => {
+  if (!Number.isFinite(rechargeYuanValue.value) || rechargeYuanValue.value <= 0) return null
+  return Math.round(rechargeYuanValue.value * creditsPerYuan.value * 10) / 10
+})
+const rechargeQrSrc = computed(() => {
+  const code = String(rechargeOrder.value?.code_url || '').trim()
+  if (!code) return ''
+  return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(code)}`
+})
+const rechargeQrTitle = computed(() => (
+  rechargeChannel.value === 'alipay' ? '请使用支付宝扫码支付' : '请使用微信扫码支付'
+))
+
+const RECHARGE_QUICK_YUAN = [100, 500, 1000, 2000, 5000]
+
+function clearRechargePoll() {
+  rechargePoll?.stop()
+  rechargePoll = null
+  rechargePolling.value = false
+}
+
+function pickQuickYuan(amount: number) {
+  if (Boolean(rechargeOrder.value?.code_url) || rechargeSubmitting.value) return
+  rechargeYuan.value = String(amount)
+  rechargeError.value = ''
+}
+
+function resetRechargeDialog() {
+  clearRechargePoll()
+  rechargeYuan.value = ''
+  rechargeChannel.value = 'wechat'
+  rechargeSubmitting.value = false
+  rechargeError.value = ''
+  rechargeOrder.value = null
+}
+
+function openRechargeDialog() {
+  resetRechargeDialog()
+  rechargeVisible.value = true
+}
+
+function closeRechargeDialog() {
+  rechargeVisible.value = false
+  resetRechargeDialog()
+}
+
+function backToRechargeForm() {
+  clearRechargePoll()
+  rechargeOrder.value = null
+  rechargeError.value = ''
+  rechargeSubmitting.value = false
+}
+
+async function refreshCreditAfterPaid() {
+  const tenantId = enterpriseTenantId.value
+  summary.value = await getEnterpriseCreditSummary(tenantId)
+  await loadCreditLedger(1)
+}
+
+function startRechargePoll(outTradeNo: string) {
+  clearRechargePoll()
+  rechargePolling.value = true
+  rechargePoll = createCreditRechargePoll({
+    outTradeNo,
+    isActive: () => rechargeVisible.value,
+    fetchStatus: (no) => getEnterpriseCreditRechargeOrderStatus(no, enterpriseTenantId.value),
+    onStatus: (status) => {
+      rechargeOrder.value = { ...rechargeOrder.value, ...status } as CreditRechargeOrder
+    },
+    onPaid: async (status) => {
+      ElMessage.success(`充值成功，已到账 ${formatCreditNumber(status.credits_amount)} 算力`)
+      await refreshCreditAfterPaid()
+      closeRechargeDialog()
+    },
+    onTimeout: () => {
+      rechargeError.value = '等待支付超时，请稍后刷新流水确认'
+    },
+    onError: (message) => {
+      rechargeError.value = message
+    },
+    isCanceledError: isRequestCanceled,
+    extractError: extractErrorDetail,
+  })
+  rechargePoll.start()
+}
+
+async function submitRecharge() {
+  if (!canOnlineRecharge.value) return
+  const yuan = Number(rechargeYuan.value)
+  if (!Number.isFinite(yuan) || yuan < 1) {
+    rechargeError.value = '请输入至少 1 元'
+    return
+  }
+  if (yuan > 50000) {
+    rechargeError.value = '单笔最高 5 万元'
+    return
+  }
+  rechargeSubmitting.value = true
+  rechargeError.value = ''
+  clearRechargePoll()
+  try {
+    const order = await createEnterpriseCreditRechargeOrder({
+      yuan_amount: Math.round(yuan * 100) / 100,
+      pay_channel: rechargeChannel.value,
+      tenant_id: enterpriseTenantId.value,
+    })
+    if (!order.code_url) {
+      throw new Error('未拿到支付二维码，请稍后重试')
+    }
+    rechargeOrder.value = order
+    // 开发模式也先出码；真实回调不可用时点「模拟支付」
+    if (!order.dev_auto_paid) {
+      startRechargePoll(order.out_trade_no)
+    }
+  } catch (error) {
+    rechargeError.value = extractErrorDetail(error, '发起充值失败')
+  } finally {
+    rechargeSubmitting.value = false
+  }
+}
+
+async function simulateDevPaid() {
+  const outTradeNo = String(rechargeOrder.value?.out_trade_no || '').trim()
+  if (!outTradeNo || !rechargeOrder.value?.dev_auto_paid) return
+  rechargeSubmitting.value = true
+  rechargeError.value = ''
+  try {
+    const paid = await markEnterpriseCreditRechargeDevPaid(outTradeNo, enterpriseTenantId.value)
+    ElMessage.success(`充值成功，已到账 ${formatCreditNumber(paid.credits_amount)} 算力`)
+    await refreshCreditAfterPaid()
+    closeRechargeDialog()
+  } catch (error) {
+    rechargeError.value = extractErrorDetail(error, '模拟支付失败')
+  } finally {
+    rechargeSubmitting.value = false
+  }
+}
 
 const ledgerTotal = computed(() => Number((ledger.value as { total?: number } | null)?.total || 0))
 const ledgerTotalPages = computed(() => Math.max(1, Math.ceil(ledgerTotal.value / ledgerPageSize) || 1))
@@ -567,6 +735,10 @@ async function removeMember(row: EnterpriseMemberItem) {
   }
 }
 
+onBeforeUnmount(() => {
+  clearRechargePoll()
+})
+
 onMounted(async () => {
   applyInitialTab()
   await refreshBillingMode()
@@ -621,6 +793,15 @@ watch(visibleTabs, () => ensureAllowedTab())
             </div>
           </div>
           <div class="credit-hero-links">
+            <button
+              v-if="canOnlineRecharge"
+              type="button"
+              class="credit-notice-link"
+              @click="openRechargeDialog"
+            >在线充值</button>
+            <template v-if="canOnlineRecharge">
+              <span class="credit-hero-sep" aria-hidden="true">·</span>
+            </template>
             <span>充值请联系客户经理</span>
             <template v-if="terms">
               <span class="credit-hero-sep" aria-hidden="true">·</span>
@@ -628,6 +809,140 @@ watch(visibleTabs, () => ensureAllowedTab())
             </template>
           </div>
         </header>
+
+        <el-dialog
+          v-model="rechargeVisible"
+          width="420px"
+          class="credit-recharge-modal"
+          :show-close="true"
+          :close-on-click-modal="false"
+          @closed="resetRechargeDialog"
+        >
+          <template #header>
+            <div class="credit-recharge-head">
+              <p class="credit-recharge-kicker">算力中心</p>
+              <h3 class="credit-recharge-title">{{ rechargeOrder?.code_url ? '扫码支付' : '在线充值' }}</h3>
+              <p class="credit-recharge-sub">
+                <template v-if="rechargeOrder?.code_url">
+                  ¥{{ Number(rechargeOrder.yuan_amount).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}
+                  · 预计 {{ formatCreditNumber(rechargeOrder.credits_amount) }} 算力
+                </template>
+                <template v-else>微信支付或支付宝扫码，到账后立即可用</template>
+              </p>
+            </div>
+          </template>
+          <div class="credit-recharge-dialog">
+            <template v-if="!rechargeOrder?.code_url">
+              <div class="credit-recharge-amount-block">
+                <span class="credit-recharge-label">充值金额</span>
+                <div class="credit-recharge-amount-field">
+                  <em>¥</em>
+                  <input
+                    v-model="rechargeYuan"
+                    type="number"
+                    min="1"
+                    max="50000"
+                    step="0.01"
+                    placeholder="0"
+                    :disabled="rechargeSubmitting"
+                  >
+                </div>
+                <div class="credit-recharge-quick" role="group" aria-label="常用金额">
+                  <button
+                    v-for="amt in RECHARGE_QUICK_YUAN"
+                    :key="amt"
+                    type="button"
+                    :class="{ on: Number(rechargeYuan) === amt }"
+                    :disabled="rechargeSubmitting"
+                    @click="pickQuickYuan(amt)"
+                  >{{ amt.toLocaleString('zh-CN') }}</button>
+                </div>
+              </div>
+
+              <div class="credit-recharge-result" :class="{ ready: rechargeCreditsPreview != null }">
+                <span>预计到账</span>
+                <strong>
+                  <template v-if="rechargeCreditsPreview != null">{{ formatCreditNumber(rechargeCreditsPreview) }}</template>
+                  <template v-else>—</template>
+                </strong>
+                <em>算力 · 1 元 = {{ creditsPerYuan }} 算力</em>
+              </div>
+
+              <div class="credit-recharge-channels" role="radiogroup" aria-label="支付方式">
+                <button
+                  type="button"
+                  class="channel-wechat"
+                  :class="{ on: rechargeChannel === 'wechat' }"
+                  :disabled="rechargeSubmitting"
+                  @click="rechargeChannel = 'wechat'"
+                >
+                  <span class="channel-mark" aria-hidden="true">微</span>
+                  <span class="channel-copy">
+                    <strong>微信支付</strong>
+                    <small>手机微信扫码</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="channel-alipay"
+                  :class="{ on: rechargeChannel === 'alipay' }"
+                  :disabled="rechargeSubmitting"
+                  @click="rechargeChannel = 'alipay'"
+                >
+                  <span class="channel-mark" aria-hidden="true">支</span>
+                  <span class="channel-copy">
+                    <strong>支付宝</strong>
+                    <small>手机支付宝扫码</small>
+                  </span>
+                </button>
+              </div>
+            </template>
+
+            <div v-else class="credit-recharge-qr">
+              <p class="credit-recharge-qr-title">{{ rechargeQrTitle }}</p>
+              <div class="credit-recharge-qr-frame">
+                <img class="credit-recharge-qr-img" :src="rechargeQrSrc" :alt="rechargeQrTitle">
+              </div>
+              <p class="credit-recharge-qr-hint">
+                <template v-if="rechargeOrder.dev_auto_paid">当前为支付开发模式，码不可真付</template>
+                <template v-else-if="rechargePolling">等待支付结果…</template>
+                <template v-else>扫码后请勿关闭本窗</template>
+              </p>
+              <p class="credit-recharge-qr-no">单号 {{ rechargeOrder.out_trade_no }}</p>
+            </div>
+            <p v-if="rechargeError" class="credit-recharge-error">{{ rechargeError }}</p>
+          </div>
+          <template #footer>
+            <div class="credit-recharge-footer">
+              <button
+                v-if="rechargeOrder?.code_url"
+                type="button"
+                class="btn-secondary"
+                @click="backToRechargeForm"
+              >返回修改</button>
+              <button
+                v-else
+                type="button"
+                class="btn-secondary"
+                @click="closeRechargeDialog"
+              >取消</button>
+              <button
+                v-if="rechargeOrder?.dev_auto_paid && rechargeOrder?.code_url"
+                type="button"
+                class="btn-primary"
+                :disabled="rechargeSubmitting"
+                @click="simulateDevPaid"
+              >{{ rechargeSubmitting ? '入账中…' : '模拟支付成功' }}</button>
+              <button
+                v-if="!rechargeOrder?.code_url"
+                type="button"
+                class="btn-primary"
+                :disabled="rechargeSubmitting"
+                @click="submitRecharge"
+              >{{ rechargeSubmitting ? '下单中…' : '确认支付' }}</button>
+            </div>
+          </template>
+        </el-dialog>
 
         <el-dialog v-model="termsViewVisible" width="560px" :title="termsDialogTitle">
           <div v-if="terms?.content_html" class="terms-box terms-box-dialog" v-html="terms.content_html" />
@@ -1224,6 +1539,275 @@ watch(visibleTabs, () => ensureAllowedTab())
   cursor: pointer;
 }
 .credit-notice-link:hover { text-decoration: underline; }
+.credit-recharge-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.credit-recharge-head {
+  padding-right: 20px;
+}
+.credit-recharge-kicker {
+  margin: 0 0 4px;
+  color: #64748b;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.credit-recharge-title {
+  margin: 0;
+  color: #0f172a;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+.credit-recharge-sub {
+  margin: 6px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.credit-recharge-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+.credit-recharge-amount-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid #dbe3ee;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.credit-recharge-amount-field:focus-within {
+  border-color: var(--el-color-primary);
+  background: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--el-color-primary) 18%, transparent);
+}
+.credit-recharge-amount-field em {
+  font-style: normal;
+  color: #94a3b8;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1;
+}
+.credit-recharge-amount-field input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #0f172a;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.credit-recharge-amount-field input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.credit-recharge-amount-field input::-webkit-outer-spin-button,
+.credit-recharge-amount-field input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.credit-recharge-amount-field input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.credit-recharge-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.credit-recharge-quick button {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.credit-recharge-quick button:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+.credit-recharge-quick button.on {
+  border-color: color-mix(in srgb, var(--el-color-primary) 55%, #fff);
+  background: color-mix(in srgb, var(--el-color-primary) 10%, #fff);
+  color: var(--el-color-primary);
+}
+.credit-recharge-quick button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.credit-recharge-result {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: baseline;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e8eef5;
+}
+.credit-recharge-result.ready {
+  background: linear-gradient(180deg, #f0f7ff 0%, #eef6ff 100%);
+  border-color: color-mix(in srgb, var(--el-color-primary) 22%, #e8eef5);
+}
+.credit-recharge-result > span {
+  grid-column: 1;
+  grid-row: 1;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+.credit-recharge-result > strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
+  color: #0f172a;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.credit-recharge-result.ready > strong {
+  color: var(--el-color-primary);
+}
+.credit-recharge-result > em {
+  grid-column: 1;
+  grid-row: 2;
+  font-style: normal;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.credit-recharge-channels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.credit-recharge-channels > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.credit-recharge-channels > button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.credit-recharge-channels .channel-mark {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+.channel-wechat .channel-mark { background: #07c160; }
+.channel-alipay .channel-mark { background: #1677ff; }
+.credit-recharge-channels .channel-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.credit-recharge-channels .channel-copy strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.credit-recharge-channels .channel-copy small {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.channel-wechat.on {
+  border-color: #07c160;
+  background: #f3fbf6;
+  box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12);
+}
+.channel-alipay.on {
+  border-color: #1677ff;
+  background: #f3f8ff;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+}
+.credit-recharge-qr {
+  margin: 0;
+  padding: 4px 0 0;
+  border: none;
+  border-radius: 0;
+  text-align: center;
+  background: transparent;
+}
+.credit-recharge-qr-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.credit-recharge-qr-frame {
+  display: inline-flex;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e8eef5;
+}
+.credit-recharge-qr-img {
+  width: 200px;
+  height: 200px;
+  display: block;
+  background: #fff;
+  border-radius: 6px;
+}
+.credit-recharge-qr-hint {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  color: #64748b;
+}
+.credit-recharge-qr-no {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.credit-recharge-error {
+  margin: 0;
+  color: #dc2626;
+  font-size: 13px;
+}
+.credit-recharge-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
 .field { display: block; margin-bottom: 12px; }
 .field span { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px; }
 .input { width: 100%; border: 1px solid var(--el-border-color); border-radius: 6px; padding: 8px 10px; }
@@ -1356,5 +1940,27 @@ watch(visibleTabs, () => ensureAllowedTab())
   .credit-metric.is-primary .credit-metric-value { font-size: 30px; }
   .credit-expand-dl { grid-template-columns: 1fr; }
   .credit-ledger-item { gap: 12px; padding: 12px 0; }
+}
+</style>
+
+<style>
+/* teleported el-dialog shell; keep recharge modal chrome with the page */
+.credit-recharge-modal.el-dialog {
+  border-radius: 16px;
+  overflow: hidden;
+}
+.credit-recharge-modal .el-dialog__header {
+  margin: 0;
+  padding: 20px 20px 0;
+}
+.credit-recharge-modal .el-dialog__body {
+  padding: 16px 20px 8px;
+}
+.credit-recharge-modal .el-dialog__footer {
+  padding: 8px 20px 20px;
+}
+.credit-recharge-modal .el-dialog__headerbtn {
+  top: 18px;
+  right: 16px;
 }
 </style>

@@ -1508,6 +1508,8 @@ def recharge_credits(
     operator_user_id: int,
     reason: str,
     detail_json: dict | None = None,
+    ref_type: str = "manual",
+    ref_id: str | None = None,
 ) -> TenantCreditLedger:
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant.id).with_for_update())
     tenant.credit_balance = Decimal(str(tenant.credit_balance or 0)) + amount
@@ -1516,7 +1518,8 @@ def recharge_credits(
         amount=amount,
         balance_after=_ledger_balance_snapshot(tenant, "recharge" if amount > 0 else "adjust"),
         entry_type="recharge" if amount > 0 else "adjust",
-        ref_type="manual",
+        ref_type=ref_type or "manual",
+        ref_id=ref_id,
         operator_user_id=operator_user_id,
         reason=reason,
         detail_json=detail_json,

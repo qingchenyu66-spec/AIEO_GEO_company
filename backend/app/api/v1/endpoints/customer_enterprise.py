@@ -44,6 +44,11 @@ from app.services.credit_service import (
     tenant_total_credit_deduct,
     validate_credit_monitor_save,
 )
+from app.services.credit_recharge_service import (
+    create_credit_recharge_order,
+    get_credit_recharge_order_status,
+    mark_credit_recharge_order_paid_dev,
+)
 from app.services.enterprise_member_service import (
     create_enterprise_member,
     remove_enterprise_member,
@@ -117,6 +122,7 @@ def enterprise_credit_summary(
     estimate = estimate_daily_credits(db, tenant, asset) if asset else {}
     today_deduct = tenant_today_credit_deduct(db, tenant_id)
     total_usage = tenant_total_credit_deduct(db, tenant_id)
+    policy = merge_credit_policy(tenant.credit_policy_json)
     # 2026-09-08 - 客户 summary 不返回 reserved/pending_terms（UI 已藏；防接口侧读预扣）
     return ApiResponse(
         data={
@@ -126,8 +132,94 @@ def enterprise_credit_summary(
             "total_usage": float(total_usage),
             "daily_estimate": estimate,
             "billing_mode": tenant.billing_mode,
+            "credits_per_yuan": float(policy.get("credits_per_yuan") or 4.2),
         }
     )
+
+
+class CreditRechargeCreateRequest(BaseModel):
+    yuan_amount: float = Field(..., gt=0)
+    pay_channel: str = Field(..., min_length=2, max_length=20)
+    tenant_id: int | None = None
+
+    @field_validator("pay_channel")
+    @classmethod
+    def _normalize_channel(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if text not in {"wechat", "alipay"}:
+            raise ValueError("请选择微信支付或支付宝")
+        return text
+
+
+@router.post("/credit/recharge/orders", response_model=ApiResponse[dict])
+def enterprise_credit_recharge_create(
+    payload: CreditRechargeCreateRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    if current.identity.identity_type == "PLATFORM":
+        raise HTTPException(status_code=403, detail="预览模式不可充值")
+    _require_enterprise_read(db, current, "customer.enterprise_credit", action="can_create")
+    tenant_id = _resolve_enterprise_tenant_id(db, current, payload.tenant_id)
+    tenant = _require_credit_tenant(db, tenant_id)
+    try:
+        data = create_credit_recharge_order(
+            db,
+            tenant=tenant,
+            payer_user_id=current.user.id,
+            yuan_amount=payload.yuan_amount,
+            pay_channel=payload.pay_channel,
+        )
+    except ValueError as exc:
+        raise_write_endpoint_error(exc, context="customer.enterprise.credit.recharge_create")
+    return ApiResponse(data=data)
+
+
+@router.get("/credit/recharge/orders/{out_trade_no}", response_model=ApiResponse[dict])
+def enterprise_credit_recharge_status(
+    out_trade_no: str,
+    tenant_id: int | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    _require_enterprise_read(db, current, "customer.enterprise_credit")
+    resolved_tenant_id = _resolve_enterprise_tenant_id(db, current, tenant_id)
+    _require_credit_tenant(db, resolved_tenant_id)
+    try:
+        data = get_credit_recharge_order_status(
+            db,
+            out_trade_no=out_trade_no,
+            tenant_id=resolved_tenant_id,
+        )
+    except ValueError as exc:
+        raise_read_endpoint_error(exc, context="customer.enterprise.credit.recharge_status")
+    return ApiResponse(data=data)
+
+
+@router.post("/credit/recharge/orders/{out_trade_no}/dev-paid", response_model=ApiResponse[dict])
+def enterprise_credit_recharge_dev_paid(
+    out_trade_no: str,
+    tenant_id: int | None = Query(default=None),
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    if current.identity.identity_type == "PLATFORM":
+        raise HTTPException(status_code=403, detail="预览模式不可充值")
+    _require_enterprise_read(db, current, "customer.enterprise_credit", action="can_create")
+    resolved_tenant_id = _resolve_enterprise_tenant_id(db, current, tenant_id)
+    _require_credit_tenant(db, resolved_tenant_id)
+    try:
+        status_data = get_credit_recharge_order_status(
+            db,
+            out_trade_no=out_trade_no,
+            tenant_id=resolved_tenant_id,
+        )
+        if status_data.get("status") == "paid":
+            return ApiResponse(data=status_data)
+        data = mark_credit_recharge_order_paid_dev(db, out_trade_no)
+    except ValueError as exc:
+        raise_write_endpoint_error(exc, context="customer.enterprise.credit.recharge_dev_paid")
+    return ApiResponse(data=data)
 
 
 def _csv_row(cells: list[object]) -> str:

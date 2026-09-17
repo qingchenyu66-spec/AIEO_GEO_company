@@ -11,6 +11,20 @@ export interface CreditSummary {
   total_usage?: number
   daily_estimate: Record<string, unknown>
   billing_mode: string
+  credits_per_yuan?: number
+}
+
+export interface CreditRechargeOrder {
+  out_trade_no: string
+  status: string
+  pay_channel: string
+  yuan_amount: number
+  credits_amount: number
+  credits_per_yuan: number
+  code_url?: string | null
+  paid_at?: string | null
+  available?: number | null
+  dev_auto_paid?: boolean
 }
 
 export interface CreditLedgerItem {
@@ -87,6 +101,38 @@ export interface CustomerPositionOption {
 
 export async function getEnterpriseCreditSummary(tenantId?: number): Promise<CreditSummary> {
   const response = await http.get('/v1/customer/enterprise/credit/summary', { params: enterpriseTenantParams(tenantId) })
+  return response.data.data
+}
+
+export async function createEnterpriseCreditRechargeOrder(payload: {
+  yuan_amount: number
+  pay_channel: 'wechat' | 'alipay' | string
+  tenant_id?: number
+}): Promise<CreditRechargeOrder> {
+  const response = await http.post('/v1/customer/enterprise/credit/recharge/orders', payload)
+  return response.data.data
+}
+
+export async function getEnterpriseCreditRechargeOrderStatus(
+  outTradeNo: string,
+  tenantId?: number,
+): Promise<CreditRechargeOrder> {
+  const response = await http.get(
+    `/v1/customer/enterprise/credit/recharge/orders/${encodeURIComponent(outTradeNo)}`,
+    { params: enterpriseTenantParams(tenantId) },
+  )
+  return response.data.data
+}
+
+export async function markEnterpriseCreditRechargeDevPaid(
+  outTradeNo: string,
+  tenantId?: number,
+): Promise<CreditRechargeOrder> {
+  const response = await http.post(
+    `/v1/customer/enterprise/credit/recharge/orders/${encodeURIComponent(outTradeNo)}/dev-paid`,
+    null,
+    { params: enterpriseTenantParams(tenantId) },
+  )
   return response.data.data
 }
 
