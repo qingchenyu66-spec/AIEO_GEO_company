@@ -805,7 +805,7 @@ watch(visibleTabs, () => ensureAllowedTab())
             <template v-if="canOnlineRecharge">
               <span class="credit-hero-sep" aria-hidden="true">·</span>
             </template>
-            <span>充值请联系客户经理</span>
+            <span>对公付款请联系客户经理</span>
             <template v-if="terms">
               <span class="credit-hero-sep" aria-hidden="true">·</span>
               <button type="button" class="credit-notice-link" @click="openTermsView">服务条款</button>
