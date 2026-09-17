@@ -3,7 +3,6 @@
 export type CreditRechargePollStatus = {
   status: string
   credits_amount?: number
-  [key: string]: unknown
 }
 
 export type CreditRechargePollOptions = {

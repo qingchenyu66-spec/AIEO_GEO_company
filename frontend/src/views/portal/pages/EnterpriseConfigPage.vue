@@ -308,7 +308,10 @@ function startRechargePoll(outTradeNo: string) {
     isActive: () => rechargeVisible.value,
     fetchStatus: (no) => getEnterpriseCreditRechargeOrderStatus(no, enterpriseTenantId.value),
     onStatus: (status) => {
-      rechargeOrder.value = { ...rechargeOrder.value, ...status } as CreditRechargeOrder
+      rechargeOrder.value = {
+        ...(rechargeOrder.value || {}),
+        ...status,
+      } as CreditRechargeOrder
     },
     onPaid: async (status) => {
       ElMessage.success(`充值成功，已到账 ${formatCreditNumber(status.credits_amount)} 算力`)
