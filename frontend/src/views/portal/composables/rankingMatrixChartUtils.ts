@@ -984,10 +984,11 @@ export function heatPointRank(data: MatrixHeatDataItem | [number, number, number
   return data.value?.[2] ?? -1
 }
 
-function heatRankLabelColor(rank: number): string {
+/** 走势热力格子字色：浅底必须深字。rank=1 落在 #c8f5e2，白字几乎看不见。 */
+export function heatRankLabelColor(rank: number): string {
   if (rank < 0) return '#8aa0ba'
-  if (rank === 1) return '#fff'
-  if (rank <= 3) return '#0a5c42'
+  // visualMap min=-1 max=6：约 1~3 仍在绿段，3.5+ 进入黄橙
+  if (rank < 3.5) return '#0a5c42'
   return '#9a6200'
 }
 
@@ -1120,6 +1121,10 @@ export function estimateMatrixAxisLabelWidth(labels: string[], fontSize = 13) {
 {
   console.assert(estimateMatrixAxisLabelWidth(['板材']) >= 108)
   console.assert(estimateMatrixAxisLabelWidth(['公交广告公司哪家好']) > 108)
+  console.assert(heatRankLabelColor(1) === '#0a5c42')
+  console.assert(heatRankLabelColor(1.5) === '#0a5c42')
+  console.assert(heatRankLabelColor(4) === '#9a6200')
+  console.assert(heatRankLabelColor(-1) === '#8aa0ba')
   const heatBuilt = buildMatrixHeatOption({
     platform: 'doubao',
     columns: [{ prompt: 'p1', group_name: null, monitor_keyword: '板材品牌哪个好' }],
