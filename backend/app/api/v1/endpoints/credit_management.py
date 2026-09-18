@@ -22,6 +22,7 @@ from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.models.permission import CustomerPosition
 from app.schemas.common import ApiResponse
+from app.services.operation_log_service import write_operation_log
 from app.services.billing_mode_service import (
     cancel_pending_billing_mode,
     preview_billing_mode_switch,
@@ -242,6 +243,20 @@ def tenant_credit_adjust(
             reason=payload.reason,
             detail_json=detail,
         )
+        if amount > 0:
+            yuan_bit = f"{payload.yuan_amount} 元，" if payload.yuan_amount else ""
+            note = (payload.reason or "").strip()
+            text = f"{yuan_bit}到账 {amount} 算力"
+            if note:
+                text = f"{text}（{note}）"
+            write_operation_log(
+                db,
+                current,
+                "充值",
+                text,
+                target_module="充值",
+                tenant_id=tenant.id,
+            )
         db.commit()
         return ApiResponse(
             data={

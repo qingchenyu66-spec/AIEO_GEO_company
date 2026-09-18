@@ -80,3 +80,4 @@ def test_log_competitor_change_delete() -> None:
     with patch("app.services.operation_log_service.write_operation_log") as write_log:
         _log_competitor_change(db, current, 6, action="delete", name="竞品A")
     assert "删除竞品「竞品A」" in write_log.call_args.args[3]
+    assert write_log.call_args.args[2] == "竞品"

@@ -122,6 +122,13 @@ def public_session(session: dict) -> dict:
     return {key: value for key, value in session.items() if key not in {"access_token", "token_type"}}
 
 
+def _record_landed_login(db: Session, user: User, identity: UserIdentity, request: Request | None) -> None:
+    from app.services.operation_log_service import record_customer_login
+
+    if record_customer_login(db, user=user, identity=identity, request=request):
+        db.commit()
+
+
 def _attach_session_cookie(response: Response, session: dict | None) -> None:
     if not settings.auth_cookie_enabled or not session:
         return
@@ -150,6 +157,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     db.commit()
     if len(identities) == 1:
         session = session_payload(db, user, identities[0], identities)
+        _record_landed_login(db, user, identities[0], request)
         _attach_session_cookie(response, session)
         return ApiResponse(data={"requires_identity_selection": False, "session": public_session(session)})
     return ApiResponse(data={
@@ -175,6 +183,7 @@ def demo_observer_login(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail) from exc
     identity = identities[0]
     session = session_payload(db, user, identity, identities)
+    _record_landed_login(db, user, identity, request)
     _attach_session_cookie(response, session)
     return ApiResponse(
         data={
@@ -203,6 +212,7 @@ def select_identity(payload: IdentitySelectRequest, request: Request, response: 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权使用该身份")
     identities = list(db.scalars(select(UserIdentity).options(joinedload(UserIdentity.tenant)).where(UserIdentity.user_id == user.id, UserIdentity.status.is_(True), UserIdentity.deleted.is_(False))))
     session = session_payload(db, user, identity, identities)
+    _record_landed_login(db, user, identity, request)
     _attach_session_cookie(response, session)
     return ApiResponse(data=public_session(session))
 
@@ -295,6 +305,7 @@ def change_password(
 @router.post("/switch-identity", response_model=ApiResponse[dict])
 def switch_identity(
     payload: IdentitySwitchRequest,
+    request: Request,
     response: Response,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
@@ -319,5 +330,6 @@ def switch_identity(
         identities,
         auth_time=current.auth_time,
     )
+    _record_landed_login(db, current.user, identity, request)
     _attach_session_cookie(response, session)
     return ApiResponse(data=public_session(session))

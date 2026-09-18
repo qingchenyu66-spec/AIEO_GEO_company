@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.credit_recharge_order import CreditRechargeOrder
 from app.models.tenant import Tenant
+from app.models.user import User
 from app.services.alipay_pay_service import AlipayPayError, create_precreate_qr_code
 from app.services.credit_service import (
     credits_from_yuan,
@@ -152,6 +153,33 @@ def get_credit_recharge_order_status(
     return _order_status_payload(order, tenant)
 
 
+def _plain_number(value: Decimal | float | int | str) -> str:
+    text = format(Decimal(str(value)).normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _log_online_recharge(db: Session, order: CreditRechargeOrder) -> None:
+    from app.services.operation_log_service import write_named_operation_log
+
+    user = db.get(User, order.payer_user_id) if order.payer_user_id else None
+    operator_name = "在线支付"
+    if user is not None:
+        operator_name = user.display_name or user.username or operator_name
+    channel = {"wechat": "微信", "alipay": "支付宝"}.get(str(order.pay_channel or ""), str(order.pay_channel or "在线"))
+    write_named_operation_log(
+        db,
+        action_type="充值",
+        description=f"{channel} {_plain_number(order.yuan_amount)} 元，到账 {_plain_number(order.credits_amount)} 算力",
+        operator_name=operator_name,
+        operator_user_id=order.payer_user_id,
+        tenant_id=order.tenant_id,
+        target_module="充值",
+        target_id=order.id,
+    )
+
+
 def fulfill_credit_recharge_order_paid(
     db: Session,
     *,
@@ -205,6 +233,7 @@ def fulfill_credit_recharge_order_paid(
         order.ledger_id = row.id
         order.status = "paid"
         order.paid_at = datetime.utcnow()
+        _log_online_recharge(db, order)
 
     db.commit()
     db.refresh(order)

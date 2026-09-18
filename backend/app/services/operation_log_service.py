@@ -113,6 +113,61 @@ def client_ip_from_request(request: Request | None) -> str | None:
     return None
 
 
+def write_named_operation_log(
+    db: Session,
+    *,
+    action_type: str,
+    description: str,
+    operator_name: str,
+    tenant_id: int | None,
+    operator_user_id: int | None = None,
+    target_module: str | None = None,
+    target_id: int | None = None,
+    risk_level: str = "正常",
+    ip_address: str | None = None,
+) -> OperationLog:
+    """无 CurrentSession 时写企业操作记录（登录、支付回调）。"""
+    log = OperationLog(
+        operator_name=(operator_name or "未知用户")[:64],
+        action_type=action_type[:40],
+        description=description[:500],
+        ip_address=ip_address,
+        risk_level=risk_level,
+        target_module=target_module,
+        target_id=target_id,
+        tenant_id=tenant_id,
+        operator_user_id=operator_user_id,
+    )
+    db.add(log)
+    db.flush()
+    return log
+
+
+def record_customer_login(db: Session, *, user, identity, request: Request | None = None) -> OperationLog | None:
+    """客户身份进入企业时记一条登录。平台身份和未选企业的登录不记。"""
+    if str(getattr(identity, "identity_type", "") or "") != "CUSTOMER":
+        return None
+    tenant_id = getattr(identity, "tenant_id", None)
+    if not tenant_id:
+        return None
+    operator_name = (
+        getattr(user, "display_name", None)
+        or getattr(identity, "identity_name", None)
+        or getattr(user, "username", None)
+        or "未知用户"
+    )
+    return write_named_operation_log(
+        db,
+        action_type="登录",
+        description="登录成功",
+        operator_name=str(operator_name),
+        operator_user_id=getattr(user, "id", None),
+        tenant_id=int(tenant_id),
+        target_module="登录",
+        ip_address=client_ip_from_request(request),
+    )
+
+
 def write_operation_log(
     db: Session,
     current: CurrentSession,

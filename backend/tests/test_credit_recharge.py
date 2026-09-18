@@ -6,9 +6,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.ops import OperationLog
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.credit_recharge_service import (
@@ -96,6 +98,17 @@ def test_fulfill_paid_idempotent(db: Session, monkeypatch: pytest.MonkeyPatch) -
     db.refresh(tenant)
     assert first["status"] == "paid"
     assert Decimal(str(tenant.credit_balance)) == Decimal("430.0")
+    logs = list(
+        db.scalars(
+            select(OperationLog).where(
+                OperationLog.tenant_id == tenant.id,
+                OperationLog.action_type == "充值",
+            )
+        )
+    )
+    assert len(logs) == 1
+    assert "到账" in (logs[0].description or "")
+    assert logs[0].operator_name == "充值测"
 
     second = fulfill_credit_recharge_order_paid(
         db,
@@ -105,6 +118,15 @@ def test_fulfill_paid_idempotent(db: Session, monkeypatch: pytest.MonkeyPatch) -
     db.refresh(tenant)
     assert second["status"] == "paid"
     assert Decimal(str(tenant.credit_balance)) == Decimal("430.0")
+    logs_again = list(
+        db.scalars(
+            select(OperationLog).where(
+                OperationLog.tenant_id == tenant.id,
+                OperationLog.action_type == "充值",
+            )
+        )
+    )
+    assert len(logs_again) == 1
 
 
 def test_create_order_rejects_invalid_amount(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

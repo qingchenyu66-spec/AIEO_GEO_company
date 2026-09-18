@@ -835,9 +835,9 @@ def _log_competitor_change(
     write_operation_log(
         db,
         current,
-        "竞品配置",
+        "竞品",
         f"保存竞品配置「{tenant_name}」：{detail}",
-        target_module="竞品配置",
+        target_module="竞品",
         target_id=tenant_id,
         tenant_id=tenant_id,
         risk_level=risk,
