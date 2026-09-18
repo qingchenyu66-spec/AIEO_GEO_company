@@ -79,7 +79,15 @@ def test_stale_running_recoverable_and_old_cleanup() -> None:
             platform_count=1,
             error_message="(pymysql.err.OperationalError) (1213, 'Deadlock found when trying to get lock')",
         )
-        db_session.add_all([recent, old, permanent_fail, deadlock_fail])
+        busy_fail = GeoMonitorScheduleRun(
+            tenant_id=3,
+            schedule_key="20260906-0900-kw3",
+            status="failed",
+            prompt_count=1,
+            platform_count=1,
+            error_message="企业 119 正在提交其他监测词组",
+        )
+        db_session.add_all([recent, old, permanent_fail, deadlock_fail, busy_fail])
         db_session.flush()
         recent.created_at = now - timedelta(days=1)
         recent.updated_at = stale
@@ -89,6 +97,8 @@ def test_stale_running_recoverable_and_old_cleanup() -> None:
         permanent_fail.updated_at = stale
         deadlock_fail.created_at = now - timedelta(days=1)
         deadlock_fail.updated_at = stale
+        busy_fail.created_at = now - timedelta(days=1)
+        busy_fail.updated_at = stale
         db_session.commit()
 
         resubmit, cleanup = list_recoverable_schedule_runs(db_session, now=now)
@@ -96,6 +106,7 @@ def test_stale_running_recoverable_and_old_cleanup() -> None:
         cleanup_keys = {row.schedule_key for row in cleanup}
         assert "20260906-0804-kw38" in resubmit_keys
         assert "20260906-0900-kw2" in resubmit_keys
+        assert "20260906-0900-kw3" in resubmit_keys
         assert "20260906-0900-kw1" not in resubmit_keys
         assert "20260729-0040-kw38-rg110000" in cleanup_keys
         assert schedule_run_blocks_due(recent, now=now) is False

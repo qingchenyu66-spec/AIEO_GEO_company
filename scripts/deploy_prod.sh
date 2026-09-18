@@ -120,15 +120,26 @@ rsync -a dist-next/index.html dist/index.html
 # 清理 14 天前未被引用的旧 hash 资源，控制磁盘
 find dist/assets -type f -mtime +14 -delete 2>/dev/null || true
 
-echo "==> API 快/重/回调双实例"
-cp "$ROOT/deploy/nginx/geo-http-prod-split.conf" /etc/nginx/sites-available/geo-http.conf
+echo "==> API 快/重/回调双实例 (nginx 拆流)"
+# 2026-09-18 - 生产 sites-enabled 曾是独立旧文件，只写 sites-available 不会生效，发布窗口全站 502
+NGINX_SPLIT_SRC="$ROOT/deploy/nginx/geo-http-prod-split.conf"
+cp "$NGINX_SPLIT_SRC" /etc/nginx/sites-available/geo-http.conf
+cp "$NGINX_SPLIT_SRC" /etc/nginx/sites-enabled/geo-http.conf
 nginx -t
+if ! nginx -T 2>/dev/null | grep -q 'upstream geo_api_fast'; then
+  echo "ERROR: nginx 未加载 upstream geo_api_fast，拒绝 reload" >&2
+  exit 1
+fi
+if ! nginx -T 2>/dev/null | grep -q '127.0.0.1:8011'; then
+  echo "ERROR: nginx fast upstream 缺少 8011，拒绝 reload" >&2
+  exit 1
+fi
 systemctl reload nginx
 
 wait_health() {
   local port="$1"
   local i
-  for i in $(seq 1 20); do
+  for i in $(seq 1 30); do
     if curl -sf "http://127.0.0.1:${port}/api/v1/health" >/dev/null; then
       return 0
     fi
@@ -140,10 +151,19 @@ wait_health() {
 
 rolling_pair() {
   local unit_a="$1" port_a="$2" unit_b="$3" port_b="$4"
-  echo "==> restart ${unit_a} then ${unit_b}"
+  echo "==> rolling restart ${unit_a} then ${unit_b} (never both down)"
+  # 先确认对端在服，再动本侧，避免 a/b 同秒重启
+  if ! wait_health "$port_b"; then
+    echo "ERROR: 对端 ${unit_b}:${port_b} 不健康，拒绝重启 ${unit_a}" >&2
+    exit 1
+  fi
   systemctl restart "$unit_a"
   if ! wait_health "$port_a"; then
     echo "ERROR: ${unit_a} 未起来，保留 ${unit_b} 继续服务" >&2
+    exit 1
+  fi
+  if ! wait_health "$port_b"; then
+    echo "ERROR: 重启 ${unit_a} 后对端 ${unit_b} 异常，拒绝继续" >&2
     exit 1
   fi
   systemctl restart "$unit_b"

@@ -234,7 +234,7 @@ def submit_schedule_group_task(
         raise
     except ScheduleSubmitBusy as exc:
         safe_error = redact_secrets_in_text(str(exc))
-        # 2026-09-07 - 企业串行锁未抢到：退避重试；耗尽则返回 busy，留给回收扫描再投，勿 Unexpected
+        # 2026-09-07 - 企业串行锁未抢到：退避重试；耗尽则落 transient failed，留给回收扫描再投
         logger.info(
             "submit_schedule_group busy tenant=%s key=%s attempt=%s/%s",
             tenant_id,
@@ -243,6 +243,22 @@ def submit_schedule_group_task(
             self.max_retries,
         )
         if self.request.retries >= self.max_retries:
+            created_by = current.user.id if current else None
+            try:
+                persist_schedule_group_failure(
+                    db,
+                    tenant_id=tenant_id,
+                    group_key=group_key,
+                    error_message=safe_error,
+                    created_by=created_by,
+                )
+            except Exception as persist_exc:  # noqa: BLE001
+                logger.warning(
+                    "persist_schedule_group_failure after busy exhausted failed tenant=%s key=%s error=%s",
+                    tenant_id,
+                    group_key,
+                    redact_secrets_in_text(str(persist_exc)),
+                )
             return summarize_schedule_submit_for_celery(
                 {
                     "tenant_id": tenant_id,

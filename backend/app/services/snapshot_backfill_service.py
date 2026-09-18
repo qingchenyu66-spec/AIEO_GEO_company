@@ -218,12 +218,20 @@ _PENDING_PARSE_KEYS = (
 )
 
 # 2026-09-07 - 超时失败自动重试上限（不含首次）
-_BACKFILL_SHARE_OPEN_TIMEOUT_MAX_RETRIES = 1
+# 2026-09-18 - 分享页未展开等同属瞬态，最多再入队 2 次
+_BACKFILL_SHARE_TRANSIENT_MAX_RETRIES = 2
 
 
-def _is_share_page_open_timeout_error(message: str | None) -> bool:
+def _is_share_page_retryable_error(message: str | None) -> bool:
     text = str(message or "").strip()
-    return "分享页打开超时" in text
+    if not text:
+        return False
+    if "分享页打开超时" in text:
+        return True
+    # 豆包等页未渲染完 / 未公开，短暂重试往往能过
+    if "分享页未展开回答" in text:
+        return True
+    return False
 
 
 def _try_requeue_share_open_timeout_retry(
@@ -233,11 +241,11 @@ def _try_requeue_share_open_timeout_retry(
     parse_job_id: str,
     err_text: str,
 ) -> dict[str, Any] | None:
-    """分享页打开超时：保持 pending、刷新 watchdog 时钟、同 job 再入队一次。
+    """分享页打开超时或未展开：保持 pending、刷新 watchdog 时钟、同 job 再入队。
 
     2026-09-07 - 勿在同任务内连开两次 Playwright（会顶 soft/hard limit）；改二次入队。
     """
-    if not _is_share_page_open_timeout_error(err_text):
+    if not _is_share_page_retryable_error(err_text):
         return None
     locked = db.scalar(
         select(GeoMonitorSubtask)
@@ -256,20 +264,21 @@ def _try_requeue_share_open_timeout_retry(
         retries = int(raw.get("_backfill_timeout_retries") or 0)
     except (TypeError, ValueError):
         retries = 0
-    if retries >= _BACKFILL_SHARE_OPEN_TIMEOUT_MAX_RETRIES:
+    if retries >= _BACKFILL_SHARE_TRANSIENT_MAX_RETRIES:
         return None
     raw["_backfill_timeout_retries"] = retries + 1
-    # 刷新起始时间，避免首次 120s + 排队 + 二次解析被 300s watchdog 误杀
+    # 刷新起始时间，避免首次耗时 + 排队 + 二次解析被 watchdog 误杀
     raw["_pending_parse_started_at"] = datetime.now(UTC).isoformat()
     raw["backfill_parse_error"] = None
-    raw["backfill_parse_enqueue"] = "timeout_retry"
+    reason = "unexpanded_retry" if "未展开" in err_text else "timeout_retry"
+    raw["backfill_parse_enqueue"] = reason
     subtask.raw_result_json = raw
     db.commit()
     try:
         mode = enqueue_backfill_parse(subtask_id=subtask.subtask_id, parse_job_id=parse_job_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception(
-            "backfill timeout retry enqueue failed subtask_id=%s job_id=%s err=%r",
+            "backfill share retry enqueue failed subtask_id=%s job_id=%s err=%r",
             subtask.subtask_id,
             parse_job_id,
             exc,
@@ -278,13 +287,13 @@ def _try_requeue_share_open_timeout_retry(
         _mark_backfill_parse_failed(
             db,
             subtask,
-            f"超时重试入队失败：{detail}"[:240],
+            f"分享页重试入队失败：{detail}"[:240],
             parse_job_id=parse_job_id,
         )
         return {
             "status": "failed",
             "subtask_id": subtask.subtask_id,
-            "error": f"超时重试入队失败：{detail}"[:240],
+            "error": f"分享页重试入队失败：{detail}"[:240],
         }
     db.refresh(subtask)
     raw2 = dict(subtask.raw_result_json or {})
@@ -292,10 +301,11 @@ def _try_requeue_share_open_timeout_retry(
     subtask.raw_result_json = raw2
     db.commit()
     logger.warning(
-        "async backfill parse timeout retry queued subtask_id=%s job_id=%s attempt=%s",
+        "async backfill parse share retry queued subtask_id=%s job_id=%s attempt=%s reason=%s",
         subtask.subtask_id,
         parse_job_id,
         retries + 1,
+        reason,
     )
     return {
         "status": "retrying",

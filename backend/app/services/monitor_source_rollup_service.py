@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, PendingRollbackError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -23,6 +23,9 @@ from app.services.monitor_sample_metrics import SUCCESS_STATUSES as TERMINAL_STA
 from app.services.schedule_context import lead_diagnosis_runs_for_tasks, schedule_runs_for_tasks
 
 logger = logging.getLogger(__name__)
+
+# 2026-09-18 - 同企业同日多任务并发回调会撞 uk；MySQL 下 savepoint 有时毒化整段事务，改 rollback 整段重试
+_SOURCE_DAILY_WRITE_RETRIES = 3
 
 
 def _merge_url_maps(chunks: list[dict[str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -70,6 +73,60 @@ def _tenant_source_config(db: Session, tenant_id: int) -> tuple[set[str], list[s
     exposure = brand_exposure_terms(asset, active_keyword_groups(db, tenant_id)) if asset else []
     config_fp = source_stats_config_fingerprint(exposure, purchased)
     return purchased, exposure, config_fp
+
+
+def _upsert_source_daily_row(
+    db: Session,
+    *,
+    tenant_id: int,
+    stat_date: date,
+    config_fp: str,
+    branded_map: dict[str, Any],
+    all_map: dict[str, Any],
+    branded_day_count: int,
+    platform_day: dict[str, int],
+) -> GeoMonitorSourceDaily:
+    """写入或更新一日物化行；撞 uk 时由调用方 rollback 后重试。"""
+    row = db.scalar(
+        select(GeoMonitorSourceDaily).where(
+            GeoMonitorSourceDaily.tenant_id == tenant_id,
+            GeoMonitorSourceDaily.stat_date == stat_date,
+        )
+    )
+    if row is None:
+        row = GeoMonitorSourceDaily(
+            tenant_id=tenant_id,
+            stat_date=stat_date,
+            branded_json={},
+            all_json={},
+            daily_by_platform_json={},
+        )
+        db.add(row)
+        try:
+            # 同企业同日多任务并发双插：savepoint 收回后读已有行
+            with db.begin_nested():
+                db.flush()
+        except IntegrityError:
+            # savepoint 已回滚；须甩掉本地 pending，否则二次 flush 会再撞 uk
+            try:
+                db.expunge(row)
+            except Exception:
+                pass
+            row = db.scalar(
+                select(GeoMonitorSourceDaily).where(
+                    GeoMonitorSourceDaily.tenant_id == tenant_id,
+                    GeoMonitorSourceDaily.stat_date == stat_date,
+                )
+            )
+            if row is None:
+                raise
+    row.config_fp = config_fp
+    row.branded_json = branded_map
+    row.all_json = all_map
+    row.daily_branded_count = branded_day_count
+    row.daily_by_platform_json = platform_day
+    db.flush()
+    return row
 
 
 def rebuild_source_daily_for_day(
@@ -124,41 +181,36 @@ def rebuild_source_daily_for_day(
         if int((bucket or {}).get(day_key) or 0) > 0
     }
 
-    row = db.scalar(
-        select(GeoMonitorSourceDaily).where(
-            GeoMonitorSourceDaily.tenant_id == tenant_id,
-            GeoMonitorSourceDaily.stat_date == stat_date,
-        )
-    )
-    if row is None:
-        row = GeoMonitorSourceDaily(
-            tenant_id=tenant_id,
-            stat_date=stat_date,
-            branded_json={},
-            all_json={},
-            daily_by_platform_json={},
-        )
-        db.add(row)
+    last_exc: BaseException | None = None
+    for attempt in range(_SOURCE_DAILY_WRITE_RETRIES):
         try:
-            # 2026-08-31 - 同企业同日多任务并发回调会双插撞 uk - 用 savepoint 收回再读已有行
-            with db.begin_nested():
-                db.flush()
-        except IntegrityError:
-            row = db.scalar(
-                select(GeoMonitorSourceDaily).where(
-                    GeoMonitorSourceDaily.tenant_id == tenant_id,
-                    GeoMonitorSourceDaily.stat_date == stat_date,
-                )
+            return _upsert_source_daily_row(
+                db,
+                tenant_id=tenant_id,
+                stat_date=stat_date,
+                config_fp=config_fp,
+                branded_map=branded_map,
+                all_map=all_map,
+                branded_day_count=branded_day_count,
+                platform_day=platform_day,
             )
-            if row is None:
-                raise
-    row.config_fp = config_fp
-    row.branded_json = branded_map
-    row.all_json = all_map
-    row.daily_branded_count = branded_day_count
-    row.daily_by_platform_json = platform_day
-    db.flush()
-    return row
+        except (IntegrityError, PendingRollbackError) as exc:
+            last_exc = exc
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if attempt + 1 >= _SOURCE_DAILY_WRITE_RETRIES:
+                break
+            logger.warning(
+                "source_daily upsert conflict retry tenant=%s day=%s attempt=%s err=%s",
+                tenant_id,
+                stat_date,
+                attempt + 1,
+                exc,
+            )
+    assert last_exc is not None
+    raise last_exc
 
 
 def refresh_source_daily_for_task(db: Session, task_id: str) -> None:
@@ -476,28 +528,40 @@ def _backfill_source_daily_from_history(
             for platform, bucket in daily_by_platform.items()
             if int((bucket or {}).get(day_key) or 0) > 0
         }
-        row = db.scalar(
-            select(GeoMonitorSourceDaily).where(
-                GeoMonitorSourceDaily.tenant_id == tenant_id,
-                GeoMonitorSourceDaily.stat_date == day,
-            )
-        )
+        last_exc: BaseException | None = None
+        row: GeoMonitorSourceDaily | None = None
+        for attempt in range(_SOURCE_DAILY_WRITE_RETRIES):
+            try:
+                row = _upsert_source_daily_row(
+                    db,
+                    tenant_id=tenant_id,
+                    stat_date=day,
+                    config_fp=config_fp,
+                    branded_map=branded_map,
+                    all_map=all_map,
+                    branded_day_count=int(daily_counts.get(day_key) or 0),
+                    platform_day=platform_day,
+                )
+                break
+            except (IntegrityError, PendingRollbackError) as exc:
+                last_exc = exc
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                if attempt + 1 >= _SOURCE_DAILY_WRITE_RETRIES:
+                    break
+                logger.warning(
+                    "source_daily history upsert conflict retry tenant=%s day=%s attempt=%s err=%s",
+                    tenant_id,
+                    day,
+                    attempt + 1,
+                    exc,
+                )
         if row is None:
-            row = GeoMonitorSourceDaily(
-                tenant_id=tenant_id,
-                stat_date=day,
-                branded_json={},
-                all_json={},
-                daily_by_platform_json={},
-            )
-            db.add(row)
-        row.config_fp = config_fp
-        row.branded_json = branded_map
-        row.all_json = all_map
-        row.daily_branded_count = int(daily_counts.get(day_key) or 0)
-        row.daily_by_platform_json = platform_day
+            assert last_exc is not None
+            raise last_exc
         written.append(row)
-    db.flush()
     return written
 
 

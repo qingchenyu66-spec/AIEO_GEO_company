@@ -47,6 +47,9 @@ SCHEDULE_FAILED_RETRY_HINTS = (
     "Connection reset",
     "Connection refused",
     "try restarting transaction",
+    # 2026-09-18 - 企业锁 Busy 耗尽后落 failed，回收扫描可近窗补投
+    "正在提交其他监测词组",
+    "ScheduleSubmitBusy",
 )
 # 2026-09-07 - MySQL 死锁是 SQLAlchemy OperationalError，原先只抓 kombu 导致不重试、running 留尸
 _SCHEDULE_TRANSIENT_ERRORS = (
@@ -58,7 +61,7 @@ _SCHEDULE_TRANSIENT_ERRORS = (
 
 
 class ScheduleSubmitBusy(RuntimeError):
-    """同企业另一词组正在提交；Celery 应退避重试，勿标 failed。"""
+    """同企业另一词组正在提交；Celery 应退避重试；耗尽后可落 failed 供回收扫描补投。"""
 
 
 @dataclass(frozen=True)
