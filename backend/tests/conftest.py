@@ -92,7 +92,12 @@ def _ensure_demo_platform_login() -> None:
 @pytest.fixture(autouse=True, scope="session")
 def _sweep_credit_test_junk_tenants() -> None:
     """会话起止清掉算力写测垃圾企业，兜底 HTTP 夹具/历史残留。"""
-    from scripts.cleanup_credit_test_junk import purge_junk_tenants
+    try:
+        from scripts.cleanup_credit_test_junk import purge_junk_tenants
+    except ImportError:
+        # 生产机未必带本地清理脚本；缺模块时跳过，勿堵掉整仓 pytest
+        yield
+        return
 
     def _purge() -> None:
         with SessionLocal() as db:
