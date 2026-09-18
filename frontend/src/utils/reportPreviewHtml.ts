@@ -50,6 +50,7 @@ export function injectReportPreviewBase(html: string, origin = typeof window !==
 /**
  * 仅预览 blob 注入：按 iframe 宽度 scale .deck，打印/导出 HTML 走别的链路不经此函数。
  * 2026-07-27 - 企业诊断在线预览 2520 画布看不全 - 预览等比适配宽度，不改母版
+ * 2026-09-18 - 等 deck_pack/字体就绪才 scale 导致首屏裁切半晌；宽度立即缩，高度等拆页后再量
  */
 export function injectReportPreviewFit(html: string): string {
   if (!html || html.includes('id="geo-preview-fit-script"')) return html
@@ -87,18 +88,19 @@ export function injectReportPreviewFit(html: string): string {
 <script id="geo-preview-fit-script">
 (function () {
   var SLIDE_W = ${REPORT_SLIDE_WIDTH_PX};
-  function fit() {
-    var deck = document.querySelector(".deck");
-    if (!deck) return;
-    // 2026-07-28 - 先等 deck_pack 拆页再量高缩放，避免预览按裁切前高度算 spacer
-    if (document.getElementById("geo-deck-pack") && document.documentElement.dataset.geoDeckPacked !== "1") {
-      return;
-    }
+  var packedObserver = null;
+  function packPending() {
+    return !!(document.getElementById("geo-deck-pack") && document.documentElement.dataset.geoDeckPacked !== "1");
+  }
+  function applyScale(deck) {
     document.documentElement.classList.add("geo-preview-fit");
     var vw = document.documentElement.clientWidth || window.innerWidth || SLIDE_W;
     var scale = Math.min(1, vw / SLIDE_W);
     if (!(scale > 0)) scale = 1;
     deck.style.transform = "scale(" + scale + ")";
+    return scale;
+  }
+  function applySpacer(deck, scale) {
     var naturalH = deck.scrollHeight || deck.offsetHeight || 0;
     var spacer = document.getElementById("geo-preview-fit-spacer");
     if (!spacer) {
@@ -116,6 +118,31 @@ export function injectReportPreviewFit(html: string): string {
         });
       }
     } catch (e) {}
+  }
+  function watchPacked() {
+    if (packedObserver || !packPending()) return;
+    packedObserver = new MutationObserver(function () {
+      if (!packPending()) {
+        packedObserver.disconnect();
+        packedObserver = null;
+        schedule();
+      }
+    });
+    packedObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-geo-deck-packed"],
+    });
+  }
+  function fit() {
+    var deck = document.querySelector(".deck");
+    if (!deck) return;
+    var scale = applyScale(deck);
+    // 拆页前高度会偏；宽度必须先缩，否则首屏只露 2520 画布一角
+    if (packPending()) {
+      watchPacked();
+      return;
+    }
+    applySpacer(deck, scale);
   }
   function schedule() {
     window.requestAnimationFrame(fit);
