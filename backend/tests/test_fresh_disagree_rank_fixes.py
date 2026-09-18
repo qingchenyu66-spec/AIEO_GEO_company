@@ -245,3 +245,35 @@ def test_bold_lead_narrative_beats_line_enum() -> None:
     )
     assert detail.rank == 1, detail
     assert detail.rank_basis == "bold_lead_company"
+
+
+def test_bare_latin_zh_company_card_counts_peer_before_honglian() -> None:
+    """无加粗、无冒号的 transcosmos大宇宙中国 须占槽，鸿联九五为类内第2。"""
+    answer = """
+呼叫中心外包公司推荐
+一、综合型头部BPO服务商（适合大型企业、多行业覆盖）
+
+transcosmos大宇宙中国
+1966年成立，近60年BPO行业经验，1995年进入中国。2026年获新客服节最佳外包合作服务商奖。
+
+北京鸿联九五
+在中国客服BPO行业核心厂商中位居前列，金融行业应用份额突出。
+
+泰盈科技
+在多个金融行业招标中频繁中标。
+
+京北方
+以金融外包为支柱。
+
+六、按场景的初步建议
+| 你的情况 | 可重点关注 |
+| 大型企业，多行业综合客服 | transcosmos大宇宙中国、鸿联九五、泰盈科技 |
+"""
+    detail = _resolve_brand_rank_detail(
+        _sub("呼叫中心外包公司推荐", answer, platform="deepseek"),
+        "北京鸿联九五信息产业有限公司",
+        ["鸿联九五", "北京鸿联九五信息产业有限公司"],
+        None,
+    )
+    assert detail.rank == 2, detail
+    assert detail.rank_basis == "section_local"

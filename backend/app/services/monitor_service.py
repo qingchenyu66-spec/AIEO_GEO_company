@@ -4203,6 +4203,18 @@ def _line_local_brand_enum_rank(
     return best
 
 
+def _latin_zh_company_card_name(name: str) -> bool:
+    """无冒号、无加粗的公司卡名：transcosmos大宇宙中国。
+
+    2026-09-18 - 与 Bio Island：/ transcosmos（大宇宙中国）： 同一类卡。
+    只放行拉丁开头紧接汉字，避免把「BPO呼叫中心…」长标题收进槽。
+    """
+    text = str(name or "").strip()
+    if not text or len(text) > 16:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9']{2,}[\u4e00-\u9fff]{2,8}", text))
+
+
 def _section_nomination_brand_rank(body: str, brand_terms: list[str]) -> int | None:
     """小分类内点名行序：书名号 / Name： / 可选择Name / 单品牌 bullet。
 
@@ -4363,6 +4375,8 @@ def _section_nomination_brand_rank(body: str, brand_terms: list[str]) -> int | N
                 and (
                     _configured_exposure_term_in_text(solo, brand_terms)
                     or _looks_like_company_list_name(solo)
+                    # 2026-09-18 - 裸行 transcosmos大宇宙中国 超 14 字且无公司后缀，looks_like 不收
+                    or _latin_zh_company_card_name(solo)
                 )
             ):
                 slots.append(solo)
