@@ -4613,6 +4613,9 @@ def _category_section_label(title: str) -> str | None:
     # 2026-09-04 - 字段行含「预算」勿进档位标签，否则编号第3被伪类内第1盖掉
     if _looks_like_brand_field_label_heading(raw):
         return None
+    # 2026-09-20 - 卖点句「主打高端系统门窗。」含档位词, 不是档名. 否则十大门窗第10被切成第9.
+    if re.search(r"[。！？]", raw):
+        return None
     # 2026-08-17 - 长标题「方案三：全国性标杆…」先于 len>16 截断认分类，否则只吃全文出场
     fuzzy_early = _geo_fuzzy_section_label(raw)
     if fuzzy_early:
@@ -5323,6 +5326,42 @@ def _emoji_lead_company_card_rank(text: str, brand_terms: list[str]) -> int | No
     return None
 
 
+_FOLLOWUP_CARD_MARK_RE = re.compile(r"^[✅⚠👉]")
+
+
+def _followup_mark_card_rank(text: str, brand_terms: list[str]) -> int | None:
+    """无编号品牌卡: 标题的下一行是勾/警告/适合. 按标题出现的顺序计位.
+
+    2026-09-20 - 儿童房首选品牌里大王椰是第6张卡, 没有井号也没有冒号, 规则曾算空.
+    """
+    if not text or not brand_terms:
+        return None
+    plains: list[str] = []
+    for raw in str(text).splitlines():
+        plain = re.sub(r"<[^>]+>", " ", raw)
+        plain = re.sub(r"\*\*", "", plain)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        if plain:
+            plains.append(plain)
+    titles: list[str] = []
+    for idx, line in enumerate(plains):
+        if _FOLLOWUP_CARD_MARK_RE.match(line) or line.startswith("❌"):
+            continue
+        if len(line) > 40 or any(ch in line for ch in "。！？"):
+            continue
+        if idx + 1 >= len(plains) or not _FOLLOWUP_CARD_MARK_RE.match(plains[idx + 1]):
+            continue
+        if _looks_like_brand_field_label_heading(line):
+            continue
+        titles.append(line)
+    if len(titles) < 2:
+        return None
+    for index, title in enumerate(titles, 1):
+        if _configured_exposure_term_in_text(title, brand_terms):
+            return index
+    return None
+
+
 def _drop_soft_ranks_beaten_by_structured(
     candidates: list[BrandRankResolution],
 ) -> list[BrandRankResolution]:
@@ -5632,6 +5671,13 @@ def _looks_like_assessment_criterion_heading(bare: str) -> bool:
         return False
     if re.search(r"公司|集团|传媒|控股|品牌|有限|股份", body):
         return False
+    # 2026-09-20 - 「2. 高吸收与高性价比: 宝得聪」是品牌卡, 不是「6. 性价比」这种短标准项.
+    if re.search(r"[：:]", body):
+        tail = re.split(r"[：:]", body, maxsplit=1)[-1].strip()
+        tail = re.sub(r"\s*[（(].*$", "", tail).strip()
+        if tail and re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9 ·]{2,16}", tail):
+            if not re.search(r"标准|框架|评估|建议|要求", tail):
+                return False
     return bool(
         re.search(
             r"合规|数据安全|人才|服务管理|行业经验|技术|创新|性价比|成本|"
@@ -6713,6 +6759,71 @@ def _company_colon_heading_rank(
     return None, None
 
 
+def _line_is_company_intro(plain: str) -> bool:
+    """公司名加冒号的介绍行, 不是场景分组标题。"""
+    from app.services.ranking_parser import _looks_like_company_list_name
+
+    bare = re.sub(r"\*\*", "", str(plain or "")).strip()
+    bare = re.sub(r"^[-*•·▪]\s*", "", bare).strip()
+    if "：" not in bare and ":" not in bare:
+        return False
+    head = re.split(r"[：:]", bare, maxsplit=1)[0].strip()
+    head = re.sub(r"\s*[（(][^）)]*[)）]\s*$", "", head).strip()
+    if not head or len(head) > 40 or "/" in head or "／" in head:
+        return False
+    if _looks_like_company_list_name(head):
+        return True
+    return bool(re.match(r"^[A-Za-z]", head) and len(bare) > len(head) + 2)
+
+
+def _next_nonempty_plain(lines: list[str], index: int) -> str:
+    for raw in lines[index + 1 :]:
+        plain = re.sub(r"<[^>]+>", " ", raw)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        if plain:
+            return plain
+    return ""
+
+
+def _scene_group_label(plain: str, lines: list[str], index: int) -> str | None:
+    """无井号的场景分组。斜杠短标题换档; 公司名冒号介绍不换档。
+
+    2026-09-20 - 按核心场景下金融/跨国/本土被连加成第8.
+    斜杠短标题是一档, 公司名冒号介绍不是.
+    """
+    bare = re.sub(r"\*\*", "", str(plain or "")).strip()
+    bare = re.sub(r"^[-*•·▪]\s*", "", bare).strip()
+    bare = re.sub(r"^#{1,6}\s*", "", bare).strip()
+    bare = re.sub(
+        r"^[✅🔥📍📌📺💡⚡️🏢🎯📋💰💎🪵🛋️🏆🚀⭐🌟✨💪🏅🎖️🇨🇳🌍]\s*",
+        "",
+        bare,
+    ).strip()
+    if not bare or len(bare) > 48 or any(ch in bare for ch in "。！？"):
+        return None
+    if _looks_like_brand_field_label_heading(bare):
+        return None
+    if _line_is_company_intro(bare):
+        return None
+    if "：" in bare or ":" in bare:
+        head, tail = re.split(r"[：:]", bare, maxsplit=1)
+        head, tail = head.strip(), tail.strip()
+        if not head or not tail or len(head) > 24 or len(tail) > 18:
+            return None
+        if "/" not in head and "／" not in head:
+            return None
+        if re.search(r"[、,，]", tail):
+            return None
+        return head[:24]
+    if ("/" not in bare and "／" not in bare) or len(bare) > 24:
+        return None
+    if any(ch in bare for ch in "，；"):
+        return None
+    if not _line_is_company_intro(_next_nonempty_plain(lines, index)):
+        return None
+    return bare[:24]
+
+
 def _tier_local_brand_token_rank(
     text: str,
     brand_terms: list[str],
@@ -6763,7 +6874,7 @@ def _tier_local_brand_token_rank(
         # 2026-09-03 - 认「1）性价比入门」分档开节
         r"^(?:#{1,6}\s*|[一二三四五六七八九十]+[、.．]\s*|\d+\s*[、.．）)]\s*)(.+)$"
     )
-    for raw_line in lines:
+    for idx, raw_line in enumerate(lines):
         line = re.sub(r"<[^>]+>", " ", raw_line)
         plain = re.sub(r"\s+", " ", line).strip()
         if not plain:
@@ -6831,6 +6942,11 @@ def _tier_local_brand_token_rank(
                         and not _looks_like_brand_field_label_heading(probe)
                     ):
                         label = probe[:16]
+        # 2026-09-20 - 已在大段内时, 斜杠场景行换档. 公司名冒号介绍不在这里开节.
+        if not label and current_title is not None:
+            scene = _scene_group_label(plain, lines, idx)
+            if scene:
+                label = scene
         if label:
             # 2026-09-03 - 主榜公司卡勿开类内节，避免卖点词「全链路」吞掉后续决策表抬位
             if _looks_like_numbered_company_card_heading(bare):
@@ -7838,6 +7954,18 @@ def _resolve_brand_rank_detail(
                 )
             )
             mentioned = True
+        followup_card = _followup_mark_card_rank(rankable_text, brand_terms)
+        if followup_card is not None:
+            candidates.append(
+                BrandRankResolution(
+                    rank=int(followup_card),
+                    mentioned=True,
+                    source="appearance",
+                    confidence=0.9,
+                    rank_basis="followup_card",
+                )
+            )
+            mentioned = True
 
     # 2026-08-11 - 方案C：分档小类内点名序优先于全文出场序，并带回类名
     # 2026-08-12 - 其他值得关注/实力品牌参考：点名也算排名（小节内序）
@@ -7995,6 +8123,7 @@ def _resolve_brand_rank_detail(
                 # 2026-09-15 - 门店卡片序已立时勿再加全文出场
                 "store_card_local",
                 "glued_card_local",
+                "followup_card",
             }
         ):
             appearance_rank = _appearance_order_rank(

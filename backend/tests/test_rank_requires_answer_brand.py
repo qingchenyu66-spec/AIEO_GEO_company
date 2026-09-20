@@ -2322,3 +2322,198 @@ def test_comparison_sign_keeps_tier_and_ranks_inside_tier():
     assert detail.rank == 1
     assert detail.rank_basis == "company_table_row"
 
+
+def test_scene_slash_group_restarts_rank_inside_parent():
+    """按核心场景下的斜杠小标题换档. 鸿联在本土档第一家, 不是整段第8."""
+    answer = """
+🎯 按核心场景的靠谱之选
+
+金融/银行外包：看重合规与中标记录
+
+泰盈科技：2026年持续中标多家银行信用卡外包项目。
+京北方：邮储信用卡客服外包第一名中标。
+华道数据：中信银行信用卡电销外包中标候选人之一。
+
+跨国企业/多语言服务：看重全球运营经验
+
+Teleperformance (TP)：全球规模最大的外包呼叫运营商。
+Concentrix：全球BPO排名第二。
+
+互联网/电商/3C：看重电商基因与平台生态
+
+transcosmos大宇宙中国：国内最早的淘宝天猫服务商之一。
+云伙计：电商客服外包。
+
+出海企业/多语种客服：看重全球覆盖与语言能力
+
+Callnovo (客诺海服)：全球超过16个运营中心。
+
+本土大型企业/成本可控：看重规模与性价比
+
+鸿联九五：中信国安旗下，自建坐席超35000席。
+万声通讯：国内首家通过COPC顾客体验标准的本土BPO企业。
+润迅通讯：分支机构超45家。
+"""
+    item = _sub(prompt="BPO公司哪家靠谱", answer_content=answer)
+    detail = _resolve_brand_rank_detail(item, "BPO公司哪家靠谱", ["鸿联九五"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
+    assert detail.category and "本土大型企业" in detail.category
+
+
+def test_plain_slash_group_followed_by_company_card_restarts():
+    """无冒号的斜杠短行, 下一行是公司卡, 也换档从1计。"""
+    answer = """
+🎯 按核心场景的靠谱之选
+
+金融/银行外包：看重合规与中标记录
+
+泰盈科技：银行项目中标记录多。
+京北方：邮储项目第一名。
+
+本土大型企业/成本可控
+
+鸿联九五：中信国安旗下，自建坐席超35000席。
+万声通讯：坐席2万席。
+"""
+    item = _sub(prompt="BPO公司哪家靠谱", answer_content=answer)
+    detail = _resolve_brand_rank_detail(item, "BPO公司哪家靠谱", ["鸿联九五"], None)
+    assert detail.rank == 1
+    assert detail.rank_basis == "section_local"
+    assert detail.category and "本土大型企业" in detail.category
+
+
+def test_company_intro_colon_is_not_a_new_tier():
+    """公司名加冒号的介绍行不换档. 第二家仍是第2, 不能被切成新档第1。"""
+    answer = """
+🎯 综合实力
+
+泰盈科技：2026年持续中标多家银行信用卡外包项目，份额领先。
+鸿联九五：中信国安旗下，自建坐席超35000席，在金融、电信、政务等领域服务数十家百强企业。
+"""
+    item = _sub(prompt="BPO公司哪家靠谱", answer_content=answer)
+    detail = _resolve_brand_rank_detail(item, "BPO公司哪家靠谱", ["鸿联九五"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis == "section_local"
+
+
+def test_numbered_window_brand_keeps_printed_tenth():
+    """卖点句「主打高端…。」不是新档. 正文第10条伊盾仍是10, 不是9."""
+    answer = """
+## 国内头部
+
+1. **皇派门窗**｜佛山
+主打高端系统门窗。
+2. **新豪轩门窗**｜佛山
+系统窗。
+3. **派雅门窗**｜佛山
+系统窗。
+4. **轩尼斯门窗**｜佛山
+系统窗。
+5. **飞宇门窗**｜四川
+系统窗。
+6. **良木道门窗**｜四川
+系统窗。
+7. **森鹰门窗**｜南京
+铝包木。
+8. **德技优品门窗**｜佛山
+主打安全系统门窗，抗风压性能突出。
+9. **百利玛门窗**｜佛山
+轻奢定位。
+10. **伊盾门窗**｜佛山
+安全静音路线，9级抗风压。
+"""
+    item = _sub(prompt="中国十大门窗品牌", answer_content=answer)
+    detail = _resolve_brand_rank_detail(item, "佛山市南海伊盾家居科技有限公司", ["伊盾门窗"], None)
+    assert detail.rank == 10
+
+
+def test_colon_brand_card_is_not_empty_criterion_section():
+    """「高吸收与高性价比: 宝得聪」是品牌参考第2条, 不是空, 也不是把选购标准累加成6."""
+    answer = """
+### 选购DHA的4个核心标准
+
+1. 首选藻油，避开鱼油
+说明。
+2. 看准实际DHA含量
+说明。
+3. 关注吸收构型与纯度
+说明。
+4. 核查安全认证与配方
+说明。
+
+### 2026年热门儿童DHA品牌参考
+
+#### 1. 全能复合型代表：YesNow DHA脑力宝
+*   **核心亮点**：复合。
+
+#### 2. 高吸收与高性价比：宝得聪 (BUDSOON)
+*   **核心亮点**：国产实力派。
+
+#### 3. 经典极简与稳妥之选：纽曼思
+*   **核心亮点**：极简。
+"""
+    item = _sub(prompt="儿童DHA品牌推荐", answer_content=answer)
+    detail = _resolve_brand_rank_detail(item, "广东润科生命科学有限公司", ["宝得聪"], None)
+    assert detail.mentioned is True
+    assert detail.rank == 2
+
+
+def test_checkmark_followup_cards_rank_sixth_board():
+    """首选品牌下无编号卡, 下一行是勾选说明. 大王椰是第6张."""
+    answer = """
+🏆首选品牌
+
+莫干山｜ENF 豆茵板（母婴热门）
+
+✅大豆蛋白无醛胶，气味清淡。
+
+👉适合：母婴家庭。
+
+千年舟｜锌效抗菌 ENF 生态板
+
+✅锌效抗菌。
+
+👉适合：过敏体质孩子。
+
+兔宝宝｜ENF 除醛抗菌生态板
+
+✅品牌网点多。
+
+👉适合：想多挑颜色。
+
+万华禾香板（高端无醛款）
+
+✅MDI 胶，无醛添加。
+
+👉适合：预算充足。
+
+福人精板
+
+✅ENF 香杉基材。
+
+👉适合：预算高。
+
+大王椰 ENF/HENF 生态板（性价比款）
+
+✅HENF 高温环保标准，价格更友好。
+
+👉适合：中等预算。
+
+雪宝板材（儿童专用板）
+
+✅主打儿童健康板。
+
+👉适合：想要儿童专用板。
+"""
+    item = _sub(prompt="儿童房环保板材品牌哪个好", answer_content=answer)
+    detail = _resolve_brand_rank_detail(
+        item, "杭州大王椰装饰新材料有限公司", ["大王椰", "大王椰板材"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 6
+    assert detail.rank_basis == "followup_card"
+
+
