@@ -1067,14 +1067,21 @@ def scan_stale_credit_reserves() -> dict[str, Any]:
     if not settings.celery_enabled:
         return {"status": "disabled"}
     from app.services.credit_service import scan_stale_reserves, settle_open_credit_reserves
+    from app.services.monitor_service import refresh_open_reserve_amounts
 
     db = SessionLocal()
     try:
-        # 先 settle 晚到格，再 TTL 清孤儿，避免可结算格子被拖成悬挂
+        # 先把晚到 amount 补到列上, 再 settle. 不重写回答正文.
+        amount_updates = refresh_open_reserve_amounts(db)
         settled = settle_open_credit_reserves(db)
         released = scan_stale_reserves(db)
         db.commit()
-        return {"status": "ok", "settled_cells": settled, "released": released}
+        return {
+            "status": "ok",
+            "amount_updates": amount_updates,
+            "settled_cells": settled,
+            "released": released,
+        }
     except Exception:
         db.rollback()
         raise

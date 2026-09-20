@@ -98,12 +98,12 @@ def test_list_pending_excludes_gap_backfill_sql():
     assert "json_extract" in compiled.lower()
 
 
-def test_list_pending_includes_completed_credit_tasks_in_grace():
-    """算力调度 completed 任务在 grace 内仍须进同步队列，否则晚到 amount 无法 settle。"""
+def test_list_pending_excludes_completed_credit_tasks():
+    """completed 不再进全文同步. 晚到 amount 走费用补拉, 不靠这条 SQL."""
     db = MagicMock()
     db.scalars.return_value = []
     list_pending_monitor_task_ids(db, limit=10)
     stmt = db.scalars.call_args.args[0]
     compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "completed" in compiled
-    assert "_geo_credit" in compiled or "reserve_ref" in compiled
+    assert "_geo_credit" not in compiled
+    assert "reserve_ref" not in compiled

@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from sqlalchemy import select
+
 from app.services.monitor_service import (
     _upsert_subtask,
     subtask_blocks_remote_content_overwrite,
@@ -130,3 +132,43 @@ def test_upsert_preserves_pending_backfill_parse(monkeypatch):
     assert out.raw_result_json.get("backfill_parse_status") == "pending"
     assert out.raw_result_json.get("before_backfill", {}).get("page_screenshot") == "https://old.png"
     assert out.remote_time == 456
+
+
+def test_upsert_does_not_dirty_unchanged_snapshot(db):
+    """同一份远端结果再同步一次, 不把子任务标成已修改."""
+    from uuid import uuid4
+
+    from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+
+    task_id = f"task-{uuid4().hex[:12]}"
+    sub_id = f"st-{uuid4().hex[:10]}"
+    db.add(
+        GeoMonitorTask(
+            task_id=task_id,
+            status="processing",
+            total_items=1,
+            completed_items=0,
+            failed_items=0,
+            prompts_json=["词"],
+            platforms_json=[{"platform": "doubao"}],
+            raw_request_json={},
+            raw_response_json={},
+        )
+    )
+    db.flush()
+    item = {
+        "subTaskId": sub_id,
+        "platform": "doubao",
+        "mode": "search",
+        "prompt": "词",
+        "status": "completed",
+        "answerContent": "正文不变",
+        "amount": 0.18,
+    }
+    _upsert_subtask(db, task_id, item)
+    db.flush()
+    db.expire_all()
+    _upsert_subtask(db, task_id, item)
+    sub = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == sub_id))
+    assert sub.answer_content == "正文不变"
+    assert db.is_modified(sub, include_collections=False) is False

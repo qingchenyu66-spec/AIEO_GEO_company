@@ -124,11 +124,25 @@ def _has_structured_rankings(value: Any) -> bool:
     return bool(normalize_structured_rankings(value or []))
 
 
+def _stored_equal(current: Any, new: Any) -> bool:
+    if isinstance(current, Decimal) or isinstance(new, Decimal):
+        if current is None or new is None:
+            return current is None and new is None
+        return Decimal(str(current)) == Decimal(str(new))
+    return current == new
+
+
+def _set_if_changed(obj: Any, name: str, value: Any) -> None:
+    if _stored_equal(getattr(obj, name), value):
+        return
+    setattr(obj, name, value)
+
+
 def _normalize_subtask_rankings_on_write(subtask: GeoMonitorSubtask) -> None:
     """upsert/补录后把 all_rankings_json 规范成段内序，避免扁平连号入库。"""
     normalized = rankings_for_storage(subtask.answer_content, subtask.all_rankings_json)
     if normalized is not None:
-        subtask.all_rankings_json = normalized
+        _set_if_changed(subtask, "all_rankings_json", normalized)
 
 
 def _merge_remote_rank_fields(subtask: GeoMonitorSubtask, item: dict[str, Any]) -> None:
@@ -141,28 +155,28 @@ def _merge_remote_rank_fields(subtask: GeoMonitorSubtask, item: dict[str, Any]) 
     """
     incoming_mp = item.get("mentionPosition")
     if incoming_mp is not None and subtask.mention_position is None:
-        subtask.mention_position = incoming_mp
+        _set_if_changed(subtask, "mention_position", incoming_mp)
 
     incoming_ctx = item.get("mentionContext")
     if incoming_ctx and not subtask.mention_context:
-        subtask.mention_context = incoming_ctx
+        _set_if_changed(subtask, "mention_context", incoming_ctx)
     elif incoming_mp is not None and subtask.mention_position == incoming_mp and not subtask.mention_context:
         # 刚用模力替补写入位次、本地尚无上下文时，可带上远端上下文
-        subtask.mention_context = incoming_ctx
+        _set_if_changed(subtask, "mention_context", incoming_ctx)
 
     incoming_ranks = item.get("allRankings")
     if _has_structured_rankings(incoming_ranks):
         if not _has_structured_rankings(subtask.all_rankings_json):
-            subtask.all_rankings_json = incoming_ranks
+            _set_if_changed(subtask, "all_rankings_json", incoming_ranks)
     elif not _has_structured_rankings(subtask.all_rankings_json):
-        subtask.all_rankings_json = incoming_ranks
+        _set_if_changed(subtask, "all_rankings_json", incoming_ranks)
 
     incoming_competitors = item.get("competitorRankings")
     if _has_structured_rankings(incoming_competitors):
         if not _has_structured_rankings(subtask.competitor_rankings_json):
-            subtask.competitor_rankings_json = incoming_competitors
+            _set_if_changed(subtask, "competitor_rankings_json", incoming_competitors)
     elif not _has_structured_rankings(subtask.competitor_rankings_json):
-        subtask.competitor_rankings_json = incoming_competitors
+        _set_if_changed(subtask, "competitor_rankings_json", incoming_competitors)
 
 
 def _subtask_awaiting_upstream_rank(
@@ -453,22 +467,13 @@ def list_pending_monitor_task_ids(
         stmt = stmt.where(GeoMonitorTask.task_id == task_id)
     else:
         grace_cutoff = datetime.now() - timedelta(hours=max(0, terminal_grace_hours))
-        # 算力调度任务：completed 后仍可能晚到 amount，grace 内继续同步以便 settle
-        credit_reserve_ref = func.json_unquote(
-            func.json_extract(GeoMonitorTask.raw_request_json, "$._geo_credit.reserve_ref")
-        )
+        # completed 退出全文同步. 晚到 amount 由 refresh_open_reserve_amounts 只补费用列.
         stmt = stmt.where(
             or_(
                 GeoMonitorTask.status.notin_(TERMINAL_STATUSES),
                 and_(
                     GeoMonitorTask.status.in_(("partial_completed", "failed", "stopped")),
                     GeoMonitorTask.updated_at >= grace_cutoff,
-                ),
-                and_(
-                    GeoMonitorTask.status == "completed",
-                    GeoMonitorTask.updated_at >= grace_cutoff,
-                    credit_reserve_ref.is_not(None),
-                    credit_reserve_ref != "",
                 ),
             )
         )
@@ -1188,38 +1193,50 @@ def _upsert_subtask(db: Session, task_id: str, item: dict[str, Any]) -> GeoMonit
         has_answer = bool(incoming_answer or subtask.answer_content)
         has_error = bool(item.get("errorMessage") or subtask.error_message)
         if item.get("status"):
-            subtask.status = _resolved_subtask_status(subtask.status, item.get("status"), has_answer, has_error)
+            _set_if_changed(
+                subtask,
+                "status",
+                _resolved_subtask_status(subtask.status, item.get("status"), has_answer, has_error),
+            )
         if item.get("time") is not None:
-            subtask.remote_time = item.get("time")
+            _set_if_changed(subtask, "remote_time", item.get("time"))
         if item.get("amount") is not None:
-            subtask.amount = Decimal(str(item["amount"]))
+            _set_if_changed(subtask, "amount", Decimal(str(item["amount"])))
         if item.get("proxyIp"):
-            subtask.proxy_ip = item.get("proxyIp")
+            _set_if_changed(subtask, "proxy_ip", item.get("proxyIp"))
         return subtask
 
     incoming_answer = item.get("answerContent")
     has_answer = bool(incoming_answer or subtask.answer_content)
     has_error = bool(item.get("errorMessage") or subtask.error_message)
-    subtask.platform = item.get("platform") or subtask.platform
-    subtask.mode = item.get("mode") or subtask.mode
-    subtask.prompt = item.get("prompt") or subtask.prompt
-    subtask.status = _resolved_subtask_status(subtask.status, item.get("status"), has_answer, has_error)
-    subtask.remote_time = item.get("time")
-    subtask.page_screenshot = item.get("pageScreenshot") or None
-    subtask.answer_content = incoming_answer or subtask.answer_content
-    subtask.reference_list_json = _filter_citation_sources(item.get("referenceList")) or None
-    subtask.citation_list_json = _filter_citation_sources(item.get("citationList")) or None
-    subtask.reasoning_process_json = item.get("reasoningProcess")
-    subtask.recommended_questions_json = item.get("recommendedQuestions")
-    subtask.media_content_json = item.get("mediaContent")
-    subtask.error_message = item.get("errorMessage")
-    subtask.proxy_ip = item.get("proxyIp")
-    subtask.amount = Decimal(str(item["amount"])) if item.get("amount") is not None else None
+    _set_if_changed(subtask, "platform", item.get("platform") or subtask.platform)
+    _set_if_changed(subtask, "mode", item.get("mode") or subtask.mode)
+    _set_if_changed(subtask, "prompt", item.get("prompt") or subtask.prompt)
+    _set_if_changed(
+        subtask,
+        "status",
+        _resolved_subtask_status(subtask.status, item.get("status"), has_answer, has_error),
+    )
+    _set_if_changed(subtask, "remote_time", item.get("time"))
+    _set_if_changed(subtask, "page_screenshot", item.get("pageScreenshot") or None)
+    _set_if_changed(subtask, "answer_content", incoming_answer or subtask.answer_content)
+    _set_if_changed(subtask, "reference_list_json", _filter_citation_sources(item.get("referenceList")) or None)
+    _set_if_changed(subtask, "citation_list_json", _filter_citation_sources(item.get("citationList")) or None)
+    _set_if_changed(subtask, "reasoning_process_json", item.get("reasoningProcess"))
+    _set_if_changed(subtask, "recommended_questions_json", item.get("recommendedQuestions"))
+    _set_if_changed(subtask, "media_content_json", item.get("mediaContent"))
+    _set_if_changed(subtask, "error_message", item.get("errorMessage"))
+    _set_if_changed(subtask, "proxy_ip", item.get("proxyIp"))
+    _set_if_changed(
+        subtask,
+        "amount",
+        Decimal(str(item["amount"])) if item.get("amount") is not None else None,
+    )
     from app.services.brand_analysis_service import preserve_brand_analysis_sentiment_on_upsert
 
     kept_sentiment, merged_raw = preserve_brand_analysis_sentiment_on_upsert(subtask, item if isinstance(item, dict) else {})
-    subtask.sentiment = kept_sentiment
-    subtask.raw_result_json = merged_raw
+    _set_if_changed(subtask, "sentiment", kept_sentiment)
+    _set_if_changed(subtask, "raw_result_json", merged_raw)
     _merge_remote_rank_fields(subtask, item)
     # 2026-07-27 - 扁平 allRankings 与段内序冲突 - upsert 后按正文分段规范化入库
     _normalize_subtask_rankings_on_write(subtask)
@@ -2197,6 +2214,43 @@ def get_monitor_subtask(db: Session, subtask_id: str, current: CurrentSession) -
         ):
             raise ValueError("子任务不存在或无权访问")
     return subtask
+
+
+def refresh_open_reserve_amounts(db: Session, *, limit: int = 80) -> int:
+    """已完成且预扣仍开放的任务只补 amount. 正文和原始结果不写."""
+    from app.services.credit_service import list_completed_tasks_with_open_reserves
+
+    tasks = list_completed_tasks_with_open_reserves(db, limit=limit)
+    if not tasks:
+        return 0
+    client = MolizhishuClient()
+    updated = 0
+    for task in tasks:
+        try:
+            response = client.get_task_result(task.task_id)
+        except Exception as exc:
+            logger.warning("late amount refresh failed task_id=%s error=%s", task.task_id, exc)
+            continue
+        data = response.get("data") or {}
+        for item in data.get("subTaskList") or []:
+            if not isinstance(item, dict) or item.get("amount") is None:
+                continue
+            subtask_id = str(item.get("subTaskId") or "").strip()
+            if not subtask_id:
+                continue
+            subtask = db.scalar(
+                select(GeoMonitorSubtask).where(
+                    GeoMonitorSubtask.task_id == task.task_id,
+                    GeoMonitorSubtask.subtask_id == subtask_id,
+                )
+            )
+            if subtask is None:
+                continue
+            before = subtask.amount
+            _set_if_changed(subtask, "amount", Decimal(str(item["amount"])))
+            if not _stored_equal(before, subtask.amount):
+                updated += 1
+    return updated
 
 
 def sync_monitor_task(db: Session, task_id: str, current: CurrentSession) -> GeoMonitorTask:

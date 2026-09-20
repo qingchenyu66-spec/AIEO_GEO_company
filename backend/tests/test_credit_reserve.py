@@ -1172,3 +1172,95 @@ def test_callback_settles_when_amount_arrives_after_completed(db):
     db.refresh(tenant)
     assert tenant.credit_balance == Decimal("9")
     assert tenant.credit_reserved == Decimal("0")
+
+
+def test_late_amount_refresh_settles_without_rewriting_answer(db, monkeypatch):
+    """完成后只补 amount. 晚到费用能结上, 回答正文不改."""
+    from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
+    from app.services.monitor_service import refresh_open_reserve_amounts
+
+    tenant = _seed_credit_tenant(db, balance=Decimal("20"))
+    ref = f"late-amt-{uuid4().hex[:8]}"
+    task_id = f"task-{uuid4().hex[:12]}"
+    sub_id = f"st-{uuid4().hex[:10]}"
+    assert reserve_credits(
+        db,
+        tenant,
+        Decimal("1"),
+        ref_id=ref,
+        ref_type="reserve_batch",
+        detail_json={"shares_by_platform": {"doubao": 1.0}, "default_cell_share": 1.0},
+    )
+    db.add(
+        GeoMonitorTask(
+            task_id=task_id,
+            tenant_id=tenant.id,
+            status="completed",
+            total_items=1,
+            completed_items=1,
+            failed_items=0,
+            prompts_json=["词晚到"],
+            platforms_json=[{"platform": "doubao"}],
+            raw_request_json={"_geo_credit": {"reserve_ref": ref}},
+            raw_response_json={},
+        )
+    )
+    db.add(
+        GeoMonitorScheduleRun(
+            tenant_id=tenant.id,
+            schedule_key=ref,
+            task_id=task_id,
+            status="submitted",
+            prompt_count=1,
+            platform_count=1,
+        )
+    )
+    db.add(
+        GeoMonitorSubtask(
+            subtask_id=sub_id,
+            task_id=task_id,
+            platform="doubao",
+            mode="search",
+            prompt="词晚到",
+            status="completed",
+            amount=None,
+            answer_content="先有正文",
+            raw_result_json={"status": "completed"},
+        )
+    )
+    db.flush()
+
+    class _Client:
+        def get_task_result(self, _task_id):
+            return {
+                "data": {
+                    "status": "completed",
+                    "subTaskList": [
+                        {
+                            "subTaskId": sub_id,
+                            "status": "completed",
+                            "answerContent": "不应写入的新正文",
+                            "amount": 0.18,
+                        }
+                    ],
+                }
+            }
+
+    monkeypatch.setattr("app.services.monitor_service.MolizhishuClient", lambda: _Client())
+    assert refresh_open_reserve_amounts(db) == 1
+    sub = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == sub_id))
+    assert sub.answer_content == "先有正文"
+    assert sub.raw_result_json == {"status": "completed"}
+    assert sub.amount == Decimal("0.18")
+
+    settled = settle_open_credit_reserves(db)
+    assert settled >= 1
+    db.refresh(tenant)
+    assert tenant.credit_balance == Decimal("19")
+    assert tenant.credit_reserved == Decimal("0")
+
+    db.expire_all()
+    assert refresh_open_reserve_amounts(db) == 0
+    sub = db.scalar(select(GeoMonitorSubtask).where(GeoMonitorSubtask.subtask_id == sub_id))
+    assert sub.answer_content == "先有正文"
+    assert db.is_modified(sub, include_collections=False) is False
