@@ -3301,10 +3301,14 @@ def _finalize_matrix_cell(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 2026-09-20 - 只剥真正的标签. <0.3% ... 合格率> 是比较符号, 旧正则会把中间的第二档整段吃掉.
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
+
+
 def _strip_html_for_match(text: str | None) -> str:
     if not text:
         return ""
-    cleaned = re.sub(r"<[^>]+>", " ", text)
+    cleaned = _HTML_TAG_RE.sub(" ", text)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -3415,7 +3419,7 @@ def _plaintext_field(field: str | None) -> str:
         return ""
     # 2026-07-30 - 表内 <br> 先变空格再剥其它标签，避免 | 行被拆断导致品牌表只剩首行
     cleaned = re.sub(r"<br\s*/?>", " ", str(field), flags=re.I)
-    cleaned = re.sub(r"<[^>]+>", "\n", cleaned)
+    cleaned = _HTML_TAG_RE.sub("\n", cleaned)
     cleaned = re.sub(r"\r", "\n", cleaned)
     return cleaned.strip()
 
@@ -6242,6 +6246,37 @@ def _tsv_brand_table_rank(text: str, brand_terms: list[str]) -> int | None:
     return None
 
 
+def _markdown_table_tier_col_index(cols: list[str]) -> int | None:
+    """梯队/分档列。有这一列时位次在档内重计, 不把上一档的行数加进来。"""
+    for idx, col in enumerate(cols):
+        norm = re.sub(r"\s+", "", str(col or ""))
+        if "梯队" in norm or "分档" in norm:
+            return idx
+    return None
+
+
+def _tier_scoped_table_row_no(
+    rows: list[list[str]],
+    row_index: int,
+    tier_col: int | None,
+) -> int:
+    """无梯队列时用整表行号; 有梯队列时换档从 1 计, 空单元格沿用上一档。"""
+    if tier_col is None:
+        return row_index + 1
+    local = 0
+    prev = ""
+    for index, cells in enumerate(rows):
+        tier = cells[tier_col].strip() if tier_col < len(cells) else ""
+        tier = re.sub(r"\s+", "", tier)
+        if tier and tier != prev:
+            local = 0
+            prev = tier
+        local += 1
+        if index == row_index:
+            return local
+    return row_index + 1
+
+
 def _company_markdown_table_row_rank(text: str, brand_terms: list[str]) -> int | None:
     """公司名称列 Markdown 表：品牌所在数据行序（1-based）。
 
@@ -6281,19 +6316,22 @@ def _company_markdown_table_row_rank(text: str, brand_terms: list[str]) -> int |
                 if enumish >= 1:
                     i = end_idx
                     continue
-            for row_no, cells in enumerate(rows, 1):
+            tier_col = _markdown_table_tier_col_index(cols)
+            if tier_col == brand_col:
+                tier_col = None
+            for row_index, cells in enumerate(rows):
                 if brand_col < len(cells) and _configured_exposure_term_in_text(
                     cells[brand_col], brand_terms
                 ):
-                    return row_no
+                    return _tier_scoped_table_row_no(rows, row_index, tier_col)
             # 名称列未命中时：带地址/备注/区域的推荐表允许其它格点名计行
             head = "".join(re.sub(r"\s+", "", c) for c in cols)
             if any(k in head for k in ("地址", "备注", "所在区域", "主营", "市场")):
-                for row_no, cells in enumerate(rows, 1):
+                for row_index, cells in enumerate(rows):
                     if any(
                         _configured_exposure_term_in_text(c, brand_terms) for c in cells
                     ):
-                        return row_no
+                        return _tier_scoped_table_row_no(rows, row_index, tier_col)
         i = end_idx
     return None
 

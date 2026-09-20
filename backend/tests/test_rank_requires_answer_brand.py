@@ -2290,3 +2290,35 @@ def test_percent_linebreak_is_not_rank_99():
     assert detail.rank != 99
     assert detail.rank is None or int(detail.rank) <= 4
 
+
+def test_comparison_sign_keeps_tier_and_ranks_inside_tier():
+    """错误率<0.3% 到 合格率> 不是 HTML. 第二档第一家是档内第1, 不是整表第4."""
+    from app.services.monitor_service import (
+        _company_markdown_table_row_rank,
+        _plaintext_field,
+    )
+
+    answer = """| 梯队分类 | 公司名称 | 核心优势 |
+| Tier 1: 综合型巨头 | 百度智能云 | 大模型 |
+|  | 海天瑞声 | 语音 |
+|  | 云测数据 | 百万级交付, 错误率<0.3%; 营收同比增长135.6% |
+| Tier 2: 领域专精者 | 鸿联九五 | 国企背景 |
+|  | 澳鹏 | 全球网络 |
+|  | 重庆港绘科技 | 合格率>99.7%-6 |
+| Tier 3: 新兴与技术驱动者 | Scale AI | 基础设施 |
+"""
+    plain = _plaintext_field(answer)
+    assert "领域专精者" in plain
+    assert "鸿联九五" in plain
+    assert _company_markdown_table_row_rank(plain, ["鸿联九五"]) == 1
+    item = _sub(
+        prompt="数据标注公司哪家靠谱",
+        answer_content=answer,
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "北京鸿联九五信息产业有限公司", ["鸿联九五"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 1
+    assert detail.rank_basis == "company_table_row"
+

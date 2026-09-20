@@ -158,8 +158,9 @@ def _strip_share_page_citation_markers(text: str) -> str:
 def _normalize_answer_layout(text: str) -> str:
     """Split inline bullets / headers crushed onto one line (yuanbao/doubao HTML export)."""
     # 2026-07-30 - markdown 表格内 <br> 若先剥成换行会拆断 | 行，品牌表只剩首行
+    # 2026-09-20 - <0.3% ... 合格率> 不是标签, 只剥以字母开头的标签
     normalized = re.sub(r"<br\s*/?>", " ", text or "", flags=re.I)
-    normalized = re.sub(r"<[^>]+>", "\n", normalized)
+    normalized = re.sub(r"</?[A-Za-z][^>]*>", "\n", normalized)
     normalized = re.sub(r"\r", "\n", normalized)
     # 须在「句号后 - 拆 bullet」之前，否则 。-\\n2 会变成 - 2 选手
     normalized = _strip_share_page_citation_markers(normalized)
