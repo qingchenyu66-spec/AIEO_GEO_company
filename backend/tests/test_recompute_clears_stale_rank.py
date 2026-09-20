@@ -84,6 +84,11 @@ def test_recompute_uses_rules_even_when_rank_engine_llm(monkeypatch) -> None:
     monkeypatch.setattr("app.services.monitor_service._resolve_brand_rank_detail", fake_rules)
     monkeypatch.setattr("app.services.monitor_service._brand_in_answer_for_rank", lambda *_a, **_k: True)
     monkeypatch.setattr("app.services.rank_llm_service.persist_rank_resolution", fake_persist)
+
+    def fail_llm(**_kwargs):
+        raise AssertionError("sane rule rank must not call llm")
+
+    monkeypatch.setattr("app.services.rank_llm_service.accept_llm_fallback", fail_llm)
     recompute_subtask_rank_from_answer(MagicMock(), subtask, task, force=True)
     assert subtask.mention_position == 2
     assert subtask.raw_result_json["rank_resolution"]["source"] == "appearance"

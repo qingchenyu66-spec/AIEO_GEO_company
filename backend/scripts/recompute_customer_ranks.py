@@ -35,6 +35,8 @@ def _patch_skip_llm() -> None:
         return resolution
 
     rank_llm_service.resolve_rank_with_optional_llm = _passthrough  # type: ignore[assignment]
+    # 批量洗历史只跑规则, 不因空位次或大数去调模型
+    rank_llm_service.accept_llm_fallback = lambda **_kwargs: None  # type: ignore[assignment]
 
 
 def _recompute_keep_rankings(db, subtask, task, *, dry_run: bool) -> dict | None:

@@ -5329,15 +5329,10 @@ def _emoji_lead_company_card_rank(text: str, brand_terms: list[str]) -> int | No
 _FOLLOWUP_CARD_MARK_RE = re.compile(r"^[✅⚠👉]")
 
 
-def _followup_mark_card_rank(text: str, brand_terms: list[str]) -> int | None:
-    """无编号品牌卡: 标题的下一行是勾/警告/适合. 按标题出现的顺序计位.
-
-    2026-09-20 - 儿童房首选品牌里大王椰是第6张卡, 没有井号也没有冒号, 规则曾算空.
-    """
-    if not text or not brand_terms:
-        return None
+def _followup_mark_card_titles(text: str) -> list[str]:
+    """无编号品牌卡标题: 下一行是勾/警告/适合. """
     plains: list[str] = []
-    for raw in str(text).splitlines():
+    for raw in str(text or "").splitlines():
         plain = re.sub(r"<[^>]+>", " ", raw)
         plain = re.sub(r"\*\*", "", plain)
         plain = re.sub(r"\s+", " ", plain).strip()
@@ -5354,12 +5349,104 @@ def _followup_mark_card_rank(text: str, brand_terms: list[str]) -> int | None:
         if _looks_like_brand_field_label_heading(line):
             continue
         titles.append(line)
+    return titles
+
+
+def _followup_mark_card_rank(text: str, brand_terms: list[str]) -> int | None:
+    """无编号品牌卡: 标题的下一行是勾/警告/适合. 按标题出现的顺序计位.
+
+    2026-09-20 - 儿童房首选品牌里大王椰是第6张卡, 没有井号也没有冒号, 规则曾算空.
+    """
+    if not text or not brand_terms:
+        return None
+    titles = _followup_mark_card_titles(text)
     if len(titles) < 2:
         return None
     for index, title in enumerate(titles, 1):
         if _configured_exposure_term_in_text(title, brand_terms):
             return index
     return None
+
+
+def _markdown_company_row_count(text: str) -> int:
+    """公司名列表的数据行数. 数不出品牌列则不算。"""
+    from app.services.ranking_parser import _is_markdown_table_line
+
+    lines = [str(ln or "").rstrip() for ln in str(text or "").splitlines()]
+    total = 0
+    i = 0
+    while i < len(lines):
+        if not _is_markdown_table_line(lines[i]):
+            i += 1
+            continue
+        _brand_col, end_idx, rows = _markdown_table_data_rows(lines, i)
+        if len(rows) >= 2:
+            total += len(rows)
+        i = max(end_idx, i + 1)
+    return total
+
+
+def _enumerated_company_count(text: str) -> int:
+    """正文里能数出来的公司数. 几种数法取最多的, 避免同名单加两次。
+
+    2026-09-20 - 规则位次大于这个数时交给模型. 数不到 2 家则不用这道, 只靠 20 的上限挡 99.
+    """
+    from app.services.ranking_parser import parse_answer_rankings
+
+    counts: list[int] = []
+    numbered = [
+        body
+        for body in _collect_numbered_list_items(text)
+        if _looks_like_numbered_catalog_peer(body)
+    ]
+    if len(numbered) >= 2:
+        counts.append(len(numbered))
+    cards = _followup_mark_card_titles(text)
+    if len(cards) >= 2:
+        counts.append(len(cards))
+    table_rows = _markdown_company_row_count(text)
+    if table_rows >= 2:
+        counts.append(table_rows)
+    names = {
+        str(item.get("name") or "").strip()
+        for item in parse_answer_rankings(text)
+        if str(item.get("name") or "").strip()
+    }
+    if len(names) >= 2:
+        counts.append(len(names))
+    return max(counts) if counts else 0
+
+
+_RULE_RANK_SANITY_CAP = 20
+_LLM_SKIP_BASIS = frozenset({"negative_context_skip", "aside_or_tip_only"})
+
+
+def _rule_rank_unusable(rank: int | float | None, company_count: int) -> bool:
+    """大于正文公司数, 或大于 20, 不当成可用位次。"""
+    if rank is None:
+        return False
+    try:
+        value = float(rank)
+    except (TypeError, ValueError):
+        return True
+    if value > _RULE_RANK_SANITY_CAP:
+        return True
+    return company_count >= 2 and value > float(company_count)
+
+
+def _should_ask_llm(resolution: BrandRankResolution, company_count: int) -> bool:
+    """规则为空, 或规则数字明显对不上公司数, 才问模型。已有正常位次不问。"""
+    if resolution.rank is not None and _rule_rank_unusable(resolution.rank, company_count):
+        return True
+    if resolution.rank is not None:
+        return False
+    if not resolution.mentioned:
+        return False
+    if str(resolution.source or "") in {"exposure", "manual"}:
+        return False
+    if str(resolution.rank_basis or "") in _LLM_SKIP_BASIS:
+        return False
+    return True
 
 
 def _drop_soft_ranks_beaten_by_structured(
@@ -11477,6 +11564,55 @@ def recompute_subtask_rank_from_answer(
 
     # 2026-09-15 - 写路径只认规则；LLM 不再合并进 mention_position
     resolution = _resolve_brand_rank_detail(subtask, task.monitor_keywords, brand_terms, asset)
+    # 2026-09-20 - 规则为空, 或位次大于正文公司数 / 20, 才问模型. 正常位次不交给模型.
+    # 模型原句对不上, 或同样给出大数, 则空着, 不保留 99 这种规则数.
+    answer_text = _answer_body_for_rank(subtask)
+    company_count = _enumerated_company_count(answer_text)
+    rules_rank = resolution.rank
+    if _should_ask_llm(resolution, company_count):
+        from app.services.rank_llm_service import accept_llm_fallback
+
+        accepted = accept_llm_fallback(
+            subtask=subtask,
+            task=task,
+            brand_terms=brand_terms,
+            answer_text=answer_text,
+            company_count=company_count,
+        )
+        if accepted is not None and accepted.rank is not None:
+            rank = accepted.rank
+            subtask.mention_position = int(rank) if float(rank).is_integer() else rank
+            persist_rank_resolution(
+                subtask,
+                BrandRankResolution(
+                    rank=subtask.mention_position,
+                    mentioned=True,
+                    source="llm",
+                    confidence=accepted.confidence,
+                    category=accepted.category,
+                    rank_basis=accepted.rank_basis or "category_local",
+                    evidence=accepted.evidence,
+                ),
+                rules_rank=rules_rank,
+                llm_rank=subtask.mention_position,
+            )
+            return
+        if _rule_rank_unusable(rules_rank, company_count):
+            subtask.mention_position = None
+            persist_rank_resolution(
+                subtask,
+                BrandRankResolution(
+                    rank=None,
+                    mentioned=True,
+                    source="none",
+                    confidence=0.4,
+                    rank_basis=resolution.rank_basis,
+                    category=resolution.category,
+                ),
+                rules_rank=rules_rank,
+            )
+            return
+
     rank = resolution.rank
     if rank is not None:
         subtask.mention_position = int(rank) if float(rank).is_integer() else rank

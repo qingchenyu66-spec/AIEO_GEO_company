@@ -606,6 +606,53 @@ def _keep_llm_result_if_evidence_off(
     return replace(result, evidence=None)
 
 
+def accept_llm_fallback(
+    *,
+    subtask: GeoMonitorSubtask,
+    task: GeoMonitorTask,
+    brand_terms: list[str],
+    answer_text: str,
+    company_count: int,
+) -> LlmBrandRankResult | None:
+    """规则为空或规则数字对不上公司数时, 才采用模型位次.
+
+    原句对不上正文, 或模型数字同样大过公司数 / 20, 则不用.
+    """
+    from app.services.monitor_service import _rule_rank_unusable
+
+    result = extract_brand_rank_with_llm(
+        brand_terms=brand_terms,
+        monitor_keyword=str(task.monitor_keywords or "").strip(),
+        prompt=str(subtask.prompt or ""),
+        answer_text=answer_text,
+        force=True,
+    )
+    if result is None or not result.mentioned or result.rank is None:
+        return None
+    if result.confidence < 0.65:
+        return None
+    if not _evidence_in_answer(result.evidence, answer_text):
+        return None
+    if _rule_rank_unusable(result.rank, company_count):
+        return None
+    return result
+
+
+def _evidence_in_answer(evidence: str | None, answer_text: str) -> bool:
+    """模型引用的原句必须能在正文里对上. 只差 markdown 星号或空白可以过. """
+    if not evidence or not answer_text:
+        return False
+
+    def norm(value: str) -> str:
+        text = re.sub(r"\*\*", "", value)
+        return re.sub(r"\s+", "", text)
+
+    needle = norm(evidence)
+    if len(needle) < 6:
+        return False
+    return needle in norm(answer_text)
+
+
 def resolve_rank_with_optional_llm(
     *,
     subtask: GeoMonitorSubtask,
