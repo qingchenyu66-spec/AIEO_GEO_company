@@ -5978,11 +5978,15 @@ def _split_tier_scopes(text: str) -> list[str]:
 
 def _parse_numbered_subsection_header(bare: str) -> tuple[int, str] | None:
     """### 7.大王椰 或 ### 7. 大王椰；无空格时拒 1.5亿元。兼认「3）高配」。"""
-    match = _NUMBERED_ITEM_LINE_RE.match(bare) or _PAREN_TIER_ITEM_LINE_RE.match(bare)
+    dotted = _NUMBERED_ITEM_LINE_RE.match(bare)
+    paren = _PAREN_TIER_ITEM_LINE_RE.match(bare)
+    match = dotted or paren
     if not match:
         return None
     body = match.group(2).strip()
-    if body[:1].isdigit() and not re.search(r"[\.、．）)]\s*", bare):
+    # 2026-09-20 - 点后紧贴数字是小数/百分比, 不是编号标题. 99.7% 不得当成第99节.
+    # 旧判断用 \s*, 零个空格也算命中, 小数一律放行. 有空格的「1. 5G方案」仍认.
+    if dotted and body[:1].isdigit() and not re.search(r"[\.、．]\s+", bare):
         return None
     return int(match.group(1)), body
 

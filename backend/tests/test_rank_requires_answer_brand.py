@@ -2257,3 +2257,36 @@ def test_suit_budget_field_line_not_fake_section_local_first() -> None:
     assert detail.mentioned is True
     assert detail.rank == 3
 
+
+def test_percent_linebreak_is_not_rank_99():
+    """合格率折行 99.7%-6 | 不是第99节; 后文点名不得变成位次99."""
+    from app.services.monitor_service import _parse_numbered_subsection_header
+
+    assert _parse_numbered_subsection_header("99.7%-6 |") is None
+    assert _parse_numbered_subsection_header("1.5亿元") is None
+    assert _parse_numbered_subsection_header("7.大王椰") == (7, "大王椰")
+    assert _parse_numbered_subsection_header("1. 5G方案") == (1, "5G方案")
+    assert _parse_numbered_subsection_header("3）高配") == (3, "高配")
+
+    answer = """| 梯队分类 | 公司名称 | 核心优势 |
+| Tier 1: 综合型巨头 | 百度智能云 | 自动化标注 |
+|  | 海天瑞声 | 自研平台 |
+|  | 云测数据 | 错误率
+99.7%-6 |
+| Tier 2 | 星图数据 | 垂直行业 |
+
+如何选择靠谱服务商
+重点关注: 首选国企背景. 鸿联九五就是典型的代表.
+代表公司: 鸿联九五(合规体系完善, 已服务银行保险机构).
+"""
+    item = _sub(
+        prompt="数据标注公司哪家靠谱",
+        answer_content=answer,
+        mention_position=99,
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "北京鸿联九五信息产业有限公司", ["鸿联九五"], None
+    )
+    assert detail.rank != 99
+    assert detail.rank is None or int(detail.rank) <= 4
+
