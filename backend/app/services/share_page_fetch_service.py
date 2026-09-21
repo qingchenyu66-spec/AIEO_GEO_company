@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import html.parser
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -115,7 +116,9 @@ _UI_NOISE_PHRASES = (
     "注意核实",
 )
 
-_DOUBAO_ANSWER_WAIT_SECONDS = 15.0
+# 2026-09-21 - 生产上豆包成功补录约 3.5s 就画完; 壳页把 15s 用满也不会出现正文.
+# 有 SSR 时直接用 JSON. 这里只兜「页面里没有 JSON、还在等浏览器画字」的壳页.
+_DOUBAO_ANSWER_WAIT_SECONDS = 5.0
 _DEFAULT_ANSWER_WAIT_SECONDS = 2.5
 _PROMPT_STOPWORDS = frozenset({
     "类似", "同类", "的", "平台", "工具", "有哪些", "哪些", "推荐", "介绍",
@@ -245,6 +248,21 @@ def _wait_for_share_body(
             break
         page.wait_for_timeout(200)
     return body_text, title
+
+
+def _doubao_ssr_from_page(page: Any, *, host: str, prompt: str | None) -> SharePageFetchResult | None:
+    """DOM 一出来就看内嵌 JSON. 有助手正文就不必再空等屏幕."""
+    if not _is_doubao_host(host):
+        return None
+    try:
+        page_html = page.content() or ""
+        title = (page.title() or "").strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+    hit = _result_from_html(page_html, host=host, title=title, prompt=prompt)
+    if hit is None or not doubao_answer_ready(hit.answer_content, title=hit.title or title, prompt=prompt):
+        return None
+    return hit
 
 
 def _peel_escapes(text: str, *, rounds: int = 12) -> str:
@@ -393,6 +411,101 @@ def extract_doubao_references(page_html: str) -> list[dict[str, Any]]:
         )
 
     return _dedupe_refs(rows)
+
+
+def _collect_doubao_message_lists(node: Any, found: list[list], *, depth: int = 0) -> None:
+    if depth > 8:
+        return
+    if isinstance(node, dict):
+        snap = node.get("message_snapshot")
+        if isinstance(snap, dict) and isinstance(snap.get("message_list"), list):
+            found.append(snap["message_list"])
+        args = node.get("routerDataFnArgs")
+        if isinstance(args, list):
+            for item in args:
+                if isinstance(item, str) and item.lstrip()[:1] in "{[":
+                    try:
+                        parsed = json.loads(item)
+                    except json.JSONDecodeError:
+                        continue
+                    _collect_doubao_message_lists(parsed, found, depth=depth + 1)
+                else:
+                    _collect_doubao_message_lists(item, found, depth=depth + 1)
+        for key, val in node.items():
+            if key in {"message_snapshot", "routerDataFnArgs"}:
+                continue
+            if isinstance(val, (dict, list)):
+                _collect_doubao_message_lists(val, found, depth=depth + 1)
+    elif isinstance(node, list):
+        for item in node[:30]:
+            _collect_doubao_message_lists(item, found, depth=depth + 1)
+
+
+def _normalize_doubao_markdown(text: str) -> str:
+    """分享 JSON 里是 Markdown. 排名认的是行首序号, 标题井号要拿掉."""
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        line = re.sub(r"^>\s?", "", line)
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _doubao_bot_text_from_messages(messages: list) -> str:
+    chunks: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("user_type") != 2:
+            continue
+        blocks = msg.get("content_block")
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            content = block.get("content")
+            if not isinstance(content, dict):
+                continue
+            text_block = content.get("text_block")
+            if not isinstance(text_block, dict):
+                continue
+            text = str(text_block.get("text") or "").strip()
+            if text:
+                chunks.append(text)
+    return "\n\n".join(chunks).strip()
+
+
+def extract_doubao_ssr_answer(page_html: str) -> str:
+    """从豆包分享页内嵌 shareInfo JSON 取助手正文, 不依赖屏幕是否画出来.
+
+    2026-09-21 - 可见正文还是壳页时, text_block 已经在 data-fn-args / mergeLoaderData 里.
+    """
+    peeled = html.unescape(page_html or "")
+    if "message_snapshot" not in peeled and "text_block" not in peeled:
+        return ""
+    decoder = json.JSONDecoder()
+    for marker in ("data-fn-args=", "mergeLoaderData"):
+        search_from = 0
+        for _ in range(4):
+            idx = peeled.find(marker, search_from)
+            if idx < 0:
+                break
+            search_from = idx + len(marker)
+            bracket = peeled.find("[", idx, idx + 1500)
+            if bracket < 0:
+                continue
+            try:
+                data, end = decoder.raw_decode(peeled, bracket)
+            except json.JSONDecodeError:
+                continue
+            search_from = max(search_from, end)
+            lists: list[list] = []
+            _collect_doubao_message_lists(data, lists)
+            for messages in lists:
+                text = _clean_answer_text(_normalize_doubao_markdown(_doubao_bot_text_from_messages(messages)))
+                if text:
+                    return text
+    return ""
 
 
 def extract_kimi_references(page_html: str) -> list[dict[str, Any]]:
@@ -938,6 +1051,10 @@ def _result_from_html(
     prompt: str | None = None,
 ) -> SharePageFetchResult | None:
     answer = _extract_answer_from_html(page_html, body_text)
+    if _is_doubao_host(host) and not doubao_answer_ready(answer, title=title, prompt=prompt):
+        ssr = extract_doubao_ssr_answer(page_html)
+        if ssr and doubao_answer_ready(ssr, title=title, prompt=prompt):
+            answer = ssr
     if _looks_like_share_error_page(answer) or len(answer) < 20:
         return None
     if _is_doubao_host(host) and not doubao_answer_ready(answer, title=title, prompt=prompt):
@@ -1138,7 +1255,11 @@ def fetch_share_page_browser_combined(
                     )
                 page = context.new_page()
                 page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-                wait_budget = 1.0 if qianwen_api_hit is not None else None
+                ssr_hit = _doubao_ssr_from_page(page, host=host, prompt=prompt)
+                if qianwen_api_hit is not None or ssr_hit is not None:
+                    wait_budget = 1.0
+                else:
+                    wait_budget = None
                 body_text, title = _wait_for_share_body(
                     page, host=host, prompt=prompt, wait_budget=wait_budget
                 )
@@ -1168,17 +1289,23 @@ def fetch_share_page_browser_combined(
                         )
                 if result is None and qianwen_api_hit is not None:
                     result = qianwen_api_hit
+                if result is None and _is_doubao_host(host):
+                    if ssr_hit is not None:
+                        result = ssr_hit
+                    else:
+                        raise ValueError(share_page_unusable_message())
                 if result is None:
                     answer = _extract_answer_from_html(page_html, body_text)
-                    if _is_doubao_host(host):
-                        raise ValueError(share_page_unusable_message())
                     if _looks_like_share_error_page(answer):
                         raise ValueError("分享页不可用或已失效，请更换可公开访问的链接")
                     raise ValueError("未能从分享页解析到回答正文，请确认链接可公开访问")
                 if _is_doubao_host(host) and not doubao_answer_ready(
                     result.answer_content, title=result.title, prompt=prompt
                 ):
-                    raise ValueError(share_page_unusable_message())
+                    if ssr_hit is not None:
+                        result = ssr_hit
+                    else:
+                        raise ValueError(share_page_unusable_message())
                 # 浏览器正文过短时优先用 API 正文
                 if (
                     qianwen_api_hit is not None
@@ -1193,7 +1320,14 @@ def fetch_share_page_browser_combined(
                         claimed_refs=result.claimed_refs or qianwen_api_hit.claimed_refs,
                     )
                 try:
-                    shot_path = capture_share_page_screenshot_from_page(page, value, subtask_id=subtask_id)
+                    body_painted = (not _is_doubao_host(host)) or doubao_answer_ready(
+                        body_text, title=title, prompt=prompt
+                    )
+                    shot_path = (
+                        capture_share_page_screenshot_from_page(page, value, subtask_id=subtask_id)
+                        if body_painted
+                        else None
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "combined backfill screenshot failed subtask_id=%s err=%s",
@@ -1257,6 +1391,7 @@ def fetch_share_page(
             return http_hit
         raise ValueError("服务器未安装 Playwright，无法解析分享页") from exc
 
+    ssr_hit: SharePageFetchResult | None = None
     try:
         _ensure_windows_playwright_event_loop()
         with sync_playwright() as playwright:
@@ -1267,7 +1402,13 @@ def fetch_share_page(
                     viewport={"width": 1280, "height": 900},
                 )
                 page.goto(value, wait_until="domcontentloaded", timeout=timeout_ms)
-                body_text, title = _wait_for_share_body(page, host=host, prompt=prompt)
+                ssr_hit = _doubao_ssr_from_page(page, host=host, prompt=prompt)
+                body_text, title = _wait_for_share_body(
+                    page,
+                    host=host,
+                    prompt=prompt,
+                    wait_budget=1.0 if ssr_hit is not None else None,
+                )
                 _expand_citation_panels(page)
                 body_text = page.inner_text("body") or body_text
                 title = (page.title() or "").strip() or title
@@ -1310,6 +1451,8 @@ def fetch_share_page(
             http_hit.references = qianwen_api_refs
             http_hit.claimed_refs = len(qianwen_api_refs)
         return http_hit
+    if result is None and ssr_hit is not None:
+        result = ssr_hit
     if result is None:
         if _is_doubao_host(host):
             raise ValueError(share_page_unusable_message())
@@ -1320,5 +1463,9 @@ def fetch_share_page(
     if _is_doubao_host(host) and not doubao_answer_ready(
         result.answer_content, title=result.title, prompt=prompt
     ):
+        if ssr_hit is not None and doubao_answer_ready(
+            ssr_hit.answer_content, title=ssr_hit.title, prompt=prompt
+        ):
+            return ssr_hit
         raise ValueError(share_page_unusable_message())
     return result

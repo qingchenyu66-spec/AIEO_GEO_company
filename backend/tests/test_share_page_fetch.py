@@ -525,3 +525,164 @@ def test_deepseek_share_table_ranks_honglian_third_without_chrome() -> None:
     )
     assert detail.rank == 3, detail
     assert detail.rank_basis == "company_table_row"
+
+
+def _sample_doubao_answer() -> str:
+    return (
+        "# 1. 莫干山板材\n适合门店集中比价, 库存和色号都能现场看.\n"
+        "2. 千年舟生态板\n本地有仓, 适合批量补货.\n"
+        "3. 大王椰板材\n报价透明, 可按项目送货, 也方便比售后.\n"
+    )
+
+
+def _doubao_ssr_page(answer: str, *, prompt: str = "仅用户提问不要当回答") -> str:
+    import html as html_lib
+    import json
+
+    payload = {
+        "data": {
+            "message_snapshot": {
+                "message_list": [
+                    {
+                        "user_type": 1,
+                        "brief": prompt,
+                        "content_block": [
+                            {"block_type": 10000, "content": {"text_block": {"text": prompt}}}
+                        ],
+                    },
+                    {
+                        "user_type": 2,
+                        "content_block": [
+                            {"block_type": 10025, "content": {"search_query_result_block": {}}},
+                            {"block_type": 10000, "content": {"text_block": {"text": answer}}},
+                        ],
+                    },
+                ]
+            }
+        }
+    }
+    outer = [
+        "thread_(token)/page",
+        [{"key": "shareInfo", "routerDataFnArgs": [json.dumps(payload, ensure_ascii=False)]}],
+    ]
+    attr = html_lib.escape(json.dumps(outer, ensure_ascii=False), quote=True)
+    return (
+        "<html><head><title>豆包 - 你的 AI 智能助手</title></head>"
+        f"<body data-fn-args='{attr}'>豆包 - 你的 AI 智能助手</body></html>"
+    )
+
+
+def test_doubao_ssr_answer_used_when_screen_is_shell() -> None:
+    from app.services.share_page_fetch_service import _result_from_html
+
+    answer = _sample_doubao_answer()
+    page = _doubao_ssr_page(answer)
+    hit = _result_from_html(
+        page,
+        host="www.doubao.com",
+        title="豆包 - 你的 AI 智能助手",
+        body_text="豆包 - 你的 AI 智能助手\n\n-->",
+        prompt="北京板材门店推荐",
+    )
+    assert hit is not None
+    assert "莫干山板材" in hit.answer_content
+    assert "仅用户提问不要当回答" not in hit.answer_content
+    assert re.search(r"(?m)^1\.\s*莫干山", hit.answer_content)
+
+
+def test_fast_fetch_returns_doubao_ssr_without_browser(monkeypatch) -> None:
+    import httpx
+
+    answer = _sample_doubao_answer()
+    page = _doubao_ssr_page(answer)
+
+    class _Resp:
+        status_code = 200
+        text = page
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    hit = try_fast_fetch_share_page(
+        "https://www.doubao.com/thread/abc1234567890",
+        prompt="北京板材门店推荐",
+    )
+    assert hit is not None
+    assert "莫干山板材" in hit.answer_content
+
+
+def test_browser_combined_keeps_ssr_when_screen_stays_shell(monkeypatch) -> None:
+    from app.services import share_page_fetch_service as svc
+
+    answer = _sample_doubao_answer()
+    page_html = _doubao_ssr_page(answer)
+    waits: list[int] = []
+
+    class _FakePage:
+        def goto(self, *a, **k):
+            return None
+
+        def inner_text(self, *a, **k):
+            return "豆包 - 你的 AI 智能助手\n\n-->"
+
+        def wait_for_timeout(self, ms):
+            waits.append(ms)
+
+        def title(self):
+            return "豆包 - 你的 AI 智能助手"
+
+        def content(self):
+            return page_html
+
+    class _FakeContext:
+        def new_page(self):
+            return _FakePage()
+
+        def close(self):
+            return None
+
+    class _FakeBrowser:
+        def new_context(self, **kwargs):
+            return _FakeContext()
+
+        def close(self):
+            return None
+
+    class _FakeChromium:
+        @staticmethod
+        def launch(headless=True):
+            return _FakeBrowser()
+
+    class _FakePw:
+        chromium = _FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    import playwright.sync_api as pw
+
+    monkeypatch.setattr(pw, "sync_playwright", lambda: _FakePw())
+    monkeypatch.setattr(svc, "_expand_citation_panels", lambda page: None)
+    monkeypatch.setattr(svc, "_DOUBAO_ANSWER_WAIT_SECONDS", 0.05)
+    result, shot = svc.fetch_share_page_browser_combined(
+        "https://www.doubao.com/thread/abc1234567890",
+        subtask_id="st-ssr",
+    )
+    assert "莫干山板材" in result.answer_content
+    assert shot is None
+    assert waits
+

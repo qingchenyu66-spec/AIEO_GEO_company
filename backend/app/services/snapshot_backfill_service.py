@@ -218,8 +218,10 @@ _PENDING_PARSE_KEYS = (
 )
 
 # 2026-09-07 - 超时失败自动重试上限（不含首次）
-# 2026-09-18 - 分享页未展开等同属瞬态，最多再入队 2 次
+# 2026-09-18 - 分享页未展开等同属瞬态, 最多再入队 2 次
+# 2026-09-21 - 立刻重试打的还是同一次壳页; 隔开再试, 成功页通常几秒就能过
 _BACKFILL_SHARE_TRANSIENT_MAX_RETRIES = 2
+_BACKFILL_SHARE_RETRY_COUNTDOWN_SECONDS = 25
 
 
 def _is_share_page_retryable_error(message: str | None) -> bool:
@@ -275,7 +277,11 @@ def _try_requeue_share_open_timeout_retry(
     subtask.raw_result_json = raw
     db.commit()
     try:
-        mode = enqueue_backfill_parse(subtask_id=subtask.subtask_id, parse_job_id=parse_job_id)
+        mode = enqueue_backfill_parse(
+            subtask_id=subtask.subtask_id,
+            parse_job_id=parse_job_id,
+            countdown=_BACKFILL_SHARE_RETRY_COUNTDOWN_SECONDS,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "backfill share retry enqueue failed subtask_id=%s job_id=%s err=%r",
@@ -1266,7 +1272,7 @@ def _spawn_backfill_parse(*, subtask_id: str, parse_job_id: str) -> None:
     ).start()
 
 
-def enqueue_backfill_parse(*, subtask_id: str, parse_job_id: str) -> str:
+def enqueue_backfill_parse(*, subtask_id: str, parse_job_id: str, countdown: int = 0) -> str:
     """慢路径解析入队；绝不在 HTTP 线程同步 Playwright。
 
     celery_enabled=True（生产）：只走 Celery，失败抛错由上层清 pending。
@@ -1285,8 +1291,12 @@ def enqueue_backfill_parse(*, subtask_id: str, parse_job_id: str) -> str:
         from app.core.redis_client import _is_auth_redis_error, redis_url_without_auth
         from app.tasks.snapshot_backfill import parse_and_apply_backfill_task
 
+        delay = max(0, int(countdown or 0))
+        apply_kwargs: dict[str, Any] = {"args": (subtask_id, job_id)}
+        if delay:
+            apply_kwargs["countdown"] = delay
         try:
-            parse_and_apply_backfill_task.delay(subtask_id, job_id)
+            parse_and_apply_backfill_task.apply_async(**apply_kwargs)
         except Exception as exc:  # noqa: BLE001
             # 2026-09-02 - 本地 Redis 无密码但 URL/连接池误带 AUTH - 去认证并用新连接重试
             if not _is_auth_redis_error(exc):
@@ -1307,7 +1317,7 @@ def enqueue_backfill_parse(*, subtask_id: str, parse_job_id: str) -> str:
             except Exception:
                 pass
             with celery_app.connection_or_acquire(connection=celery_app.connection(bare_broker)) as conn:
-                parse_and_apply_backfill_task.apply_async(args=(subtask_id, job_id), connection=conn)
+                parse_and_apply_backfill_task.apply_async(connection=conn, **apply_kwargs)
         return "queued"
     _spawn_backfill_parse(subtask_id=subtask_id, parse_job_id=job_id)
     return "thread_fallback"
