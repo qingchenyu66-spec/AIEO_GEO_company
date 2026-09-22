@@ -405,19 +405,64 @@ onUnmounted(() => {
       <div v-for="n in 6" :key="n" class="ws-board-skeleton" />
     </div>
 
-    <section v-else-if="showEmptyGuide" class="ws-board-empty">
-      <Clock3 :size="32" />
-      <h3>等待首次监测结果</h3>
-      <p>暂无已完成检测结果，请等待监测任务返回。</p>
-      <button
-        v-if="canOpenRealtime"
-        type="button"
-        class="ws-board-btn ws-board-btn-primary"
-        @click="navigateToMenu('customer.realtime')"
-      >
-        <Search :size="16" />
-        查看{{ realtimeMenuName }}
-      </button>
+    <section v-else-if="showEmptyGuide" class="ws-board-empty-wrap" :class="{ 'is-period-switching': periodSwitching }">
+      <article class="ws-board-card ws-board-empty-period-card">
+        <div class="ws-board-conclusion-head">
+          <div class="ws-board-conclusion-title-wrap">
+            <div class="ws-board-conclusion-title">数据周期</div>
+            <p v-if="trendPeriodLabel" class="ws-board-conclusion-sub">
+              {{ trendPeriodLabel }} · 当前区间暂无样本
+            </p>
+          </div>
+          <div class="ws-board-conclusion-head-aside">
+            <div class="ws-board-period-inline" role="region" aria-label="数据周期">
+              <div class="ws-board-tabs" :aria-busy="periodSwitching">
+                <button
+                  v-for="option in trendPresetOptions"
+                  :key="option.value"
+                  type="button"
+                  class="ws-board-tab"
+                  :class="{ active: trendPreset === option.value }"
+                  @click="applyTrendPreset(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+              <span v-if="periodSwitching" class="ws-board-period-bar-hint">正在切换…</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="trendPreset === 'custom'" class="ws-board-date-inputs ws-board-date-inputs--inline">
+          <input
+            v-model="trendStartDate"
+            type="date"
+            :max="trendEndDate"
+            @change="onCustomTrendDateChange"
+          >
+          <span>至</span>
+          <input
+            v-model="trendEndDate"
+            type="date"
+            :min="trendStartDate"
+            :max="trendMaxDate"
+            @change="onCustomTrendDateChange"
+          >
+        </div>
+        <div class="ws-board-empty">
+          <Clock3 :size="32" />
+          <h3>当前周期暂无监测结果</h3>
+          <p>默认「近7天」可能没有新任务。可切换「本月」或「自定义」查看历史数据，或去监测页确认任务。</p>
+          <button
+            v-if="canOpenRealtime"
+            type="button"
+            class="ws-board-btn ws-board-btn-primary"
+            @click="navigateToMenu('customer.realtime')"
+          >
+            <Search :size="16" />
+            查看{{ realtimeMenuName }}
+          </button>
+        </div>
+      </article>
     </section>
 
     <template v-else-if="brief">
