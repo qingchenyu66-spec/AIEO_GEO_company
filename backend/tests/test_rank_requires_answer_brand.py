@@ -533,6 +533,66 @@ def test_dha_sell_points_do_not_inflate_appearance_rank():
     assert detail.rank_basis in {"brand_token_order", "line_enum_local"}
 
 
+def test_dha_numbered_tier_bold_next_line_is_second_not_token_sixth():
+    """分款推荐：1.款式标题 + 下一行加粗品牌 → 第2；勿把无重金属/海藻来源抬成 brand_token_order 第6."""
+    answer = """先给结论：**婴幼儿优先选藻油DHA（无重金属、几乎不含EPA）**，每粒DHA含量优先选**100–150mg**，配料干净、无糖无香精。
+
+一、选购要点
+1. **原料首选藻油**：裂壶藻（S油）/寇氏隐甲藻（T油），避开鱼油（易有重金属、EPA偏高）。
+2. **单粒含量**：0–3岁每天100mg左右；3岁以上可到120–150mg。
+3. **配料干净**：无糖、无防腐剂、无人工香精；优先甘油三酯型，更好吸收。
+
+二、分款推荐（都是藻油）
+1. 性价比基础款（0岁+，日常补）
+**Little Swisse 儿童藻油DHA**
+- 每粒DHA：**100mg**，海藻来源，无腥味
+- 适用：0个月以上宝宝，配料简单，价格亲民
+
+2. 国产高纯度款（追求纯度、独立包装）
+**宝得聪 DHA藻油**
+- 每粒DHA：**120mg，纯度53%**，裂壶藻提取，0蔗糖、无过敏原
+- 独立铝箔包装，不易氧化，适合出门携带
+
+3. 高销量复合款（学龄儿童，护眼+补脑）
+**小葵花 PS+DHA藻油**
+- 每粒DHA：**150mg**，额外添加PS磷脂酰丝氨酸+叶黄素
+- 适合4岁以上学生，用眼多、用脑量大的孩子
+
+4. 多营养配方款（含ARA+维D，发育追赶）
+**健敏思 Witsbb DHA藻油**
+- 每粒DHA：**120mg**，复配ARA、VD、VK，协同助力脑眼发育
+- 澳洲进口，敏宝友好，腥味淡
+"""
+    from app.services.monitor_service import (
+        _collect_brand_appearance_tokens,
+        _is_brand_like_appearance_token,
+        _looks_like_assessment_criterion_heading,
+    )
+
+    assert not _looks_like_assessment_criterion_heading(
+        "1. 性价比基础款（0岁+，日常补）"
+    )
+    for junk in ("无重金属", "几乎不含EPA", "mg", "每粒DHA", "海藻来源", "裂壶藻提取"):
+        assert not _is_brand_like_appearance_token(junk, ["宝得聪"]), junk
+    tokens = _collect_brand_appearance_tokens(answer, ["宝得聪"])
+    assert "无重金属" not in tokens
+    assert "海藻来源" not in tokens
+    assert tokens.index("宝得聪") < 3
+
+    item = _sub(
+        prompt="儿童DHA品牌推荐",
+        answer_content=answer,
+        mention_position=None,
+        raw_result_json={},
+    )
+    detail = _resolve_brand_rank_detail(
+        item, "儿童DHA品牌推荐", ["宝得聪"], None
+    )
+    assert detail.mentioned is True
+    assert detail.rank == 2
+    assert detail.rank_basis in {"numbered_subheading", "section_local", "numbered_list"}
+
+
 def test_prose_product_title_mentioned_without_rank():
     """B：仅「万唯新初一分班考」散文露出 → 提及但无合格枚举则空位次。"""
     answer = """
@@ -766,7 +826,7 @@ def test_edu_numbered_subheading_second_not_token_fifth():
     )
     assert detail.mentioned is True
     assert detail.rank == 2
-    assert detail.rank_basis == "section_local"
+    assert detail.rank_basis in {"section_local", "numbered_subheading"}
 
 
 def test_merged_duplicate_rankings_do_not_inflate_structured_rank():

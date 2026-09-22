@@ -3697,6 +3697,9 @@ def _is_brand_like_appearance_token(name: str, brand_terms: list[str] | None = N
         "竖屏", "漫剧", "配音", "剪辑", "品效", "刊例", "旅客", "激励",
         "裁切", "开料", "合适", "哪些", "目标", "独家", "经营权", "整合",
         "嫌腥", "部分宝宝",
+        # 2026-09-22 - 藻油卖点加粗勿进出场（无重金属/海藻来源把宝得聪抬到第6）
+        "重金属", "不含", "海藻", "来源", "提取", "每粒", "纯度", "蔗糖",
+        "复配", "过敏原", "藻油", "EPA", "ARA", "磷脂", "叶黄素",
         # 2026-08-12 - C1：教辅品类/卖点不得进出场（万唯虚高到28）
         "讲解", "练习", "试卷", "知识点", "例题", "易错", "拔高", "中考",
         "专项", "听力", "翻译", "文言文", "同步", "课时", "单元", "分层",
@@ -3781,6 +3784,9 @@ def _is_strong_appearance_proper_name(text: str) -> bool:
     """出场池非配置词：只收短中文专名或拉丁品牌词。"""
     value = str(text or "").strip()
     if not value:
+        return False
+    # 2026-09-22 - mg/VD/VK/EPA 等计量或成分缩写不是品牌
+    if re.fullmatch(r"[A-Za-z]{1,3}", value):
         return False
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{1,19}", value):
         return True
@@ -5768,6 +5774,9 @@ def _looks_like_assessment_criterion_heading(bare: str) -> bool:
         if tail and re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9 ·]{2,16}", tail):
             if not re.search(r"标准|框架|评估|建议|要求", tail):
                 return False
+    # 2026-09-22 - 「1. 性价比基础款」是分款推荐档名, 不是评估框架「6. 性价比」
+    if re.search(r"(?:款|档|型|系列)$", body):
+        return False
     return bool(
         re.search(
             r"合规|数据安全|人才|服务管理|行业经验|技术|创新|性价比|成本|"
@@ -5775,6 +5784,21 @@ def _looks_like_assessment_criterion_heading(bare: str) -> bool:
             body,
         )
     )
+
+
+def _looks_like_numbered_product_tier_heading(bare: str) -> bool:
+    """「1. 性价比基础款」「2. 国产高纯度款」分款档名：开节并保留字面号."""
+    text = re.sub(r"\*\*", "", str(bare or "")).strip()
+    text = re.sub(r"^#+\s*", "", text).strip()
+    parsed = _parse_numbered_subsection_header(text)
+    if not parsed:
+        return False
+    head = re.sub(r"[（(].*$", "", str(parsed[1] or "")).strip()
+    if not head or len(head) > 24:
+        return False
+    if _looks_like_assessment_criterion_heading(text):
+        return False
+    return bool(re.search(r"(?:款|档|型|系列)$", head))
 
 
 def _is_chapter_scope_boundary_line(plain: str) -> bool:
@@ -7009,6 +7033,13 @@ def _tier_local_brand_token_rank(
                 probe = _strip_section_decorations(header_body).strip(" ：:.-—|？?")
                 if 2 <= len(probe) <= 40:
                     label = probe[:16]
+            # 2026-09-22 - 「2. 国产高纯度款」无 fuzzy 类名也开节，保留字面号=2
+            if not label and _looks_like_numbered_product_tier_heading(
+                re.sub(r"^#+\s*", "", bare)
+            ):
+                probe = _strip_section_decorations(header_body).strip(" ：:.-—|？?")
+                if 2 <= len(probe) <= 40:
+                    label = probe[:16]
         elif 2 <= len(plain) <= 72:
             # 2026-08-19 - 「🏢 综合实力型：…」「高合规要求场景」无 # 未开节 → 冒号卡空位/全文14
             # 2026-09-03 - 无#「其他值得关注/国产一线」走 category/secondary，勿只靠 fuzzy
@@ -7055,12 +7086,14 @@ def _tier_local_brand_token_rank(
             # 2026-09-03 - ### N.标题保留字面号，类内直接回 N（万唯###2=2，勿书名单点成1）
             # 2026-09-03 - #### 2.门店：剥尽 # 再认编号
             # 2026-09-03 - 仅井号或「N）」分档保留字面标题；普通「1.条目」仍用 label，免回归
+            # 2026-09-22 - 「N. …款」分款档名同样保留字面号
             stripped_bare = re.sub(r"^#+\s*", "", bare)
             numbered_heading = _parse_numbered_subsection_header(stripped_bare)
             paren_tier = bool(_PAREN_TIER_ITEM_LINE_RE.match(stripped_bare))
+            product_tier = _looks_like_numbered_product_tier_heading(stripped_bare)
             current_title = (
                 stripped_bare.strip()[:40]
-                if numbered_heading and (is_hash_heading or paren_tier)
+                if numbered_heading and (is_hash_heading or paren_tier or product_tier)
                 else label
             )
             current_lines = []
@@ -7825,8 +7858,11 @@ def _resolve_brand_rank_detail(
             mentioned = True
 
     # 2026-08-26 - S1：### N.品牌 标题序优先于扁平 structured 榜
+    # 2026-09-22 - 标题无品牌时认子行加粗主推（分款推荐 2.款式 + **宝得聪**）
     if has_brand_in_rankable:
         sub_heading = _numbered_subheading_title_rank(rankable_text, brand_terms)
+        if sub_heading is None:
+            sub_heading = _numbered_subheading_brand_rank(rankable_text, brand_terms)
         if sub_heading is not None:
             candidates.append(
                 BrandRankResolution(
