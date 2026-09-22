@@ -453,16 +453,20 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
       seen.add(token)
       keywords.push(token)
     }
+
+    // 含已下线词时以下表/图表同一套 matrix.columns 为准, 避免下拉仍是当前配置词、图里却是历史词
+    if (filters.includeRetiredKeywords && (rankingMatrix.value?.columns?.length || 0) > 0) {
+      for (const column of rankingMatrix.value!.columns) {
+        add(column.monitor_keyword || column.prompt)
+      }
+      return keywords.sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    }
+
     const scopedGroups = selectedKeywordGroup.value
       ? [selectedKeywordGroup.value]
       : monitorGroupOptions.value
     for (const group of scopedGroups) {
       for (const keyword of keywordGroupMonitorKeywords(group)) add(keyword)
-    }
-    if (filters.includeRetiredKeywords) {
-      for (const column of rankingMatrix.value?.columns || []) {
-        if (column.retired) add(column.prompt)
-      }
     }
     return keywords.sort((left, right) => left.localeCompare(right, 'zh-CN'))
   })

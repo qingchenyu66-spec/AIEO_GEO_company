@@ -2948,9 +2948,12 @@ def _build_matrix_columns(
                 "platforms": list(group_platforms),
             })
 
+    # 含已下线：无论当前配置是否映射出列, 都按 prompt_set 补历史词并打 retired.
+    # 否则当前词全对不上窗内数据时会掉进下方兜底, 列无 retired, 前端下拉与图表两套词.
+    if include_retired:
+        return _append_retired_matrix_columns(columns, prompt_set, keyword_groups, asset=asset)
+
     if columns:
-        if include_retired:
-            return _append_retired_matrix_columns(columns, prompt_set, keyword_groups, asset=asset)
         return columns
 
     visible_prompts = sorted(

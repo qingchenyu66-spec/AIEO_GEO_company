@@ -1520,6 +1520,21 @@
   gap: 12px;
 }
 
+.ws-board-empty-wrap {
+  margin-bottom: 20px;
+}
+
+.ws-board-empty-period-card {
+  padding: 20px 22px 8px;
+}
+
+.ws-board-empty-period-card .ws-board-empty {
+  margin: 8px 0 12px;
+  border: 0;
+  background: transparent;
+  padding: 28px 12px 24px;
+}
+
 .ws-board-empty {
   text-align: center;
   color: var(--text-muted);
@@ -1528,6 +1543,12 @@
 .ws-board-empty h3 {
   margin: 12px 0 8px;
   color: var(--text);
+}
+
+.ws-board-empty p {
+  max-width: 420px;
+  margin: 0 auto 16px;
+  line-height: 1.5;
 }
 
 .ws-board-skeleton {
