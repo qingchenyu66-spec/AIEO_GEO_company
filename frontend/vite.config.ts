@@ -28,6 +28,15 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/api'),
       },
+      // 本地同域内嵌选词服务，Cookie/CSRF 可打到 GEO /api/v1
+      '/keyword-miner': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        rewrite: (path) => {
+          const rest = path.replace(/^\/keyword-miner/, '')
+          return rest || '/'
+        },
+      },
     },
   },
 })

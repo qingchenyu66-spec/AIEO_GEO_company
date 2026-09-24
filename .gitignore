@@ -6,6 +6,10 @@ __pycache__/
 .coverage
 backend/.venv/
 backend/.env
+services/keyword-miner/.env
+services/keyword-miner/history.db
+services/keyword-miner/*.db
+_tmp_geo_keyword_miner/
 e2e/.env.rpa
 *.local.env
 *.env.local

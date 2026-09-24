@@ -66,6 +66,7 @@ const ReportCenterPage = defineAsyncPage(() => import('./portal/pages/ReportCent
 const LeadDiagnosisPage = defineAsyncPage(() => import('./portal/pages/LeadDiagnosisPage.vue'))
 const H5DiagnosisOrdersPage = defineAsyncPage(() => import('./portal/pages/H5DiagnosisOrdersPage.vue'))
 const SnapshotBackfillOpsPage = defineAsyncPage(() => import('./portal/pages/SnapshotBackfillOpsPage.vue'))
+const KeywordMinerPage = defineAsyncPage(() => import('./portal/pages/KeywordMinerPage.vue'))
 const AlertThresholdsPage = defineAsyncPage(() => import('./portal/pages/AlertThresholdsPage.vue'))
 const KnowledgeBasePage = defineAsyncPage(() => import('./portal/pages/KnowledgeBasePage.vue'))
 const CustomerWorkspacePage = defineAsyncPage(() => import('./portal/pages/CustomerWorkspacePage.vue'))
@@ -216,6 +217,9 @@ const isReportCenterPage = computed(() => ['customer.reports', 'platform.reports
 const isLeadDiagnosisPage = computed(() => activeMenuCode.value === 'platform.lead_diagnosis')
 const isH5DiagnosisOrdersPage = computed(() => activeMenuCode.value === 'platform.h5_diagnosis_orders')
 const isSnapshotBackfillPage = computed(() => activeMenuCode.value === 'platform.snapshot_backfill')
+const isKeywordMinerPage = computed(() => activeMenuCode.value === 'platform.keyword_miner')
+const keywordMinerMounted = ref(false)
+watch(isKeywordMinerPage, (on) => { if (on) keywordMinerMounted.value = true }, { immediate: true })
 const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
 const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
@@ -343,6 +347,7 @@ const pageSubtitle = computed(() => {
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后下载 HTML 发给客户'
   if (isH5DiagnosisOrdersPage.value) return 'H5 付费诊断订单：支付状态、金额与关联售前诊断'
   if (isSnapshotBackfillPage.value) return '粘贴 AI 分享链接，自动解析正文与信源并重算排名'
+  if (isKeywordMinerPage.value) return '选词、拓词，一键导出 Word 交付报告'
   if (isApprovalPage.value) {
     return '审核销售提交的用户、企业、报告与诊断操作；通过后才会真正生效'
   }
@@ -607,7 +612,7 @@ watch(effectiveTenantIdForLogo, () => {
     :identity-count="isPreviewActive ? 0 : (auth.session?.identities.length || 0)"
     :identities="isPreviewActive ? [] : (auth.session?.identities || [])"
     :current-identity-id="auth.session?.identity?.id"
-    :immersive="isCustomerWorkspacePage"
+    :immersive="isCustomerWorkspacePage || isKeywordMinerPage"
     :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
@@ -649,6 +654,7 @@ watch(effectiveTenantIdForLogo, () => {
     <LeadDiagnosisPage v-else-if="isLeadDiagnosisPage" />
     <H5DiagnosisOrdersPage v-else-if="isH5DiagnosisOrdersPage" />
     <SnapshotBackfillOpsPage v-else-if="isSnapshotBackfillPage" />
+    <template v-else-if="isKeywordMinerPage" />
     <AlertThresholdsPage v-else-if="isAlertThresholdsPage" />
     <KnowledgeBasePage v-else-if="isKnowledgePage" />
     <BrandAnalysisPage v-else-if="isBrandAnalysisPage" />
@@ -679,6 +685,11 @@ watch(effectiveTenantIdForLogo, () => {
       </template>
       <FunctionalFeaturePage v-else @open-menu-config="openMenuConfigDialog" />
     </template>
+
+    <KeywordMinerPage
+      v-if="keywordMinerMounted"
+      :active="isKeywordMinerPage"
+    />
     </template>
   </PortalLayout>
 

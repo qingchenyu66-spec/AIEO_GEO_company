@@ -35,7 +35,7 @@ fi
 RESTART_API=0
 RESTART_CELERY=0
 if [[ "$BEFORE_REV" != "$AFTER_REV" ]]; then
-  if git diff --name-only "$BEFORE_REV" "$AFTER_REV" | grep -qE '^(backend/|scripts/setup_api_split_services\.sh|scripts/deploy_prod\.sh|deploy/)'; then
+  if git diff --name-only "$BEFORE_REV" "$AFTER_REV" | grep -qE '^(backend/|services/keyword-miner/|scripts/setup_api_split_services\.sh|scripts/setup_keyword_miner\.sh|scripts/deploy_prod\.sh|deploy/)'; then
     RESTART_API=1
     RESTART_CELERY=1
   fi
@@ -134,7 +134,14 @@ if ! nginx -T 2>/dev/null | grep -q '127.0.0.1:8011'; then
   echo "ERROR: nginx fast upstream 缺少 8011，拒绝 reload" >&2
   exit 1
 fi
+if ! nginx -T 2>/dev/null | grep -q 'location /keyword-miner/'; then
+  echo "ERROR: nginx 缺少 /keyword-miner/ 反代，拒绝 reload" >&2
+  exit 1
+fi
 systemctl reload nginx
+
+echo "==> keyword-miner (GEO选词)"
+bash "$ROOT/scripts/setup_keyword_miner.sh"
 
 wait_health() {
   local port="$1"

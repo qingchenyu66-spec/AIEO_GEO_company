@@ -1,0 +1,20 @@
+[Unit]
+Description=GEO Keyword Miner
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/geo/AIEO_GEO/services/keyword-miner
+EnvironmentFile=-/opt/geo/AIEO_GEO/services/keyword-miner/.env
+EnvironmentFile=-/data/geo/keyword-miner.env
+Environment=HOST=127.0.0.1
+Environment=PORT=8088
+Environment=HISTORY_BACKEND=off
+Environment=HISTORY_DB=/data/geo/keyword-miner/history.db
+ExecStart=/opt/geo/AIEO_GEO/backend/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

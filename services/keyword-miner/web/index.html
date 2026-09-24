@@ -1,0 +1,1139 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GEO 选词</title>
+<style>
+  :root {
+    --bg: #f3f5f8;
+    --card: #fff;
+    --line: #e5e8ef;
+    --text: #1f2430;
+    --muted: #6b7280;
+    --brand: #185fa5;
+    --brand-soft: #e8f1fb;
+    --ok: #2f9e44;
+    --warn: #c2410c;
+    --soft: #f7f8fb;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 20px 18px 48px;
+  }
+  body.embed {
+    background: #fff;
+    overflow: hidden;
+  }
+  body.embed .shell {
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    display: grid;
+    grid-template-rows: 1fr;
+    overflow: hidden;
+  }
+  .top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  body.embed .top { display: none !important; }
+  .brand-block { display: flex; gap: 12px; align-items: center; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--brand); color: #fff; font-weight: 700;
+    display: grid; place-items: center; font-size: 16px; letter-spacing: 0.02em;
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 700; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .work {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  body.embed .work {
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: minmax(320px, 380px) 1fr;
+    gap: 0;
+    border: 0;
+    overflow: hidden;
+  }
+  @media (max-width: 900px) {
+    body.embed .work { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 42%) 1fr; }
+  }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .panel.form {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+  }
+  body.embed .panel {
+    border: 0;
+    border-radius: 0;
+    padding: 14px 14px 18px;
+  }
+  body.embed .panel.form {
+    border-right: 1px solid var(--line);
+    background: var(--soft);
+    overflow: hidden;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+  body.embed .panel.result {
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 0;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+  .form-body {
+    flex: 1;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 14px 14px 8px;
+  }
+  .form-footer {
+    flex-shrink: 0;
+    padding: 12px 14px 14px;
+    border-top: 1px solid var(--line);
+    background: #f0f2f6;
+  }
+  .form-footer .btn {
+    width: 100%;
+  }
+  .field.is-error input,
+  .field.is-error textarea {
+    border-color: #e03131;
+    box-shadow: 0 0 0 3px rgba(224, 49, 49, 0.12);
+  }
+  .field-hint {
+    margin: -4px 0 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  body.embed #result {
+    flex: 1;
+    min-height: 0;
+  }
+  #result:has(.ready) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  body.embed #result:has(.ready) {
+    min-height: 0;
+  }
+  body.embed #status:empty,
+  body.embed #tools[style*="display: none"] {
+    display: none !important;
+  }
+
+  .panel-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0 0 12px;
+    letter-spacing: 0.02em;
+  }
+  body.embed .panel-title { display: none; }
+
+  label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 5px;
+    font-size: 12.5px;
+    color: #374151;
+  }
+  input, textarea, select {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-family: inherit;
+    background: #fff;
+    color: var(--text);
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: #8bb4de;
+    box-shadow: 0 0 0 3px rgba(24, 95, 165, 0.12);
+  }
+  textarea { resize: vertical; min-height: 72px; }
+  .field { margin-bottom: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid2.stack-sm { }
+  @media (max-width: 560px) {
+    .grid2, .grid2.stack-sm { grid-template-columns: 1fr; }
+  }
+
+  .plats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .pill {
+    display: inline-flex; align-items: center;
+    font-size: 12px; border-radius: 8px; padding: 5px 11px;
+    background: #eef1f6; color: var(--muted);
+    cursor: pointer; user-select: none; border: 1px solid transparent;
+  }
+  .pill.on {
+    background: var(--brand-soft); color: var(--brand);
+    border-color: #b7d0ea; font-weight: 650;
+  }
+  .filehint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+    padding: 12px 14px 16px;
+  }
+  .history-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 8px;
+    padding: 10px 10px 9px;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .history-item:hover { border-color: #8bb4de; background: var(--brand-soft); }
+  .history-item .row1 {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .history-item .t { font-weight: 650; line-height: 1.35; }
+  .history-item .m { color: var(--muted); margin-top: 4px; font-size: 12px; line-height: 1.4; }
+  .history-item .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .history-item .tagx {
+    font-size: 11px;
+    color: #374151;
+    background: #eef2f7;
+    border-radius: 999px;
+    padding: 2px 7px;
+  }
+  .history-item .s {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: var(--brand);
+    font-weight: 650;
+  }
+  .history-item .s.bad { color: var(--warn); }
+  .history-item .s.pending { color: #b08900; }
+
+  .result-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 10px;
+  }
+  body.embed .result-bar { margin: 0 0 8px; }
+  .result-bar .actions {
+    margin: 0;
+    flex: 1;
+  }
+  .hist-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: none;
+  }
+  .hist-drawer.open { display: block; }
+  .hist-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.28);
+  }
+  .hist-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: min(400px, 92vw);
+    height: 100%;
+    background: #fff;
+    border-left: 1px solid var(--line);
+    box-shadow: -8px 0 28px rgba(15, 23, 42, 0.12);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .hist-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .hist-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .hist-head .btn.icon {
+    padding: 6px 10px;
+    min-width: 0;
+    font-size: 13px;
+  }
+  .hist-filter {
+    padding: 10px 14px 0;
+    flex-shrink: 0;
+  }
+  .hist-filter input {
+    width: 100%;
+  }
+  .btn {
+    background: var(--brand); color: #fff; border: none;
+    padding: 10px 18px; border-radius: 9px;
+    font-size: 14px; font-weight: 650; cursor: pointer;
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.ghost {
+    background: #fff; color: var(--brand);
+    border: 1px solid #c5d4e8;
+  }
+  .btn.primary-outline { border-color: var(--brand); }
+
+  .banner {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; padding: 7px 11px; border-radius: 8px; margin: 0 8px 10px 0;
+  }
+  .banner.demo { background: #fff7ed; color: var(--warn); }
+  .banner.live { background: #ecfdf3; color: var(--ok); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .actions {
+    display: flex; gap: 8px; align-items: center;
+    margin: 0 0 12px; flex-wrap: wrap;
+  }
+  .muted { color: var(--muted); }
+  .empty {
+    text-align: left; color: var(--muted);
+    padding: 24px; font-size: 13.5px;
+  }
+
+  /* Idle / running states */
+  .ready {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 28px 24px;
+    max-width: 28em;
+    box-sizing: border-box;
+    text-align: center;
+  }
+  .ready-head h2 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .ready-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+  .ready-run .pulse {
+    width: 100%;
+    max-width: 220px;
+    height: 4px;
+    border-radius: 999px;
+    background: #e8edf4;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .ready-run .pulse > i {
+    display: block;
+    height: 100%;
+    width: 40%;
+    border-radius: inherit;
+    background: var(--brand);
+    animation: run-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes run-pulse {
+    0% { transform: translateX(-20%); }
+    100% { transform: translateX(220%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ready-run .pulse > i { animation: none; width: 100%; }
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; background: var(--soft); }
+  tbody tr:hover { background: var(--brand-soft); }
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-size: 11.5px; background: var(--brand-soft); color: var(--brand);
+  }
+  .score { font-weight: 700; }
+  .bar { height: 5px; border-radius: 4px; background: #eef1f6; overflow: hidden; margin-top: 4px; }
+  .bar > i { display: block; height: 100%; background: var(--brand); }
+  .stage-h {
+    margin: 16px 0 4px; font-size: 13.5px; font-weight: 700; color: var(--brand);
+    border-left: 3px solid var(--brand); padding-left: 8px;
+  }
+  .ans { color: #0a7d4d; font-size: 12px; line-height: 1.45; max-width: 360px; }
+  h3 { font-size: 14px; margin: 4px 0 0; }
+  body.embed .ding-only { display: none !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div class="brand-block">
+      <div class="logo">G</div>
+      <div>
+        <h1>GEO 选词</h1>
+        <div class="sub">选词 + 拓词 · 导出 Word 交付报告</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="work">
+    <section class="panel form">
+      <div class="form-body">
+        <p class="panel-title">输入</p>
+        <div class="grid2">
+          <div class="field">
+            <label for="company">企业名称</label>
+            <input id="company" placeholder="例如：艾迪亚控股集团" autocomplete="organization" />
+          </div>
+          <div class="field">
+            <label for="product">产品 / 服务</label>
+            <input id="product" placeholder="例如：品牌推广、企业服务" />
+          </div>
+        </div>
+        <p class="field-hint">企业名称、产品、客户资料至少填一项</p>
+        <div class="field">
+          <label for="materials">客户资料</label>
+          <textarea id="materials" placeholder="粘贴企业介绍、产品说明、官网摘要等"></textarea>
+          <div style="margin-top:8px"><input id="file" type="file" accept=".txt,.md,.csv,.docx" /></div>
+          <div class="filehint" id="filehint">支持 .txt / .md / .csv / .docx</div>
+        </div>
+        <div class="field">
+          <label for="task">任务类型</label>
+          <select id="task">
+            <option value="both">选词 + 拓词</option>
+            <option value="select">仅选词</option>
+            <option value="expand">仅拓词</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>目标 AI 平台</label>
+          <div class="plats" id="platforms"></div>
+        </div>
+        <div class="field">
+          <label for="web_url">官网 URL</label>
+          <input id="web_url" placeholder="https://..." />
+        </div>
+        <div class="field">
+          <label for="brand_terms">品牌词库（一行一个）</label>
+          <textarea id="brand_terms" placeholder="多品牌时逐行填写；默认含企业名称"></textarea>
+        </div>
+        <div class="field">
+          <label for="count">拓词数量</label>
+          <input id="count" type="number" min="10" max="120" value="60" />
+        </div>
+      </div>
+      <div class="form-footer">
+        <button class="btn" id="run" type="button">生成选词报告</button>
+      </div>
+    </section>
+
+    <section class="panel result">
+      <p class="panel-title">结果</p>
+      <div class="result-bar">
+        <button class="btn ghost" id="histOpen" type="button">历史</button>
+        <div class="actions" id="tools" style="display:none">
+          <button class="btn ghost" id="copySel" type="button">复制选词</button>
+          <button class="btn ghost" id="copyExp" type="button">复制拓词</button>
+          <button class="btn ghost ding-only" id="push" type="button">推送到钉钉群</button>
+          <button class="btn" id="docx" type="button">下载 Word 报告</button>
+          <span class="muted" id="countHint"></span>
+        </div>
+      </div>
+      <div id="status"></div>
+      <div id="result"></div>
+    </section>
+  </div>
+</div>
+
+<div id="histDrawer" class="hist-drawer" aria-hidden="true">
+  <div class="hist-backdrop" id="histBackdrop"></div>
+  <aside class="hist-panel" role="dialog" aria-modal="true" aria-labelledby="histTitle">
+    <div class="hist-head">
+      <h2 id="histTitle">历史记录</h2>
+      <button type="button" class="btn ghost icon" id="histClose">关闭</button>
+    </div>
+    <div class="hist-filter">
+      <input id="histFilter" type="search" placeholder="按企业 / 产品筛选" autocomplete="off" />
+    </div>
+    <div id="historyList" class="history-list"><div class="muted" style="padding:8px 0">暂无记录</div></div>
+  </aside>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const STAGES = ["需求萌生","品类筛选","品牌对比","产品选型","价格预算","同城渠道","决策下单","下单履约","售后维保","品牌专属"];
+  const ALL_PLAT = ["豆包","DeepSeek","Kimi","通义","元宝","文心"];
+  const LS_JOB = "geo.keyword_miner.job_id";
+  const LS_DRAFT = "geo.keyword_miner.draft";
+  const LS_RESULT = "geo.keyword_miner.last_result";
+  let selectedPlats = new Set(ALL_PLAT);
+  let current = { selection: [], expansion: {} };
+  let pollTimer = null;
+  let activeJobId = null;
+
+  const embed = new URLSearchParams(location.search).has("embed") || window.self !== window.top;
+  if (embed) document.body.classList.add("embed");
+
+  const API_BASE = (() => {
+    const p = location.pathname || "";
+    if (p === "/keyword-miner" || p.startsWith("/keyword-miner/")) return "/keyword-miner";
+    return "";
+  })();
+  function apiUrl(path) {
+    return API_BASE + path;
+  }
+
+  // GEO 主库历史：同域 Cookie；父页 postMessage 可覆盖 apiBase/csrf
+  let GEO_API_BASE = "/api/v1";
+  let GEO_CSRF = "";
+  let GEO_READY = !embed;
+  const geoWaiters = [];
+  function readCsrf() {
+    if (GEO_CSRF) return GEO_CSRF;
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)geo_csrf_token=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : "";
+    } catch (_) { return ""; }
+  }
+  function geoUrl(path) {
+    return String(GEO_API_BASE || "/api/v1").replace(/\/$/, "") + path;
+  }
+  async function geoFetch(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers || {});
+    const method = String(opts.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      const csrf = readCsrf();
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+    }
+    const resp = await fetch(geoUrl(path), Object.assign({}, opts, {
+      credentials: "include",
+      headers,
+      cache: opts.cache || "no-store",
+    }));
+    return resp;
+  }
+  function onGeoReady(fn) {
+    if (GEO_READY) { fn(); return; }
+    geoWaiters.push(fn);
+  }
+  window.addEventListener("message", (ev) => {
+    const d = ev && ev.data;
+    if (!d || d.type !== "geo-km-bootstrap") return;
+    if (d.apiBase) GEO_API_BASE = String(d.apiBase).replace(/\/$/, "");
+    if (d.csrf != null) GEO_CSRF = String(d.csrf || "");
+    GEO_READY = true;
+    while (geoWaiters.length) {
+      try { geoWaiters.shift()(); } catch (_) {}
+    }
+  });
+
+  async function syncJobToGeo(job) {
+    if (!job || !job.job_id) return;
+    const body = {
+      status: job.status,
+      company: job.company || "",
+      product: job.product || "",
+      error: job.error || null,
+      payload: job.payload || null,
+      result: job.result || null,
+      created_at: job.created_at || null,
+      updated_at: job.updated_at || null,
+      selection_count: job.selection_count,
+      expansion_count: job.expansion_count,
+      task: job.task,
+      platforms: job.platforms,
+      source: job.source,
+      model: job.model,
+      top_words: job.top_words,
+    };
+    try {
+      const r = await geoFetch("/keyword-miner/jobs/" + encodeURIComponent(job.job_id), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) return;
+    } catch (_) {}
+  }
+
+  function idlePreviewHtml() {
+    return (
+      '<div class="ready">' +
+        '<div class="ready-head">' +
+          '<h2>填写左侧信息后生成报告</h2>' +
+          '<p>至少填写企业名称、产品或客户资料之一，勾选目标 AI 平台，然后点「生成选词报告」。完成后可在此查看选词 / 拓词并下载 Word。</p>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function showIdlePreview() {
+    $("tools").style.display = "none";
+    $("status").innerHTML = "";
+    $("result").innerHTML = idlePreviewHtml();
+  }
+
+  showIdlePreview();
+  function renderPlats() {
+    $("platforms").innerHTML = ALL_PLAT.map(p =>
+      '<span class="pill ' + (selectedPlats.has(p) ? 'on' : '') + '" data-p="' + p + '" role="button" tabindex="0">' + p + '</span>'
+    ).join('');
+    [...$("platforms").children].forEach(el => {
+      const toggle = () => {
+        const p = el.dataset.p;
+        if (selectedPlats.has(p)) selectedPlats.delete(p); else selectedPlats.add(p);
+        renderPlats();
+        saveDraft();
+      };
+      el.onclick = toggle;
+      el.onkeydown = (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+      };
+    });
+  }
+  renderPlats();
+  loadDraft();
+  try {
+    const resumeId = localStorage.getItem(LS_JOB);
+    if (resumeId) {
+      void pollJob(resumeId);
+    } else {
+      const raw = localStorage.getItem(LS_RESULT);
+      if (raw) {
+        const data = JSON.parse(raw);
+        current = { selection: data.selection || [], expansion: data.expansion || {} };
+        if ((current.selection && current.selection.length) || Object.values(current.expansion || {}).some(a => a && a.length)) {
+          render(data);
+        }
+      }
+    }
+  } catch (_) {}
+  onGeoReady(() => {});
+  // 超时兜底：父页未及时 bootstrap 也放开 GEO 调用
+  setTimeout(() => {
+    if (!GEO_READY) {
+      GEO_READY = true;
+      while (geoWaiters.length) {
+        try { geoWaiters.shift()(); } catch (_) {}
+      }
+    }
+  }, 1500);
+
+  ["company","product","web_url","task","materials","brand_terms","count"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", saveDraft);
+    el.addEventListener("input", () => {
+      const field = el.closest(".field");
+      if (field) field.classList.remove("is-error");
+      saveDraft();
+    });
+  });
+
+  $("file").addEventListener("change", async () => {
+    const f = $("file").files[0]; if (!f) return;
+    $("filehint").textContent = "正在读取 " + f.name + " ...";
+    const buf = await f.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    try {
+      const r = await fetch(apiUrl("/api/ingest"), { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ filename: f.name, data: b64 }) });
+      const d = await r.json();
+      const cur = $("materials").value.trim();
+      $("materials").value = (cur ? cur + "\n\n" : "") + (d.text || "");
+      $("filehint").textContent = "已读取 " + f.name + "（" + (d.text||"").length + " 字）";
+    } catch (e) { $("filehint").textContent = "读取失败：" + e.message; }
+  });
+
+  function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+  function saveDraft() {
+    try {
+      localStorage.setItem(LS_DRAFT, JSON.stringify({
+        company: $("company").value,
+        product: $("product").value,
+        web_url: $("web_url").value,
+        task: $("task").value,
+        materials: $("materials").value,
+        brand_terms: $("brand_terms").value,
+        count: $("count").value,
+        platforms: [...selectedPlats],
+      }));
+    } catch (_) {}
+  }
+
+  function loadDraft() {
+    try {
+      const raw = localStorage.getItem(LS_DRAFT);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d.company != null) $("company").value = d.company;
+      if (d.product != null) $("product").value = d.product;
+      if (d.web_url != null) $("web_url").value = d.web_url;
+      if (d.task != null) $("task").value = d.task;
+      if (d.materials != null) $("materials").value = d.materials;
+      if (d.brand_terms != null) $("brand_terms").value = d.brand_terms;
+      if (d.count != null) $("count").value = d.count;
+      if (Array.isArray(d.platforms) && d.platforms.length) {
+        selectedPlats = new Set(d.platforms);
+        renderPlats();
+      }
+    } catch (_) {}
+  }
+
+  function setJobId(id) {
+    activeJobId = id || null;
+    try {
+      if (id) localStorage.setItem(LS_JOB, id);
+      else localStorage.removeItem(LS_JOB);
+    } catch (_) {}
+  }
+
+  function clearFieldErrors() {
+    document.querySelectorAll(".field.is-error").forEach((el) => el.classList.remove("is-error"));
+  }
+
+  function markFieldError(id) {
+    const el = $(id);
+    if (!el) return;
+    const field = el.closest(".field");
+    if (field) field.classList.add("is-error");
+  }
+
+  function setRunIdle() {
+    $("run").disabled = false;
+    $("run").textContent = "生成选词报告";
+  }
+
+  function showRunning() {
+    $("run").disabled = true;
+    $("run").textContent = "生成中…";
+    $("tools").style.display = "none";
+    $("status").innerHTML = "";
+    $("result").innerHTML =
+      '<div class="ready ready-run">' +
+        '<div class="ready-head">' +
+          '<h2>正在生成选词报告…</h2>' +
+          '<p>通常需要 1–3 分钟。完成后可在此查看结果并下载 Word。</p>' +
+        '</div>' +
+        '<div class="pulse" aria-hidden="true"><i></i></div>' +
+      '</div>';
+  }
+
+  function stopPoll() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  async function pollJob(jobId) {
+    stopPoll();
+    setJobId(jobId);
+    showRunning();
+    const tick = async () => {
+      try {
+        const resp = await fetch(apiUrl("/api/jobs/" + encodeURIComponent(jobId)), { cache: "no-store" });
+        if (resp.status === 404) {
+          setJobId(null);
+          showIdlePreview();
+          $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>上次任务已过期，请重新生成。</div>';
+          setRunIdle();
+          return;
+        }
+        const job = await resp.json();
+        if (job.error && job.status === "error") {
+          void syncJobToGeo(job);
+          throw new Error(job.error);
+        }
+        if (job.status === "done" && job.result) {
+          void syncJobToGeo(job);
+          setJobId(null);
+          setRunIdle();
+          const data = job.result;
+          current = { selection: data.selection || [], expansion: data.expansion || {} };
+          if (data.meta) {
+            if (data.meta.company && !$("company").value) $("company").value = data.meta.company;
+            if (data.meta.product && !$("product").value) $("product").value = data.meta.product;
+          }
+          render(data);
+          void loadHistory();
+          return;
+        }
+        if (job.status === "queued" || job.status === "running") {
+          void syncJobToGeo(job);
+          pollTimer = setTimeout(tick, 1500);
+          return;
+        }
+        throw new Error(job.error || ("未知状态：" + job.status));
+      } catch (e) {
+        setRunIdle();
+        $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
+        showIdlePreview();
+      }
+    };
+    await tick();
+  }
+
+  async function run() {
+    clearFieldErrors();
+    const company = $("company").value.trim();
+    const product = $("product").value.trim();
+    const materials = $("materials").value.trim();
+    const web_url = $("web_url").value.trim();
+    const count = $("count").value || 60;
+    const task = $("task").value;
+    const platforms = [...selectedPlats];
+    if (!company && !product && !materials && !web_url) {
+      markFieldError("company");
+      markFieldError("product");
+      markFieldError("materials");
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>请至少填写企业名称、产品或客户资料之一。</div>';
+      $("company").focus();
+      return;
+    }
+    if (!platforms.length) {
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>请至少勾选一个目标 AI 平台。</div>';
+      return;
+    }
+    saveDraft();
+    showRunning();
+    try {
+      const resp = await fetch(apiUrl("/api/mine"), { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ company, product, materials, web_url, count, task, platforms,
+          brand_terms: $("brand_terms").value.split(/\n+/).map(s=>s.trim()).filter(Boolean) }) });
+      const data = await resp.json();
+      if (data.error && !data.job_id) throw new Error(data.error);
+      // 兼容旧同步接口：直接返回 selection
+      if (data.selection || data.expansion) {
+        current = { selection: data.selection || [], expansion: data.expansion || {} };
+        setRunIdle();
+        render(data);
+        return;
+      }
+      if (!data.job_id) throw new Error("未返回任务 ID");
+      await pollJob(data.job_id);
+    } catch (e) {
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
+      showIdlePreview();
+      setRunIdle();
+    }
+  }
+
+  let historyItems = [];
+  let histFilterText = "";
+
+  function openHistDrawer() {
+    const drawer = $("histDrawer");
+    if (!drawer) return;
+    drawer.classList.add("open");
+    drawer.setAttribute("aria-hidden", "false");
+    void loadHistory();
+    setTimeout(() => { try { $("histFilter").focus(); } catch (_) {} }, 0);
+  }
+
+  function closeHistDrawer() {
+    const drawer = $("histDrawer");
+    if (!drawer) return;
+    drawer.classList.remove("open");
+    drawer.setAttribute("aria-hidden", "true");
+  }
+
+  function paintHistory(items) {
+    const box = $("historyList");
+    if (!box) return;
+    const q = histFilterText.trim().toLowerCase();
+    const filtered = !q ? items : items.filter((it) => {
+      const blob = [it.company, it.product, it.model, it.status].join(" ").toLowerCase();
+      return blob.includes(q);
+    });
+    if (!filtered.length) {
+      box.innerHTML = '<div class="muted" style="padding:8px 0">' + (items.length ? "无匹配记录" : "暂无记录") + "</div>";
+      return;
+    }
+    const taskLabel = { both: "选词+拓词", select: "仅选词", expand: "仅拓词" };
+    box.innerHTML = filtered.map(it => {
+      const title = (it.company || it.product || "未命名").trim() || "未命名";
+      const bits = [];
+      if (it.product && it.product !== it.company) bits.push(it.product);
+      bits.push(fmtTime(it.updated_at || it.created_at));
+      const tags = [];
+      if (it.task) tags.push(taskLabel[it.task] || it.task);
+      tags.push("选词 " + (it.selection_count || 0));
+      tags.push("拓词 " + (it.expansion_count || 0));
+      if (it.model) tags.push(it.model);
+      else if (it.source === "demo") tags.push("演示");
+      (it.platforms || []).slice(0, 4).forEach(p => tags.push(p));
+      if ((it.platforms || []).length > 4) tags.push("+" + ((it.platforms || []).length - 4));
+      const st = it.status === "done" ? "完成" : (it.status === "error" ? "失败" : "进行中");
+      const cls = it.status === "done" ? "" : (it.status === "error" ? "bad" : "pending");
+      return '<button type="button" class="history-item" data-id="' + esc(it.job_id) + '">' +
+        '<div class="row1"><div class="t">' + esc(title) + '</div><span class="s ' + cls + '">' + st + '</span></div>' +
+        (bits.length ? '<div class="m">' + esc(bits.join(" · ")) + '</div>' : '') +
+        (tags.length ? '<div class="tags">' + tags.map(t => '<span class="tagx">' + esc(t) + '</span>').join("") + '</div>' : '') +
+        '</button>';
+    }).join("");
+    [...box.querySelectorAll(".history-item")].forEach(el => {
+      el.onclick = () => void openHistory(el.dataset.id);
+    });
+  }
+
+  function fmtTime(ts) {
+    if (!ts) return "";
+    const d = new Date(Number(ts) * 1000);
+    if (Number.isNaN(d.getTime())) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  async function loadHistory() {
+    const box = $("historyList");
+    if (!box) return;
+    box.innerHTML = '<div class="muted" style="padding:8px 0">加载中…</div>';
+    try {
+      // 优先 GEO 主库；失败再回退本机 SQLite（独立打开页）
+      let items = null;
+      try {
+        const r = await geoFetch("/keyword-miner/jobs?limit=50");
+        if (r.ok) {
+          const d = await r.json();
+          items = (d && d.data && d.data.items) || (d && d.items) || [];
+        }
+      } catch (_) {}
+      if (items == null) {
+        const r = await fetch(apiUrl("/api/history?limit=50"), { cache: "no-store" });
+        const d = await r.json();
+        items = d.items || [];
+      }
+      historyItems = items;
+      paintHistory(historyItems);
+    } catch (_) {
+      box.innerHTML = '<div class="muted" style="padding:8px 0">历史加载失败</div>';
+    }
+  }
+
+  function applyPayload(p) {
+    if (!p || typeof p !== "object") return;
+    if (p.company != null) $("company").value = p.company;
+    if (p.product != null) $("product").value = p.product;
+    if (p.web_url != null) $("web_url").value = p.web_url;
+    if (p.task != null) $("task").value = p.task;
+    if (p.materials != null) $("materials").value = p.materials;
+    if (Array.isArray(p.brand_terms)) $("brand_terms").value = p.brand_terms.join("\n");
+    else if (p.brand_terms != null) $("brand_terms").value = String(p.brand_terms);
+    if (p.count != null) $("count").value = p.count;
+    if (Array.isArray(p.platforms) && p.platforms.length) {
+      selectedPlats = new Set(p.platforms);
+      renderPlats();
+    }
+    saveDraft();
+  }
+
+  async function openHistory(jobId) {
+    if (!jobId) return;
+    try {
+      let job = null;
+      try {
+        const r = await geoFetch("/keyword-miner/jobs/" + encodeURIComponent(jobId));
+        if (r.ok) {
+          const d = await r.json();
+          job = (d && d.data) || d;
+        }
+      } catch (_) {}
+      if (!job) {
+        const resp = await fetch(apiUrl("/api/jobs/" + encodeURIComponent(jobId)), { cache: "no-store" });
+        if (!resp.ok) throw new Error("记录不存在");
+        job = await resp.json();
+      }
+      if (job.payload) applyPayload(job.payload);
+      else {
+        if (job.company) $("company").value = job.company;
+        if (job.product) $("product").value = job.product;
+      }
+      if (job.status === "done" && job.result) {
+        current = { selection: job.result.selection || [], expansion: job.result.expansion || {} };
+        if (job.result.meta && !job.payload) {
+          if (job.result.meta.company) $("company").value = job.result.meta.company;
+          if (job.result.meta.product) $("product").value = job.result.meta.product;
+          if (job.result.meta.task) $("task").value = job.result.meta.task;
+          if (job.result.meta.count != null) $("count").value = job.result.meta.count;
+          if (Array.isArray(job.result.meta.platforms) && job.result.meta.platforms.length) {
+            selectedPlats = new Set(job.result.meta.platforms);
+            renderPlats();
+          }
+        }
+        closeHistDrawer();
+        render(job.result);
+        return;
+      }
+      if (job.status === "queued" || job.status === "running") {
+        closeHistDrawer();
+        await pollJob(jobId);
+        return;
+      }
+      throw new Error(job.error || "该记录无可用结果");
+    } catch (e) {
+      closeHistDrawer();
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>' + esc(e.message) + '</div>';
+    }
+  }
+
+  function render(data) {
+    saveDraft();
+    try { localStorage.setItem(LS_RESULT, JSON.stringify(data)); } catch (_) {}
+    void loadHistory();
+    $("status").innerHTML = "";
+    let html = "";
+    if (current.selection.length) {
+      html += '<h3>一、选词建议</h3>';
+      html += "<table><thead><tr><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th></tr></thead><tbody>";
+      current.selection.slice().sort((a,b)=>b.score-a.score).forEach(k => {
+        const w = Math.max(0,Math.min(100,k.score));
+        html += "<tr><td><b>"+esc(k.word)+"</b></td><td><span class='tag'>"+esc(k.category)+"</span></td><td>"+esc(k.intent)+
+          "</td><td class='score'>"+w+"</td><td class='muted'>"+esc(k.reason||"")+"</td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+    const expStages = STAGES.filter(s => (current.expansion[s]||[]).length);
+    if (expStages.length) {
+      const total = expStages.reduce((n,s)=>n+current.expansion[s].length,0);
+      html += '<h3 style="margin-top:18px">二、拓词清单（' + total + ' 条）</h3>';
+      expStages.forEach(s => {
+        const isBrand = (s === "品牌专属");
+        html += '<div class="stage-h">' + s + '（' + current.expansion[s].length + '）</div>';
+        html += "<table><thead><tr><th>" + (isBrand ? '拓词（含品牌名）' : '拓词') + "</th><th>热度</th><th>说明</th><th>答案要点</th></tr></thead><tbody>";
+        current.expansion[s].forEach(it => {
+          const h = Math.max(0,Math.min(100,it.heat));
+          html += "<tr><td><b>"+esc(it.word)+"</b></td><td class='score'>"+h+
+            '<div class="bar"><i style="width:'+h+'%"></i></div></td><td class="muted">'+esc(it.note||"")+"</td><td class='ans'>"+esc(it.answer||"")+"</td></tr>";
+        });
+        html += "</tbody></table>";
+      });
+    }
+    if (!html) {
+      showIdlePreview();
+      return;
+    }
+    $("tools").style.display = (current.selection.length || expStages.length) ? "flex" : "none";
+    $("countHint").textContent = "选词 " + current.selection.length + " · 拓词 " + (expStages.reduce((n,s)=>n+current.expansion[s].length,0));
+    $("result").innerHTML = html;
+  }
+
+  function copyAll(arr, key) {
+    if (!arr.length) return;
+    const text = arr.map(k => k[key]).join("\n");
+    navigator.clipboard.writeText(text).then(() => alert("已复制 " + arr.length + " 条"));
+  }
+  $("copySel").onclick = () => copyAll(current.selection, "word");
+  $("copyExp").onclick = () => copyAll(Object.values(current.expansion).flat(), "word");
+
+  $("docx").onclick = async () => {
+    const company = $("company").value.trim() || "企业";
+    const date = new Date().toISOString().slice(0,10);
+    const filename = "GEO选词建议_" + company + "_" + date + ".docx";
+    const payload = { meta:{ company:$("company").value.trim(), product:$("product").value.trim(),
+        platforms:[...selectedPlats] }, selection:current.selection, expansion:current.expansion, filename };
+    $("docx").disabled = true; $("docx").textContent = "生成中…";
+    try {
+      const r = await fetch(apiUrl("/api/export_docx"), { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(payload) });
+      if (!r.ok) throw new Error((await r.json()).error || "生成失败");
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    } catch (e) { alert("生成失败：" + e.message); }
+    finally { $("docx").disabled = false; $("docx").textContent = "下载 Word 报告"; }
+  };
+
+  $("push").onclick = async () => {
+    if (!current.selection.length && !Object.values(current.expansion).some(a => a.length)) {
+      alert("请先生成选词/拓词结果"); return;
+    }
+    const webhook = prompt("粘贴钉钉群机器人 Webhook 地址：");
+    if (!webhook) return;
+    const secret = prompt("机器人加签密钥 secret（没有则直接确定留空）：") || "";
+    $("push").disabled = true; $("push").textContent = "推送中…";
+    try {
+      const r = await fetch(apiUrl("/api/push_dingtalk"), { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ webhook, secret, company:$("company").value.trim(),
+          selection:current.selection, expansion:current.expansion }) });
+      const d = await r.json();
+      if (d.ok) alert("已推送到钉钉群。");
+      else alert("推送失败：" + (d.error || "未知错误"));
+    } catch (e) { alert("推送失败：" + e.message); }
+    finally { $("push").disabled = false; $("push").textContent = "推送到钉钉群"; }
+  };
+
+  $("run").onclick = run;
+  $("histOpen").onclick = () => openHistDrawer();
+  $("histClose").onclick = () => closeHistDrawer();
+  $("histBackdrop").onclick = () => closeHistDrawer();
+  $("histFilter").addEventListener("input", () => {
+    histFilterText = $("histFilter").value || "";
+    paintHistory(historyItems);
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && $("histDrawer").classList.contains("open")) {
+      closeHistDrawer();
+    }
+  });
+</script>
+</body>
+</html>

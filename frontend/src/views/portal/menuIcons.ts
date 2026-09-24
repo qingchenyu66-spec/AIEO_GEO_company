@@ -16,6 +16,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Stethoscope,
   Upload,
   UserCog,
@@ -43,6 +44,7 @@ const iconMap: Record<string, Component> = {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Stethoscope,
   Upload,
   UserCog,
@@ -66,6 +68,7 @@ const menuCodeIconMap: Record<string, Component> = {
   'platform.lead_diagnosis': Stethoscope,
   'platform.h5_diagnosis_orders': Receipt,
   'platform.reports': FileBarChart,
+  'platform.keyword_miner': Sparkles,
 }
 
 export function menuIcon(menu: MenuInfo) {

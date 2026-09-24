@@ -25,6 +25,7 @@ from app.models.notification import SystemNotification, SystemNotificationRead
 from app.models.announcement import Announcement, AnnouncementAck, AnnouncementMedia
 from app.models.h5_diagnosis_order import H5DiagnosisOrder
 from app.models.credit_recharge_order import CreditRechargeOrder
+from app.models.keyword_miner import GeoKeywordMinerJob
 
 __all__ = [
     "GeoMonitorWindowSnapshot",
@@ -61,4 +62,5 @@ __all__ = [
     "AnnouncementMedia",
     "H5DiagnosisOrder",
     "CreditRechargeOrder",
+    "GeoKeywordMinerJob",
 ]
