@@ -28,7 +28,10 @@ import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
-from dingtalk_crypto import DingTalkCrypto
+try:
+    from dingtalk_crypto import DingTalkCrypto
+except Exception:  # noqa: BLE001 - 无 pycryptodome 时仍可跑选词/导出
+    DingTalkCrypto = None  # type: ignore[misc, assignment]
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
@@ -703,6 +706,8 @@ def build_dingtalk_markdown(company, selection, expansion):
 
 # ---------------- 钉钉交互式回调（群里 @ 就出词）----------------
 def get_crypto():
+    if DingTalkCrypto is None:
+        return None
     if DINGTALK_TOKEN and DINGTALK_AES_KEY:
         return DingTalkCrypto(DINGTALK_TOKEN, DINGTALK_AES_KEY)
     return None

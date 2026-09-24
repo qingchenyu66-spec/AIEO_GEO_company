@@ -54,6 +54,9 @@ if grep -q '^HISTORY_BACKEND=sqlite' "$ENV_FILE"; then
   sed -i 's|^HISTORY_BACKEND=sqlite|HISTORY_BACKEND=off|' "$ENV_FILE"
 fi
 
+# 生产用 backend venv；补齐选词服务额外依赖（钉钉加解密）
+"$ROOT/backend/.venv/bin/pip" install -q "pycryptodome>=3.20.0"
+
 cp "$UNIT_SRC" "$UNIT_DST"
 systemctl daemon-reload
 systemctl enable geo-keyword-miner
