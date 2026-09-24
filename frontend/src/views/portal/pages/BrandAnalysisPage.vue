@@ -421,6 +421,9 @@ onMounted(() => {
               <p class="ws-board-conclusion-sub">
                 {{ dashboard.period_label || '—' }}
                 · {{ dashboard.purchased_platforms?.length || 0 }} 个平台
+                <template v-if="dashboard.data_as_of">
+                  · 截至抓取 {{ dashboard.data_as_of }}
+                </template>
               </p>
             </div>
             <div class="ws-board-conclusion-head-aside ba-summary-aside">

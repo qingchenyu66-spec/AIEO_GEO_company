@@ -20,11 +20,25 @@ def test_resolve_compare_period_defaults_month() -> None:
 
 
 def test_brand_compare_windows_equal_length() -> None:
-    now = datetime(2026, 9, 7, 15, 0, 0)
-    win = brand_compare_windows(now, "week")
+    anchor = datetime(2026, 9, 22, 9, 0, 0)
+    win = brand_compare_windows(anchor, "week")
     assert win["days"] == 7
+    assert win["range_end"] == anchor
     assert (win["current_start"] - win["previous_start"]).days == 7
     assert (win["range_end"] - win["current_start"]).days == 7
+    assert win["current_label"] == "2026-09-15 ~ 2026-09-22"
+
+
+def test_brand_compare_windows_stable_when_calendar_day_moves() -> None:
+    """同一抓取锚点：隔天打开窗口不变（客户可解释口径）。"""
+    crawl = datetime(2026, 9, 22, 9, 5, 0)
+    mon = brand_compare_windows(crawl, "week")
+    thu = brand_compare_windows(crawl, "week")
+    assert mon["current_label"] == thu["current_label"]
+    assert mon["previous_label"] == thu["previous_label"]
+    # 若误用「今天」作锚点，周四会滚到 09-17~09-24
+    drifted = brand_compare_windows(datetime(2026, 9, 24, 10, 0, 0), "week")
+    assert drifted["current_label"] != mon["current_label"]
 
 
 def test_description_share_matches_filter_style_counts() -> None:

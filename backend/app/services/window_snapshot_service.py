@@ -17,6 +17,8 @@ from app.models.monitor import GeoMonitorWindowSnapshot
 logger = logging.getLogger(__name__)
 
 WINDOW_KINDS = ("workspace_brief",)
+# 2026-09-24 - 品牌分析口碑块按抓取日 write-once 冻结；勿被 GEO 作废扫掉
+BRAND_ANALYSIS_KIND = "brand_analysis"
 WINDOW_DAYS = (7, 30)
 DEFAULT_FILTER_FP = "default"
 
@@ -28,8 +30,12 @@ def _as_of_customer_cutoff(now: datetime | None = None) -> date:
 
 
 def invalidate_window_snapshots_for_tenant(db: Session, tenant_id: int) -> int:
+    """只作废工作台预聚合；品牌分析冻结快照按抓取日保留。"""
     result = db.execute(
-        delete(GeoMonitorWindowSnapshot).where(GeoMonitorWindowSnapshot.tenant_id == int(tenant_id))
+        delete(GeoMonitorWindowSnapshot).where(
+            GeoMonitorWindowSnapshot.tenant_id == int(tenant_id),
+            GeoMonitorWindowSnapshot.kind.in_(tuple(WINDOW_KINDS)),
+        )
     )
     db.commit()
     return int(result.rowcount or 0)
@@ -96,6 +102,44 @@ def upsert_window_snapshot(
         row.payload_json = payload
         row.computed_at = now
     db.commit()
+
+
+def insert_window_snapshot_if_absent(
+    db: Session,
+    *,
+    tenant_id: int,
+    kind: str,
+    window_days: int,
+    payload: dict[str, Any],
+    as_of_date: date,
+    filter_fp: str = DEFAULT_FILTER_FP,
+) -> bool:
+    """Write-once：已有同键快照则不改，避免补解析把客户已见数字改掉。"""
+    fp = filter_fp or DEFAULT_FILTER_FP
+    existing = db.scalar(
+        select(GeoMonitorWindowSnapshot.id).where(
+            GeoMonitorWindowSnapshot.tenant_id == int(tenant_id),
+            GeoMonitorWindowSnapshot.kind == kind,
+            GeoMonitorWindowSnapshot.window_days == int(window_days),
+            GeoMonitorWindowSnapshot.as_of_date == as_of_date,
+            GeoMonitorWindowSnapshot.filter_fp == fp,
+        )
+    )
+    if existing is not None:
+        return False
+    db.add(
+        GeoMonitorWindowSnapshot(
+            tenant_id=int(tenant_id),
+            kind=kind,
+            window_days=int(window_days),
+            as_of_date=as_of_date,
+            filter_fp=fp,
+            payload_json=payload,
+            computed_at=datetime.now(),
+        )
+    )
+    db.commit()
+    return True
 
 
 def build_workspace_brief_window_payload(

@@ -443,7 +443,7 @@ def monitor_brand_analysis(
     parse: bool = Query(default=False, description="是否对未解析样本调用 DeepSeek；默认否，避免读路径堵接口"),
     compare_period: str = Query(
         default="month",
-        description="环比窗口：week/month/quarter/year（滚动等长上期）",
+        description="环比窗口：week/month/quarter/year（以最近品牌词抓取日为截止的等长上期）",
     ),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
@@ -485,7 +485,7 @@ def monitor_brand_analysis_export(
     tenant_id: int | None = Query(default=None, description="平台端只读预览时指定企业"),
     compare_period: str = Query(
         default="month",
-        description="D1：与页面当前环比窗口一致 week/month/quarter/year",
+        description="D1：与页面当前环比窗口一致 week/month/quarter/year（抓取日截止）",
     ),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),

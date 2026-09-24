@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+import hashlib
+from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -898,7 +899,8 @@ def _group_ai_descriptions(
     return rows
 
 
-# 2026-09-07 - B+ 总览：滚动等长窗口，上期可选周/月/季/年
+# 2026-09-07 - B+ 总览：等长窗口，上期可选周/月/季/年
+# 2026-09-24 - 截止日锚定最近品牌词抓取，避免日历日滚动导致未抓取也变数
 COMPARE_PERIOD_DAYS: dict[str, int] = {
     "week": 7,
     "month": 30,
@@ -926,12 +928,33 @@ def resolve_brand_compare_period(raw: str | None) -> str:
     return key if key in COMPARE_PERIOD_DAYS else "month"
 
 
-def brand_compare_windows(now: datetime, compare_period: str) -> dict[str, Any]:
-    """本期 [current_start, range_end]，上期 [previous_start, current_start)。"""
+def resolve_brand_analysis_anchor(db: Session, tenant_id: int) -> datetime | None:
+    """最近一次品牌词任务创建时间 = 本租户最近抓取批次锚点。"""
+    return db.scalar(
+        select(func.max(GeoMonitorTask.created_at)).where(
+            GeoMonitorTask.tenant_id == int(tenant_id),
+            GeoMonitorTask.purpose == "brand_word",
+            GeoMonitorTask.deleted.is_(False),
+        )
+    )
+
+
+def brand_analysis_filter_fp(platform_codes: list[str] | None) -> str:
+    codes = sorted({str(c or "").strip() for c in (platform_codes or []) if str(c or "").strip()})
+    if not codes:
+        return "default"
+    return hashlib.md5("|".join(codes).encode("utf-8")).hexdigest()
+
+
+def brand_compare_windows(anchor: datetime, compare_period: str) -> dict[str, Any]:
+    """本期 [current_start, range_end]，上期 [previous_start, current_start)。
+
+    range_end 用抓取锚点，不用「今天打开页」的 now。
+    """
     days = COMPARE_PERIOD_DAYS[compare_period]
-    range_end = now
-    current_start = now - timedelta(days=days)
-    previous_start = now - timedelta(days=days * 2)
+    range_end = anchor
+    current_start = anchor - timedelta(days=days)
+    previous_start = anchor - timedelta(days=days * 2)
     label = COMPARE_PERIOD_LABELS[compare_period]
     return {
         "compare_period": compare_period,
@@ -943,6 +966,86 @@ def brand_compare_windows(now: datetime, compare_period: str) -> dict[str, Any]:
         "current_label": f"{current_start.date().isoformat()} ~ {range_end.date().isoformat()}",
         "previous_label": f"{previous_start.date().isoformat()} ~ {current_start.date().isoformat()}",
     }
+
+
+def _brand_analysis_parse_settled(parse_meta: dict[str, Any]) -> bool:
+    return int(parse_meta.get("pending_left") or 0) <= 0 and int(
+        parse_meta.get("description_pending_left") or 0
+    ) <= 0
+
+
+def _snapshot_payload_from_dashboard(data: dict[str, Any]) -> dict[str, Any]:
+    """冻结整块看板（含描述列表），去掉瞬时 parse 噪声。"""
+    payload = dict(data)
+    payload["frozen"] = True
+    payload["parse"] = {
+        "parsed": 0,
+        "pending_left": 0,
+        "errors": [],
+        "description_parsed": 0,
+        "description_pending_left": 0,
+        "description_errors": [],
+    }
+    return payload
+
+
+def _try_load_brand_analysis_snapshot(
+    db: Session,
+    *,
+    tenant_id: int,
+    grain: str,
+    as_of: date,
+    filter_fp: str,
+) -> dict[str, Any] | None:
+    from app.services.window_snapshot_service import BRAND_ANALYSIS_KIND, get_window_snapshot
+
+    snap = get_window_snapshot(
+        db,
+        tenant_id=tenant_id,
+        kind=BRAND_ANALYSIS_KIND,
+        window_days=COMPARE_PERIOD_DAYS[grain],
+        as_of_date=as_of,
+        filter_fp=filter_fp,
+    )
+    if not snap:
+        return None
+    out = dict(snap)
+    out["frozen"] = True
+    out["data_as_of"] = as_of.isoformat()
+    out["compare_period"] = grain
+    out["compare_period_label"] = COMPARE_PERIOD_LABELS[grain]
+    out["generated_at"] = datetime.now().isoformat(timespec="seconds")
+    return out
+
+
+def _try_freeze_brand_analysis_snapshot(
+    db: Session,
+    *,
+    tenant_id: int,
+    grain: str,
+    as_of: date,
+    filter_fp: str,
+    data: dict[str, Any],
+    parse_meta: dict[str, Any],
+) -> bool:
+    if not _brand_analysis_parse_settled(parse_meta):
+        return False
+    if int(data.get("sample_count") or 0) <= 0:
+        return False
+    from app.services.window_snapshot_service import (
+        BRAND_ANALYSIS_KIND,
+        insert_window_snapshot_if_absent,
+    )
+
+    return insert_window_snapshot_if_absent(
+        db,
+        tenant_id=tenant_id,
+        kind=BRAND_ANALYSIS_KIND,
+        window_days=COMPARE_PERIOD_DAYS[grain],
+        payload=_snapshot_payload_from_dashboard(data),
+        as_of_date=as_of,
+        filter_fp=filter_fp,
+    )
 
 
 def _empty_sentiment_counts() -> dict[str, int]:
@@ -1172,6 +1275,8 @@ def _load_brand_word_subtasks(
     range_end: datetime,
     limit: int = 400,
 ) -> list[GeoMonitorSubtask]:
+    # 拉取上界用 now：锚点之后情感/描述补解析会刷 updated_at，不能按抓取锚点截掉
+    load_end = max(range_end, datetime.now())
     stmt = (
         select(GeoMonitorSubtask)
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
@@ -1184,7 +1289,7 @@ def _load_brand_word_subtasks(
                 GeoMonitorSubtask.updated_at >= lookback_start,
                 GeoMonitorTask.created_at >= lookback_start,
             ),
-            GeoMonitorSubtask.updated_at <= range_end,
+            GeoMonitorSubtask.updated_at <= load_end,
         )
         .order_by(GeoMonitorSubtask.updated_at.desc())
         .limit(limit)
@@ -1227,6 +1332,7 @@ def build_brand_analysis_dashboard(
     """品牌分析：描述要点比例 + 上期环比（周/月/季/年）+ AI 描述列表。
 
     默认不在读路径调 DeepSeek；同步写路径 / 显式 parse=true 再补齐。
+    口碑块按最近品牌词抓取日锚定，并在解析齐后 write-once 冻结。
     """
     resolved = _resolve_workspace_brief_tenant_id(current, tenant_id)
     asset = get_brand_asset(db, resolved)
@@ -1246,13 +1352,27 @@ def build_brand_analysis_dashboard(
 
     grain = resolve_brand_compare_period(compare_period)
     now = datetime.now()
-    windows = brand_compare_windows(now, grain)
+    anchor = resolve_brand_analysis_anchor(db, resolved) or now
+    as_of = anchor.date()
+    filter_fp = brand_analysis_filter_fp(purchased)
+    if not parse_sentiments:
+        frozen = _try_load_brand_analysis_snapshot(
+            db,
+            tenant_id=resolved,
+            grain=grain,
+            as_of=as_of,
+            filter_fp=filter_fp,
+        )
+        if frozen is not None:
+            return frozen
+
+    windows = brand_compare_windows(anchor, grain)
     current_start: datetime = windows["current_start"]
     previous_start: datetime = windows["previous_start"]
     range_end: datetime = windows["range_end"]
     load_limit = COMPARE_LOAD_LIMIT[grain]
 
-    # 一次拉满上期起点～现在，再按窗口切开（避免 limit 截断上期）
+    # 一次拉满上期起点～抓取锚点，再按窗口切开（避免 limit 截断上期）
     subtasks = _load_brand_word_subtasks(
         db,
         tenant_id=resolved,
@@ -1388,7 +1508,7 @@ def build_brand_analysis_dashboard(
     )
 
     sample_count = sum(platform_counts.values())
-    return {
+    result = {
         "tenant_id": resolved,
         "brand_name": brand_name,
         "company_name": asset.company_full_name if asset else brand_name,
@@ -1409,7 +1529,205 @@ def build_brand_analysis_dashboard(
         "ai_descriptions": ai_descriptions,
         "parse": parse_meta,
         "generated_at": now.isoformat(timespec="seconds"),
+        "data_as_of": as_of.isoformat(),
+        "frozen": False,
     }
+    _try_freeze_brand_analysis_snapshot(
+        db,
+        tenant_id=resolved,
+        grain=grain,
+        as_of=as_of,
+        filter_fp=filter_fp,
+        data=result,
+        parse_meta=parse_meta,
+    )
+    return result
+
+
+def maybe_freeze_brand_analysis_after_brand_word(db: Session, tenant_id: int) -> dict[str, Any]:
+    """品牌词同步+解析后尝试 write-once 冻结各环比粒度。"""
+    purchased = _purchased_platforms_for_brand_words(db, int(tenant_id))
+    filter_fp = brand_analysis_filter_fp(purchased)
+    anchor = resolve_brand_analysis_anchor(db, int(tenant_id)) or datetime.now()
+    as_of = anchor.date()
+    frozen_grains: list[str] = []
+    skipped: list[str] = []
+    for grain in COMPARE_PERIOD_DAYS:
+        existing = _try_load_brand_analysis_snapshot(
+            db,
+            tenant_id=int(tenant_id),
+            grain=grain,
+            as_of=as_of,
+            filter_fp=filter_fp,
+        )
+        if existing is not None:
+            skipped.append(grain)
+            continue
+        try:
+            data = build_brand_analysis_dashboard_for_tenant(
+                db,
+                tenant_id=int(tenant_id),
+                purchased=purchased,
+                compare_period=grain,
+                parse_sentiments=False,
+            )
+            if _try_freeze_brand_analysis_snapshot(
+                db,
+                tenant_id=int(tenant_id),
+                grain=grain,
+                as_of=as_of,
+                filter_fp=filter_fp,
+                data=data,
+                parse_meta=data.get("parse") or {},
+            ):
+                frozen_grains.append(grain)
+            else:
+                skipped.append(grain)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "freeze brand analysis failed tenant=%s grain=%s error=%s",
+                tenant_id,
+                grain,
+                exc,
+            )
+            skipped.append(grain)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    return {
+        "tenant_id": int(tenant_id),
+        "as_of": as_of.isoformat(),
+        "frozen": frozen_grains,
+        "skipped": skipped,
+    }
+
+
+def build_brand_analysis_dashboard_for_tenant(
+    db: Session,
+    *,
+    tenant_id: int,
+    purchased: list[str] | None = None,
+    compare_period: str | None = None,
+    parse_sentiments: bool = False,
+) -> dict[str, Any]:
+    """无会话物化：供抓取后冻结；平台列表用已购品牌词端，不做观察号收窄。"""
+    resolved = int(tenant_id)
+    asset = get_brand_asset(db, resolved)
+    brand_name = (
+        (asset.company_full_name if asset else None)
+        or (asset.brand_name if asset else None)
+        or "监测品牌"
+    )
+    purchased = list(purchased) if purchased is not None else _purchased_platforms_for_brand_words(db, resolved)
+    purchased_set = set(purchased)
+    names = _platform_name_map()
+    grain = resolve_brand_compare_period(compare_period)
+    now = datetime.now()
+    anchor = resolve_brand_analysis_anchor(db, resolved) or now
+    as_of = anchor.date()
+    filter_fp = brand_analysis_filter_fp(purchased)
+    windows = brand_compare_windows(anchor, grain)
+    current_start: datetime = windows["current_start"]
+    previous_start: datetime = windows["previous_start"]
+    range_end: datetime = windows["range_end"]
+    load_limit = COMPARE_LOAD_LIMIT[grain]
+    subtasks = _load_brand_word_subtasks(
+        db,
+        tenant_id=resolved,
+        lookback_start=previous_start,
+        range_end=range_end,
+        limit=load_limit,
+    )
+    if purchased_set:
+        subtasks = [item for item in subtasks if item.platform in purchased_set]
+    parse_meta: dict[str, Any] = {
+        "parsed": 0,
+        "pending_left": sum(1 for item in subtasks if not _has_deepseek_sentiment(item)),
+        "errors": [],
+        "description_parsed": 0,
+        "description_pending_left": sum(1 for item in subtasks if not _has_deepseek_description(item)),
+        "description_errors": [],
+    }
+    current_subtasks = [
+        item for item in subtasks
+        if _subtask_in_window(item, current_start, range_end, end_exclusive=False)
+    ]
+    previous_subtasks = [
+        item for item in subtasks
+        if _subtask_in_window(item, previous_start, current_start, end_exclusive=True)
+    ]
+    platform_rows, sentiment_counts, platform_counts = _build_platform_rows(
+        purchased=purchased,
+        purchased_set=purchased_set,
+        names=names,
+        current_subtasks=current_subtasks,
+    )
+    if not purchased:
+        purchased = sort_platform_codes(
+            [code for code, count in platform_counts.items() if count > 0]
+        )
+    base_pie = [
+        {"name": "正面", "value": sentiment_counts["正面"]},
+        {"name": "中性", "value": sentiment_counts["中性"]},
+        {"name": "负面", "value": sentiment_counts["负面"]},
+    ]
+    if sentiment_counts["未知"]:
+        base_pie.append({"name": "未知", "value": sentiment_counts["未知"]})
+    platform_pie = [
+        {
+            "name": names.get(code) or code,
+            "code": code,
+            "value": platform_counts.get(code, 0),
+        }
+        for code in (purchased or list(platform_counts.keys()))
+        if platform_counts.get(code, 0) > 0
+    ]
+    aliases = _brand_aliases(
+        str(brand_name),
+        str(asset.brand_name) if asset and asset.brand_name else None,
+        str(asset.company_full_name) if asset and asset.company_full_name else None,
+    )
+    ai_descriptions = _group_ai_descriptions(
+        current_subtasks,
+        platform_names=names,
+        brand_aliases=aliases,
+    )
+    prev_description_counts = _tally_description_counts_exact(previous_subtasks)
+    description_counts = _tally_description_group_counts(ai_descriptions)
+    description_share = _sentiment_share_pct(description_counts)
+    prev_description_share = _sentiment_share_pct(prev_description_counts)
+    description_compare = _description_compare_block(
+        current_counts=description_counts,
+        previous_counts=prev_description_counts,
+        current_share=description_share,
+        previous_share=prev_description_share,
+    )
+    sample_count = sum(platform_counts.values())
+    result = {
+        "tenant_id": resolved,
+        "brand_name": brand_name,
+        "company_name": asset.company_full_name if asset else brand_name,
+        "period_label": windows["current_label"],
+        "compare_period": grain,
+        "compare_period_label": windows["compare_period_label"],
+        "previous_period_label": windows["previous_label"],
+        "purchased_platforms": purchased,
+        "sample_count": sample_count,
+        "sentiment_counts": sentiment_counts,
+        "sentiment_pie": base_pie,
+        "platform_pie": platform_pie,
+        "platforms": platform_rows,
+        "description_counts": description_counts,
+        "description_share": description_share,
+        "description_compare": description_compare,
+        "ai_descriptions": ai_descriptions,
+        "parse": parse_meta,
+        "generated_at": now.isoformat(timespec="seconds"),
+        "data_as_of": as_of.isoformat(),
+        "frozen": False,
+    }
+    return result
 
 
 def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) -> None:
@@ -1446,3 +1764,11 @@ def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) ->
         brand_name=str(brand_name),
         subtasks=subtasks,
     )
+    try:
+        maybe_freeze_brand_analysis_after_brand_word(db, int(task.tenant_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "maybe_freeze_brand_analysis_after_brand_word failed tenant=%s error=%s",
+            task.tenant_id,
+            exc,
+        )
