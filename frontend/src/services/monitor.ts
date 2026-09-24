@@ -747,6 +747,10 @@ export interface BrandAnalysisDashboard {
     description_errors?: string[]
   }
   generated_at?: string
+  /** 最近品牌词抓取日 YYYY-MM-DD；口碑块按此日锚定并冻结 */
+  data_as_of?: string
+  /** true=已按本次抓取冻结，未新抓取前不会因打开日期变化 */
+  frozen?: boolean
 }
 
 export async function getBrandAnalysis(
