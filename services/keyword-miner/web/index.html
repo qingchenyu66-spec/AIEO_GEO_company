@@ -207,6 +207,37 @@
     border-color: #b7d0ea; font-weight: 650;
   }
   .filehint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .file-row input[type="file"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+  .file-row .btn.file-pick {
+    padding: 7px 12px;
+    font-size: 12.5px;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .file-name {
+    font-size: 12.5px;
+    color: var(--muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .file-name.has-file { color: #374151; }
 
   .history-list {
     display: flex;
@@ -453,7 +484,11 @@
         <div class="field">
           <label for="materials">客户资料</label>
           <textarea id="materials" placeholder="粘贴企业介绍、产品说明、官网摘要等"></textarea>
-          <div style="margin-top:8px"><input id="file" type="file" accept=".txt,.md,.csv,.docx" /></div>
+          <div class="file-row">
+            <input id="file" type="file" accept=".txt,.md,.csv,.docx" />
+            <button type="button" class="btn ghost file-pick" id="filePick">上传资料</button>
+            <span class="file-name" id="fileName">未选择文件</span>
+          </div>
           <div class="filehint" id="filehint">支持 .txt / .md / .csv / .docx</div>
         </div>
         <div class="field">
@@ -690,8 +725,12 @@
     });
   });
 
+  $("filePick").addEventListener("click", () => $("file").click());
   $("file").addEventListener("change", async () => {
     const f = $("file").files[0]; if (!f) return;
+    const nameEl = $("fileName");
+    nameEl.textContent = f.name;
+    nameEl.classList.add("has-file");
     $("filehint").textContent = "正在读取 " + f.name + " ...";
     const buf = await f.arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -701,8 +740,13 @@
       const d = await r.json();
       const cur = $("materials").value.trim();
       $("materials").value = (cur ? cur + "\n\n" : "") + (d.text || "");
-      $("filehint").textContent = "已读取 " + f.name + "（" + (d.text||"").length + " 字）";
-    } catch (e) { $("filehint").textContent = "读取失败：" + e.message; }
+      $("filehint").textContent = "已读入客户资料（" + (d.text||"").length + " 字）";
+      saveDraft();
+    } catch (e) {
+      $("filehint").textContent = "读取失败：" + e.message;
+      nameEl.textContent = "未选择文件";
+      nameEl.classList.remove("has-file");
+    }
   });
 
   function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
