@@ -88,7 +88,7 @@ def upgrade() -> None:
         SELECT p.id, m.id, 1, 1, 0, 1
         FROM sys_position p
         JOIN sys_menu m ON m.menu_code = '{MENU_CODE}' AND m.deleted = 0
-        WHERE p.deleted = 0 AND p.position_code LIKE 'PLATFORM%'
+        WHERE p.deleted = 0 AND p.position_code LIKE 'PLATFORM%%'
           AND NOT EXISTS (
             SELECT 1 FROM sys_position_menu pm
             WHERE pm.position_id = p.id AND pm.menu_id = m.id
