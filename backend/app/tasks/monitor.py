@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from celery.exceptions import Ignore, Retry
+from celery.exceptions import Ignore, MaxRetriesExceededError, Retry
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.redis_client import delete_cache, get_redis_client, prefixed_key, redis_lock
 from app.models.lead_diagnosis import LeadDiagnosisRun
+from app.models.monitor import GeoMonitorCallbackEvent
 from app.services.lead_diagnosis_service import (
     enumerate_due_lead_runs,
     finalize_due_lead_diagnoses,
@@ -581,6 +582,19 @@ def scan_pending_syncs(
     return result
 
 
+def _mark_callback_event_terminal_failed(db, event_id: int, message: str) -> None:
+    """重试耗尽时把事件从 queued 收到 failed, 避免一直挂着。"""
+    event = db.get(GeoMonitorCallbackEvent, int(event_id))
+    if event is None:
+        return
+    if event.process_status in {"processed", "ignored", "ignored_deleted", "ignored_unknown", "failed"}:
+        return
+    event.process_status = "failed"
+    event.error_message = str(message or "callback retries exhausted")[:2000]
+    event.processed_at = datetime.now()
+    db.commit()
+
+
 @celery_app.task(
     name="app.tasks.monitor.process_molizhishu_callback_task",
     bind=True,
@@ -596,7 +610,6 @@ def process_molizhishu_callback_task(self, event_id: int) -> dict[str, Any]:
     if not settings.celery_enabled:
         return {"status": "disabled", "event_id": event_id}
 
-    from app.models.monitor import GeoMonitorCallbackEvent
     from app.services.molizhishu_callback_service import process_molizhishu_callback_event
 
     db = SessionLocal()
@@ -617,10 +630,15 @@ def process_molizhishu_callback_task(self, event_id: int) -> dict[str, Any]:
             return process_molizhishu_callback_event(db, int(event_id))
     except Retry:
         raise
+    except MaxRetriesExceededError as exc:
+        logger.exception("process_molizhishu_callback retries exhausted event_id=%s", event_id)
+        _mark_callback_event_terminal_failed(db, int(event_id), str(exc))
+        return {"status": "failed", "event_id": event_id, "message": str(exc)[:240]}
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=min(120, 15 * (self.request.retries + 1)))
         logger.exception("process_molizhishu_callback failed event_id=%s", event_id)
+        _mark_callback_event_terminal_failed(db, int(event_id), str(exc))
         return {"status": "failed", "event_id": event_id, "message": str(exc)[:240]}
     finally:
         db.close()
