@@ -28,6 +28,14 @@ export const ENTERPRISE_CHILD_MENUS = [
   'customer.enterprise_audit',
 ] as const
 
+export const KEYWORD_MINER_MENU = 'platform.keyword_miner'
+export const KEYWORD_MINER_WORKBENCH_MENU = 'platform.keyword_miner.workbench'
+export const KEYWORD_MINER_EXAMPLES_MENU = 'platform.keyword_miner.examples'
+export const KEYWORD_MINER_CHILD_MENUS = [
+  KEYWORD_MINER_WORKBENCH_MENU,
+  KEYWORD_MINER_EXAMPLES_MENU,
+] as const
+
 export const hiddenCustomerMenus = ['customer.batch', 'customer.geo', 'customer.sentiment', 'platform.sentiment']
 
 /** 侧栏不单独露出：已收进「算力运营」Tab */
@@ -83,5 +91,8 @@ export function isEnterpriseConfigMenuCode(code: string): boolean {
 }
 
 export function normalizeMenuCode(code: string) {
-  return code === 'platform.users' ? USER_LIST_MENU : code
+  if (code === 'platform.users') return USER_LIST_MENU
+  // GEO选词父级进选词台; 范例库走子菜单码
+  if (code === KEYWORD_MINER_MENU) return KEYWORD_MINER_WORKBENCH_MENU
+  return code
 }

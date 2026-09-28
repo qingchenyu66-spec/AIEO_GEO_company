@@ -30,6 +30,10 @@ import {
   SETTINGS_CHILD_MENUS,
   ENTERPRISE_CONFIG_MENU,
   ENTERPRISE_CHILD_MENUS,
+  KEYWORD_MINER_MENU,
+  KEYWORD_MINER_WORKBENCH_MENU,
+  KEYWORD_MINER_EXAMPLES_MENU,
+  KEYWORD_MINER_CHILD_MENUS,
   hiddenCustomerMenus,
   hiddenEnterpriseConfigPermissionMenus,
   hiddenEnterprisePermissionMenus,
@@ -152,6 +156,11 @@ const allowedMenuCodes = computed(() => {
   if (settingsRouteAllowed(auth.allowedMenus) && !codes.includes(SETTINGS_MENU)) {
     extra.push(SETTINGS_MENU)
   }
+  // GEO选词父级授权时, 允许进选词台/范例库子路由
+  if (codes.includes(KEYWORD_MINER_MENU)) {
+    if (!codes.includes(KEYWORD_MINER_WORKBENCH_MENU)) extra.push(KEYWORD_MINER_WORKBENCH_MENU)
+    if (!codes.includes(KEYWORD_MINER_EXAMPLES_MENU)) extra.push(KEYWORD_MINER_EXAMPLES_MENU)
+  }
   return extra.length ? [...codes, ...extra] : codes
 })
 const { activeMenuCode, navigateToMenu, isMenuBlocked } = usePortalMenu(
@@ -172,7 +181,7 @@ const menus = computed(() => {
   }
   const filtered = auth.allowedMenus
     .filter(menu => menu.show_in_sidebar !== false)
-    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenEnterpriseConfigPermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus].includes(menu.menu_code))
+    .filter(menu => ![USER_CREATE_MENU, USER_LIST_MENU, POSITION_MENU, 'customer.assets', ...hiddenCustomerMenus, ...hiddenPlatformMenus, ...hiddenEnterprisePermissionMenus, ...hiddenEnterpriseConfigPermissionMenus, ...hiddenUserPermissionMenus, ...hiddenSettingsPermissionMenus, ...KEYWORD_MINER_CHILD_MENUS].includes(menu.menu_code))
   if (auditRouteAllowed(auth.allowedMenus) && !filtered.some(menu => menu.menu_code === 'platform.audit')) {
     const auditChild = auth.allowedMenus.find(menu => menu.menu_code.startsWith('platform.audit.'))
     if (auditChild) {
@@ -217,7 +226,15 @@ const isReportCenterPage = computed(() => ['customer.reports', 'platform.reports
 const isLeadDiagnosisPage = computed(() => activeMenuCode.value === 'platform.lead_diagnosis')
 const isH5DiagnosisOrdersPage = computed(() => activeMenuCode.value === 'platform.h5_diagnosis_orders')
 const isSnapshotBackfillPage = computed(() => activeMenuCode.value === 'platform.snapshot_backfill')
-const isKeywordMinerPage = computed(() => activeMenuCode.value === 'platform.keyword_miner')
+const isKeywordMinerPage = computed(() => (
+  activeMenuCode.value === KEYWORD_MINER_MENU
+  || activeMenuCode.value === KEYWORD_MINER_WORKBENCH_MENU
+  || activeMenuCode.value === KEYWORD_MINER_EXAMPLES_MENU
+))
+const isKeywordMinerWorkbench = computed(() => (
+  activeMenuCode.value === KEYWORD_MINER_MENU
+  || activeMenuCode.value === KEYWORD_MINER_WORKBENCH_MENU
+))
 const keywordMinerMounted = ref(false)
 watch(isKeywordMinerPage, (on) => { if (on) keywordMinerMounted.value = true }, { immediate: true })
 const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
@@ -230,11 +247,15 @@ const isBrandAnalysisPage = computed(() => activeMenuCode.value === 'customer.br
 const isCreditOpsPage = computed(() => activeMenuCode.value === 'platform.credit_ops_board')
 const isEnterpriseConfigPage = computed(() => isEnterpriseConfigMenuCode(activeMenuCode.value))
 /** 侧栏高亮父级；子项仅作页内 Tab / deep-link */
-const sidebarActiveMenuCode = computed(() => (
-  (ENTERPRISE_CHILD_MENUS as readonly string[]).includes(activeMenuCode.value)
-    ? ENTERPRISE_CONFIG_MENU
-    : activeMenuCode.value
-))
+const sidebarActiveMenuCode = computed(() => {
+  if ((ENTERPRISE_CHILD_MENUS as readonly string[]).includes(activeMenuCode.value)) {
+    return ENTERPRISE_CONFIG_MENU
+  }
+  if ((KEYWORD_MINER_CHILD_MENUS as readonly string[]).includes(activeMenuCode.value)) {
+    return KEYWORD_MINER_MENU
+  }
+  return activeMenuCode.value
+})
 const isDashboardPage = computed(() => ['platform.dashboard', 'customer.workspace'].includes(activeMenuCode.value))
 
 // 2026-09-08 - zero 仍解析，CreditOpsPage 映射到概览+仅零余额
@@ -347,7 +368,11 @@ const pageSubtitle = computed(() => {
   if (isLeadDiagnosisPage.value) return '为潜在客户创建诊断：三时段自动抓取全平台数据，汇总后下载 HTML 发给客户'
   if (isH5DiagnosisOrdersPage.value) return 'H5 付费诊断订单：支付状态、金额与关联售前诊断'
   if (isSnapshotBackfillPage.value) return '粘贴 AI 分享链接，自动解析正文与信源并重算排名'
-  if (isKeywordMinerPage.value) return '选词、拓词，一键导出 Word 交付报告'
+  if (isKeywordMinerPage.value) {
+    return isKeywordMinerWorkbench.value
+      ? '选词、拓词，可修订并入库范例'
+      : '维护行业范例，供下次生成参考'
+  }
   if (isApprovalPage.value) {
     return '审核销售提交的用户、企业、报告与诊断操作；通过后才会真正生效'
   }
@@ -612,7 +637,7 @@ watch(effectiveTenantIdForLogo, () => {
     :identity-count="isPreviewActive ? 0 : (auth.session?.identities.length || 0)"
     :identities="isPreviewActive ? [] : (auth.session?.identities || [])"
     :current-identity-id="auth.session?.identity?.id"
-    :immersive="isCustomerWorkspacePage || isKeywordMinerPage"
+    :immersive="isCustomerWorkspacePage || isKeywordMinerWorkbench"
     :fullscreen="portalFullscreen"
     :menu-icon="menuIcon"
     :pending-approval-count="pendingApprovalCount"
@@ -689,6 +714,8 @@ watch(effectiveTenantIdForLogo, () => {
     <KeywordMinerPage
       v-if="keywordMinerMounted"
       :active="isKeywordMinerPage"
+      :active-tab="isKeywordMinerWorkbench ? 'workbench' : 'examples'"
+      @switch-tab="(tab) => navigateToMenu(tab === 'workbench' ? KEYWORD_MINER_WORKBENCH_MENU : KEYWORD_MINER_EXAMPLES_MENU)"
     />
     </template>
   </PortalLayout>

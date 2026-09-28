@@ -37,6 +37,8 @@ ROUTE_PARENT_BY_CHILD: dict[str, str] = {
     "customer.enterprise_members": "customer.enterprise_config",
     "customer.enterprise_credit": "customer.enterprise_config",
     "customer.enterprise_audit": "customer.enterprise_config",
+    "platform.keyword_miner.workbench": "platform.keyword_miner",
+    "platform.keyword_miner.examples": "platform.keyword_miner",
 }
 
 # 职位权限配置里不单独勾选的路由父菜单（只配置子项动作，父菜单自动推导）

@@ -106,12 +106,17 @@
     padding: 0;
   }
   body.embed .panel.result {
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
     min-height: 0;
     background: #fff;
     display: flex;
     flex-direction: column;
+  }
+  .result-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
   .form-body {
     flex: 1;
@@ -139,16 +144,17 @@
     font-size: 12px;
     color: var(--muted);
   }
-  body.embed #result {
-    flex: 1;
-    min-height: 0;
-  }
   #result:has(.ready) {
     display: flex;
     align-items: center;
     justify-content: center;
   }
+  body.embed .result-scroll:has(.ready) {
+    display: flex;
+    flex-direction: column;
+  }
   body.embed #result:has(.ready) {
+    flex: 1;
     min-height: 0;
   }
   body.embed #status:empty,
@@ -172,7 +178,8 @@
     font-size: 12.5px;
     color: #374151;
   }
-  input, textarea, select {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  textarea, select {
     width: 100%;
     padding: 9px 11px;
     border: 1px solid var(--line);
@@ -182,10 +189,30 @@
     background: #fff;
     color: var(--text);
   }
-  input:focus, textarea:focus, select:focus {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
+  textarea:focus, select:focus {
     outline: none;
     border-color: #8bb4de;
     box-shadow: 0 0 0 3px rgba(24, 95, 165, 0.12);
+  }
+  input[type="checkbox"], input[type="radio"] {
+    width: 14px;
+    height: 14px;
+    margin: 2px 0 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    accent-color: var(--brand);
+    vertical-align: middle;
+  }
+  input[type="checkbox"]:focus,
+  input[type="checkbox"]:focus-visible,
+  input[type="radio"]:focus,
+  input[type="radio"]:focus-visible {
+    outline: none;
+    box-shadow: none;
   }
   textarea { resize: vertical; min-height: 72px; }
   .field { margin-bottom: 12px; }
@@ -233,6 +260,45 @@
     max-width: 100%;
   }
   .file-name.has-file { color: #374151; }
+
+  .row-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; white-space: nowrap; }
+  .row-actions .btn.tiny {
+    padding: 3px 8px; font-size: 12px; border-radius: 7px;
+  }
+  .revise-modal {
+    position: fixed; inset: 0; z-index: 80; display: none;
+  }
+  .revise-modal.open { display: block; }
+  .revise-backdrop {
+    position: absolute; inset: 0; background: rgba(15, 23, 42, 0.35);
+  }
+  .revise-panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(520px, calc(100vw - 28px));
+    background: #fff; border-radius: 12px; border: 1px solid var(--line);
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+    padding: 14px 16px 16px;
+  }
+  .revise-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .revise-head h2 { margin: 0; font-size: 16px; }
+  .revise-word { margin: 8px 0 12px; font-size: 13px; line-height: 1.45; }
+  .revise-body { display: flex; flex-direction: column; gap: 10px; }
+  .revise-label {
+    font-size: 13px; color: var(--muted, #6b7280); margin-bottom: 2px;
+  }
+  #reviseReason {
+    width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font: inherit; background: #fff;
+  }
+  #reviseCustomText {
+    width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font: inherit; resize: vertical;
+  }
+  .revise-foot {
+    display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;
+  }
 
   .history-list {
     display: flex;
@@ -291,9 +357,21 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 6;
     margin: 0 0 10px;
+    padding: 8px 0;
+    background: #fff;
+    border-bottom: 1px solid var(--line);
   }
-  body.embed .result-bar { margin: 0 0 8px; }
+  body.embed .result-bar {
+    position: relative;
+    top: auto;
+    margin: 0 0 0;
+    padding: 0 0 10px;
+  }
   .result-bar .actions {
     margin: 0;
     flex: 1;
@@ -507,6 +585,10 @@
           <textarea id="brand_terms" placeholder="多品牌时逐行填写；默认含企业名称"></textarea>
         </div>
         <div class="field">
+          <label for="industry">行业标签（范例匹配用）</label>
+          <input id="industry" placeholder="如：紧固件 / 跨境代理 / 家装板材" />
+        </div>
+        <div class="field">
           <label for="count">拓词数量</label>
           <input id="count" type="number" min="10" max="120" value="60" />
         </div>
@@ -521,16 +603,44 @@
       <div class="result-bar">
         <button class="btn ghost" id="histOpen" type="button">历史</button>
         <div class="actions" id="tools" style="display:none">
-          <button class="btn ghost" id="copySel" type="button">复制选词</button>
-          <button class="btn ghost" id="copyExp" type="button">复制拓词</button>
+          <button class="btn ghost" id="batchRevise" type="button">批量修改</button>
+          <button class="btn ghost" id="addExamples" type="button">勾选加入范例</button>
+          <button class="btn ghost" id="addAllExamples" type="button">全部加入范例</button>
           <button class="btn ghost ding-only" id="push" type="button">推送到钉钉群</button>
           <button class="btn" id="docx" type="button">下载 Word 报告</button>
           <span class="muted" id="countHint"></span>
         </div>
       </div>
-      <div id="status"></div>
-      <div id="result"></div>
+      <div class="result-scroll">
+        <div id="status"></div>
+        <div id="result"></div>
+      </div>
     </section>
+  </div>
+</div>
+
+<div id="reviseModal" class="revise-modal" aria-hidden="true">
+  <div class="revise-backdrop" id="reviseBackdrop"></div>
+  <div class="revise-panel" role="dialog" aria-modal="true" aria-labelledby="reviseTitle">
+    <div class="revise-head">
+      <h2 id="reviseTitle">修改这条词</h2>
+      <button type="button" class="btn ghost icon" id="reviseClose">关闭</button>
+    </div>
+    <p class="revise-word muted" id="reviseWordPreview"></p>
+    <div class="revise-body">
+      <div class="revise-label">修改原因</div>
+      <select id="reviseReason">
+        <option value="">请选择修改原因</option>
+        <option value="拓出的词提问AI大模型给出的标准答案为纯知识点和品牌或产品无关">拓出的词提问 AI 大模型给出的标准答案为纯知识点，和品牌或产品无关</option>
+        <option value="拓出的词太长，要求精简短语">拓出的词太长，要求精简短语</option>
+        <option value="custom">其他原因（下方填写）</option>
+      </select>
+      <textarea id="reviseCustomText" rows="3" placeholder="补充说明：希望怎么改…"></textarea>
+    </div>
+    <div class="revise-foot">
+      <button type="button" class="btn ghost" id="reviseCancel">取消</button>
+      <button type="button" class="btn" id="reviseSubmit">重新生成</button>
+    </div>
   </div>
 </div>
 
@@ -557,6 +667,9 @@
   const LS_RESULT = "geo.keyword_miner.last_result";
   let selectedPlats = new Set(ALL_PLAT);
   let current = { selection: [], expansion: {} };
+  let editNotes = [];
+  let lastDoneJobId = null;
+  let reviseTargets = [];
   let pollTimer = null;
   let activeJobId = null;
 
@@ -570,6 +683,13 @@
   })();
   function apiUrl(path) {
     return API_BASE + path;
+  }
+  function minerFetch(path, opts) {
+    opts = opts || {};
+    return fetch(apiUrl(path), Object.assign({}, opts, {
+      credentials: "include",
+      cache: opts.cache || "no-store",
+    }));
   }
 
   // GEO 主库历史：同域 Cookie；父页 postMessage 可覆盖 apiBase/csrf
@@ -607,9 +727,18 @@
     geoWaiters.push(fn);
   }
   window.addEventListener("message", (ev) => {
-    const d = ev && ev.data;
+    if (!ev || ev.origin !== location.origin) return;
+    const d = ev.data;
     if (!d || d.type !== "geo-km-bootstrap") return;
-    if (d.apiBase) GEO_API_BASE = String(d.apiBase).replace(/\/$/, "");
+    // 仅允许同源父页覆盖 apiBase, 且必须仍是本站 /api 路径
+    if (d.apiBase) {
+      try {
+        const u = new URL(String(d.apiBase), location.origin);
+        if (u.origin === location.origin && u.pathname.startsWith("/api")) {
+          GEO_API_BASE = (u.origin + u.pathname).replace(/\/$/, "");
+        }
+      } catch (_) {}
+    }
     if (d.csrf != null) GEO_CSRF = String(d.csrf || "");
     GEO_READY = true;
     while (geoWaiters.length) {
@@ -642,8 +771,16 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!r.ok) return;
-    } catch (_) {}
+      if (!r.ok) {
+        const errBody = await r.json().catch(() => ({}));
+        const detail = errBody.detail || errBody.message || ("HTTP " + r.status);
+        $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
+          + esc(String(detail)) + '</div>';
+      }
+    } catch (e) {
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
+        + esc(e.message || String(e)) + '</div>';
+    }
   }
 
   function idlePreviewHtml() {
@@ -709,7 +846,7 @@
     }
   }, 1500);
 
-  ["company","product","web_url","task","materials","brand_terms","count"].forEach(id => {
+  ["company","product","web_url","task","materials","brand_terms","industry","count"].forEach(id => {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", saveDraft);
@@ -730,7 +867,7 @@
     const buf = await f.arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
     try {
-      const r = await fetch(apiUrl("/api/ingest"), { method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await minerFetch("/api/ingest", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ filename: f.name, data: b64 }) });
       const d = await r.json();
       const cur = $("materials").value.trim();
@@ -755,6 +892,7 @@
         task: $("task").value,
         materials: $("materials").value,
         brand_terms: $("brand_terms").value,
+        industry: $("industry").value,
         count: $("count").value,
         platforms: [...selectedPlats],
       }));
@@ -772,6 +910,7 @@
       if (d.task != null) $("task").value = d.task;
       if (d.materials != null) $("materials").value = d.materials;
       if (d.brand_terms != null) $("brand_terms").value = d.brand_terms;
+      if (d.industry != null) $("industry").value = d.industry;
       if (d.count != null) $("count").value = d.count;
       if (Array.isArray(d.platforms) && d.platforms.length) {
         selectedPlats = new Set(d.platforms);
@@ -829,7 +968,7 @@
     showRunning();
     const tick = async () => {
       try {
-        const resp = await fetch(apiUrl("/api/jobs/" + encodeURIComponent(jobId)), { cache: "no-store" });
+        const resp = await minerFetch("/api/jobs/" + encodeURIComponent(jobId), { cache: "no-store" });
         if (resp.status === 404) {
           setJobId(null);
           showIdlePreview();
@@ -844,10 +983,12 @@
         }
         if (job.status === "done" && job.result) {
           void syncJobToGeo(job);
+          lastDoneJobId = jobId;
           setJobId(null);
           setRunIdle();
           const data = job.result;
           current = { selection: data.selection || [], expansion: data.expansion || {} };
+          editNotes = [];
           if (data.meta) {
             if (data.meta.company && !$("company").value) $("company").value = data.meta.company;
             if (data.meta.product && !$("product").value) $("product").value = data.meta.product;
@@ -895,14 +1036,39 @@
     saveDraft();
     showRunning();
     try {
-      const resp = await fetch(apiUrl("/api/mine"), { method:"POST", headers:{"Content-Type":"application/json"},
+      let reference_examples = [];
+      let edit_lessons = [];
+      try {
+        const industry = ($("industry").value || product || company || "").trim();
+        const qs = new URLSearchParams({ industry, product, limit: "6" });
+        const mr = await geoFetch("/keyword-miner/examples/match?" + qs.toString());
+        if (mr.ok) {
+          const md = await mr.json();
+          const payload = (md && md.data) || md || {};
+          reference_examples = Array.isArray(payload.items) ? payload.items : [];
+          edit_lessons = Array.isArray(payload.edit_lessons) ? payload.edit_lessons : [];
+        }
+      } catch (_) {}
+      const resp = await minerFetch("/api/mine", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ company, product, materials, web_url, count, task, platforms,
-          brand_terms: $("brand_terms").value.split(/\n+/).map(s=>s.trim()).filter(Boolean) }) });
+          brand_terms: $("brand_terms").value.split(/\n+/).map(s=>s.trim()).filter(Boolean),
+          reference_examples, edit_lessons }) });
       const data = await resp.json();
       if (data.error && !data.job_id) throw new Error(data.error);
+      // 真正注入生成后累加范例 use_count
+      const touchIds = reference_examples.map((x) => x && x.id).filter((id) => Number(id) > 0);
+      if (touchIds.length && (data.job_id || data.selection || data.expansion)) {
+        void geoFetch("/keyword-miner/examples/touch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: touchIds }),
+        }).catch(() => {});
+      }
       // 兼容旧同步接口：直接返回 selection
       if (data.selection || data.expansion) {
         current = { selection: data.selection || [], expansion: data.expansion || {} };
+        editNotes = [];
+        lastDoneJobId = null;
         setRunIdle();
         render(data);
         return;
@@ -958,7 +1124,6 @@
       tags.push("选词 " + (it.selection_count || 0));
       tags.push("拓词 " + (it.expansion_count || 0));
       if (it.model) tags.push(it.model);
-      else if (it.source === "demo") tags.push("演示");
       (it.platforms || []).slice(0, 4).forEach(p => tags.push(p));
       if ((it.platforms || []).length > 4) tags.push("+" + ((it.platforms || []).length - 4));
       const st = it.status === "done" ? "完成" : (it.status === "error" ? "失败" : "进行中");
@@ -997,7 +1162,7 @@
         }
       } catch (_) {}
       if (items == null) {
-        const r = await fetch(apiUrl("/api/history?limit=50"), { cache: "no-store" });
+        const r = await minerFetch("/api/history?limit=50", { cache: "no-store" });
         const d = await r.json();
         items = d.items || [];
       }
@@ -1037,7 +1202,7 @@
         }
       } catch (_) {}
       if (!job) {
-        const resp = await fetch(apiUrl("/api/jobs/" + encodeURIComponent(jobId)), { cache: "no-store" });
+        const resp = await minerFetch("/api/jobs/" + encodeURIComponent(jobId), { cache: "no-store" });
         if (!resp.ok) throw new Error("记录不存在");
         job = await resp.json();
       }
@@ -1047,19 +1212,23 @@
         if (job.product) $("product").value = job.product;
       }
       if (job.status === "done" && job.result) {
-        current = { selection: job.result.selection || [], expansion: job.result.expansion || {} };
-        if (job.result.meta && !job.payload) {
-          if (job.result.meta.company) $("company").value = job.result.meta.company;
-          if (job.result.meta.product) $("product").value = job.result.meta.product;
-          if (job.result.meta.task) $("task").value = job.result.meta.task;
-          if (job.result.meta.count != null) $("count").value = job.result.meta.count;
-          if (Array.isArray(job.result.meta.platforms) && job.result.meta.platforms.length) {
-            selectedPlats = new Set(job.result.meta.platforms);
+        lastDoneJobId = jobId;
+        const preferred = job.edited_result || job.result || {};
+        current = { selection: preferred.selection || [], expansion: preferred.expansion || {} };
+        editNotes = Array.isArray(job.edit_notes) ? job.edit_notes : [];
+        const meta = (job.result && job.result.meta) || preferred.meta || {};
+        if (meta && !job.payload) {
+          if (meta.company) $("company").value = meta.company;
+          if (meta.product) $("product").value = meta.product;
+          if (meta.task) $("task").value = meta.task;
+          if (meta.count != null) $("count").value = meta.count;
+          if (Array.isArray(meta.platforms) && meta.platforms.length) {
+            selectedPlats = new Set(meta.platforms);
             renderPlats();
           }
         }
         closeHistDrawer();
-        render(job.result);
+        render(preferred);
         return;
       }
       if (job.status === "queued" || job.status === "running") {
@@ -1074,6 +1243,33 @@
     }
   }
 
+  function rowActionsHtml(kind, idx, stage) {
+    const st = stage ? ' data-stage="' + esc(stage) + '"' : "";
+    return '<div class="row-actions">'
+      + '<button type="button" class="btn ghost tiny" data-act="revise" data-kind="' + kind + '" data-idx="' + idx + '"' + st + '>修改</button>'
+      + '<button type="button" class="btn ghost tiny" data-act="example" data-kind="' + kind + '" data-idx="' + idx + '"' + st + '>加入范例</button>'
+      + '</div>';
+  }
+
+  function bindResultActions() {
+    $("result").querySelectorAll("[data-act='revise']").forEach((btn) => {
+      btn.onclick = () => openReviseModal({
+        kind: btn.getAttribute("data-kind"),
+        idx: Number(btn.getAttribute("data-idx")),
+        stage: btn.getAttribute("data-stage") || "",
+      });
+    });
+    $("result").querySelectorAll("[data-act='example']").forEach((btn) => {
+      btn.onclick = () => {
+        void addOneExample({
+          kind: btn.getAttribute("data-kind"),
+          idx: Number(btn.getAttribute("data-idx")),
+          stage: btn.getAttribute("data-stage") || "",
+        });
+      };
+    });
+  }
+
   function render(data) {
     saveDraft();
     try { localStorage.setItem(LS_RESULT, JSON.stringify(data)); } catch (_) {}
@@ -1081,12 +1277,19 @@
     $("status").innerHTML = "";
     let html = "";
     if (current.selection.length) {
-      html += '<h3>一、选词建议</h3>';
-      html += "<table><thead><tr><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th></tr></thead><tbody>";
-      current.selection.slice().sort((a,b)=>b.score-a.score).forEach(k => {
+      html += '<h3>一、选词建议 <span class="muted" style="font-weight:400;font-size:12px">点「修改」可重新生成；可勾选批量入范例</span></h3>';
+      html += "<table><thead><tr><th></th><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th><th>操作</th></tr></thead><tbody>";
+      current.selection.slice().sort((a,b)=>b.score-a.score).forEach((k, idx) => {
+        // keep stable idx against unsorted source: map by word+score later via data-idx on sorted view
+        const srcIdx = current.selection.indexOf(k);
         const w = Math.max(0,Math.min(100,k.score));
-        html += "<tr><td><b>"+esc(k.word)+"</b></td><td><span class='tag'>"+esc(k.category)+"</span></td><td>"+esc(k.intent)+
-          "</td><td class='score'>"+w+"</td><td class='muted'>"+esc(k.reason||"")+"</td></tr>";
+        html += "<tr data-kind='select' data-idx=\"" + srcIdx + "\"><td><input type='checkbox' data-f='pick' /></td>"
+          + "<td>" + esc(k.word) + "</td>"
+          + "<td>" + esc(k.category || "") + "</td>"
+          + "<td>" + esc(k.intent || "") + "</td>"
+          + "<td>" + w + "</td>"
+          + "<td>" + esc(k.reason || "") + "</td>"
+          + "<td>" + rowActionsHtml("select", srcIdx, "") + "</td></tr>";
       });
       html += "</tbody></table>";
     }
@@ -1097,11 +1300,15 @@
       expStages.forEach(s => {
         const isBrand = (s === "品牌专属");
         html += '<div class="stage-h">' + s + '（' + current.expansion[s].length + '）</div>';
-        html += "<table><thead><tr><th>" + (isBrand ? '拓词（含品牌名）' : '拓词') + "</th><th>热度</th><th>说明</th><th>答案要点</th></tr></thead><tbody>";
-        current.expansion[s].forEach(it => {
+        html += "<table><thead><tr><th></th><th>" + (isBrand ? '拓词（含品牌名）' : '拓词') + "</th><th>热度</th><th>说明</th><th>答案要点</th><th>操作</th></tr></thead><tbody>";
+        current.expansion[s].forEach((it, idx) => {
           const h = Math.max(0,Math.min(100,it.heat));
-          html += "<tr><td><b>"+esc(it.word)+"</b></td><td class='score'>"+h+
-            '<div class="bar"><i style="width:'+h+'%"></i></div></td><td class="muted">'+esc(it.note||"")+"</td><td class='ans'>"+esc(it.answer||"")+"</td></tr>";
+          html += "<tr data-kind='expand' data-stage=\""+esc(s)+"\" data-idx=\""+idx+"\"><td><input type='checkbox' data-f='pick' /></td>"
+            + "<td>" + esc(it.word) + "</td>"
+            + "<td>" + h + "</td>"
+            + "<td>" + esc(it.note || "") + "</td>"
+            + "<td>" + esc(it.answer || "") + "</td>"
+            + "<td>" + rowActionsHtml("expand", idx, s) + "</td></tr>";
         });
         html += "</tbody></table>";
       });
@@ -1113,15 +1320,294 @@
     $("tools").style.display = (current.selection.length || expStages.length) ? "flex" : "none";
     $("countHint").textContent = "选词 " + current.selection.length + " · 拓词 " + (expStages.reduce((n,s)=>n+current.expansion[s].length,0));
     $("result").innerHTML = html;
+    bindResultActions();
   }
 
-  function copyAll(arr, key) {
-    if (!arr.length) return;
-    const text = arr.map(k => k[key]).join("\n");
-    navigator.clipboard.writeText(text).then(() => alert("已复制 " + arr.length + " 条"));
+  function collectPickedTargets() {
+    const targets = [];
+    document.querySelectorAll("#result tr[data-kind='select']").forEach((tr) => {
+      if (!(tr.querySelector("[data-f='pick']") || {}).checked) return;
+      targets.push({ kind: "select", idx: Number(tr.getAttribute("data-idx")), stage: "" });
+    });
+    document.querySelectorAll("#result tr[data-kind='expand']").forEach((tr) => {
+      if (!(tr.querySelector("[data-f='pick']") || {}).checked) return;
+      targets.push({
+        kind: "expand",
+        idx: Number(tr.getAttribute("data-idx")),
+        stage: tr.getAttribute("data-stage") || "",
+      });
+    });
+    return targets;
   }
-  $("copySel").onclick = () => copyAll(current.selection, "word");
-  $("copyExp").onclick = () => copyAll(Object.values(current.expansion).flat(), "word");
+
+  function itemFromTarget(target) {
+    if (!target) return null;
+    if (target.kind === "select") return current.selection[target.idx] || null;
+    return (current.expansion[target.stage] || [])[target.idx] || null;
+  }
+
+  function openReviseModal(targetOrList) {
+    const list = Array.isArray(targetOrList) ? targetOrList : [targetOrList];
+    reviseTargets = list.filter((t) => itemFromTarget(t));
+    if (!reviseTargets.length) return;
+    if (reviseTargets.length === 1) {
+      const item = itemFromTarget(reviseTargets[0]);
+      $("reviseTitle").textContent = "修改这条词";
+      $("reviseWordPreview").textContent = "原词：" + ((item && item.word) || "");
+    } else {
+      $("reviseTitle").textContent = "批量修改";
+      $("reviseWordPreview").textContent = "已选 " + reviseTargets.length + " 条，将按同一原因逐条重新生成";
+    }
+    $("reviseReason").value = "";
+    $("reviseCustomText").value = "";
+    $("reviseModal").classList.add("open");
+    $("reviseModal").setAttribute("aria-hidden", "false");
+  }
+
+  function closeReviseModal() {
+    reviseTargets = [];
+    $("reviseModal").classList.remove("open");
+    $("reviseModal").setAttribute("aria-hidden", "true");
+  }
+
+  function pickedReviseReason() {
+    let val = ($("reviseReason").value || "").trim();
+    const custom = ($("reviseCustomText").value || "").trim();
+    // 只填了文本框时, 默认当作「其他原因」
+    if (!val && custom) {
+      val = "custom";
+      $("reviseReason").value = "custom";
+    }
+    if (!val) return "";
+    if (val === "custom") return custom;
+    return custom ? (val + "；" + custom) : val;
+  }
+
+  async function persistEditsSilent() {
+    if (!lastDoneJobId) return;
+    try {
+      await geoFetch("/keyword-miner/jobs/" + encodeURIComponent(lastDoneJobId) + "/edits", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          edited_result: { selection: current.selection, expansion: current.expansion },
+          edit_notes: editNotes,
+        }),
+      });
+    } catch (_) {}
+  }
+
+  async function reviseOneTarget(target, reason) {
+    const old = itemFromTarget(target);
+    if (!old) throw new Error("找不到原词");
+    const payload = {
+      kind: target.kind,
+      stage: target.stage || "",
+      word: old.word,
+      reason,
+      company: $("company").value.trim(),
+      product: $("product").value.trim(),
+      materials: $("materials").value.trim(),
+      web_url: $("web_url").value.trim(),
+      platforms: [...selectedPlats],
+      answer: old.answer || "",
+      heat: old.heat,
+      category: old.category || "",
+      intent: old.intent || "",
+      score: old.score,
+    };
+    const r = await minerFetch("/api/revise_word", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || ("HTTP " + r.status));
+    const item = d.item;
+    if (!item || !item.word) throw new Error("模型未返回新词");
+    if (target.kind === "select") {
+      current.selection[target.idx] = {
+        word: item.word,
+        category: item.category || old.category || "",
+        intent: item.intent || old.intent || "",
+        score: Number(item.score != null ? item.score : old.score) || 0,
+        reason: item.reason || old.reason || "",
+      };
+    } else {
+      current.expansion[target.stage][target.idx] = {
+        word: item.word,
+        heat: Number(item.heat != null ? item.heat : old.heat) || 0,
+        note: item.note || old.note || "",
+        answer: item.answer || old.answer || "",
+      };
+    }
+    editNotes.push({
+      kind: target.kind,
+      stage: target.stage || "",
+      word: item.word,
+      old_word: old.word,
+      reason,
+    });
+  }
+
+  async function submitRevise() {
+    if (!reviseTargets.length) return;
+    let reason = pickedReviseReason();
+    const selected = ($("reviseReason").value || "").trim();
+    if (!selected && !reason) {
+      alert("请选择修改原因，或在下方填写说明");
+      return;
+    }
+    if (selected === "custom" && !reason) {
+      alert("请填写其他原因");
+      return;
+    }
+    if (!reason) reason = selected;
+    const btn = $("reviseSubmit");
+    const targets = reviseTargets.slice();
+    btn.disabled = true;
+    let done = 0;
+    let failed = 0;
+    let lastErr = "";
+    try {
+      for (const target of targets) {
+        btn.textContent = "生成中 " + (done + 1) + "/" + targets.length + "…";
+        try {
+          await reviseOneTarget(target, reason);
+          done += 1;
+        } catch (e) {
+          failed += 1;
+          lastErr = e.message || String(e);
+        }
+      }
+      closeReviseModal();
+      render({ selection: current.selection, expansion: current.expansion });
+      await persistEditsSilent();
+      if (failed) {
+        alert("完成 " + done + " 条，失败 " + failed + " 条" + (lastErr ? ("；末次：" + lastErr) : ""));
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "重新生成";
+    }
+  }
+
+  function exampleItemFromTarget(target) {
+    if (target.kind === "select") {
+      const x = current.selection[target.idx];
+      if (!x) return null;
+      return {
+        kind: "select",
+        stage: x.category || "",
+        word: x.word,
+        intent: x.intent || "",
+        note: x.reason || "",
+        edit_reason: "",
+      };
+    }
+    const x = (current.expansion[target.stage] || [])[target.idx];
+    if (!x) return null;
+    return {
+      kind: "expand",
+      stage: target.stage,
+      word: x.word,
+      heat: x.heat,
+      note: x.note || "",
+      answer: x.answer || "",
+      edit_reason: "",
+    };
+  }
+
+  async function postExamples(items) {
+    if (!items.length) {
+      alert("请先勾选要入库的词");
+      return;
+    }
+    const industry = ($("industry").value || $("product").value || "").trim();
+    const resp = await geoFetch("/keyword-miner/examples/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        industry,
+        source_job_id: lastDoneJobId,
+        source_company: $("company").value.trim(),
+        source_product: $("product").value.trim(),
+        items,
+      }),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body.detail || body.message || ("HTTP " + resp.status));
+    const data = body.data || body;
+    alert("已入库 " + (data.created || 0) + " 条，跳过重复 " + (data.skipped || 0) + " 条");
+  }
+
+  async function addOneExample(target) {
+    const item = exampleItemFromTarget(target);
+    if (!item) return;
+    try {
+      await postExamples([item]);
+    } catch (e) {
+      alert("入库失败：" + e.message);
+    }
+  }
+
+  async function addExamplesBatch() {
+    const items = collectPickedTargets().map(exampleItemFromTarget).filter(Boolean);
+    try {
+      await postExamples(items);
+    } catch (e) {
+      alert("入库失败：" + e.message);
+    }
+  }
+
+  function collectAllExampleItems() {
+    const items = [];
+    current.selection.forEach((_, idx) => {
+      const item = exampleItemFromTarget({ kind: "select", idx, stage: "" });
+      if (item) items.push(item);
+    });
+    Object.keys(current.expansion || {}).forEach((stage) => {
+      (current.expansion[stage] || []).forEach((_, idx) => {
+        const item = exampleItemFromTarget({ kind: "expand", idx, stage });
+        if (item) items.push(item);
+      });
+    });
+    return items;
+  }
+
+  async function addAllExamples() {
+    const items = collectAllExampleItems();
+    if (!items.length) {
+      alert("当前没有可入库的词");
+      return;
+    }
+    if (!confirm("将把全部 " + items.length + " 条加入范例库，是否继续？")) return;
+    try {
+      await postExamples(items);
+    } catch (e) {
+      alert("入库失败：" + e.message);
+    }
+  }
+
+  $("batchRevise").onclick = () => {
+    const targets = collectPickedTargets();
+    if (!targets.length) {
+      alert("请先勾选要修改的词");
+      return;
+    }
+    openReviseModal(targets);
+  };
+  $("addExamples").onclick = () => { void addExamplesBatch(); };
+  $("addAllExamples").onclick = () => { void addAllExamples(); };
+  $("reviseClose").onclick = () => closeReviseModal();
+  $("reviseCancel").onclick = () => closeReviseModal();
+  $("reviseBackdrop").onclick = () => closeReviseModal();
+  $("reviseCustomText").addEventListener("input", () => {
+    if (($("reviseCustomText").value || "").trim() && !($("reviseReason").value || "").trim()) {
+      $("reviseReason").value = "custom";
+    }
+  });
+  $("reviseSubmit").onclick = () => { void submitRevise(); };
 
   $("docx").onclick = async () => {
     const company = $("company").value.trim() || "企业";
@@ -1131,7 +1617,7 @@
         platforms:[...selectedPlats] }, selection:current.selection, expansion:current.expansion, filename };
     $("docx").disabled = true; $("docx").textContent = "生成中…";
     try {
-      const r = await fetch(apiUrl("/api/export_docx"), { method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await minerFetch("/api/export_docx", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify(payload) });
       if (!r.ok) throw new Error((await r.json()).error || "生成失败");
       const blob = await r.blob();
@@ -1150,7 +1636,7 @@
     const secret = prompt("机器人加签密钥 secret（没有则直接确定留空）：") || "";
     $("push").disabled = true; $("push").textContent = "推送中…";
     try {
-      const r = await fetch(apiUrl("/api/push_dingtalk"), { method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await minerFetch("/api/push_dingtalk", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ webhook, secret, company:$("company").value.trim(),
           selection:current.selection, expansion:current.expansion }) });
       const d = await r.json();
@@ -1169,6 +1655,10 @@
     paintHistory(historyItems);
   });
   document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && $("reviseModal").classList.contains("open")) {
+      closeReviseModal();
+      return;
+    }
     if (ev.key === "Escape" && $("histDrawer").classList.contains("open")) {
       closeHistDrawer();
     }

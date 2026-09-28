@@ -6,7 +6,7 @@ GEO 优化选词智能体 · 后端 API 服务 (MVP v3)
 能力：选词（问题/事实/长尾三类） + 拓词（用户购买全链路 9 阶段，含 AI 平台预估热度）
 输入：企业名称 / 产品服务 / 官网 URL（服务端抓取）/ 资料文本或文件
 交付：结构化结果 + 可直接下载的 Word(.docx) 报告
-大模型：默认 DeepSeek（OpenAI 兼容），环境变量可切换；无 Key 时进入演示模式。
+大模型：默认 DeepSeek（OpenAI 兼容），环境变量可切换；必须配置 LLM_API_KEY。
 
 依赖：python-docx（用于生成 .docx）。其余为标准库。
 运行：python3 app.py  （建议用装有 python-docx 的 venv）
@@ -33,6 +33,33 @@ try:
 except Exception:  # noqa: BLE001 - 无 pycryptodome 时仍可跑选词/导出
     DingTalkCrypto = None  # type: ignore[misc, assignment]
 
+
+def _load_dotenv_file(path: str) -> None:
+    """轻量加载同目录 .env, 不覆盖已有环境变量."""
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                if not key or key in os.environ:
+                    continue
+                val = val.strip()
+                if (val.startswith('"') and val.endswith('"')) or (
+                    val.startswith("'") and val.endswith("'")
+                ):
+                    val = val[1:-1]
+                os.environ[key] = val
+    except OSError:
+        pass
+
+
+_load_dotenv_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
 
@@ -41,6 +68,19 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+
+# GEO 会话门禁 (挖词 API 二次校验; nginx auth_request 同打此地址)
+GEO_GATE_URL = (
+    os.getenv("GEO_GATE_URL", "http://127.0.0.1:8001/api/v1/keyword-miner/gate").strip()
+    or "http://127.0.0.1:8001/api/v1/keyword-miner/gate"
+)
+
+# 钉钉 webhook 仅允许官方域名
+DINGTALK_WEBHOOK_HOST_SUFFIXES = (
+    "oapi.dingtalk.com",
+    "oapi.dingtalk.cn",
+    ".dingtalk.com",
+)
 
 # ---------- 钉钉交互式机器人（消息回调）配置 ----------
 # 在「钉钉开发者后台 → 应用开发 → 机器人」创建企业内部机器人，
@@ -324,11 +364,110 @@ def extract_json(text):
         raise
 
 
-# ---------------- 资料抓取 / 读取 ----------------
+# ---------------- 资料抓取 / 读取 / 出站限制 ----------------
+def _host_is_private(hostname: str) -> bool:
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return True
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return True
+    try:
+        import ipaddress
+
+        ip = ipaddress.ip_address(host)
+        return bool(
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+    except ValueError:
+        pass
+    # 未解析成 IP 的主机名: 拦截明显内网写法
+    if host.endswith(".internal") or host.endswith(".intranet"):
+        return True
+    if host.startswith("10.") or host.startswith("192.168.") or host.startswith("169.254."):
+        return True
+    return False
+
+
+def is_safe_public_http_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = parsed.hostname or ""
+    if _host_is_private(host):
+        return False
+    # 再解析 DNS, 拦截解析到内网的公网域名
+    try:
+        import ipaddress
+        import socket
+
+        infos = socket.getaddrinfo(host, None)
+        for info in infos:
+            ip_s = info[4][0]
+            ip = ipaddress.ip_address(ip_s)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def is_allowed_dingtalk_webhook(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    for suf in DINGTALK_WEBHOOK_HOST_SUFFIXES:
+        if suf.startswith("."):
+            if host == suf[1:] or host.endswith(suf):
+                return True
+        elif host == suf:
+            return True
+    return False
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """每跳再做公网校验, 最多 3 次跳转, 防 redirect SSRF."""
+
+    max_repeats = 3
+    max_redirections = 3
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_safe_public_http_url(newurl):
+            raise urllib.error.HTTPError(newurl, 403, "redirect to unsafe url blocked", headers, None)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_SAFE_URL_OPENER = urllib.request.build_opener(_SafeRedirectHandler)
+
+
 def fetch_url_text(url, limit=8000):
+    if not url or not is_safe_public_http_url(url):
+        return ""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; GeoMiner/1.0)"})
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with _SAFE_URL_OPENER.open(req, timeout=15) as r:
             raw = r.read().decode("utf-8", "ignore")
         text = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
         text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
@@ -337,6 +476,53 @@ def fetch_url_text(url, limit=8000):
         return text[:limit]
     except Exception:
         return ""
+
+
+def validate_mine_payload(payload):
+    """拒绝空跑烧 LLM."""
+    if not isinstance(payload, dict):
+        raise ValueError("请求体无效")
+    company = str(payload.get("company") or "").strip()
+    product = str(payload.get("product") or "").strip()
+    materials = str(payload.get("materials") or "").strip()
+    web_url = str(payload.get("web_url") or "").strip()
+    if not (company or product or materials or web_url):
+        raise ValueError("请至少填写企业名称、产品或客户资料之一")
+    if web_url and not is_safe_public_http_url(web_url):
+        raise ValueError("官网地址不合法或指向内网, 已拒绝抓取")
+    platforms = payload.get("platforms") or []
+    if not isinstance(platforms, list) or not platforms:
+        raise ValueError("请至少选择一个目标 AI 平台")
+    try:
+        count = int(payload.get("count", 30))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("count 无效") from exc
+    if count < 1 or count > 120:
+        raise ValueError("count 超出范围 (1-120)")
+
+
+def verify_geo_gate(headers) -> tuple[bool, str]:
+    """用浏览器带来的 Cookie/Bearer 打 GEO gate, 失败则拒挖词."""
+    cookie = headers.get("Cookie") or headers.get("cookie") or ""
+    auth = headers.get("Authorization") or headers.get("authorization") or ""
+    if not cookie and not auth:
+        return False, "请先登录"
+    try:
+        req = urllib.request.Request(GEO_GATE_URL, method="GET")
+        if cookie:
+            req.add_header("Cookie", cookie)
+        if auth:
+            req.add_header("Authorization", auth)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if 200 <= int(resp.status) < 300:
+                return True, ""
+            return False, "无权限"
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "无权限或未登录"
+        return False, "鉴权服务异常"
+    except Exception:
+        return False, "鉴权服务不可用"
 
 
 def read_upload(filename, b64):
@@ -361,133 +547,12 @@ def read_upload(filename, b64):
     return ""
 
 
-# ---------------- 演示数据（无 Key 兜底）----------------
-# 演示拓词：全部锚定「找服务商 / 采购该服务」意图，主语用品类词(seed)，
-# 使 AI 回答必然落到服务商推荐与品牌植入，杜绝纯知识点提问。
-EXPAND_DEMO = {
-    "需求萌生": [
-        "想做{seed}怎么开始找靠谱服务商", "企业想提升在AI搜索里的曝光该找哪类公司",
-        "最近想做{seed}哪家服务商靠谱", "业务刚起步该先了解哪些{seed}渠道",
-        "新手怎么快速找到靠谱的{seed}公司",
-    ],
-    "品类筛选": [
-        "{seed}服务商哪家品类全", "定制化{seed}找哪家交付快",
-        "标准化{seed}方案找哪家最齐全", "中大型企业做{seed}找哪家接得住",
-        "垂直行业{seed}找哪家有经验",
-    ],
-    "品牌对比": [
-        "{seed}一站式采购平台哪家好", "工业{seed}哪个品牌性价比高",
-        "小批量非标定制找哪家实力强", "{seed}源头厂家哪家拿货划算",
-        "认证齐全的{seed}品牌有哪些",
-    ],
-    "产品选型": [
-        "按企业规模选{seed}方案找哪家合适", "{seed}模块怎么搭配找哪家能配齐",
-        "特定行业{seed}方案哪家有成熟案例", "从0到1做{seed}找哪家能落地",
-        "多站点{seed}落地找哪家有方法论",
-    ],
-    "价格预算": [
-        "{seed}采购哪家价优", "定制化{seed}找哪家报价透明",
-        "长期合作{seed}哪家账期灵活", "批量采购{seed}哪家折扣大",
-        "{seed}年度服务费大概多少",
-    ],
-    "同城渠道": [
-        "本地有没有靠谱的{seed}服务商", "附近能做{seed}的公司有哪些",
-        "本地上门{seed}哪家好", "同城{seed}服务商怎么找",
-        "本地{seed}公司哪家响应快",
-    ],
-    "决策下单": [
-        "选{seed}服务商要看哪些资质", "签{seed}服务合同注意什么",
-        "怎么下单{seed}最稳妥", "合作{seed}前要做哪些背调",
-        "{seed}项目合作流程是怎样的",
-    ],
-    "下单履约": [
-        "{seed}交付周期一般多久", "{seed}方案实施要注意什么",
-        "{seed}进度怎么跟进", "{seed}验收标准哪家能写进合同",
-        "{seed}交付不达标怎么办",
-    ],
-    "售后维保": [
-        "{seed}售后怎么保障", "{seed}保修期一般多久",
-        "{seed}维保响应快吗", "{seed}出问题找谁处理",
-        "{seed}续费值不值",
-    ],
-    # 品牌专属：允许且应当直接带品牌名，关联企业产品/服务/政策/案例
-    "品牌专属": [
-        "{brand}能一站式服务吗", "{brand}有哪些核心服务模块",
-        "怎么对接{brand}采购服务", "{brand}支持定制化方案吗",
-        "{brand}在全国有哪些服务网点", "{brand}售后保障政策是什么",
-        "{brand}有哪些资质认证", "{brand}能提供专属选型建议吗",
-        "{brand}支持多地域交付吗", "{brand}长期合作有什么政策",
-    ],
-}
-
-
-def _stable(v, salt):
-    return 60 + (int(hashlib.md5((v + salt).encode("utf-8")).hexdigest(), 16) % 40)
-
-
-# 每个阶段对应的「品牌资产」，用于生成“标准答案要点（品牌植入）”演示素材
-STAGE_ASSET = {
-    "需求萌生": "艾迪亚控股集团的全链路GEO优化产品矩阵（关键词策略、内容生产、技术优化、效果看板）",
-    "品类筛选": "艾迪亚控股集团不同GEO优化服务模式与各自适用场景",
-    "品牌对比": "艾迪亚控股集团的品牌优势（行业经验、案例沉淀、服务体系）",
-    "产品选型": "艾迪亚控股集团GEO优化方案的核心模块与选型逻辑",
-    "价格预算": "艾迪亚控股集团的GEO优化报价构成与服务政策",
-    "同城渠道": "艾迪亚控股集团的本地门店/分公司布局与就近服务能力",
-    "决策下单": "艾迪亚控股集团的服务资质、合同条款与交付保障",
-    "下单履约": "艾迪亚控股集团的交付标准、进度看板与验收机制",
-    "售后维保": "艾迪亚控股集团的售后维保政策与响应机制",
-    BRAND_STAGE: "艾迪亚控股集团的完整产品矩阵、服务政策（报价/账期/售后）、门店布局与成功案例",
-}
-
-
-def demo_answer(stage, brand):
-    asset = STAGE_ASSET.get(stage, f"{brand}的相关服务能力")
-    if stage == BRAND_STAGE:
-        return (f"该问题直接点名{brand}，AI 应直接基于{asset}作答，"
-                f"给出明确、可核实的企业信息（产品/政策/案例），使回答100%关联{brand}。")
-    return (f"AI 应给出的标准答案需自然植入{asset}，并附真实案例与数据，"
-            f"使回答强关联{brand}、可被直接引用。")
-
-
-def demo_select(company, product, count):
-    brand = company or "本品牌"
-    seed = product or "企业推广"
-    rows = [
-        ("问题驱动", f"{brand}{seed}哪家好", "对比型", "用户采购前典型提问，易触发品牌植入"),
-        ("问题驱动", f"怎么选{seed}服务商", "交易型", "高转化决策类问题"),
-        ("事实驱动", f"{brand}服务范围有哪些", "信息型", "对应可核实事实，便于 AI 回答植入"),
-        ("事实驱动", f"{brand}门店/分公司分布", "导航型", "本地化事实，利于同城渠道"),
-        ("长尾词", f"中小企业{seed}预算多少合适", "交易型", "低竞争长尾，转化友好"),
-        ("长尾词", f"{seed}售后维保怎么保障", "信息型", "履约后链路长尾词"),
-        ("问题驱动", f"{seed}报价包含哪些内容", "交易型", "价格预算阶段高频提问"),
-        ("事实驱动", f"{brand}有哪些成功案例", "信息型", "事实驱动，增强可信度"),
-        ("长尾词", f"本地{seed}上门服务哪家快", "交易型", "同城渠道长尾"),
-        ("问题驱动", f"{brand}适合什么规模企业", "对比型", "选型对比类提问"),
-    ]
-    out = []
-    for i, (cat, w, intent, reason) in enumerate(rows):
-        out.append({"word": w, "category": cat, "intent": intent,
-                    "score": _stable(w, "sel"), "reason": reason})
-    return out[: max(1, min(count, len(out)))]
-
-
-def demo_expand(company, product, count):
-    brand = company or "本品牌"
-    seed = product or "企业推广"
-    out = {}
-    for stage in ALL_STAGES:
-        words = [t.format(brand=brand, seed=seed) for t in EXPAND_DEMO[stage]]
-        items = []
-        for w in words:
-            items.append({"word": w, "heat": _stable(w, "exp"),
-                          "note": ("品牌专属：直接关联企业" if stage == BRAND_STAGE
-                                   else "锚定找服务商/采购场景（演示）"),
-                          "answer": demo_answer(stage, brand)})
-        out[stage] = items
-    return out
-
-
 # ---------------- 核心挖掘 ----------------
+def require_llm():
+    if not LLM_API_KEY:
+        raise RuntimeError("未配置 LLM_API_KEY，无法生成")
+
+
 def build_context(company, product, materials, web_text):
     parts = []
     if company:
@@ -498,15 +563,21 @@ def build_context(company, product, materials, web_text):
         parts.append(f"官网抓取正文摘要：{web_text}")
     if materials:
         parts.append(f"客户提供资料：{materials}")
-    return "\n".join(parts) if parts else "（未提供具体信息，请基于通用企业服务场景产出示例）"
+    return "\n".join(parts) if parts else "（未提供具体信息，请基于通用企业服务场景产出）"
 
 
-def select_mine(company, product, materials, web_text, count):
+def select_mine(company, product, materials, web_text, count, reference_text="", edit_lessons=None):
+    require_llm()
     ctx = build_context(company, product, materials, web_text)
     user = f"{ctx}\n请产出 {count} 个选词（问题驱动/事实驱动/长尾词）。直接输出 JSON。"
+    if reference_text:
+        user += "\n\n" + reference_text
+    lessons = [str(x).strip() for x in (edit_lessons or []) if str(x).strip()]
+    if lessons:
+        user += "\n\n历史改因提醒（避免再犯）：\n- " + "\n- ".join(lessons[:8])
     raw = call_llm(SELECT_SYSTEM, user)
     if raw is None:
-        return demo_select(company, product, count), "demo"
+        raise RuntimeError("大模型调用失败，未返回选词结果")
     try:
         obj = extract_json(raw)
         rows = []
@@ -518,17 +589,20 @@ def select_mine(company, product, materials, web_text, count):
                              "score": int(k.get("score", 70)),
                              "reason": str(k.get("reason", ""))})
         if not rows:
-            return demo_select(company, product, count), "demo"
+            raise RuntimeError("模型未返回有效选词")
         return rows[:count], "llm"
+    except RuntimeError:
+        raise
     except Exception as e:  # noqa: BLE001
-        return demo_select(company, product, count), "demo:" + str(e)
+        raise RuntimeError("解析选词结果失败：" + str(e)) from e
 
 
 def _generate_expand(user, company, product, count, platforms):
-    """调用大模型解析拓词；无 Key 或解析失败回退演示模板。返回 (exp, src)。"""
+    """调用大模型解析拓词。返回 (exp, src)。"""
+    require_llm()
     raw = call_llm(EXPAND_SYSTEM, user)
     if raw is None:
-        return demo_expand(company, product, count), "demo"
+        raise RuntimeError("大模型调用失败，未返回拓词结果")
     try:
         obj = extract_json(raw)
         exp = obj.get("expansion", {})
@@ -543,7 +617,7 @@ def _generate_expand(user, company, product, count, platforms):
                                   "answer": str(k.get("answer", ""))})
             clean[stage] = items
         if not any(clean.values()):
-            return demo_expand(company, product, count), "demo"
+            raise RuntimeError("模型未返回有效拓词")
         for stage in ALL_STAGES:
             real = enrich_heat([i["word"] for i in clean[stage]], platforms)
             if isinstance(real, dict):
@@ -551,19 +625,27 @@ def _generate_expand(user, company, product, count, platforms):
                     if i["word"] in real:
                         i["heat"] = real[i["word"]]
         return clean, "llm"
+    except RuntimeError:
+        raise
     except Exception as e:  # noqa: BLE001
-        return demo_expand(company, product, count), "demo:" + str(e)
+        raise RuntimeError("解析拓词结果失败：" + str(e)) from e
 
 
 def expand_mine(company, product, materials, web_text, count, platforms,
-                feedback="", max_rounds=2):
+                feedback="", max_rounds=2, reference_text="", edit_lessons=None):
     """拓词 + 复盘重写闭环（①）：生成 → 确定性复核 → 未达标词带原因回写重写 → 收敛。"""
     ctx = build_context(company, product, materials, web_text)
     plat = "、".join(platforms) if platforms else "主流 AI 平台"
     base = (f"{ctx}\n目标 AI 平台：{plat}。\n"
             f"请产出约 {count} 条拓词，覆盖全部 9 个阶段，直接输出 JSON。")
+    # 运营范例优先; 不足时仍注入内置金标兜底
+    if reference_text:
+        base += "\n参考运营范例（优先对齐风格与口径）：\n" + reference_text
     if GOLDEN_EXAMPLES:
         base += "\n参考标准示例（务必对齐风格与口径）：\n" + GOLDEN_EXAMPLES
+    lessons = [str(x).strip() for x in (edit_lessons or []) if str(x).strip()]
+    if lessons:
+        base += "\n历史改因提醒（避免再犯）：\n- " + "\n- ".join(lessons[:8])
     brand_terms = [company] + list(POLICY.get("brand_names", []) or [])
 
     user = base + (("\n复核反馈（以下词未通过合规复核，请修正后重新输出全部拓词，"
@@ -734,8 +816,18 @@ def chat_reply_markdown(company, selection, expansion, report_url=None):
     return "\n".join(lines)
 
 
-# 内存报告存储：id -> (docx_bytes, filename)。进程级缓存，便于 @ 出词后回链下载。
+# 内存报告存储：id -> (docx_bytes, filename, ts)。进程级缓存，便于 @ 出词后回链下载。
 REPORTS = {}
+REPORTS_MAX = 64
+
+
+def _store_report(rid, data, fname):
+    REPORTS[rid] = (data, fname, time.time())
+    if len(REPORTS) <= REPORTS_MAX:
+        return
+    overflow = sorted(REPORTS.items(), key=lambda kv: kv[1][2])[: max(0, len(REPORTS) - REPORTS_MAX)]
+    for key, _ in overflow:
+        REPORTS.pop(key, None)
 
 # 异步选词任务：离开页面后仍继续跑，回来可按 job_id 取结果。
 JOBS = {}
@@ -980,8 +1072,89 @@ def _prune_jobs(now=None):
                 JOBS.pop(jid, None)
 
 
+def revise_one_item(payload):
+    """按改因重写单条选词/拓词, 返回新条目."""
+    kind = str(payload.get("kind") or "expand").strip().lower()
+    if kind not in {"select", "expand"}:
+        raise ValueError("kind 无效")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise ValueError("请选择或填写修改原因")
+    company = payload.get("company", "")
+    product = payload.get("product", "")
+    materials = payload.get("materials", "")
+    web_url = str(payload.get("web_url") or "").strip()
+    if web_url and not is_safe_public_http_url(web_url):
+        raise ValueError("官网地址不合法或指向内网, 已拒绝抓取")
+    web_text = fetch_url_text(web_url) if web_url else ""
+    if web_text and not materials:
+        materials = "（官网抓取）" + web_text
+    ctx = build_context(company, product, materials, web_text)
+    old_word = str(payload.get("word") or "").strip()
+    if not old_word:
+        raise ValueError("缺少原词")
+    stage = str(payload.get("stage") or "").strip()
+    old_answer = str(payload.get("answer") or "").strip()
+    platforms = payload.get("platforms") or []
+    plat = "、".join(platforms) if isinstance(platforms, list) and platforms else "主流 AI 平台"
+
+    if kind == "expand":
+        system = EXPAND_SYSTEM
+        user = (
+            f"{ctx}\n目标 AI 平台：{plat}。\n"
+            f"请只重写下面这一条拓词（阶段：{stage or '未指定'}），不要输出其他阶段。\n"
+            f"原词：{old_word}\n"
+            f"原答案要点：{old_answer or '（无）'}\n"
+            f"修改原因：{reason}\n"
+            "要求：新词必须解决上述修改原因；仍遵守拓词铁律；品牌专属阶段才可含品牌名。\n"
+            "直接输出 JSON：\n"
+            '{"item":{"word":"...","heat":0-100,"note":"...","answer":"..."}}'
+        )
+    else:
+        system = SELECT_SYSTEM
+        user = (
+            f"{ctx}\n请只重写下面这一条选词。\n"
+            f"原词：{old_word}\n"
+            f"修改原因：{reason}\n"
+            "要求：新词必须解决上述修改原因；仍遵守选词原则与广告法。\n"
+            "直接输出 JSON：\n"
+            '{"item":{"word":"...","category":"问题驱动|事实驱动|长尾词",'
+            '"intent":"信息型|交易型|导航型|对比型","score":0-100,"reason":"..."}}'
+        )
+
+    require_llm()
+    raw = call_llm(system, user)
+    if raw is None:
+        raise RuntimeError("大模型调用失败，未返回重写结果")
+
+    try:
+        obj = extract_json(raw)
+        item = obj.get("item") if isinstance(obj, dict) else None
+        if not isinstance(item, dict) or not item.get("word"):
+            raise ValueError("模型未返回有效 item")
+        if kind == "expand":
+            out = {
+                "word": str(item["word"]),
+                "heat": int(item.get("heat", payload.get("heat") or 80)),
+                "note": str(item.get("note", "")),
+                "answer": str(item.get("answer", "")),
+            }
+        else:
+            out = {
+                "word": str(item["word"]),
+                "category": str(item.get("category", payload.get("category") or "长尾词")),
+                "intent": str(item.get("intent", payload.get("intent") or "信息型")),
+                "score": int(item.get("score", payload.get("score") or 80)),
+                "reason": str(item.get("reason", "")),
+            }
+        return {"kind": kind, "stage": stage, "item": out, "reason": reason, "source": "llm"}
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("解析重写结果失败：" + str(exc)) from exc
+
+
 def execute_mine(payload):
     """同步执行一次选词/拓词，返回可 JSON 序列化的结果 dict。"""
+    validate_mine_payload(payload)
     company = payload.get("company", "")
     product = payload.get("product", "")
     materials = payload.get("materials", "")
@@ -993,23 +1166,55 @@ def execute_mine(payload):
     task = payload.get("task", "both")
     platforms = payload.get("platforms", [])
     brand_terms = payload.get("brand_terms", [])
-    source_flags = []
+    reference_examples = payload.get("reference_examples") or []
+    edit_lessons = payload.get("edit_lessons") or []
+    ref_select = ""
+    ref_expand = ""
+    if isinstance(reference_examples, list) and reference_examples:
+        sel_items = [x for x in reference_examples if isinstance(x, dict) and x.get("kind") == "select"]
+        exp_items = [x for x in reference_examples if isinstance(x, dict) and x.get("kind") == "expand"]
+        if sel_items:
+            ref_select = "【运营范例库样本】\n" + json.dumps(
+                {"selection": [
+                    {
+                        "word": i.get("word"),
+                        "category": i.get("stage") or "长尾词",
+                        "intent": i.get("intent") or "信息型",
+                        "score": 85,
+                        "reason": i.get("note") or i.get("edit_reason") or "",
+                    } for i in sel_items
+                ]},
+                ensure_ascii=False,
+            )
+        if exp_items:
+            by_stage = {}
+            for i in exp_items:
+                stage = str(i.get("stage") or "需求萌生")
+                by_stage.setdefault(stage, []).append({
+                    "word": i.get("word"),
+                    "heat": i.get("heat") or 80,
+                    "answer": i.get("answer") or "",
+                })
+            ref_expand = "【运营范例库样本】\n" + json.dumps({"expansion": by_stage}, ensure_ascii=False)
     selection, expansion = [], {}
     if task in ("select", "both"):
-        selection, s1 = select_mine(company, product, materials, web_text, count)
-        source_flags.append(s1)
+        selection, _ = select_mine(
+            company, product, materials, web_text, count,
+            reference_text=ref_select, edit_lessons=edit_lessons,
+        )
     if task in ("expand", "both"):
-        expansion, s2 = expand_mine(company, product, materials, web_text, count, platforms)
-        source_flags.append(s2)
+        expansion, _ = expand_mine(
+            company, product, materials, web_text, count, platforms,
+            reference_text=ref_expand, edit_lessons=edit_lessons,
+        )
     all_brand = (list(POLICY.get("brand_names", []) or [])
                  + ([company] if company else [])
                  + list(brand_terms or []))
     all_bl = list(DEFAULT_BLACKLIST) + list(POLICY.get("blacklist", []) or [])
     selection, expansion, violations, dedup_removed = validate_and_filter(
         selection, expansion, all_brand, all_bl)
-    src = "demo" if (not source_flags or all(s.startswith("demo") for s in source_flags)) else "llm"
     return {
-        "source": src,
+        "source": "llm",
         "model": LLM_MODEL if LLM_API_KEY else None,
         "web_fetched": bool(web_text),
         "selection": selection,
@@ -1112,7 +1317,7 @@ def make_report(company, selection, expansion):
     fname = f"GEO选词建议_{company or '企业'}_{datetime.date.today().isoformat()}.docx"
     data = build_docx({"company": company, "product": DINGTALK_DEFAULT_PRODUCT,
                        "platforms": platforms}, selection, expansion)
-    REPORTS[rid] = (data, fname)
+    _store_report(rid, data, fname)
     return rid, fname
 
 
@@ -1138,23 +1343,18 @@ def run_chat_mine(text):
     web_text = ""
     count = 30
     platforms = ["豆包", "DeepSeek", "Kimi", "通义", "元宝", "文心"]
-    sel, exp = [], {}
-    s1 = s2 = "demo"
-    try:
-        sel, s1 = select_mine(company, product, materials, web_text, count)
-        exp, s2 = expand_mine(company, product, materials, web_text, count, platforms)
-    except Exception:  # noqa: BLE001
-        sel = demo_select(company, product, count)
-        exp = demo_expand(company, product, count)
+    sel, _ = select_mine(company, product, materials, web_text, count)
+    exp, _ = expand_mine(company, product, materials, web_text, count, platforms)
     all_brand = ([company] if company else [])
     all_bl = list(DEFAULT_BLACKLIST) + list(POLICY.get("blacklist", []) or [])
     sel, exp, violations, dedup_removed = validate_and_filter(sel, exp, all_brand, all_bl)
-    src = "demo" if (s1.startswith("demo") and s2.startswith("demo")) else "llm"
-    return sel, exp, src, violations, dedup_removed
+    return sel, exp, "llm", violations, dedup_removed
 
 
 def reply_session_webhook(webhook, text):
     """通过 sessionWebhook（异步）把结果推回会话，无需加密。"""
+    if not is_allowed_dingtalk_webhook(webhook):
+        return "ERROR:sessionWebhook 仅允许钉钉官方 HTTPS 地址"
     body = json.dumps(
         {"msgtype": "markdown", "markdown": {"title": "GEO选词结果", "text": text}},
         ensure_ascii=False,
@@ -1224,6 +1424,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _require_geo_auth(self) -> bool:
+        ok, msg = verify_geo_gate(self.headers)
+        if ok:
+            return True
+        self._send(401, json.dumps({"error": msg or "请先登录"}, ensure_ascii=False))
+        return False
+
     def do_GET(self):
         if self.path.startswith("/api/health"):
             self._send(200, json.dumps(
@@ -1231,7 +1438,15 @@ class Handler(BaseHTTPRequestHandler):
                  "dingtalk_callback": bool(get_crypto())},
                 ensure_ascii=False))
             return
+        if self.path.startswith("/api/dingtalk/callback"):
+            self.handle_dingtalk_get()
+            return
+        if self.path.startswith("/api/report/"):
+            self.handle_report()
+            return
         if self.path.startswith("/api/jobs/"):
+            if not self._require_geo_auth():
+                return
             job_id = self.path.split("/api/jobs/", 1)[1].split("?")[0].split("/")[0]
             job = get_mine_job(job_id)
             if not job:
@@ -1240,16 +1455,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(job, ensure_ascii=False))
             return
         if self.path.startswith("/api/history"):
+            if not self._require_geo_auth():
+                return
             from urllib.parse import urlparse, parse_qs
             q = parse_qs(urlparse(self.path).query)
             limit = (q.get("limit") or ["30"])[0]
             self._send(200, json.dumps({"items": list_history(limit)}, ensure_ascii=False))
-            return
-        if self.path.startswith("/api/dingtalk/callback"):
-            self.handle_dingtalk_get()
-            return
-        if self.path.startswith("/api/report/"):
-            self.handle_report()
             return
         try:
             with open(WEB_INDEX, "r", encoding="utf-8") as f:
@@ -1261,8 +1472,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/dingtalk/callback"):
             self.handle_dingtalk_post()
             return
-        if not self.path.startswith(("/api/mine", "/api/export_docx", "/api/ingest", "/api/push_dingtalk")):
+        if not self.path.startswith(
+            ("/api/mine", "/api/export_docx", "/api/ingest", "/api/push_dingtalk", "/api/revise_word")
+        ):
             self._send(404, json.dumps({"error": "not found"}))
+            return
+        if not self._require_geo_auth():
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -1270,6 +1485,15 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw)
         except Exception:
             self._send(400, json.dumps({"error": "bad request"}))
+            return
+
+        if self.path.startswith("/api/revise_word"):
+            try:
+                self._send(200, json.dumps(revise_one_item(payload), ensure_ascii=False))
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False))
+            except Exception as e:  # noqa: BLE001
+                self._send(500, json.dumps({"error": str(e)}, ensure_ascii=False))
             return
 
         if self.path.startswith("/api/ingest"):
@@ -1299,6 +1523,9 @@ class Handler(BaseHTTPRequestHandler):
             if not webhook:
                 self._send(400, json.dumps({"error": "缺少 webhook"}))
                 return
+            if not is_allowed_dingtalk_webhook(webhook):
+                self._send(400, json.dumps({"error": "webhook 仅允许钉钉官方 HTTPS 地址"}, ensure_ascii=False))
+                return
             md = build_dingtalk_markdown(company, selection, expansion)
             ts = str(int(time.time() * 1000))
             url = webhook
@@ -1321,11 +1548,18 @@ class Handler(BaseHTTPRequestHandler):
         from urllib.parse import urlparse, parse_qs
         q = parse_qs(urlparse(self.path).query)
         want_sync = (q.get("sync", ["0"])[0] or "0") in ("1", "true", "yes")
+        try:
+            validate_mine_payload(payload)
+        except ValueError as e:
+            self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False))
+            return
         if want_sync:
             try:
                 self._send(200, json.dumps(execute_mine(payload), ensure_ascii=False))
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False))
             except Exception as e:  # noqa: BLE001
-                self._send(500, json.dumps({"error": str(e)}))
+                self._send(500, json.dumps({"error": str(e)}, ensure_ascii=False))
             return
         job = start_mine_job(payload)
         self._send(202, json.dumps(job, ensure_ascii=False))
@@ -1363,7 +1597,7 @@ class Handler(BaseHTTPRequestHandler):
         if not item:
             self._send(404, json.dumps({"error": "report not found"}))
             return
-        data, fname = item
+        data, fname = item[0], item[1]
         self._send_file(
             data,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1439,7 +1673,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, json.dumps({"status": 0}))
         else:
-            # 无 sessionWebhook（旧版/测试）：同步加密回复（演示模式很快；LLM 模式可能超时）
+            # 无 sessionWebhook（旧版/测试）：同步加密回复（LLM 模式可能超时）
             md, _ = chat_build(content)
             if receive_id:
                 out = crypto.encrypt(
@@ -1457,7 +1691,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     init_history_db()
     print(f"GEO 选词智能体 MVP v3 启动： http://{HOST}:{PORT}")
-    print(f"大模型：{'已配置 (' + LLM_MODEL + ')' if LLM_API_KEY else '未配置 -> 演示模式'}")
+    print(f"大模型：{'已配置 (' + LLM_MODEL + ')' if LLM_API_KEY else '未配置（生成将失败）'}")
     print(f"钉钉交互式回调：{'已配置 (Token+AESKey)' if get_crypto() else '未配置 -> 仅网页端/群推送可用'}")
     print(f"历史库：{HISTORY_BACKEND}" + (f" -> {HISTORY_DB}" if HISTORY_BACKEND == "sqlite" else " (GEO 主库)"))
     # ThreadingHTTPServer：生产环境多人并发访问（如钉钉工作台）时不会互相阻塞

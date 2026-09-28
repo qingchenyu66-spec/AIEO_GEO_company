@@ -54,6 +54,7 @@ export function permissionGroupKey(menu: MenuInfo) {
     || menu.menu_code === 'platform.lead_diagnosis'
     || menu.menu_code === 'platform.h5_diagnosis_orders'
     || menu.menu_code === 'platform.keyword_miner'
+    || menu.menu_code.startsWith('platform.keyword_miner.')
   ) return 'diagnosis'
   if (menu.menu_code === 'platform.snapshot_backfill') return 'backfill'
   if (['platform.competitor', 'platform.sources', 'platform.reports'].includes(menu.menu_code)) return 'analysis'
