@@ -237,6 +237,9 @@ const isKeywordMinerWorkbench = computed(() => (
 ))
 const keywordMinerMounted = ref(false)
 watch(isKeywordMinerPage, (on) => { if (on) keywordMinerMounted.value = true }, { immediate: true })
+function onKeywordMinerSwitchTab(tab: 'workbench' | 'examples') {
+  navigateToMenu(tab === 'workbench' ? KEYWORD_MINER_WORKBENCH_MENU : KEYWORD_MINER_EXAMPLES_MENU)
+}
 const isAlertThresholdsPage = computed(() => activeMenuCode.value === 'platform.alerts')
 const isKnowledgePage = computed(() => activeMenuCode.value === 'customer.knowledge')
 const isBrandAssetPage = computed(() => activeMenuCode.value === 'platform.audit')
@@ -715,7 +718,7 @@ watch(effectiveTenantIdForLogo, () => {
       v-if="keywordMinerMounted"
       :active="isKeywordMinerPage"
       :active-tab="isKeywordMinerWorkbench ? 'workbench' : 'examples'"
-      @switch-tab="(tab) => navigateToMenu(tab === 'workbench' ? KEYWORD_MINER_WORKBENCH_MENU : KEYWORD_MINER_EXAMPLES_MENU)"
+      @switch-tab="onKeywordMinerSwitchTab"
     />
     </template>
   </PortalLayout>
