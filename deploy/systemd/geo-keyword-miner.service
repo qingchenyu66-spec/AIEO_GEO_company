@@ -9,7 +9,8 @@ EnvironmentFile=-/opt/geo/AIEO_GEO/services/keyword-miner/.env
 EnvironmentFile=-/data/geo/keyword-miner.env
 Environment=HOST=127.0.0.1
 Environment=PORT=8088
-Environment=HISTORY_BACKEND=off
+# sqlite=本地任务断点 (重启可续读 done / 中断标 error); 门户历史列表仍走 GEO MySQL
+Environment=HISTORY_BACKEND=sqlite
 Environment=HISTORY_DB=/data/geo/keyword-miner/history.db
 ExecStart=/opt/geo/AIEO_GEO/backend/.venv/bin/python app.py
 Restart=on-failure

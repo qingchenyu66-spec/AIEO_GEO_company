@@ -104,3 +104,29 @@ def test_touch_examples_increments_use_count(monkeypatch):
     out = kms.touch_examples(db, current, [9, 9, "x", 0])
     assert out["updated"] == 1
     assert row.use_count == 3
+
+
+def test_recover_jobs_after_restart_marks_running_error(tmp_path, monkeypatch):
+    app = _load_miner_app()
+    db_path = tmp_path / "history.db"
+    monkeypatch.setattr(app, "HISTORY_BACKEND", "sqlite")
+    monkeypatch.setattr(app, "HISTORY_DB", str(db_path))
+    app.JOBS.clear()
+    app.init_history_db()
+    job = {
+        "job_id": "deadbeef01",
+        "status": "running",
+        "company": "测企",
+        "product": "",
+        "created_at": 1.0,
+        "updated_at": 2.0,
+        "error": None,
+        "result": None,
+        "payload": {"task": "both"},
+    }
+    app._persist_job(job)
+    app.recover_jobs_after_restart()
+    recovered = app.JOBS.get("deadbeef01")
+    assert recovered is not None
+    assert recovered["status"] == "error"
+    assert "重启" in (recovered.get("error") or "")

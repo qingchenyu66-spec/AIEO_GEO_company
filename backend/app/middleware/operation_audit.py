@@ -44,6 +44,8 @@ _SKIP_PATHS = frozenset({
     "/api/v1/monitor/molizhishu/callback",
 })
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# 选词写操作在 keyword_miner_service 显式记「谁改了哪个词」; 整段跳过中间件避免双写/刷屏
+_SKIP_KEYWORD_MINER_PREFIX = "/api/v1/keyword-miner/"
 
 
 def _should_audit(method: str, path: str) -> bool:
@@ -51,6 +53,8 @@ def _should_audit(method: str, path: str) -> bool:
         return False
     normalized = path.rstrip("/") or "/"
     if path in _SKIP_PATHS or normalized in _SKIP_PATHS:
+        return False
+    if path.startswith(_SKIP_KEYWORD_MINER_PREFIX):
         return False
     if any(path.startswith(prefix) for prefix in _SKIP_EXPLICIT_AUDIT_PREFIXES):
         return False

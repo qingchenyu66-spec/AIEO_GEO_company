@@ -233,6 +233,64 @@
     background: var(--brand-soft); color: var(--brand);
     border-color: #b7d0ea; font-weight: 650;
   }
+  .keyword-tag-box {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid #d8e7f8;
+    border-radius: 10px;
+    background: #f8fbff;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .keyword-tag-box:focus-within {
+    border-color: #8eb8ea;
+    box-shadow: 0 0 0 3px rgba(72,128,214,.12);
+    background: #fff;
+  }
+  .keyword-tag-box i {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 100%;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-style: normal;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.3;
+    word-break: break-all;
+    border: 1px solid #b8d4f5;
+    color: #1a5fb4;
+    background: #eef5ff;
+  }
+  .keyword-tag-box i button {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 50%;
+    color: #1a5fb4;
+    background: #d6e8ff;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+  }
+  .keyword-tag-box input {
+    flex: 1;
+    min-width: 140px;
+    height: 28px;
+    border: 0;
+    outline: none;
+    color: #17324d;
+    background: transparent;
+    font-size: 13px;
+    font-family: inherit;
+    padding: 0;
+    box-shadow: none;
+  }
   .filehint { font-size: 12px; color: var(--muted); margin-top: 5px; }
   .file-row {
     display: flex;
@@ -581,8 +639,10 @@
           <input id="web_url" placeholder="https://..." />
         </div>
         <div class="field">
-          <label for="brand_terms">品牌词库（一行一个）</label>
-          <textarea id="brand_terms" placeholder="多品牌时逐行填写；默认含企业名称"></textarea>
+          <label>品牌词库</label>
+          <div class="keyword-tag-box" id="brand_terms_box" aria-label="品牌词库">
+            <input id="brand_terms_input" type="text" placeholder="输入后回车添加，支持粘贴多行" autocomplete="off" />
+          </div>
         </div>
         <div class="field">
           <label for="industry">行业标签（范例匹配用）</label>
@@ -663,9 +723,11 @@
   const STAGES = ["需求萌生","品类筛选","品牌对比","产品选型","价格预算","同城渠道","决策下单","下单履约","售后维保","品牌专属"];
   const ALL_PLAT = ["豆包","DeepSeek","Kimi","通义","元宝","文心"];
   const LS_JOB = "geo.keyword_miner.job_id";
+  const LS_TOUCH = "geo.keyword_miner.touch_ids";
   const LS_DRAFT = "geo.keyword_miner.draft";
   const LS_RESULT = "geo.keyword_miner.last_result";
   let selectedPlats = new Set(ALL_PLAT);
+  let brandTerms = [];
   let current = { selection: [], expansion: {} };
   let editNotes = [];
   let lastDoneJobId = null;
@@ -746,8 +808,9 @@
     }
   });
 
-  async function syncJobToGeo(job) {
-    if (!job || !job.job_id) return;
+  async function syncJobToGeo(job, opts) {
+    if (!job || !job.job_id) return false;
+    const quiet = !!(opts && opts.quiet);
     const body = {
       status: job.status,
       company: job.company || "",
@@ -772,15 +835,32 @@
         body: JSON.stringify(body),
       });
       if (!r.ok) {
-        const errBody = await r.json().catch(() => ({}));
-        const detail = errBody.detail || errBody.message || ("HTTP " + r.status);
-        $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
-          + esc(String(detail)) + '</div>';
+        if (!quiet) {
+          const errBody = await r.json().catch(() => ({}));
+          const detail = errBody.detail || errBody.message || ("HTTP " + r.status);
+          $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
+            + esc(String(detail)) + '</div>';
+        }
+        return false;
       }
+      return true;
     } catch (e) {
-      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
-        + esc(e.message || String(e)) + '</div>';
+      if (!quiet) {
+        $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>结果已生成, 但同步主库失败：'
+          + esc(e.message || String(e)) + '</div>';
+      }
+      return false;
     }
+  }
+
+  async function markJobGoneOnGeo(jobId) {
+    if (!jobId) return;
+    await syncJobToGeo({
+      job_id: jobId,
+      status: "error",
+      error: "挖词服务已重启或任务过期, 请重新生成",
+      updated_at: Date.now() / 1000,
+    }, { quiet: true });
   }
 
   function idlePreviewHtml() {
@@ -823,7 +903,7 @@
   try {
     const resumeId = localStorage.getItem(LS_JOB);
     if (resumeId) {
-      void pollJob(resumeId);
+      void pollJob(resumeId, loadTouchIds());
     } else {
       const raw = localStorage.getItem(LS_RESULT);
       if (raw) {
@@ -846,7 +926,7 @@
     }
   }, 1500);
 
-  ["company","product","web_url","task","materials","brand_terms","industry","count"].forEach(id => {
+  ["company","product","web_url","task","materials","industry","count"].forEach(id => {
     const el = $(id);
     if (!el) return;
     el.addEventListener("change", saveDraft);
@@ -856,6 +936,83 @@
       saveDraft();
     });
   });
+
+  function normalizeBrandTerms(list) {
+    const out = [];
+    const seen = new Set();
+    (list || []).forEach((raw) => {
+      String(raw || "").split(/[\n,，;；\t]+/).forEach((part) => {
+        const term = part.trim();
+        if (!term || seen.has(term)) return;
+        seen.add(term);
+        out.push(term);
+      });
+    });
+    return out;
+  }
+
+  function renderBrandTerms() {
+    const box = $("brand_terms_box");
+    const input = $("brand_terms_input");
+    if (!box || !input) return;
+    [...box.querySelectorAll("i")].forEach((el) => el.remove());
+    brandTerms.forEach((term, idx) => {
+      const tag = document.createElement("i");
+      tag.appendChild(document.createTextNode(term));
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("aria-label", "移除 " + term);
+      btn.textContent = "×";
+      btn.addEventListener("click", () => {
+        brandTerms = brandTerms.filter((_, i) => i !== idx);
+        renderBrandTerms();
+        saveDraft();
+      });
+      tag.appendChild(btn);
+      box.insertBefore(tag, input);
+    });
+  }
+
+  function addBrandTerms(list) {
+    const next = normalizeBrandTerms(list);
+    if (!next.length) return;
+    brandTerms = normalizeBrandTerms(brandTerms.concat(next));
+    renderBrandTerms();
+    saveDraft();
+  }
+
+  function commitBrandTermInput(clearOnly) {
+    const input = $("brand_terms_input");
+    if (!input) return;
+    const val = (input.value || "").trim();
+    if (val) addBrandTerms([val]);
+    if (clearOnly !== false) input.value = "";
+  }
+
+  (function bindBrandTerms() {
+    const input = $("brand_terms_input");
+    const box = $("brand_terms_box");
+    if (!input || !box) return;
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commitBrandTermInput();
+      } else if (ev.key === "Backspace" && !input.value && brandTerms.length) {
+        brandTerms = brandTerms.slice(0, -1);
+        renderBrandTerms();
+        saveDraft();
+      }
+    });
+    input.addEventListener("blur", () => commitBrandTermInput());
+    input.addEventListener("paste", (ev) => {
+      const text = (ev.clipboardData || window.clipboardData).getData("text") || "";
+      if (!/[\n,，;；\t]/.test(text)) return;
+      ev.preventDefault();
+      addBrandTerms([text]);
+      input.value = "";
+    });
+    box.addEventListener("click", () => input.focus());
+  })();
 
   $("filePick").addEventListener("click", () => $("file").click());
   $("file").addEventListener("change", async () => {
@@ -891,7 +1048,7 @@
         web_url: $("web_url").value,
         task: $("task").value,
         materials: $("materials").value,
-        brand_terms: $("brand_terms").value,
+        brand_terms: brandTerms.slice(),
         industry: $("industry").value,
         count: $("count").value,
         platforms: [...selectedPlats],
@@ -909,7 +1066,9 @@
       if (d.web_url != null) $("web_url").value = d.web_url;
       if (d.task != null) $("task").value = d.task;
       if (d.materials != null) $("materials").value = d.materials;
-      if (d.brand_terms != null) $("brand_terms").value = d.brand_terms;
+      if (Array.isArray(d.brand_terms)) brandTerms = normalizeBrandTerms(d.brand_terms);
+      else if (d.brand_terms != null) brandTerms = normalizeBrandTerms([String(d.brand_terms)]);
+      renderBrandTerms();
       if (d.industry != null) $("industry").value = d.industry;
       if (d.count != null) $("count").value = d.count;
       if (Array.isArray(d.platforms) && d.platforms.length) {
@@ -919,12 +1078,32 @@
     } catch (_) {}
   }
 
-  function setJobId(id) {
+  function setJobId(id, touchIds) {
     activeJobId = id || null;
     try {
-      if (id) localStorage.setItem(LS_JOB, id);
-      else localStorage.removeItem(LS_JOB);
+      if (id) {
+        localStorage.setItem(LS_JOB, id);
+        if (Array.isArray(touchIds)) {
+          const cleaned = touchIds.map((x) => Number(x)).filter((n) => n > 0);
+          if (cleaned.length) localStorage.setItem(LS_TOUCH, JSON.stringify(cleaned));
+          else localStorage.removeItem(LS_TOUCH);
+        }
+      } else {
+        localStorage.removeItem(LS_JOB);
+        localStorage.removeItem(LS_TOUCH);
+      }
     } catch (_) {}
+  }
+
+  function loadTouchIds() {
+    try {
+      const raw = localStorage.getItem(LS_TOUCH);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map((x) => Number(x)).filter((n) => n > 0) : [];
+    } catch (_) {
+      return [];
+    }
   }
 
   function clearFieldErrors() {
@@ -962,27 +1141,65 @@
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   }
 
-  async function pollJob(jobId) {
+  function touchExampleIds(ids) {
+    const cleaned = (ids || []).map((id) => Number(id)).filter((id) => id > 0);
+    if (!cleaned.length) return;
+    void geoFetch("/keyword-miner/examples/touch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: cleaned }),
+    }).catch(() => {});
+  }
+
+  async function pollJob(jobId, touchIds) {
     stopPoll();
-    setJobId(jobId);
+    // 显式传入数组(可为空)时覆盖旧 touchIds; 仅 resume 不传第二参时读 LS
+    const pendingTouch = Array.isArray(touchIds) ? touchIds.slice() : loadTouchIds();
+    setJobId(jobId, pendingTouch);
     showRunning();
+    let lastSyncedStatus = null;
+    let transientFails = 0;
+    const failTerminal = (message) => {
+      setJobId(null);
+      setRunIdle();
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(message) + '</div>';
+      showIdlePreview();
+    };
+    const pauseKeepJob = (message) => {
+      // 保留 LS_JOB, 刷新页面可续跑
+      setRunIdle();
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>' + esc(message) + '</div>';
+    };
     const tick = async () => {
       try {
         const resp = await minerFetch("/api/jobs/" + encodeURIComponent(jobId), { cache: "no-store" });
         if (resp.status === 404) {
+          await markJobGoneOnGeo(jobId);
           setJobId(null);
           showIdlePreview();
           $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>上次任务已过期，请重新生成。</div>';
           setRunIdle();
           return;
         }
+        if (!resp.ok) {
+          transientFails += 1;
+          if (transientFails >= 8) {
+            pauseKeepJob("任务状态连续获取失败, 请刷新页面续跑或重新生成");
+            return;
+          }
+          pollTimer = setTimeout(tick, 2000);
+          return;
+        }
+        transientFails = 0;
         const job = await resp.json();
         if (job.error && job.status === "error") {
-          void syncJobToGeo(job);
-          throw new Error(job.error);
+          await syncJobToGeo(job);
+          failTerminal(job.error);
+          return;
         }
         if (job.status === "done" && job.result) {
-          void syncJobToGeo(job);
+          await syncJobToGeo(job);
+          touchExampleIds(pendingTouch);
           lastDoneJobId = jobId;
           setJobId(null);
           setRunIdle();
@@ -998,15 +1215,23 @@
           return;
         }
         if (job.status === "queued" || job.status === "running") {
-          void syncJobToGeo(job);
+          // 仅状态变化时同步主库, 避免每 1.5s PUT 刷屏
+          if (job.status !== lastSyncedStatus) {
+            lastSyncedStatus = job.status;
+            void syncJobToGeo(job, { quiet: true });
+          }
           pollTimer = setTimeout(tick, 1500);
           return;
         }
-        throw new Error(job.error || ("未知状态：" + job.status));
+        failTerminal(job.error || ("未知状态：" + job.status));
       } catch (e) {
-        setRunIdle();
-        $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
-        showIdlePreview();
+        // 瞬时网络/解析异常: 保留 LS_JOB 并重试
+        transientFails += 1;
+        if (transientFails >= 8) {
+          pauseKeepJob("网络异常, 请刷新页面续跑: " + (e.message || String(e)));
+          return;
+        }
+        pollTimer = setTimeout(tick, 2000);
       }
     };
     await tick();
@@ -1051,21 +1276,14 @@
       } catch (_) {}
       const resp = await minerFetch("/api/mine", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ company, product, materials, web_url, count, task, platforms,
-          brand_terms: $("brand_terms").value.split(/\n+/).map(s=>s.trim()).filter(Boolean),
+          brand_terms: brandTerms.slice(),
           reference_examples, edit_lessons }) });
       const data = await resp.json();
       if (data.error && !data.job_id) throw new Error(data.error);
-      // 真正注入生成后累加范例 use_count
       const touchIds = reference_examples.map((x) => x && x.id).filter((id) => Number(id) > 0);
-      if (touchIds.length && (data.job_id || data.selection || data.expansion)) {
-        void geoFetch("/keyword-miner/examples/touch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: touchIds }),
-        }).catch(() => {});
-      }
-      // 兼容旧同步接口：直接返回 selection
+      // 兼容旧同步接口：直接返回 selection 时再 touch
       if (data.selection || data.expansion) {
+        touchExampleIds(touchIds);
         current = { selection: data.selection || [], expansion: data.expansion || {} };
         editNotes = [];
         lastDoneJobId = null;
@@ -1074,7 +1292,8 @@
         return;
       }
       if (!data.job_id) throw new Error("未返回任务 ID");
-      await pollJob(data.job_id);
+      // 异步任务: 等 status=done 再 touch, 失败不加 use_count
+      await pollJob(data.job_id, touchIds);
     } catch (e) {
       $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
       showIdlePreview();
@@ -1180,8 +1399,9 @@
     if (p.web_url != null) $("web_url").value = p.web_url;
     if (p.task != null) $("task").value = p.task;
     if (p.materials != null) $("materials").value = p.materials;
-    if (Array.isArray(p.brand_terms)) $("brand_terms").value = p.brand_terms.join("\n");
-    else if (p.brand_terms != null) $("brand_terms").value = String(p.brand_terms);
+    if (Array.isArray(p.brand_terms)) brandTerms = normalizeBrandTerms(p.brand_terms);
+    else if (p.brand_terms != null) brandTerms = normalizeBrandTerms([String(p.brand_terms)]);
+    renderBrandTerms();
     if (p.count != null) $("count").value = p.count;
     if (Array.isArray(p.platforms) && p.platforms.length) {
       selectedPlats = new Set(p.platforms);
@@ -1277,7 +1497,7 @@
     $("status").innerHTML = "";
     let html = "";
     if (current.selection.length) {
-      html += '<h3>一、选词建议 <span class="muted" style="font-weight:400;font-size:12px">点「修改」可重新生成；可勾选批量入范例</span></h3>';
+      html += '<h3>一、选词建议</h3>';
       html += "<table><thead><tr><th></th><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th><th>操作</th></tr></thead><tbody>";
       current.selection.slice().sort((a,b)=>b.score-a.score).forEach((k, idx) => {
         // keep stable idx against unsorted source: map by word+score later via data-idx on sorted view

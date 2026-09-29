@@ -27,6 +27,7 @@ _API_PREFIX_MODULES = (
     ("/api/v1/alerts/", "告警任务"),
     ("/api/v1/notifications/", "消息通知"),
     ("/api/v1/ops/", "系统运维"),
+    ("/api/v1/keyword-miner/", "GEO选词"),
 )
 
 _PATH_IN_DESC = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s+(/api/\S+)")
@@ -55,6 +56,10 @@ _ROUTE_RULES: list[tuple[str, re.Pattern[str], str]] = [
     ("PUT", re.compile(r"^/api/v1/platforms/\d+$"), "修改模型平台：更新平台启用状态或显示配置"),
     ("POST", re.compile(r"^/api/v1/notifications/\d+/read$"), "标记消息已读"),
     ("POST", re.compile(r"^/api/v1/notifications/read-all$"), "全部消息标记已读"),
+    ("PUT", re.compile(r"^/api/v1/keyword-miner/jobs/[^/]+/edits$"), "保存选词修订：更新选词/拓词编辑结果"),
+    ("POST", re.compile(r"^/api/v1/keyword-miner/examples/batch$"), "入库选词范例：批量写入范例库"),
+    ("POST", re.compile(r"^/api/v1/keyword-miner/examples/touch$"), "累计范例引用：选词生成命中范例后加引用次数"),
+    ("PATCH", re.compile(r"^/api/v1/keyword-miner/examples/\d+$"), "维护选词范例：更新内容或停用/启用"),
 ]
 
 _LEGACY_FRIENDLY = {

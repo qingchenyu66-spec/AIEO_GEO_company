@@ -74,6 +74,8 @@ GEO_GATE_URL = (
     os.getenv("GEO_GATE_URL", "http://127.0.0.1:8001/api/v1/keyword-miner/gate").strip()
     or "http://127.0.0.1:8001/api/v1/keyword-miner/gate"
 )
+# 挖词 API 请求体上限 (字节); 防超大 JSON / 上传拖垮进程
+MAX_BODY_BYTES = max(64 * 1024, int(os.getenv("MAX_BODY_BYTES", str(4 * 1024 * 1024))))
 
 # 钉钉 webhook 仅允许官方域名
 DINGTALK_WEBHOOK_HOST_SUFFIXES = (
@@ -468,7 +470,8 @@ def fetch_url_text(url, limit=8000):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; GeoMiner/1.0)"})
         with _SAFE_URL_OPENER.open(req, timeout=15) as r:
-            raw = r.read().decode("utf-8", "ignore")
+            # 先截断原始字节, 避免超大页面占满内存
+            raw = r.read(max(limit * 10, 200_000)).decode("utf-8", "ignore")
         text = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
         text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -835,7 +838,8 @@ JOBS_LOCK = threading.Lock()
 JOB_TTL_SEC = 6 * 3600
 HISTORY_DB = os.getenv("HISTORY_DB") or os.path.join(HERE, "history.db")
 HISTORY_KEEP = 200
-# sqlite=本地可选缓存；off=仅内存(生产历史走 GEO 主库)
+# sqlite=本地任务断点 (重启后可 GET 已落盘任务); 门户历史列表仍走 GEO MySQL
+# off=仅内存 (进程一挂进行中任务即丢)
 HISTORY_BACKEND = (os.getenv("HISTORY_BACKEND") or "sqlite").strip().lower()
 
 
@@ -904,7 +908,7 @@ def _result_summary(result):
 
 
 def _persist_job(job):
-    """可选写入本地 SQLite; 生产用 HISTORY_BACKEND=off, 历史由 GEO 主库接管."""
+    """可选写入本地 SQLite 作断点; 门户历史列表仍以 GEO 主库为准."""
     if HISTORY_BACKEND != "sqlite":
         return
     try:
@@ -1307,7 +1311,62 @@ def get_mine_job(job_id):
     db_job = _load_job_from_db(job_id)
     if not db_job:
         return None
+    # 热加载进内存, 避免反复读盘; 进行中状态已在启动时收成 error
+    with JOBS_LOCK:
+        JOBS.setdefault(job_id, db_job)
     return _job_snapshot(db_job)
+
+
+def recover_jobs_after_restart():
+    """启动时: 未完成任务标 error (线程已死), done 任务热加载便于续读."""
+    if HISTORY_BACKEND != "sqlite":
+        return
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, status, company, product, created_at, updated_at, error, result_json, payload_json
+                FROM mine_jobs
+                ORDER BY updated_at DESC
+                LIMIT 40
+                """
+            ).fetchall()
+    except Exception:
+        return
+    now = time.time()
+    for r in rows:
+        result = None
+        payload = None
+        if r["result_json"]:
+            try:
+                result = json.loads(r["result_json"])
+            except Exception:
+                result = None
+        if r["payload_json"]:
+            try:
+                payload = json.loads(r["payload_json"])
+            except Exception:
+                payload = None
+        status = (r["status"] or "").strip().lower()
+        error = r["error"]
+        if status in {"queued", "running"}:
+            status = "error"
+            error = error or "挖词服务重启, 任务已中断, 请重新生成"
+        job = {
+            "job_id": r["job_id"],
+            "status": status,
+            "created_at": r["created_at"],
+            "updated_at": now if status == "error" and (r["status"] or "") != "error" else r["updated_at"],
+            "company": r["company"] or "",
+            "product": r["product"] or "",
+            "error": error,
+            "result": result,
+            "payload": payload,
+        }
+        with JOBS_LOCK:
+            JOBS[job["job_id"]] = job
+        if status == "error" and (r["status"] or "").strip().lower() in {"queued", "running"}:
+            _persist_job(job)
 
 
 def make_report(company, selection, expansion):
@@ -1481,6 +1540,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length > MAX_BODY_BYTES:
+                self._send(413, json.dumps({"error": "请求体过大"}, ensure_ascii=False))
+                return
             raw = self.rfile.read(length).decode("utf-8") if length else "{}"
             payload = json.loads(raw)
         except Exception:
@@ -1690,9 +1752,13 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_history_db()
+    recover_jobs_after_restart()
     print(f"GEO 选词智能体 MVP v3 启动： http://{HOST}:{PORT}")
     print(f"大模型：{'已配置 (' + LLM_MODEL + ')' if LLM_API_KEY else '未配置（生成将失败）'}")
     print(f"钉钉交互式回调：{'已配置 (Token+AESKey)' if get_crypto() else '未配置 -> 仅网页端/群推送可用'}")
-    print(f"历史库：{HISTORY_BACKEND}" + (f" -> {HISTORY_DB}" if HISTORY_BACKEND == "sqlite" else " (GEO 主库)"))
+    print(
+        f"任务断点：{HISTORY_BACKEND}"
+        + (f" -> {HISTORY_DB}" if HISTORY_BACKEND == "sqlite" else " (仅内存; 门户历史仍走 GEO 主库)")
+    )
     # ThreadingHTTPServer：生产环境多人并发访问（如钉钉工作台）时不会互相阻塞
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

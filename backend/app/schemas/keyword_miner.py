@@ -48,7 +48,7 @@ class KeywordMinerExampleBatchRequest(BaseModel):
     source_job_id: str | None = None
     source_company: str = ""
     source_product: str = ""
-    items: list[KeywordMinerExampleItemIn] = Field(default_factory=list)
+    items: list[KeywordMinerExampleItemIn] = Field(default_factory=list, max_length=200)
 
 
 class KeywordMinerExampleUpdateRequest(BaseModel):

@@ -99,6 +99,10 @@ MENU_ALLOWED_ACTIONS: dict[str, frozenset[str]] = {
     "platform.lead_diagnosis": frozenset({"can_export", "can_create"}),
     "platform.h5_diagnosis_orders": frozenset({"can_export"}),
     "platform.snapshot_backfill": frozenset({"can_export", "can_update"}),
+    # 与前端 menuPermissionMatrix 对齐; 缺省会只剩 can_export, 职位一保存就洗掉写权限
+    "platform.keyword_miner": frozenset({"can_export", "can_update", "can_create"}),
+    "platform.keyword_miner.workbench": frozenset({"can_export", "can_update", "can_create"}),
+    "platform.keyword_miner.examples": frozenset({"can_export", "can_update", "can_create", "can_delete"}),
     "platform.reports": frozenset({"can_export", "can_create", "can_update"}),
     "platform.models": frozenset({"can_export"}),
     "platform.alerts": frozenset({"can_export", "can_update"}),

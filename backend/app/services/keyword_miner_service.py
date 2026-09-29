@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentSession, require_platform
@@ -18,11 +18,66 @@ from app.schemas.keyword_miner import (
     KeywordMinerJobUpsertRequest,
 )
 from app.services.menu_permission_service import has_any_identity_menu_permission
+from app.services.operation_log_service import write_operation_log
 
 MENU_CODE = "platform.keyword_miner"
 WORKBENCH_MENU = "platform.keyword_miner.workbench"
 EXAMPLES_MENU = "platform.keyword_miner.examples"
 HISTORY_KEEP = 200
+# 挖词进程重启或浏览器离开后, 主库可能残留 queued/running
+STALE_JOB_SECONDS = 2 * 3600
+AUDIT_MODULE = "GEO选词"
+
+
+def _audit(
+    db: Session,
+    current: CurrentSession,
+    action_type: str,
+    description: str,
+    *,
+    target_id: int | None = None,
+) -> None:
+    write_operation_log(
+        db,
+        current,
+        action_type,
+        description,
+        target_module=AUDIT_MODULE,
+        target_id=target_id,
+        risk_level="普通",
+    )
+
+
+def _summarize_edit_notes(notes: list[dict] | None, *, limit: int = 6) -> str:
+    rows: list[str] = []
+    for note in notes or []:
+        if not isinstance(note, dict):
+            continue
+        old_word = str(note.get("old_word") or "").strip()
+        new_word = str(note.get("word") or "").strip()
+        reason = str(note.get("reason") or "").strip()
+        kind = str(note.get("kind") or "").strip()
+        stage = str(note.get("stage") or "").strip()
+        if not (old_word or new_word):
+            continue
+        if old_word and new_word and old_word != new_word:
+            piece = f"「{old_word}」→「{new_word}」"
+        else:
+            piece = f"「{new_word or old_word}」"
+        if kind == "expand" and stage:
+            piece = f"{stage}/{piece}"
+        if reason:
+            piece = f"{piece}（{reason}）"
+        rows.append(piece)
+        if len(rows) >= limit:
+            break
+    if not rows:
+        return "保存修订"
+    extra = max(0, len(notes or []) - len(rows))
+    text = "；".join(rows)
+    if extra:
+        text = f"{text} 等共 {len(notes or [])} 条"
+    return text
 
 
 def _require_workbench(db: Session, current: CurrentSession) -> None:
@@ -144,8 +199,38 @@ def _prune_old(db: Session) -> None:
         db.delete(row)
 
 
+def finalize_stale_jobs(db: Session, *, older_than_seconds: int = STALE_JOB_SECONDS) -> int:
+    """把超时仍停在 queued/running 的主库任务收成 error, 避免历史列表僵尸."""
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=max(60, int(older_than_seconds)))
+    rows = list(
+        db.scalars(
+            select(GeoKeywordMinerJob).where(
+                GeoKeywordMinerJob.status.in_(("queued", "running")),
+                or_(
+                    and_(
+                        GeoKeywordMinerJob.job_updated_at.is_not(None),
+                        GeoKeywordMinerJob.job_updated_at < cutoff,
+                    ),
+                    and_(
+                        GeoKeywordMinerJob.job_updated_at.is_(None),
+                        GeoKeywordMinerJob.updated_at < cutoff,
+                    ),
+                ),
+            )
+        ).all()
+    )
+    now = datetime.now(UTC).replace(tzinfo=None)
+    for row in rows:
+        row.status = "error"
+        row.error = row.error or "任务超时未完成 (可能挖词服务重启或浏览器中断), 请重新生成"
+        row.job_updated_at = now
+    return len(rows)
+
+
 def list_jobs(db: Session, current: CurrentSession, *, limit: int = 50) -> list[dict]:
     _require_workbench(db, current)
+    if finalize_stale_jobs(db):
+        db.flush()
     limit = max(1, min(int(limit or 50), 200))
     rows = db.scalars(
         select(GeoKeywordMinerJob)
@@ -253,6 +338,7 @@ def upsert_job(
             row.job_created_at = job_created
         row.job_updated_at = job_updated
 
+    finalize_stale_jobs(db)
     _prune_old(db)
     db.flush()
     return _serialize_detail(row)
@@ -280,6 +366,15 @@ def save_job_edits(
     row.edited_result_json = payload.edited_result
     row.edit_notes_json = list(payload.edit_notes or [])
     row.job_updated_at = datetime.now(UTC).replace(tzinfo=None)
+    company = (row.company or "").strip() or "未命名企业"
+    detail = _summarize_edit_notes(list(payload.edit_notes or []))
+    _audit(
+        db,
+        current,
+        "修订选词",
+        f"修订选词任务 {job_id}（{company}）：{detail}",
+        target_id=row.id,
+    )
     db.flush()
     return _serialize_detail(row)
 
@@ -321,7 +416,8 @@ def list_examples(
     status: str | None = "active",
     q: str | None = None,
     limit: int = 100,
-) -> list[dict]:
+    offset: int = 0,
+) -> dict:
     _require_examples(db, current)
     stmt = select(GeoKeywordMinerExample).order_by(
         GeoKeywordMinerExample.updated_at.desc(), GeoKeywordMinerExample.id.desc()
@@ -341,8 +437,17 @@ def list_examples(
                 GeoKeywordMinerExample.edit_reason.like(like),
             )
         )
-    rows = db.scalars(stmt.limit(max(1, min(int(limit or 100), 500)))).all()
-    return [_serialize_example(r) for r in rows]
+    page_limit = max(1, min(int(limit or 100), 500))
+    page_offset = max(0, int(offset or 0))
+    id_stmt = stmt.with_only_columns(GeoKeywordMinerExample.id).order_by(None)
+    total = int(db.scalar(select(func.count()).select_from(id_stmt.subquery())) or 0)
+    rows = db.scalars(stmt.offset(page_offset).limit(page_limit)).all()
+    return {
+        "items": [_serialize_example(r) for r in rows],
+        "total": total,
+        "limit": page_limit,
+        "offset": page_offset,
+    }
 
 
 def match_examples(
@@ -448,6 +553,8 @@ def batch_create_examples(
     _require_examples(db, current, need_update=True)
     if not payload.items:
         raise ValueError("items 不能为空")
+    if len(payload.items) > 200:
+        raise ValueError("单次最多入库 200 条")
     industry = (payload.industry or "").strip()[:80]
     created = 0
     skipped = 0
@@ -494,7 +601,29 @@ def batch_create_examples(
         db.flush()
         created += 1
         out_ids.append(row.id)
+    if created:
+        sample = "、".join(
+            (item.word or "").strip()
+            for item in payload.items
+            if (item.word or "").strip()
+        )[:180]
+        company = (payload.source_company or "").strip()
+        prefix = f"入库范例 {created} 条"
+        if company:
+            prefix = f"{prefix}（来源 {company}）"
+        _audit(db, current, "入库范例", f"{prefix}：{sample}" if sample else prefix)
     return {"created": created, "skipped": skipped, "ids": out_ids}
+
+
+def _require_examples_actions(
+    db: Session,
+    current: CurrentSession,
+    actions: tuple[str, ...],
+) -> None:
+    require_platform(current)
+    if not has_any_identity_menu_permission(db, current.identity.id, EXAMPLES_MENU, actions):
+        if not has_any_identity_menu_permission(db, current.identity.id, MENU_CODE, actions):
+            raise PermissionError("当前账号无权维护 GEO选词范例库")
 
 
 def update_example(
@@ -503,10 +632,16 @@ def update_example(
     example_id: int,
     payload: KeywordMinerExampleUpdateRequest,
 ) -> dict:
-    _require_examples(db, current, need_update=True)
+    # 停用/启用走 can_delete (兼容仅有 can_update 的旧授权)
+    if payload.status is not None:
+        _require_examples_actions(db, current, ("can_delete", "can_update"))
+    else:
+        _require_examples(db, current, need_update=True)
     row = db.get(GeoKeywordMinerExample, int(example_id))
     if row is None:
         raise LookupError("范例不存在")
+    before_word = (row.word or "").strip()
+    before_status = row.status
     if payload.industry is not None:
         row.industry = payload.industry.strip()[:80]
     if payload.stage is not None:
@@ -536,6 +671,32 @@ def update_example(
     row.content_hash = _example_hash(
         kind=row.kind, industry=row.industry or "", stage=row.stage or "", word=row.word or ""
     )
+    after_word = (row.word or "").strip()
+    if payload.status is not None and row.status != before_status:
+        label = "启用" if row.status == "active" else "停用"
+        _audit(
+            db,
+            current,
+            f"{label}范例",
+            f"{label}范例「{after_word or before_word}」(id={row.id})",
+            target_id=row.id,
+        )
+    elif after_word and after_word != before_word:
+        _audit(
+            db,
+            current,
+            "维护范例",
+            f"修改范例词「{before_word}」→「{after_word}」(id={row.id})",
+            target_id=row.id,
+        )
+    else:
+        _audit(
+            db,
+            current,
+            "维护范例",
+            f"更新范例「{after_word or before_word}」(id={row.id})",
+            target_id=row.id,
+        )
     db.flush()
     return _serialize_example(row)
 

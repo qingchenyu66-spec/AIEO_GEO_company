@@ -40,8 +40,13 @@ def list_keyword_miner_jobs(
 ) -> ApiResponse[dict]:
     try:
         items = keyword_miner_service.list_jobs(db, current, limit=limit)
+        db.commit()
     except PermissionError as exc:
+        db.rollback()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
     return ApiResponse(data={"items": items})
 
 
@@ -113,17 +118,25 @@ def list_keyword_miner_examples(
     industry: str | None = Query(default=None),
     status_filter: str | None = Query(default="active", alias="status"),
     q: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=20, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     try:
-        items = keyword_miner_service.list_examples(
-            db, current, kind=kind, industry=industry, status=status_filter, q=q, limit=limit
+        data = keyword_miner_service.list_examples(
+            db,
+            current,
+            kind=kind,
+            industry=industry,
+            status=status_filter,
+            q=q,
+            limit=limit,
+            offset=offset,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    return ApiResponse(data={"items": items})
+    return ApiResponse(data=data)
 
 
 @router.get("/examples/match", response_model=ApiResponse[dict])

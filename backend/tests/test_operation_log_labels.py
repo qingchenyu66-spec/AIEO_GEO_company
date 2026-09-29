@@ -35,7 +35,20 @@ def test_humanize_target_module_legacy_audit() -> None:
 
 def test_module_from_api_path() -> None:
     assert module_from_api_path("/api/v1/monitor/tasks") == "监测运营"
+    assert module_from_api_path("/api/v1/keyword-miner/jobs/abc") == "GEO选词"
     assert module_from_api_path("/api/v1/unknown/foo") == "接口操作"
+
+
+def test_keyword_miner_friendly_descriptions() -> None:
+    assert build_friendly_audit_description(
+        "PUT", "/api/v1/keyword-miner/jobs/abc/edits"
+    ) == "保存选词修订：更新选词/拓词编辑结果"
+    assert build_friendly_audit_description(
+        "POST", "/api/v1/keyword-miner/examples/batch"
+    ) == "入库选词范例：批量写入范例库"
+    assert build_friendly_audit_description(
+        "PATCH", "/api/v1/keyword-miner/examples/9"
+    ) == "维护选词范例：更新内容或停用/启用"
 
 
 def test_humanize_description_from_api_path() -> None:

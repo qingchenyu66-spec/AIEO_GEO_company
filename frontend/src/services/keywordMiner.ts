@@ -27,9 +27,15 @@ export async function listKeywordMinerExamples(params: {
   status?: string
   q?: string
   limit?: number
+  offset?: number
 } = {}) {
   const response = await http.get('/v1/keyword-miner/examples', { params })
-  return response.data.data as { items: KeywordMinerExample[] }
+  return response.data.data as {
+    items: KeywordMinerExample[]
+    total: number
+    limit: number
+    offset: number
+  }
 }
 
 export async function updateKeywordMinerExample(

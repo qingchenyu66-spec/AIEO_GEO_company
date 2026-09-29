@@ -43,18 +43,18 @@ if ! grep -q '^PORT=' "$ENV_FILE"; then
   echo 'PORT=8088' >> "$ENV_FILE"
 fi
 if ! grep -q '^HISTORY_BACKEND=' "$ENV_FILE"; then
-  echo 'HISTORY_BACKEND=off' >> "$ENV_FILE"
+  echo 'HISTORY_BACKEND=sqlite' >> "$ENV_FILE"
 fi
 if ! grep -q '^GEO_GATE_URL=' "$ENV_FILE"; then
   echo 'GEO_GATE_URL=http://127.0.0.1:8001/api/v1/keyword-miner/gate' >> "$ENV_FILE"
 fi
-# 兼容旧配置；HISTORY_BACKEND=off 时不再写 SQLite
+# 本地 sqlite 断点目录; 门户历史列表仍走 GEO MySQL
 if ! grep -q '^HISTORY_DB=' "$ENV_FILE"; then
   echo "HISTORY_DB=${DATA_DIR}/history.db" >> "$ENV_FILE"
 fi
-# 已有 .env 若仍默认 sqlite，生产切到 off（历史走 GEO 主库）
-if grep -q '^HISTORY_BACKEND=sqlite' "$ENV_FILE"; then
-  sed -i 's|^HISTORY_BACKEND=sqlite|HISTORY_BACKEND=off|' "$ENV_FILE"
+# 旧 off 配置升级为 sqlite, 避免进程重启丢进行中/刚完成任务
+if grep -q '^HISTORY_BACKEND=off' "$ENV_FILE"; then
+  sed -i 's|^HISTORY_BACKEND=off|HISTORY_BACKEND=sqlite|' "$ENV_FILE"
 fi
 
 # 生产用 backend venv；补齐选词服务额外依赖（钉钉加解密）

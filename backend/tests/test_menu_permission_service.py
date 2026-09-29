@@ -33,6 +33,64 @@ def test_audit_list_allows_stop_service_delete_flag():
     }
 
 
+def test_keyword_miner_sanitize_keeps_write_flags():
+    """职位保存不得把选词 create/update 洗成只读."""
+    parent = sanitize_menu_grant_flags(
+        "platform.keyword_miner",
+        "PLATFORM",
+        can_create=True,
+        can_update=True,
+        can_delete=True,
+        can_export=True,
+    )
+    assert parent == {
+        "can_create": True,
+        "can_update": True,
+        "can_delete": False,
+        "can_export": True,
+    }
+    workbench = sanitize_menu_grant_flags(
+        "platform.keyword_miner.workbench",
+        "PLATFORM",
+        can_create=True,
+        can_update=True,
+        can_delete=False,
+        can_export=True,
+    )
+    assert workbench["can_create"] is True
+    assert workbench["can_update"] is True
+    examples = sanitize_menu_grant_flags(
+        "platform.keyword_miner.examples",
+        "PLATFORM",
+        can_create=True,
+        can_update=True,
+        can_delete=True,
+        can_export=True,
+    )
+    assert examples == {
+        "can_create": True,
+        "can_update": True,
+        "can_delete": True,
+        "can_export": True,
+    }
+
+
+def test_keyword_miner_batch_items_max_length():
+    from pydantic import ValidationError
+
+    from app.schemas.keyword_miner import KeywordMinerExampleBatchRequest, KeywordMinerExampleItemIn
+
+    items = [
+        KeywordMinerExampleItemIn(kind="select", word=f"w{i}")
+        for i in range(201)
+    ]
+    try:
+        KeywordMinerExampleBatchRequest(items=items)
+        assert False, "expected ValidationError"
+    except ValidationError:
+        pass
+
+
 def test_users_create_menu_is_route_only_not_assignable():
     assert "platform.users.create" in ROUTE_ONLY_MENU_CODES
 

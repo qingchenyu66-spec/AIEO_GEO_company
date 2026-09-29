@@ -42,7 +42,7 @@ bash scripts/deploy_prod.sh
 
 - 服务：`geo-keyword-miner`（本机 `127.0.0.1:8088`）
 - Nginx：`/keyword-miner/` → `8088`
-- 历史：GEO MySQL `geo_keyword_miner_job`（选词服务 `HISTORY_BACKEND=off`）
+- 历史列表：GEO MySQL `geo_keyword_miner_job`；选词服务本地 SQLite 作任务断点（`HISTORY_BACKEND=sqlite`）
 - 密钥：`services/keyword-miner/.env` 的 `LLM_API_KEY`（首次可由 `backend/.env` 的 `DEEPSEEK_API_KEY` 自动填充）
 
 单独安装/重启选词服务：
