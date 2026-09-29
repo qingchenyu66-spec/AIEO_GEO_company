@@ -1757,6 +1757,7 @@ def list_snapshot_backfill_history_candidates(
 
     2026-09-07 - PC/手机平台码分开：doubao 不可见 doubao_mobile 历史
     2026-09-07 - 候选列表太慢：只取轻字段 + 正文截断，不做排期/品牌二次查询
+    2026-09-29 - 仍截 30 条，取 remote_time 最早（监测完成时间最靠前）；无 remote_time 时退回 updated_at
     """
     if current.identity.identity_type != "PLATFORM":
         raise PermissionError("仅平台运营端可查看历史补录候选")
@@ -1766,7 +1767,7 @@ def list_snapshot_backfill_history_candidates(
     platform = (target.platform or "").strip()
     if not prompt or not platform:
         return []
-    cap = max(1, min(int(limit or _REUSE_HISTORY_CANDIDATE_LIMIT), 50))
+    cap = max(1, min(int(limit or _REUSE_HISTORY_CANDIDATE_LIMIT), _REUSE_HISTORY_CANDIDATE_LIMIT))
 
     answer_excerpt_col = func.substr(GeoMonitorSubtask.answer_content, 1, 160).label("answer_excerpt")
     answer_len_col = func.length(GeoMonitorSubtask.answer_content).label("sample_chars")
@@ -1790,6 +1791,7 @@ def list_snapshot_backfill_history_candidates(
             GeoMonitorSubtask.platform,
             GeoMonitorSubtask.prompt,
             GeoMonitorSubtask.mention_position,
+            GeoMonitorSubtask.remote_time,
             GeoMonitorSubtask.updated_at,
             answer_excerpt_col,
             answer_len_col,
@@ -1806,7 +1808,13 @@ def list_snapshot_backfill_history_candidates(
             GeoMonitorTask.purpose == _task_backfill_purpose(task),
             _reuse_history_exclude_clause(dialect=dialect),
         )
-        .order_by(GeoMonitorSubtask.updated_at.desc())
+        .order_by(
+            # MySQL 无 NULLS LAST：无 remote_time 的排后面，再按完成时间升序
+            case((GeoMonitorSubtask.remote_time.is_(None), 1), else_=0).asc(),
+            GeoMonitorSubtask.remote_time.asc(),
+            GeoMonitorSubtask.updated_at.asc(),
+            GeoMonitorSubtask.subtask_id.asc(),
+        )
         .limit(cap)
     )
     if task.tenant_id is None:
@@ -1817,6 +1825,13 @@ def list_snapshot_backfill_history_candidates(
     rows: list[dict[str, Any]] = []
     for row in db.execute(stmt).all():
         updated = row.updated_at
+        remote_ms = row.remote_time
+        remote_iso = None
+        if remote_ms is not None:
+            try:
+                remote_iso = datetime.fromtimestamp(int(remote_ms) / 1000).isoformat(sep=" ", timespec="seconds")
+            except (TypeError, ValueError, OSError, OverflowError):
+                remote_iso = None
         excerpt = str(row.answer_excerpt or "").strip()
         rows.append({
             "subtask_id": row.subtask_id,
@@ -1824,8 +1839,10 @@ def list_snapshot_backfill_history_candidates(
             "platform": row.platform,
             "prompt": row.prompt,
             "mention_position": row.mention_position,
+            "remote_time": int(remote_ms) if remote_ms is not None else None,
+            "remote_time_label": remote_iso,
             "updated_at": updated.isoformat() if updated else None,
-            # 列表不再二次查排期；前端用 updated_at 作主标签即可
+            # 列表不再二次查排期；前端优先展示监测完成时间
             "schedule_label": None,
             "schedule_window_key": None,
             "region_label": None,

@@ -112,7 +112,7 @@ def test_history_candidates_scoped_by_purpose(db, monkeypatch):
     monkeypatch.setattr(mod, "get_monitor_subtask", lambda *_a, **_k: bw_target)
     monkeypatch.setattr(mod, "get_monitor_task", lambda *_a, **_k: bw_task)
 
-    rows = list_snapshot_backfill_history_candidates(db, subtask_id=bw_target.subtask_id, current=current, limit=20)
+    rows = list_snapshot_backfill_history_candidates(db, subtask_id=bw_target.subtask_id, current=current)
     ids = {row["subtask_id"] for row in rows}
     assert bw_ok.subtask_id in ids
     assert geo_ok.subtask_id not in ids

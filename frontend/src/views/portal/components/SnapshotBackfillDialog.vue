@@ -246,34 +246,39 @@ async function handleSubmit() {
     <template v-else>
       <p v-if="historyLoading" class="snapshot-backfill-intro">加载历史场次…</p>
       <p v-else-if="!historyItems.length" class="snapshot-backfill-intro">暂无同词同平台的历史成功场次</p>
-      <div v-else class="snapshot-history-list" role="listbox" aria-label="历史成功场次">
-        <label
-          v-for="item in historyItems"
-          :key="item.subtask_id"
-          class="snapshot-history-item"
-          :class="{ active: selectedHistoryId === item.subtask_id }"
-        >
-          <input
-            v-model="selectedHistoryId"
-            type="radio"
-            name="snapshot-history"
-            :value="item.subtask_id"
+      <template v-else>
+        <p class="snapshot-backfill-intro">
+          同条件按监测完成时间取最早最多 30 条，当前 {{ historyItems.length }} 条
+        </p>
+        <div class="snapshot-history-list" role="listbox" aria-label="历史成功场次">
+          <label
+            v-for="item in historyItems"
+            :key="item.subtask_id"
+            class="snapshot-history-item"
+            :class="{ active: selectedHistoryId === item.subtask_id }"
           >
-          <span class="snapshot-history-body">
-            <strong>{{ item.schedule_label || item.updated_at || item.subtask_id }}</strong>
-            <em>
-              排名 {{ item.mention_position ?? '—' }}
-              · {{ item.sample_chars }} 字
-              <template v-if="item.has_screenshot"> · 含截图</template>
-            </em>
-            <small v-if="item.answer_excerpt">{{ item.answer_excerpt }}</small>
-          </span>
+            <input
+              v-model="selectedHistoryId"
+              type="radio"
+              name="snapshot-history"
+              :value="item.subtask_id"
+            >
+            <span class="snapshot-history-body">
+              <strong>{{ item.remote_time_label || item.schedule_label || item.updated_at || item.subtask_id }}</strong>
+              <em>
+                排名 {{ item.mention_position ?? '—' }}
+                · {{ item.sample_chars }} 字
+                <template v-if="item.has_screenshot"> · 含截图</template>
+              </em>
+              <small v-if="item.answer_excerpt">{{ item.answer_excerpt }}</small>
+            </span>
+          </label>
+        </div>
+        <label class="snapshot-history-rank">
+          <span>品牌排名（可选，留空用历史场次原排名）</span>
+          <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
         </label>
-      </div>
-      <label v-if="historyItems.length" class="snapshot-history-rank">
-        <span>品牌排名（可选，留空用历史场次原排名）</span>
-        <input v-model="form.mention_position" type="number" min="1" max="100" placeholder="例如 3">
-      </label>
+      </template>
     </template>
 
     <template #footer>
@@ -344,7 +349,7 @@ async function handleSubmit() {
 .snapshot-history-list {
   display: grid;
   gap: 8px;
-  max-height: 280px;
+  max-height: min(52vh, 420px);
   overflow: auto;
   margin: 0 0 12px;
 }

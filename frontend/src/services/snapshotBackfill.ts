@@ -251,6 +251,8 @@ export interface SnapshotBackfillHistoryCandidate {
   platform: string
   prompt: string
   mention_position?: number | null
+  remote_time?: number | null
+  remote_time_label?: string | null
   updated_at?: string | null
   schedule_label?: string | null
   schedule_window_key?: string | null

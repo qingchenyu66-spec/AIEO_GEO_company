@@ -174,6 +174,79 @@ def test_list_history_candidates_same_prompt_platform(db_session, monkeypatch) -
     assert "st-mobile" not in ids
 
 
+def test_list_history_candidates_keeps_earliest_30(db_session, monkeypatch) -> None:
+    """匹配条件内截 30 条，取 remote_time 最早的（不受 updated_at 干扰）."""
+    from datetime import datetime, timedelta
+
+    _patch_getters(monkeypatch, db_session)
+    task = GeoMonitorTask(
+        task_id="task-many",
+        tenant_id=92,
+        monitor_keywords="品牌C",
+        status="completed",
+        total_items=40,
+        completed_items=40,
+        failed_items=0,
+        prompts_json=["批量历史问法"],
+        platforms_json=[{"platform": "doubao", "mode": "standard"}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    dst_task = GeoMonitorTask(
+        task_id="task-many-dst",
+        tenant_id=92,
+        monitor_keywords="品牌C",
+        status="failed",
+        total_items=1,
+        completed_items=0,
+        failed_items=1,
+        prompts_json=["批量历史问法"],
+        platforms_json=[{"platform": "doubao", "mode": "standard"}],
+        raw_request_json={},
+        raw_response_json={},
+    )
+    base = datetime(2026, 1, 1, 8, 0, 0)
+    base_ms = int(base.timestamp() * 1000)
+    sources = [
+        GeoMonitorSubtask(
+            subtask_id=f"st-many-{i:02d}",
+            task_id="task-many",
+            platform="doubao",
+            mode="standard",
+            prompt="批量历史问法",
+            status="completed",
+            answer_content=f"历史正文{i}",
+            mention_position=1,
+            raw_result_json={"source": "remote"},
+            # remote_time 升序；updated_at 故意倒序，证明按监测完成时间截取
+            remote_time=base_ms + i * 3600_000,
+            updated_at=base + timedelta(hours=39 - i),
+        )
+        for i in range(40)
+    ]
+    dst = GeoMonitorSubtask(
+        subtask_id="st-many-dst",
+        task_id="task-many-dst",
+        platform="doubao",
+        mode="standard",
+        prompt="批量历史问法",
+        status="failed",
+        answer_content=None,
+        raw_result_json={},
+    )
+    task.subtasks = sources
+    dst_task.subtasks = [dst]
+    db_session.add_all([task, dst_task])
+    db_session.commit()
+
+    items = list_snapshot_backfill_history_candidates(
+        db_session, subtask_id="st-many-dst", current=_platform_current()
+    )
+    assert len(items) == 30
+    assert [row["subtask_id"] for row in items] == [f"st-many-{i:02d}" for i in range(30)]
+    assert items[0]["remote_time"] == base_ms
+
+
 def test_reuse_history_copies_content_and_keeps_ops_meta(db_session, monkeypatch) -> None:
     _patch_getters(monkeypatch, db_session)
     src_task = GeoMonitorTask(
