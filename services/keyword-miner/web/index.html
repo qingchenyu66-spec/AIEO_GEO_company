@@ -499,11 +499,16 @@
   .btn.primary-outline { border-color: var(--brand); }
 
   .banner {
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
     font-size: 12.5px; padding: 7px 11px; border-radius: 8px; margin: 0 8px 10px 0;
   }
   .banner.demo { background: #fff7ed; color: var(--warn); }
   .banner.live { background: #ecfdf3; color: var(--ok); }
+  .banner.resume {
+    background: #eef5ff; color: #1e4b8c;
+    width: 100%; box-sizing: border-box; margin: 0 0 10px;
+  }
+  .banner.resume .btn { padding: 4px 10px; font-size: 12px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
   .actions {
@@ -876,8 +881,69 @@
 
   function showIdlePreview() {
     $("tools").style.display = "none";
-    $("status").innerHTML = "";
     $("result").innerHTML = idlePreviewHtml();
+  }
+
+  function hasResultPayload(data) {
+    if (!data || typeof data !== "object") return false;
+    const sel = data.selection || [];
+    const exp = data.expansion || {};
+    return !!(sel.length || Object.values(exp).some((a) => a && a.length));
+  }
+
+  function peekLastResult() {
+    try {
+      const raw = localStorage.getItem(LS_RESULT);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      return hasResultPayload(data) ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function lastResultLabel(data) {
+    const company = String((data && data.meta && data.meta.company) || "").trim();
+    const product = String((data && data.meta && data.meta.product) || "").trim();
+    if (company && product) return company + " · " + product;
+    return company || product || "上次结果";
+  }
+
+  function offerResumeLast() {
+    if (activeJobId || pollTimer) return;
+    const data = peekLastResult();
+    if (!data) return;
+    $("status").innerHTML =
+      '<div class="banner resume" role="status">' +
+        '<span class="dot"></span>' +
+        '<span>继续上次：' + esc(lastResultLabel(data)) + '</span>' +
+        '<button type="button" class="btn ghost" id="resumeLast">打开</button>' +
+        '<button type="button" class="btn ghost" id="dismissLast">忽略</button>' +
+      '</div>';
+    const openBtn = $("resumeLast");
+    const dismissBtn = $("dismissLast");
+    if (openBtn) openBtn.onclick = () => openLastResult();
+    if (dismissBtn) {
+      dismissBtn.onclick = () => {
+        try { localStorage.removeItem(LS_RESULT); } catch (_) {}
+        $("status").innerHTML = "";
+      };
+    }
+  }
+
+  function openLastResult() {
+    const data = peekLastResult();
+    if (!data) {
+      showIdlePreview();
+      $("status").innerHTML = "";
+      return;
+    }
+    current = { selection: data.selection || [], expansion: data.expansion || {} };
+    editNotes = [];
+    const meta = data.meta || {};
+    if (meta.company && !$("company").value) $("company").value = meta.company;
+    if (meta.product && !$("product").value) $("product").value = meta.product;
+    render(data);
   }
 
   showIdlePreview();
@@ -905,16 +971,13 @@
     if (resumeId) {
       void pollJob(resumeId, loadTouchIds());
     } else {
-      const raw = localStorage.getItem(LS_RESULT);
-      if (raw) {
-        const data = JSON.parse(raw);
-        current = { selection: data.selection || [], expansion: data.expansion || {} };
-        if ((current.selection && current.selection.length) || Object.values(current.expansion || {}).some(a => a && a.length)) {
-          render(data);
-        }
-      }
+      $("status").innerHTML = "";
+      offerResumeLast();
     }
-  } catch (_) {}
+  } catch (_) {
+    $("status").innerHTML = "";
+    offerResumeLast();
+  }
   onGeoReady(() => {});
   // 超时兜底：父页未及时 bootstrap 也放开 GEO 调用
   setTimeout(() => {
@@ -1162,8 +1225,8 @@
     const failTerminal = (message) => {
       setJobId(null);
       setRunIdle();
-      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(message) + '</div>';
       showIdlePreview();
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(message) + '</div>';
     };
     const pauseKeepJob = (message) => {
       // 保留 LS_JOB, 刷新页面可续跑
@@ -1295,8 +1358,8 @@
       // 异步任务: 等 status=done 再 touch, 失败不加 use_count
       await pollJob(data.job_id, touchIds);
     } catch (e) {
-      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
       showIdlePreview();
+      $("status").innerHTML = '<div class="banner demo"><span class="dot"></span>出错：' + esc(e.message) + '</div>';
       setRunIdle();
     }
   }
@@ -1535,6 +1598,8 @@
     }
     if (!html) {
       showIdlePreview();
+      $("status").innerHTML = "";
+      offerResumeLast();
       return;
     }
     $("tools").style.display = (current.selection.length || expStages.length) ? "flex" : "none";
