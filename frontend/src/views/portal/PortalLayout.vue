@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Building2, ChevronDown, LockKeyhole, LogOut, PanelLeft, ShieldCheck, Star } from '@lucide/vue'
+import { Building2, ChevronDown, LockKeyhole, LogOut, Menu, PanelLeft, ShieldCheck, Star, X } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
 import AppBrandLogo from '../../components/AppBrandLogo.vue'
@@ -56,7 +56,32 @@ const emit = defineEmits<{
 }>()
 
 const sidebarPinned = ref(false)
+const mobileNavOpen = ref(false)
 const router = useRouter()
+
+function toggleMobileNav() {
+  mobileNavOpen.value = !mobileNavOpen.value
+}
+
+function closeMobileNav() {
+  mobileNavOpen.value = false
+}
+
+function onSidebarClick(event: MouseEvent) {
+  if (!mobileNavOpen.value) return
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  if (target.closest('.nav-favorite-btn, .nav-parent, .portal-mobile-nav-close')) return
+  if (target.closest('.nav-item, .sub-nav-item')) closeMobileNav()
+}
+
+function onMobileNavKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMobileNav()
+}
+
+function onMobileNavResize() {
+  if (window.innerWidth > 900) closeMobileNav()
+}
 
 onMounted(() => {
   try {
@@ -64,6 +89,13 @@ onMounted(() => {
   } catch {
     sidebarPinned.value = false
   }
+  window.addEventListener('keydown', onMobileNavKeydown)
+  window.addEventListener('resize', onMobileNavResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onMobileNavKeydown)
+  window.removeEventListener('resize', onMobileNavResize)
 })
 
 function toggleSidebarPin() {
@@ -99,9 +131,17 @@ function onUserMenuCommand(command: string) {
       'portal-fullscreen': fullscreen,
       'portal-sidebar-expanded': userMenuExpanded,
       'portal-sidebar-pinned': sidebarPinned,
+      'portal-mobile-nav-open': mobileNavOpen,
     }"
   >
-    <aside v-if="!fullscreen" class="sidebar">
+    <button
+      v-if="mobileNavOpen && !fullscreen"
+      type="button"
+      class="portal-mobile-nav-backdrop"
+      aria-label="关闭菜单"
+      @click="closeMobileNav"
+    />
+    <aside v-if="!fullscreen" id="portal-sidebar" class="sidebar" @click="onSidebarClick">
       <div class="brand">
         <!-- 2026-08-20 - 对齐生产：无 brand-head；固定钮 absolute 不占流，悬停不拽方标 -->
         <div class="brand-mark brand-mark--logo" aria-hidden="true">
@@ -223,6 +263,17 @@ function onUserMenuCommand(command: string) {
     </aside>
     <section class="workspace">
       <header v-if="!fullscreen" class="topbar">
+        <button
+          type="button"
+          class="portal-mobile-nav-btn"
+          :aria-expanded="mobileNavOpen"
+          aria-controls="portal-sidebar"
+          :aria-label="mobileNavOpen ? '关闭菜单' : '打开菜单'"
+          @click="toggleMobileNav"
+        >
+          <X v-if="mobileNavOpen" />
+          <Menu v-else />
+        </button>
         <div class="crumb">{{ pageTitle }}</div>
         <div class="top-actions">
           <!-- 2026-07-30 - 预览退出抢视线/像退出登录 - 顶栏次要按钮「返回企业管理」，去蓝条 -->

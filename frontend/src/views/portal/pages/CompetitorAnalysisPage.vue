@@ -338,7 +338,7 @@ const snapshotSourceTracks = computed(() =>
             <div
               v-for="(row, index) in sentimentLeaderboardRows"
               :key="`sentiment-${row.name}`"
-              class="brand-insights-rank-row"
+              class="brand-insights-rank-row is-sentiment"
               :class="{ 'is-brand': row.is_brand }"
             >
               <span>{{ index + 1 }}</span>

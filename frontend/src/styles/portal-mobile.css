@@ -1,0 +1,343 @@
+/* Phone portal. Rules stay inside max-width: 900px so desktop layout is unchanged. */
+
+.portal-mobile-nav-btn,
+.portal-mobile-nav-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .portal-mobile-nav-btn {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid #d7e3f2;
+    border-radius: 10px;
+    color: #153052;
+    background: #fff;
+    cursor: pointer;
+  }
+
+  .portal-mobile-nav-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .portal-shell .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 130;
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .portal-shell .top-actions {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  .portal-shell .sidebar {
+    position: fixed;
+    z-index: 120;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(288px, 86vw);
+    height: auto;
+    margin: 0;
+    padding: 72px 14px 24px;
+    overflow: auto;
+    transform: translateX(-105%);
+    transition: transform .2s ease;
+    box-shadow: none;
+  }
+
+  .portal-shell.portal-mobile-nav-open .sidebar {
+    transform: none;
+    box-shadow: 12px 0 36px rgba(15, 23, 42, .16);
+  }
+
+  .portal-shell .brand {
+    justify-content: flex-start;
+  }
+
+  .portal-shell .brand > div:last-of-type,
+  .portal-shell .nav-item > span:not(.nav-favorite-btn),
+  .portal-shell .sub-nav {
+    display: block;
+  }
+
+  .portal-shell .sub-nav {
+    display: grid;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .portal-shell .nav-item {
+    justify-content: flex-start;
+    min-height: 44px;
+    padding: 0 12px;
+  }
+
+  .portal-shell .sub-nav-item {
+    min-height: 44px;
+  }
+
+  .portal-shell .nav-favorite-btn,
+  .portal-shell .nav-favorite-btn.active {
+    opacity: 1;
+  }
+
+  .portal-shell.portal-mobile-nav-open .portal-mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 110;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: rgba(15, 23, 42, .46);
+    cursor: pointer;
+  }
+
+  .portal-shell.portal-mobile-nav-open .workspace {
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .portal-shell .portal-content {
+    padding: 16px 12px 32px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-shell .page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .portal-shell .page-head-aside {
+    justify-content: flex-start;
+  }
+
+  .portal-shell .page-head h1 {
+    font-size: 22px;
+    line-height: 1.25;
+  }
+
+  .portal-shell .live-status {
+    white-space: normal;
+  }
+
+  .portal-shell .portal-stats,
+  .portal-shell .ops-kpi-grid,
+  .portal-shell .ops-service-grid,
+  .portal-shell .source-hero-metrics,
+  .portal-shell .source-top-grid,
+  .portal-shell .source-analytics-grid,
+  .portal-shell .celery-insights-grid,
+  .portal-shell .alert-rule-fields,
+  .portal-shell .customer-platform-grid,
+  .portal-shell .kb-stats-panel,
+  .portal-shell .schedule-time-list,
+  .portal-shell .schedule-time-list.is-datetime,
+  .portal-shell .portal-content .source-query-bar,
+  .portal-shell .portal-content .source-data-head,
+  .portal-shell .portal-content .source-data-row,
+  .portal-shell .portal-content .schedule-preview-row,
+  .portal-shell .portal-content .permission-action-row,
+  .portal-shell .portal-content .competitor-add-row,
+  .portal-shell .portal-content .compare-brand-row,
+  .portal-shell .portal-content .competitor-hero-metrics,
+  .portal-shell .portal-content .ws-campus-grid-mid,
+  .portal-shell .portal-content .ws-campus-grid-bottom,
+  .portal-shell .portal-content .report-hero,
+  .portal-shell .portal-content .report-kpi-row,
+  .portal-shell .portal-content .sb-compare,
+  .portal-shell .portal-content .user-filter-bar,
+  .portal-shell .portal-content .brand-insights-rank-head,
+  .portal-shell .portal-content .brand-insights-rank-row,
+  .portal-shell .portal-content .lead-query-grid,
+  .portal-shell .portal-content .report-platform-table-head,
+  .portal-shell .portal-content .report-platform-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-shell .portal-content .panel-head,
+  .portal-shell .portal-content .source-panel-head,
+  .portal-shell .portal-content .competitor-panel-head,
+  .portal-shell .portal-content .report-section-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .portal-shell .portal-content .brand-insights-rank-head,
+  .portal-shell .portal-content .lead-query-grid.head,
+  .portal-shell .portal-content .report-platform-table-head {
+    display: none;
+  }
+
+  .portal-shell .portal-content .brand-insights-rank-row,
+  .portal-shell .portal-content .lead-query-grid:not(.head),
+  .portal-shell .portal-content .report-platform-table-row {
+    gap: 6px;
+    padding: 12px 4px;
+    border-bottom: 1px solid #e8f0f8;
+  }
+
+  .portal-shell .portal-content .brand-insights-rank-row > :nth-child(n + 3),
+  .portal-shell .portal-content .lead-query-grid:not(.head) > :nth-child(n + 2),
+  .portal-shell .portal-content .report-platform-table-row > :nth-child(n + 2) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+  }
+
+  .portal-shell .portal-content .brand-insights-rank-row > :nth-child(n + 3)::before,
+  .portal-shell .portal-content .lead-query-grid:not(.head) > :nth-child(n + 2)::before,
+  .portal-shell .portal-content .report-platform-table-row > :nth-child(n + 2)::before {
+    color: #8aa0ba;
+    font-size: 11px;
+    font-weight: 700;
+    font-style: normal;
+  }
+
+  .portal-shell .portal-content .brand-insights-rank-row > :nth-child(3)::before { content: "提及率"; }
+  .portal-shell .portal-content .brand-insights-rank-row > :nth-child(4)::before { content: "首位提及率"; }
+  .portal-shell .portal-content .brand-insights-rank-row.is-sentiment > :nth-child(3)::before { content: "正面占比"; }
+  .portal-shell .portal-content .brand-insights-rank-row.is-sentiment > :nth-child(4)::before { content: "负面占比"; }
+
+  .portal-shell .portal-content .lead-query-grid:not(.head):not(.mention):not(.source) > :nth-child(2)::before { content: "分类"; }
+  .portal-shell .portal-content .lead-query-grid:not(.head):not(.mention):not(.source) > :nth-child(3)::before { content: "排名"; }
+  .portal-shell .portal-content .lead-query-grid:not(.head):not(.mention):not(.source) > :nth-child(4)::before { content: "标签"; }
+  .portal-shell .portal-content .lead-query-grid.mention:not(.head) > :nth-child(2)::before { content: "命中次数"; }
+  .portal-shell .portal-content .lead-query-grid.mention:not(.head) > :nth-child(3)::before { content: "回答命中率"; }
+  .portal-shell .portal-content .lead-query-grid.mention:not(.head) > :nth-child(4)::before { content: "平均排名"; }
+  .portal-shell .portal-content .lead-query-grid.source:not(.head) > :nth-child(2)::before { content: "引用次数"; }
+  .portal-shell .portal-content .lead-query-grid.source:not(.head) > :nth-child(3)::before { content: "品牌相关"; }
+  .portal-shell .portal-content .lead-query-grid.source:not(.head) > :nth-child(4)::before { content: "平台数"; }
+
+  .portal-shell .portal-content .report-platform-table-row > :nth-child(2)::before { content: "完成数"; }
+  .portal-shell .portal-content .report-platform-table-row > :nth-child(3)::before { content: "提及率"; }
+  .portal-shell .portal-content .report-platform-table-row > :nth-child(4)::before { content: "平均排名"; }
+
+  .portal-shell .ops-log-list div,
+  .portal-shell .ops-health-list div {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .portal-shell .el-form--inline {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .portal-shell .el-form--inline .el-form-item {
+    margin-right: 0;
+    width: 100%;
+  }
+
+  .portal-shell .el-form--inline .el-input,
+  .portal-shell .el-form--inline .el-select,
+  .portal-shell .el-form--inline .el-date-editor {
+    width: 100%;
+  }
+
+  .portal-shell .source-article-scroll .source-table-row,
+  .portal-shell .source-website-short-list .source-type-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > .source-publish-time,
+  .portal-shell .source-article-scroll .source-table-row > .source-table-tags,
+  .portal-shell .source-article-scroll .source-table-row > strong,
+  .portal-shell .source-website-short-list .source-type-row > .source-domain-tag,
+  .portal-shell .source-website-short-list .source-type-row > strong,
+  .portal-shell .source-website-short-list .source-type-row > .source-type-percent {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    white-space: normal;
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > .source-publish-time::before,
+  .portal-shell .source-article-scroll .source-table-row > .source-table-tags::before,
+  .portal-shell .source-article-scroll .source-table-row > strong::before,
+  .portal-shell .source-website-short-list .source-type-row > .source-domain-tag::before,
+  .portal-shell .source-website-short-list .source-type-row > strong::before,
+  .portal-shell .source-website-short-list .source-type-row > .source-type-percent::before {
+    display: block;
+    margin-bottom: 2px;
+    color: #8aa0ba;
+    font-size: 11px;
+    font-weight: 700;
+    font-style: normal;
+    letter-spacing: 0;
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > .source-publish-time::before {
+    content: "发布时间";
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > .source-table-tags:nth-child(4)::before {
+    content: "问题";
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > .source-table-tags:nth-child(5)::before {
+    content: "露出词";
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > strong::before {
+    content: "次数";
+  }
+
+  .portal-shell .source-website-short-list .source-type-row > .source-domain-tag::before {
+    content: "域名";
+  }
+
+  .portal-shell .source-website-short-list .source-type-row > strong::before {
+    content: "次数";
+  }
+
+  .portal-shell .source-website-short-list .source-type-row > .source-type-percent::before {
+    content: "占比";
+  }
+
+  .portal-shell .source-article-scroll .source-table-row > strong,
+  .portal-shell .source-website-short-list .source-type-row > strong {
+    justify-self: start;
+  }
+
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+    margin-top: 8vh !important;
+  }
+
+  .el-dialog__body {
+    max-height: min(70vh, 640px);
+    overflow: auto;
+  }
+
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+  }
+
+  .el-select-dropdown,
+  .el-picker-panel {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .portal-shell .sidebar {
+    transition: none;
+  }
+}
