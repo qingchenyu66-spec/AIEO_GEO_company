@@ -200,6 +200,7 @@ export type SourceStatRow = {
   exposure_terms?: string[]
   questions?: string[]
   latest_time?: string | null
+  publish_time?: string | null
   has_exposure?: boolean
   category?: string | null
   category_label?: string | null

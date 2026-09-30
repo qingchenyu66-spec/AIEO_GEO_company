@@ -158,6 +158,7 @@ export interface MonitorSummary {
     exposure_terms?: string[]
     questions?: string[]
     latest_time?: string | null
+    publish_time?: string | null
     has_exposure?: boolean
   }>
   source_stats_all?: Array<{
@@ -169,6 +170,7 @@ export interface MonitorSummary {
     exposure_terms?: string[]
     questions?: string[]
     latest_time?: string | null
+    publish_time?: string | null
     has_exposure?: boolean
   }>
   source_citation_trend?: {

@@ -336,7 +336,7 @@
   padding: 16px 16px 12px;
 }
 
-/* 压过 .source-table-row 的 5 列模板；站名/域名按内容自适应，次数占比随内容定宽 */
+/* 压过 .source-table-row 的文章列模板；站名/域名按内容自适应，次数占比随内容定宽 */
 .source-table-head.source-type-head,
 .source-table-row.source-type-row {
   grid-template-columns: minmax(10rem, 1.6fr) minmax(8rem, 1fr) max-content max-content;
@@ -700,7 +700,7 @@
 .source-table-head,
 .source-table-row {
   display: grid;
-  grid-template-columns: 40px minmax(0, 2.2fr) minmax(0, 1.1fr) minmax(0, .85fr) 56px;
+  grid-template-columns: 40px minmax(0, 2.2fr) 92px minmax(0, 1.1fr) minmax(0, .85fr) 56px;
   gap: 10px;
   align-items: start;
   padding: 12px 16px;
@@ -760,6 +760,14 @@
 .source-table-title-link:hover {
   color: #2d6cdf;
   text-decoration: underline;
+}
+
+.source-publish-time {
+  color: #153052;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.45;
+  padding-top: 2px;
 }
 
 .source-table-main small {

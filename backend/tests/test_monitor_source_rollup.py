@@ -105,6 +105,45 @@ def test_merge_url_maps_sums_counts_and_unions_lists() -> None:
     assert row["latest_time"] == "2026-07-12T23:59:59"
 
 
+def test_merge_url_maps_keeps_earlier_publish_date() -> None:
+    merged = _merge_url_maps(
+        [
+            {
+                "https://a.example/x": {
+                    "title": "A",
+                    "url": "https://a.example/x",
+                    "count": 1,
+                    "platforms": [],
+                    "exposure_terms": [],
+                    "questions": [],
+                    "publish_time": "2026-08-21",
+                }
+            },
+            {
+                "https://a.example/x": {
+                    "title": "A",
+                    "url": "https://a.example/x",
+                    "count": 1,
+                    "platforms": [],
+                    "exposure_terms": [],
+                    "questions": [],
+                    "publish_time": "2026-06-01",
+                },
+                "https://b.example/y": {
+                    "title": "B",
+                    "url": "https://b.example/y",
+                    "count": 1,
+                    "platforms": [],
+                    "exposure_terms": [],
+                    "questions": [],
+                },
+            },
+        ]
+    )
+    assert merged["https://a.example/x"]["publish_time"] == "2026-06-01"
+    assert merged["https://b.example/y"]["publish_time"] is None
+
+
 def test_rebuild_source_daily_and_bundle_reads_rollup(db_session) -> None:
     tenant_id = 6
     day = date(2026, 7, 12)

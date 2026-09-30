@@ -29,6 +29,8 @@ _SOURCE_DAILY_WRITE_RETRIES = 3
 
 
 def _merge_url_maps(chunks: list[dict[str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    from app.services.monitor_service import _prefer_publish_date
+
     out: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
         if not isinstance(chunk, dict):
@@ -47,6 +49,7 @@ def _merge_url_maps(chunks: list[dict[str, dict[str, Any]]]) -> dict[str, dict[s
                     "exposure_terms": list(row.get("exposure_terms") or []),
                     "questions": list(row.get("questions") or []),
                     "latest_time": row.get("latest_time"),
+                    "publish_time": row.get("publish_time"),
                 }
                 continue
             dest["count"] = int(dest.get("count") or 0) + int(row.get("count") or 0)
@@ -64,6 +67,7 @@ def _merge_url_maps(chunks: list[dict[str, dict[str, Any]]]) -> dict[str, dict[s
             candidate = row.get("latest_time")
             if candidate and (dest.get("latest_time") is None or candidate > dest["latest_time"]):
                 dest["latest_time"] = candidate
+            dest["publish_time"] = _prefer_publish_date(dest.get("publish_time"), row.get("publish_time"))
     return out
 
 

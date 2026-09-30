@@ -77,3 +77,61 @@ def test_aggregate_source_stats_pair_includes_all_citations():
     assert by_url["https://brand.example.com/case"]["has_exposure"] is True
     assert by_url["https://example.com/ads-report"]["count"] == 1
     assert by_url["https://brand.example.com/case"]["count"] == 1
+
+
+def test_aggregate_source_stats_keeps_earliest_publish_date():
+    from datetime import date
+    from types import SimpleNamespace
+
+    from app.services.monitor_service import _aggregate_source_stats_pair
+
+    first = SimpleNamespace(
+        id=1,
+        platform="kimi",
+        prompt="机场广告公司哪家好",
+        reference_list_json=[
+            {
+                "title": "2026机场广告公司选择指南",
+                "url": "https://baijiahao.baidu.com/s?id=1",
+                "site": "百家号",
+                "publishTime": "2026-08-21",
+            },
+            {
+                "title": "无日期稿",
+                "url": "https://example.com/no-date",
+                "site": "example",
+                "publishTime": None,
+            },
+        ],
+    )
+    second = SimpleNamespace(
+        id=2,
+        platform="doubao",
+        prompt="高铁广告公司哪家好",
+        reference_list_json=[
+            {
+                "title": "2026机场广告公司选择指南",
+                "url": "https://baijiahao.baidu.com/s?id=1&from=2",
+                "site": "百家号",
+                "publishTime": "2026-06-01 16:40:37",
+            },
+            {
+                "title": "坏日期",
+                "url": "https://example.com/bad",
+                "site": "example",
+                "publishTime": "null",
+            },
+        ],
+    )
+    _branded, all_stats, _daily, _by_platform = _aggregate_source_stats_pair(
+        [first, second],  # type: ignore[arg-type]
+        business_day_by_id={1: date(2026, 9, 1), 2: date(2026, 9, 2)},
+        subtask_tenant_map={1: 6, 2: 6},
+        purchased_platforms_by_tenant={6: {"kimi", "doubao"}},
+        exposure_terms_by_tenant={6: []},
+    )
+    by_url = {row["url"].split("?")[0]: row for row in all_stats}
+    assert by_url["https://baijiahao.baidu.com/s"]["publish_time"] == "2026-06-01"
+    assert by_url["https://baijiahao.baidu.com/s"]["count"] == 2
+    assert by_url["https://example.com/no-date"]["publish_time"] is None
+    assert by_url["https://example.com/bad"]["publish_time"] is None

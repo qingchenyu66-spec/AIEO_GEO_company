@@ -764,6 +764,36 @@ def _source_filter_terms(asset: BrandAsset | None) -> list[str]:
     return list(result)
 
 
+_PUBLISH_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def _citation_publish_date(source: dict[str, Any]) -> str | None:
+    """引用 publishTime 取日期；空、null、非法日期丢掉。"""
+    raw = source.get("publishTime")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text.lower() == "null":
+        return None
+    match = _PUBLISH_DATE_RE.match(text)
+    if not match:
+        return None
+    try:
+        datetime.strptime(match.group(1), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return match.group(1)
+
+
+def _prefer_publish_date(current: str | None, candidate: str | None) -> str | None:
+    """同一链接多次引用时保留更早的发布日。"""
+    if not candidate:
+        return current or None
+    if not current or candidate < current:
+        return candidate
+    return current
+
+
 def _citation_site_label(source: dict[str, Any]) -> str | None:
     """引用里的中文站名；若 site 实际是 URL/域名则返回 None。"""
     raw = str(source.get("site") or "").strip()
@@ -1013,6 +1043,7 @@ def _aggregate_source_stats_pair_maps(
                 "exposure_terms": [],
                 "questions": [],
                 "latest_time": None,
+                "publish_time": None,
             },
         )
         row["count"] += 1
@@ -1027,6 +1058,10 @@ def _aggregate_source_stats_pair_maps(
                 row["exposure_terms"].append(term)
         if item.prompt and item.prompt not in row["questions"]:
             row["questions"].append(item.prompt)
+        row["publish_time"] = _prefer_publish_date(
+            row.get("publish_time"),
+            _citation_publish_date(source),
+        )
         # ponytail: latest_time=监测业务日；禁止 updated_at（补录会刷到今天）
         if biz_day is not None:
             candidate = datetime.combine(biz_day, time.max).isoformat(timespec="seconds")

@@ -372,6 +372,7 @@ const categoryOptions = [
         <div class="source-table-head">
           <span>#</span>
           <span>信源</span>
+          <span>发布时间</span>
           <span>问题</span>
           <span>露出词</span>
           <span>次数</span>
@@ -393,6 +394,7 @@ const categoryOptions = [
                 · {{ sourceCategoryLabel(source.category) }}
               </small>
             </div>
+            <span class="source-publish-time">{{ source.publish_time || '—' }}</span>
             <div class="source-table-tags">
               <i
                 v-for="question in visibleQuestions(source)"
