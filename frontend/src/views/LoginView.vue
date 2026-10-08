@@ -38,7 +38,7 @@ async function submitLogin() {
       identityDialog.value = true
     } else {
       ElMessage.success('登录成功')
-      await router.replace(auth.mustChangePassword ? '/change-password' : auth.portalPath)
+      await router.replace(auth.portalPath)
     }
   } catch (error: any) {
     if (error?.response?.status === 401 && error?.config?.url?.includes('/auth/login')) return
@@ -55,7 +55,7 @@ async function enterWithIdentity() {
     await auth.selectIdentity(selectedIdentity.value)
     identityDialog.value = false
     ElMessage.success(`已进入${selected.value ? identityDisplayName(selected.value) : '系统'}`)
-    await router.replace(auth.mustChangePassword ? '/change-password' : auth.portalPath)
+    await router.replace(auth.portalPath)
   } catch (error: any) {
     notifyOperationError(error, '身份选择失败')
   } finally {

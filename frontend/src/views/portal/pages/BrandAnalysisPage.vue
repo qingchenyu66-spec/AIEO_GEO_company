@@ -125,10 +125,28 @@ function compareDeltaClass(value: number | null | undefined, lowerIsBetter = fal
   return 'is-muted'
 }
 
+function descriptionGroupsFor(
+  platformCode: string,
+  sentimentLabel?: '正面' | '中性' | '负面',
+) {
+  return (dashboard.value?.ai_descriptions || []).filter(row => {
+    const onPlatform = (row.platforms || []).some(item => item.code === platformCode)
+    if (!onPlatform) return false
+    if (!sentimentLabel) return row.sentiment === '正面' || row.sentiment === '中性' || row.sentiment === '负面'
+    return row.sentiment === sentimentLabel
+  })
+}
+
 function platformShare(
-  platform: { sentiment_share?: Record<string, number>; positive?: unknown[]; neutral?: unknown[]; negative?: unknown[] },
+  platform: { code: string; sentiment_share?: Record<string, number>; positive?: unknown[]; neutral?: unknown[]; negative?: unknown[] },
   key: '正面' | '中性' | '负面',
 ) {
+  // 与左侧卡片同一口径：描述归并组。一组跨平台时，这个平台也计一次。
+  const groups = descriptionGroupsFor(platform.code)
+  if (groups.length) {
+    const matched = groups.filter(row => row.sentiment === key).length
+    return Math.round((1000 * matched) / groups.length) / 10
+  }
   const share = platform.sentiment_share
   if (share && share[key] != null) return Number(share[key] || 0)
   const pos = (platform.positive || []).length
@@ -243,12 +261,33 @@ function openDescriptionGroup(row: BrandAnalysisAiDescription) {
 function openPlatformSentimentSnaps(platformName: string, sentimentLabel: string) {
   const platform = (dashboard.value?.platforms || []).find(item => item.name === platformName)
   if (!platform) return
+  if (sentimentLabel !== '正面' && sentimentLabel !== '中性' && sentimentLabel !== '负面') return
+  const groups = descriptionGroupsFor(platform.code, sentimentLabel)
+  if (groups.length) {
+    const answers: BrandAnalysisAnswer[] = []
+    const seen = new Set<string>()
+    for (const group of groups) {
+      for (const row of group.answers || []) {
+        const key = `${row.subtask_id || ''}|${row.excerpt || ''}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        answers.push(row)
+      }
+    }
+    activeGroup.value = {
+      description: `${platform.name} · ${sentimentLabel}（${groups.length} 组）`,
+      sentiment: sentimentLabel,
+      sample_count: groups.length,
+      platforms: [{ code: platform.code, name: platform.name }],
+      answers,
+    }
+    groupVisible.value = true
+    return
+  }
   const bucketKey =
     sentimentLabel === '正面' ? 'positive'
       : sentimentLabel === '中性' ? 'neutral'
-        : sentimentLabel === '负面' ? 'negative'
-          : null
-  if (!bucketKey) return
+        : 'negative'
   const answers = platform[bucketKey] || []
   if (!answers.length) return
   activeGroup.value = {
@@ -508,7 +547,7 @@ onMounted(() => {
                   type="button"
                   class="seg is-ok"
                   :style="{ width: `${platformShare(platform, '正面')}%` }"
-                  :disabled="!(platform.positive || []).length"
+                  :disabled="descriptionGroupsFor(platform.code, '正面').length === 0 && !(platform.positive || []).length"
                   :title="`正面 ${platformShare(platform, '正面')}%`"
                   @click="openPlatformSentimentSnaps(platform.name, '正面')"
                 >
@@ -519,7 +558,7 @@ onMounted(() => {
                   type="button"
                   class="seg is-mid"
                   :style="{ width: `${platformShare(platform, '中性')}%` }"
-                  :disabled="!(platform.neutral || []).length"
+                  :disabled="descriptionGroupsFor(platform.code, '中性').length === 0 && !(platform.neutral || []).length"
                   :title="`中性 ${platformShare(platform, '中性')}%`"
                   @click="openPlatformSentimentSnaps(platform.name, '中性')"
                 >
@@ -530,7 +569,7 @@ onMounted(() => {
                   type="button"
                   class="seg is-bad"
                   :style="{ width: `${platformShare(platform, '负面')}%` }"
-                  :disabled="!(platform.negative || []).length"
+                  :disabled="descriptionGroupsFor(platform.code, '负面').length === 0 && !(platform.negative || []).length"
                   :title="`负面 ${platformShare(platform, '负面')}%`"
                   @click="openPlatformSentimentSnaps(platform.name, '负面')"
                 >

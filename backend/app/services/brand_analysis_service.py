@@ -1015,7 +1015,7 @@ def _try_load_brand_analysis_snapshot(
     out["compare_period"] = grain
     out["compare_period_label"] = COMPARE_PERIOD_LABELS[grain]
     out["generated_at"] = datetime.now().isoformat(timespec="seconds")
-    return out
+    return align_platform_sentiment_shares(out)
 
 
 def _try_freeze_brand_analysis_snapshot(
@@ -1109,6 +1109,41 @@ def _tally_description_counts_exact(subtasks: list[GeoMonitorSubtask]) -> dict[s
         label = label_of.get(dominant, "未知")
         counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def align_platform_sentiment_shares(data: dict[str, Any]) -> dict[str, Any]:
+    """平台条与左侧描述组同一口径：按平台计描述归并组，不按整篇回答情感。
+
+    一组描述跨多个平台时，每个平台各计一次。没有描述组时保留原回答级占比。
+    """
+    groups = data.get("ai_descriptions") or []
+    platforms = data.get("platforms") or []
+    if not isinstance(groups, list) or not isinstance(platforms, list) or not groups:
+        return data
+    by_code: dict[str, dict[str, int]] = {}
+    for row in groups:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("sentiment") or "").strip()
+        if label not in ("正面", "中性", "负面"):
+            continue
+        for plat in row.get("platforms") or []:
+            if not isinstance(plat, dict):
+                continue
+            code = str(plat.get("code") or "").strip()
+            if not code:
+                continue
+            bucket = by_code.setdefault(code, {"正面": 0, "中性": 0, "负面": 0})
+            bucket[label] += 1
+    for platform in platforms:
+        if not isinstance(platform, dict):
+            continue
+        code = str(platform.get("code") or "").strip()
+        counts = by_code.get(code)
+        if not counts or (counts["正面"] + counts["中性"] + counts["负面"]) <= 0:
+            continue
+        platform["sentiment_share"] = _sentiment_share_pct(counts)
+    return data
 
 
 def _sentiment_share_pct(counts: dict[str, int]) -> dict[str, float]:
@@ -1532,6 +1567,7 @@ def build_brand_analysis_dashboard(
         "data_as_of": as_of.isoformat(),
         "frozen": False,
     }
+    align_platform_sentiment_shares(result)
     _try_freeze_brand_analysis_snapshot(
         db,
         tenant_id=resolved,
@@ -1727,7 +1763,7 @@ def build_brand_analysis_dashboard_for_tenant(
         "data_as_of": as_of.isoformat(),
         "frozen": False,
     }
-    return result
+    return align_platform_sentiment_shares(result)
 
 
 def parse_sentiments_after_brand_word_sync(db: Session, task: GeoMonitorTask) -> None:

@@ -9,6 +9,7 @@ from app.services.brand_analysis_service import (
     _mark_deepseek_description,
     _mark_deepseek_descriptions,
     _normalize_description_list,
+    align_platform_sentiment_shares,
     preserve_brand_analysis_sentiment_on_upsert,
 )
 from app.models.monitor import GeoMonitorSubtask
@@ -480,4 +481,29 @@ def test_group_ai_descriptions_one_snapshot_many_points():
     assert len(rows) == 3
     assert all(r["sample_count"] == 1 for r in rows)
     assert all(r["answers"][0]["subtask_id"] == "d1" for r in rows)
+
+
+def test_platform_bar_uses_description_groups_not_answer_sentiment():
+    """整篇回答全是负面时，条形仍跟描述组：正面组要出现在绿色段。"""
+    data = {
+        "platforms": [
+            {
+                "code": "doubao",
+                "name": "豆包",
+                "sentiment_share": {"正面": 0.0, "中性": 20.0, "负面": 80.0},
+            }
+        ],
+        "ai_descriptions": [
+            {"sentiment": "正面", "platforms": [{"code": "doubao", "name": "豆包"}]},
+            {"sentiment": "正面", "platforms": [{"code": "doubao", "name": "豆包"}]},
+            {"sentiment": "中性", "platforms": [{"code": "doubao", "name": "豆包"}]},
+            {"sentiment": "负面", "platforms": [{"code": "doubao", "name": "豆包"}]},
+            {"sentiment": "负面", "platforms": [{"code": "doubao", "name": "豆包"}]},
+        ],
+    }
+    align_platform_sentiment_shares(data)
+    share = data["platforms"][0]["sentiment_share"]
+    assert share["正面"] == 40.0
+    assert share["中性"] == 20.0
+    assert share["负面"] == 40.0
 

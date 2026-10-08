@@ -143,7 +143,6 @@ def create_enterprise_member(
         password_hash=hash_password(password),
         display_name=display_name,
         created_by=operator_user_id,
-        must_change_password=True,
     )
     db.add(user)
     db.flush()
@@ -233,7 +232,7 @@ def reset_enterprise_member_password(
     if user is None:
         raise ValueError("用户不存在")
     user.password_hash = hash_password(password)
-    user.must_change_password = True
+    user.must_change_password = False
     db.commit()
 
 

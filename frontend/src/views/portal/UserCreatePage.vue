@@ -33,7 +33,7 @@ const positionsFor = (type: IdentityType) => positions[type] || []
           <input v-model="userForm.display_name" placeholder="例如 张三" />
         </label>
         <label>
-          <span>初始密码<el-tooltip content="至少 6 个字符；创建后首次登录必须修改密码才能进入系统" placement="top"><HelpCircle /></el-tooltip></span>
+          <span>初始密码<el-tooltip content="至少 6 个字符，创建后用这个密码直接登录" placement="top"><HelpCircle /></el-tooltip></span>
           <input v-model="userForm.password" placeholder="至少 6 位" />
         </label>
       </div>

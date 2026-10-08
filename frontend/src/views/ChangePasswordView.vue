@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Eye, EyeOff } from '@lucide/vue'
@@ -10,7 +10,6 @@ import { useAuthStore } from '../stores/auth'
 const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(false)
-const forcedChange = computed(() => auth.mustChangePassword)
 const form = reactive({
   oldPassword: '',
   newPassword: '',
@@ -51,11 +50,6 @@ async function submit() {
   }
 }
 
-async function logoutInstead() {
-  await auth.logout()
-  await router.replace('/login')
-}
-
 async function backToPortal() {
   await router.replace(auth.portalPath)
 }
@@ -75,8 +69,8 @@ async function backToPortal() {
     <div class="auth-center">
       <form class="auth-form auth-form--glass" @submit.prevent="submit">
         <header class="auth-glass-head">
-          <h1>{{ forcedChange ? '设置新密码' : '修改密码' }}</h1>
-          <p>{{ forcedChange ? '请先设置自己的密码，再进入工作空间' : '更新当前账号的登录密码' }}</p>
+          <h1>修改密码</h1>
+          <p>更新当前账号的登录密码</p>
         </header>
 
         <p class="auth-form-sub">当前账号：{{ auth.session?.user?.username || '—' }}</p>
@@ -88,7 +82,7 @@ async function backToPortal() {
             v-model="form.oldPassword"
             :type="showOldPassword ? 'text' : 'password'"
             autocomplete="current-password"
-            :placeholder="forcedChange ? '管理员下发的初始密码' : '当前登录密码'"
+            placeholder="当前登录密码"
           />
           <button
             type="button"
@@ -147,8 +141,8 @@ async function backToPortal() {
         <button type="submit" class="auth-submit" style="margin-top: 22px" :disabled="loading">
           <span>{{ loading ? '提交中…' : '确认修改' }}</span>
         </button>
-        <button type="button" class="auth-secondary" :disabled="loading" @click="forcedChange ? logoutInstead() : backToPortal()">
-          {{ forcedChange ? '退出登录' : '返回' }}
+        <button type="button" class="auth-secondary" :disabled="loading" @click="backToPortal()">
+          返回
         </button>
       </form>
     </div>

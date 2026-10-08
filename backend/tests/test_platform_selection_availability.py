@@ -57,6 +57,22 @@ def test_normalize_pydantic_like_platforms():
     assert rows == [{"code": "kimi", "mode": "search", "screenshot": 1}]
 
 
+def test_availability_probe_beat_paused():
+    # 2026-10-08 - 探针暂停, 平台上下架只留每日模力目录同步
+    from app.celery_app import celery_app
+    from app.tasks.monitor import (
+        check_platform_availability_weekly_task,
+        finalize_platform_probes_task,
+    )
+
+    beat = celery_app.conf.beat_schedule or {}
+    assert "sync-platform-catalog-daily" in beat
+    assert "check-platform-availability-weekly" not in beat
+    assert "finalize-platform-probes" not in beat
+    assert check_platform_availability_weekly_task() == {"status": "disabled", "reason": "probe_paused"}
+    assert finalize_platform_probes_task() == {"status": "disabled", "reason": "probe_paused"}
+
+
 def test_formal_availability_thresholds():
     assert _availability_from_formal(None) is None
     assert _availability_from_formal({"total": FORMAL_MIN_SAMPLES - 1, "success": 5, "failed": 0}) is None

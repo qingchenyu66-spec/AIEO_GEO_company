@@ -144,14 +144,7 @@ celery_app.conf.update(
             "task": "app.tasks.monitor.sync_platform_catalog_daily",
             "schedule": crontab(hour=3, minute=15),
         },
-        "check-platform-availability-weekly": {
-            "task": "app.tasks.monitor.check_platform_availability_weekly",
-            "schedule": crontab(hour=4, minute=30, day_of_week="1"),
-        },
-        "finalize-platform-probes": {
-            "task": "app.tasks.monitor.finalize_platform_probes",
-            "schedule": crontab(minute="*/20"),
-        },
+        # 2026-10-08 - 可用性探针暂停. 平台上下架只走上面的模力目录同步.
         "fail-stale-knowledge-parses": {
             "task": "app.tasks.knowledge.fail_stale_knowledge_parses",
             "schedule": crontab(minute="*/5"),

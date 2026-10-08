@@ -168,7 +168,7 @@ function toggleAllowedPlatform(code: string, event: Event) {
   <el-dialog v-model="passwordDialog" width="460px" title="重置密码">
     <div class="form-grid password-grid">
       <label><span>用户</span><input :value="editingUser ? `${editingUser.display_name}（${editingUser.username}）` : ''" disabled /></label>
-      <label><span>新密码<el-tooltip content="至少 6 个字符，重置后用户下次登录必须修改密码" placement="top"><HelpCircle /></el-tooltip></span><input v-model="resetPassword" /></label>
+      <label><span>新密码<el-tooltip content="至少 6 个字符，重置后用这个密码直接登录" placement="top"><HelpCircle /></el-tooltip></span><input v-model="resetPassword" /></label>
     </div>
     <template #footer>
       <button class="plain-btn" @click="passwordDialog = false">取消</button>

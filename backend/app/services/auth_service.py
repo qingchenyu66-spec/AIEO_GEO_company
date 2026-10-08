@@ -62,6 +62,10 @@ def authenticate(db: Session, username: str, password: str) -> tuple[User, list[
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
         db.flush()
+    # 2026-10-08 - 不再强制改密. 历史标记在本次登录清掉, 避免旧会话还被前端拉去改密页
+    if user.must_change_password:
+        user.must_change_password = False
+        db.flush()
     if not user.status:
         raise LoginRejected(login_block_reason(user))
     identities = active_identities(user)
@@ -116,7 +120,7 @@ def create_access_token(
 
 
 def change_own_password(db: Session, user: User, *, old_password: str, new_password: str) -> User:
-    """用户自助改密；成功后清除 must_change_password。"""
+    """用户自助改密。"""
     if not verify_password(old_password, user.password_hash):
         raise ValueError("当前密码不正确")
     if old_password == new_password:

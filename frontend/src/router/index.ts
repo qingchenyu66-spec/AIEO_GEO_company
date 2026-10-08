@@ -30,16 +30,10 @@ router.beforeEach((to) => {
     return '/login'
   }
 
-  // 已登录访问登录页 -> 跳转到门户或强制改密
+  // 已登录访问登录页 -> 进门户. 改密页仍可从顶栏主动进入
   if (to.path === '/login' && auth.isLoggedIn) {
-    return auth.mustChangePassword ? '/change-password' : auth.portalPath
+    return auth.portalPath
   }
-
-  // 2026-07-31 - 强制改密闸门 - 未改密只能停在改密页
-  if (auth.isLoggedIn && auth.mustChangePassword && to.path !== '/change-password') {
-    return '/change-password'
-  }
-  // 2026-08-03 - 已改密用户也可主动进改密页 - 顶栏入口，勿再 redirect 回门户
 
   // 检查身份类型是否匹配
   const requiredIdentity = to.meta.identity as string | undefined
