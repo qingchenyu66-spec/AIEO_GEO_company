@@ -25,13 +25,20 @@ from app.schemas.auth import (
     IdentitySelectRequest,
     IdentitySwitchRequest,
     LoginRequest,
+    PhoneBindRequest,
+    PhoneChangeRequest,
+    PhoneCodeRequest,
+    PasswordResetCodeRequest,
+    PasswordResetRequest,
+    PhoneLoginEnabledRequest,
+    SmsLoginCodeRequest,
+    SmsLoginRequest,
 )
 from app.schemas.common import ApiResponse
 from app.services.auth_service import (
     LoginRejected,
     authenticate,
     authenticate_observer_demo,
-    change_own_password,
     create_access_token,
     create_identity_ticket,
 )
@@ -42,11 +49,20 @@ router = APIRouter(prefix="/auth")
 
 
 def _user_public(user: User) -> dict:
+    from app.core.masking import mask_phone
+    from app.services.observer_account import is_observer_username
+
+    phone = str(getattr(user, "phone", "") or "").strip()
+    created = getattr(user, "created_at", None)
     return {
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name,
         "must_change_password": bool(getattr(user, "must_change_password", False)),
+        "phone_masked": mask_phone(phone) if phone else None,
+        "phone_login_enabled": bool(phone) and bool(getattr(user, "phone_login_enabled", True)),
+        "can_bind_phone": not is_observer_username(user.username),
+        "created_at": created.strftime("%Y-%m-%d %H:%M:%S") if created is not None else None,
     }
 
 
@@ -168,6 +184,137 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     })
 
 
+def _sms_value_error(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/sms/login-code", response_model=ApiResponse[dict])
+def send_login_code(
+    payload: SmsLoginCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import request_login_code
+
+    try:
+        dev_code = request_login_code(db, payload.phone)
+    except ValueError as exc:
+        raise _sms_value_error(exc) from exc
+    data: dict = {"sent": True}
+    if dev_code:
+        data["dev_code"] = dev_code
+    return ApiResponse(data=data)
+
+
+@router.post("/sms/login", response_model=ApiResponse[dict])
+def sms_login(
+    payload: SmsLoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import authenticate_sms
+
+    try:
+        result = authenticate_sms(db, payload.phone, payload.code)
+    except LoginRejected as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    user, identities = result
+    db.commit()
+    if len(identities) == 1:
+        session = session_payload(db, user, identities[0], identities)
+        _record_landed_login(db, user, identities[0], request)
+        _attach_session_cookie(response, session)
+        return ApiResponse(data={"requires_identity_selection": False, "session": public_session(session)})
+    return ApiResponse(data={
+        "requires_identity_selection": True,
+        "ticket": create_identity_ticket(user),
+        "user": _user_public(user),
+        "identities": [identity_info(item, db) for item in identities],
+    })
+
+
+@router.post("/phone/code", response_model=ApiResponse[dict])
+def send_phone_code(
+    payload: PhoneCodeRequest,
+    request: Request,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import request_account_code
+
+    try:
+        dev_code = request_account_code(db, current.user, payload.purpose, payload.phone)
+    except ValueError as exc:
+        raise _sms_value_error(exc) from exc
+    data: dict = {"sent": True}
+    if dev_code:
+        data["dev_code"] = dev_code
+    return ApiResponse(data=data)
+
+
+@router.post("/phone/bind", response_model=ApiResponse[dict])
+def bind_own_phone(
+    payload: PhoneBindRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    from app.services.sms_login_service import bind_phone
+
+    try:
+        bind_phone(db, current.user, payload.phone, payload.code)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise _sms_value_error(exc) from exc
+    return ApiResponse(data=_user_public(current.user))
+
+
+@router.post("/phone/change", response_model=ApiResponse[dict])
+def change_own_phone(
+    payload: PhoneChangeRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    from app.services.sms_login_service import change_phone
+
+    try:
+        change_phone(
+            db,
+            current.user,
+            old_code=payload.old_code,
+            new_phone=payload.new_phone,
+            new_code=payload.new_code,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise _sms_value_error(exc) from exc
+    return ApiResponse(data=_user_public(current.user))
+
+
+@router.post("/phone/login-enabled", response_model=ApiResponse[dict])
+def set_own_phone_login(
+    payload: PhoneLoginEnabledRequest,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    from app.services.sms_login_service import set_phone_login_enabled
+
+    try:
+        set_phone_login_enabled(current.user, payload.enabled)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise _sms_value_error(exc) from exc
+    return ApiResponse(data=_user_public(current.user))
+
+
 @router.post("/demo/observer", response_model=ApiResponse[dict])
 def demo_observer_login(
     request: Request,
@@ -281,24 +428,78 @@ def me(current: CurrentSession = Depends(get_current_session), db: Session = Dep
     })
 
 
-@router.post("/change-password", response_model=ApiResponse[dict])
-def change_password(
-    payload: ChangePasswordRequest,
-    current: CurrentSession = Depends(get_current_session),
-    db: Session = Depends(get_db),
-) -> ApiResponse[dict]:
-    """登录用户修改密码；新建/重置账号后的强制改密也走此接口。"""
+@router.post("/password/reset-check", response_model=ApiResponse[dict])
+def password_reset_check(payload: PasswordResetCodeRequest, request: Request, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    """未登录点忘记密码: 没绑手机直接拒绝, 不发短信."""
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import preview_reset
+
     try:
-        change_own_password(
+        phone_masked = preview_reset(db, payload.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data={"phone_masked": phone_masked})
+
+
+@router.post("/password/reset-code", response_model=ApiResponse[dict])
+def password_reset_code(payload: PasswordResetCodeRequest, request: Request, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    """未登录: 向账号已绑定手机发找回验证码."""
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import request_reset_code
+
+    try:
+        phone_masked, dev_code = request_reset_code(db, payload.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    data: dict = {"sent": True, "phone_masked": phone_masked}
+    if dev_code:
+        data["dev_code"] = dev_code
+    return ApiResponse(data=data)
+
+
+@router.post("/password/reset", response_model=ApiResponse[dict])
+def password_reset(payload: PasswordResetRequest, request: Request, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    """未登录: 验证码通过后设置新密码."""
+    enforce_login_rate_limit(request)
+    from app.services.sms_login_service import reset_password_with_username
+
+    try:
+        reset_password_with_username(
             db,
-            current.user,
-            old_password=payload.old_password,
+            payload.username,
+            code=payload.code,
             new_password=payload.new_password,
         )
         db.commit()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ApiResponse(data={"ok": True})
+
+
+@router.post("/change-password", response_model=ApiResponse[dict])
+def change_password(
+    payload: ChangePasswordRequest,
+    response: Response,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """登录用户凭已绑定手机的验证码修改密码."""
+    from app.services.sms_login_service import change_password_with_code
+
+    try:
+        change_password_with_code(
+            db,
+            current.user,
+            code=payload.code,
+            new_password=payload.new_password,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    clear_auth_cookie(response)
+    clear_csrf_cookie(response)
     return ApiResponse(data={"ok": True, "must_change_password": False})
 
 

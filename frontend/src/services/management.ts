@@ -84,6 +84,7 @@ export interface ManagedUser {
   id: number
   username: string
   display_name: string
+  phone?: string | null
   status: boolean
   deleted: boolean
   created_by: number | null
@@ -223,6 +224,7 @@ export interface CreateUserPayload {
   username: string
   password: string
   display_name: string
+  phone?: string | null
   identities: Array<{
     identity_type: IdentityType
     role_code: string
@@ -483,6 +485,7 @@ export async function createManagedUser(payload: CreateUserPayload): Promise<unk
 }
 
 export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'> & {
+  phone?: string | null
   /** Explicit soft-delete; omitted identities are kept (PATCH semantics). */
   remove_identity_types?: IdentityType[]
 }

@@ -36,6 +36,10 @@ const positionsFor = (type: IdentityType) => positions[type] || []
           <span>初始密码<el-tooltip content="至少 6 个字符，创建后用这个密码直接登录" placement="top"><HelpCircle /></el-tooltip></span>
           <input v-model="userForm.password" placeholder="至少 6 位" />
         </label>
+        <label>
+          <span>手机号<el-tooltip content="选填。填写后可直接用该手机号收 4 位验证码登录" placement="top"><HelpCircle /></el-tooltip></span>
+          <input v-model="userForm.phone" inputmode="numeric" maxlength="11" placeholder="选填, 11 位" />
+        </label>
       </div>
       <div class="identity-checks">
         <label v-if="canCreatePlatformUser" class="identity-check-card">

@@ -6,6 +6,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import hash_password
+from app.services.auth_service import mark_password_changed
 from app.models.approval import OperationApproval
 from app.models.permission import Position, Role, UserIdentityMenu
 from app.models.tenant import Tenant
@@ -557,6 +558,10 @@ def create_managed_user(
     )
     db.add(user)
     db.flush()
+    if payload.phone:
+        from app.services.sms_login_service import apply_login_phone
+
+        apply_login_phone(db, user, payload.phone)
 
     identity_types = [item.identity_type for item in payload.identities]
     if len(identity_types) != len(set(identity_types)):
@@ -588,6 +593,10 @@ def update_managed_user(
         raise ValueError("同一用户不能重复添加相同登录身份")
 
     user.display_name = payload.display_name
+    if "phone" in payload.model_fields_set:
+        from app.services.sms_login_service import apply_login_phone
+
+        apply_login_phone(db, user, payload.phone)
     remove_types = {item.strip().upper() for item in payload.remove_identity_types if item and item.strip()}
     invalid_remove = remove_types - {"PLATFORM", "CUSTOMER"}
     if invalid_remove:
@@ -613,6 +622,7 @@ def reset_managed_user_password(db: Session, user_id: int, password: str, curren
     user = get_managed_user(db, user_id, current_user, current_identity)
     user.password_hash = hash_password(password)
     user.must_change_password = False
+    mark_password_changed(user)
     db.commit()
 
 

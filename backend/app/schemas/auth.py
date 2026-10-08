@@ -6,6 +6,35 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class SmsLoginCodeRequest(BaseModel):
+    phone: str = Field(min_length=11, max_length=20)
+
+
+class SmsLoginRequest(BaseModel):
+    phone: str = Field(min_length=11, max_length=20)
+    code: str = Field(min_length=4, max_length=4)
+
+
+class PhoneCodeRequest(BaseModel):
+    purpose: str = Field(pattern="^(bind|change_old|change_new|password)$")
+    phone: str | None = Field(default=None, max_length=20)
+
+
+class PhoneBindRequest(BaseModel):
+    phone: str = Field(min_length=11, max_length=20)
+    code: str = Field(min_length=4, max_length=4)
+
+
+class PhoneChangeRequest(BaseModel):
+    old_code: str = Field(min_length=4, max_length=4)
+    new_phone: str = Field(min_length=11, max_length=20)
+    new_code: str = Field(min_length=4, max_length=4)
+
+
+class PhoneLoginEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class IdentitySelectRequest(BaseModel):
     ticket: str
     identity_id: int
@@ -15,10 +44,20 @@ class IdentitySwitchRequest(BaseModel):
     identity_id: int
 
 
-class ChangePasswordRequest(BaseModel):
-    """登录用户修改自己的密码（强制改密 / 自助改密共用）。"""
+class PasswordResetCodeRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
 
-    old_password: str = Field(min_length=6, max_length=128)
+
+class PasswordResetRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    code: str = Field(min_length=4, max_length=4)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    """登录用户用已绑定手机的验证码修改自己的密码."""
+
+    code: str = Field(min_length=4, max_length=4)
     new_password: str = Field(min_length=6, max_length=128)
 
 

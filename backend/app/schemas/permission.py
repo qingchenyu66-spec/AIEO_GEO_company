@@ -101,6 +101,7 @@ class UserCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=6, max_length=128)
     display_name: str = Field(min_length=2, max_length=50)
+    phone: str | None = Field(default=None, max_length=20)
     identities: list[UserIdentityCreateItem] = Field(min_length=1)
 
 
@@ -112,6 +113,7 @@ class UserUpdateRequest(BaseModel):
     """
 
     display_name: str = Field(min_length=2, max_length=50)
+    phone: str | None = None
     identities: list[UserIdentityCreateItem] = Field(min_length=1)
     remove_identity_types: list[str] = Field(default_factory=list)
 

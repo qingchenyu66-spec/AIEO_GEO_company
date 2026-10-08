@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.services.auth_service import mark_password_changed
 from app.models.permission import CustomerPosition, CustomerPositionMenu, Menu, UserIdentityMenu
 from app.models.user import User
 from app.models.user_identity import UserIdentity
@@ -233,6 +234,7 @@ def reset_enterprise_member_password(
         raise ValueError("用户不存在")
     user.password_hash = hash_password(password)
     user.must_change_password = False
+    mark_password_changed(user)
     db.commit()
 
 

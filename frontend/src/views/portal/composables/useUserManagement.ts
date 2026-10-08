@@ -53,6 +53,7 @@ export function useUserManagement(options: UserManagementOptions) {
   })
   const userForm = reactive(createUserCreateForm())
   const editForm = reactive(createEmptyIdentityForm())
+  const editPhone = ref('')
 
   // 2026-08-05 - 用户列表按职位筛 - 选项随所属端级联；未选端时带端前缀防同名
   const filterPositionOptions = computed(() => {
@@ -231,6 +232,11 @@ export function useUserManagement(options: UserManagementOptions) {
       ElMessage.warning('初始密码至少填写 6 个字符')
       return
     }
+    const createPhone = userForm.phone.trim()
+    if (createPhone && !/^1\d{10}$/.test(createPhone)) {
+      ElMessage.warning('手机号请填写 11 位')
+      return
+    }
     if (userForm.identity_types.includes('CUSTOMER')) {
       const customerConfig = userForm.identity_configs.CUSTOMER
       if (!customerConfig.tenant_id) {
@@ -249,6 +255,7 @@ export function useUserManagement(options: UserManagementOptions) {
         username: userForm.username,
         password: userForm.password,
         display_name: userForm.display_name,
+        phone: createPhone || null,
         identities,
       })
       if (isPendingApproval(result)) {
@@ -257,11 +264,13 @@ export function useUserManagement(options: UserManagementOptions) {
         else ElMessage.success(msg)
         userForm.username = ''
         userForm.display_name = ''
+        userForm.phone = ''
         return
       }
       ElMessage.success('用户已新增，并完成菜单权限分配')
       userForm.username = ''
       userForm.display_name = ''
+      userForm.phone = ''
       activeMenuCode.value = USER_LIST_MENU
       userMenuExpanded.value = true
       await loadUserManagement()
@@ -275,6 +284,7 @@ export function useUserManagement(options: UserManagementOptions) {
   async function openEditUser(user: ManagedUser) {
     await loadAssignableOptions(tenants.value, userForm)
     editingUser.value = user
+    editPhone.value = user.phone || ''
     editForm.display_name = user.display_name
     editForm.identity_types = user.identities.map(identity => identity.identity_type)
     for (const type of ['PLATFORM', 'CUSTOMER'] as IdentityType[]) {
@@ -291,6 +301,11 @@ export function useUserManagement(options: UserManagementOptions) {
 
   async function saveEditUser() {
     if (!editingUser.value || !validateEditForm()) return
+    const nextPhone = editPhone.value.trim()
+    if (nextPhone && !/^1\d{10}$/.test(nextPhone)) {
+      ElMessage.warning('手机号请填写 11 位, 留空则解绑')
+      return
+    }
     try {
       const identities = identityPayloadFromForm(editForm)
       const keepTypes = new Set(identities.map(item => item.identity_type))
@@ -299,6 +314,7 @@ export function useUserManagement(options: UserManagementOptions) {
         .filter((type): type is IdentityType => !keepTypes.has(type))
       const result = await updateManagedUser(editingUser.value.id, {
         display_name: editForm.display_name,
+        phone: nextPhone || null,
         identities,
         remove_identity_types,
       })
@@ -405,6 +421,7 @@ export function useUserManagement(options: UserManagementOptions) {
     filterPositionOptions,
     userForm,
     editForm,
+    editPhone,
     notifyError,
     loadUserManagement,
     resetUserFilters,

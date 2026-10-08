@@ -45,6 +45,11 @@ def active_identities(user: User) -> list[UserIdentity]:
     return result
 
 
+def mark_password_changed(user: User) -> None:
+    """真的更换密码时调用. 登录时重算哈希不算改密."""
+    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
+
+
 def login_block_reason(user: User) -> str:
     for item in user.identities:
         if item.identity_type != "CUSTOMER" or item.tenant_id is None:
@@ -118,16 +123,3 @@ def create_access_token(
         auth_time=int(at.timestamp()),
     )
 
-
-def change_own_password(db: Session, user: User, *, old_password: str, new_password: str) -> User:
-    """用户自助改密。"""
-    if not verify_password(old_password, user.password_hash):
-        raise ValueError("当前密码不正确")
-    if old_password == new_password:
-        raise ValueError("新密码不能与当前密码相同")
-    if len(new_password.strip()) < 6:
-        raise ValueError("新密码至少 6 个字符")
-    user.password_hash = hash_password(new_password)
-    user.must_change_password = False
-    db.flush()
-    return user

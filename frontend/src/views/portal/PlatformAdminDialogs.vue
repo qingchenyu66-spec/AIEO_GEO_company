@@ -22,6 +22,7 @@ const {
   editDialog,
   editingUser,
   editForm,
+  editPhone,
   canSelectEditIdentity,
   positions,
   tenants,
@@ -135,6 +136,7 @@ function toggleAllowedPlatform(code: string, event: Event) {
     <div class="form-grid">
       <label><span>登录账号</span><input :value="editingUser?.username" disabled /></label>
       <label><span>用户姓名<el-tooltip content="至少 2 个字符，展示在用户列表和登录身份信息里" placement="top"><HelpCircle /></el-tooltip></span><input v-model="editForm.display_name" /></label>
+      <label><span>手机号<el-tooltip content="选填。保存后可直接收验证码登录；留空则解绑" placement="top"><HelpCircle /></el-tooltip></span><input v-model="editPhone" inputmode="numeric" maxlength="11" placeholder="选填, 11 位" /></label>
     </div>
     <div class="identity-checks">
       <label v-if="canSelectEditIdentity('PLATFORM')" class="identity-check-card">

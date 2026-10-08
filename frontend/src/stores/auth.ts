@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import {
-  loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi, demoObserverLoginApi,
+  loginApi, logoutApi, meApi, selectIdentityApi, switchIdentityApi, demoObserverLoginApi, smsLoginApi,
   type AuthSession, type IdentityInfo, type UserInfo,
 } from '../services/auth'
 import { invalidatePortalMonitorReadCaches } from '../services/monitor'
@@ -57,6 +57,13 @@ export const useAuthStore = defineStore('auth', {
     },
     async login(username: string, password: string) {
       const result = await loginApi(username, password)
+      return this.applyLoginResult(result)
+    },
+    async loginBySms(phone: string, code: string) {
+      const result = await smsLoginApi(phone, code)
+      return this.applyLoginResult(result)
+    },
+    applyLoginResult(result: { session?: AuthSession; ticket?: string; user?: UserInfo | null; identities?: IdentityInfo[]; requires_identity_selection: boolean }) {
       if (result.session) this.saveSession(result.session)
       else {
         this.pendingTicket = result.ticket || ''
@@ -88,6 +95,14 @@ export const useAuthStore = defineStore('auth', {
       // 保留内存里的 token 等字段，只覆盖 /me 返回的用户/身份/菜单
       this.saveSession({ ...this.session, ...latest })
     },
+    clearLocalSession() {
+      this.session = null
+      this.pendingTicket = ''
+      this.pendingIdentities = []
+      localStorage.removeItem(STORAGE_KEY)
+      stopSessionKeepAlive()
+      invalidatePortalMonitorReadCaches()
+    },
     async logout() {
       // 先调服务端（仍带当前 Bearer/Cookie），再清本地，便于审计记到真实操作人
       try {
@@ -95,12 +110,7 @@ export const useAuthStore = defineStore('auth', {
       } catch {
         // 网络异常时仍清本地态
       }
-      this.session = null
-      this.pendingTicket = ''
-      this.pendingIdentities = []
-      localStorage.removeItem(STORAGE_KEY)
-      stopSessionKeepAlive()
-      invalidatePortalMonitorReadCaches()
+      this.clearLocalSession()
     },
   },
 })

@@ -137,6 +137,7 @@ export function createUserCreateForm() {
   return {
     username: '',
     password: generateInitialPassword(),
+    phone: '',
     display_name: base.display_name,
     identity_types: base.identity_types,
     identity_configs: base.identity_configs,

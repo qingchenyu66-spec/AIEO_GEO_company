@@ -22,6 +22,10 @@ export interface UserInfo {
   username: string
   display_name: string
   must_change_password?: boolean
+  phone_masked?: string | null
+  phone_login_enabled?: boolean
+  can_bind_phone?: boolean
+  created_at?: string | null
 }
 
 export interface MenuInfo {
@@ -65,6 +69,58 @@ export async function loginApi(username: string, password: string): Promise<Logi
   return response.data.data
 }
 
+export async function checkResetApi(username: string): Promise<{ phone_masked: string }> {
+  const response = await http.post('/v1/auth/password/reset-check', { username })
+  return response.data.data
+}
+
+export async function sendResetCodeApi(username: string): Promise<{ sent: boolean; phone_masked?: string; dev_code?: string }> {
+  const response = await http.post('/v1/auth/password/reset-code', { username })
+  return response.data.data
+}
+
+export async function resetPasswordApi(username: string, code: string, newPassword: string): Promise<void> {
+  await http.post('/v1/auth/password/reset', {
+    username,
+    code,
+    new_password: newPassword,
+  })
+}
+
+export async function sendLoginCodeApi(phone: string): Promise<{ sent: boolean; dev_code?: string }> {
+  const response = await http.post('/v1/auth/sms/login-code', { phone })
+  return response.data.data
+}
+
+export async function smsLoginApi(phone: string, code: string): Promise<LoginResult> {
+  const response = await http.post('/v1/auth/sms/login', { phone, code })
+  return response.data.data
+}
+
+export async function sendPhoneCodeApi(purpose: 'bind' | 'change_old' | 'change_new' | 'password', phone?: string): Promise<{ sent: boolean; dev_code?: string }> {
+  const response = await http.post('/v1/auth/phone/code', { purpose, phone: phone || null })
+  return response.data.data
+}
+
+export async function bindPhoneApi(phone: string, code: string): Promise<UserInfo> {
+  const response = await http.post('/v1/auth/phone/bind', { phone, code })
+  return response.data.data
+}
+
+export async function setPhoneLoginApi(enabled: boolean): Promise<UserInfo> {
+  const response = await http.post('/v1/auth/phone/login-enabled', { enabled })
+  return response.data.data
+}
+
+export async function changePhoneApi(oldCode: string, newPhone: string, newCode: string): Promise<UserInfo> {
+  const response = await http.post('/v1/auth/phone/change', {
+    old_code: oldCode,
+    new_phone: newPhone,
+    new_code: newCode,
+  })
+  return response.data.data
+}
+
 /** 2026-09-01 - H5 落地页一键体验观察号（免密） */
 export async function demoObserverLoginApi(): Promise<LoginResult> {
   // 2026-09-02 - vue-tsc 不认 silentError - 与 announcements 一样走 GeoHttpRequestConfig
@@ -100,9 +156,9 @@ export async function logoutApi(): Promise<void> {
   await http.post('/v1/auth/logout')
 }
 
-export async function changePasswordApi(oldPassword: string, newPassword: string): Promise<void> {
+export async function changePasswordApi(code: string, newPassword: string): Promise<void> {
   await http.post('/v1/auth/change-password', {
-    old_password: oldPassword,
+    code,
     new_password: newPassword,
   })
 }

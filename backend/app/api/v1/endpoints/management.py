@@ -1655,6 +1655,7 @@ def management_users(
             "id": user.id,
             "username": user.username,
             "display_name": user.display_name,
+            "phone": user.phone,
             "status": user.status,
             "deleted": user.deleted,
             "created_by": user.created_by,

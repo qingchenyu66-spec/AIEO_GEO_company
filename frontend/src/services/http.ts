@@ -79,7 +79,7 @@ http.interceptors.response.use(
     const hasResponse = Boolean(error.response)
 
     if (status === 401) {
-      if (url.includes('/auth/login')) {
+      if (url.includes('/auth/login') || url.includes('/auth/sms/login')) {
         const message = error.response?.data?.detail || error.message || '账号或密码错误'
         ElMessage.error(message)
       } else {

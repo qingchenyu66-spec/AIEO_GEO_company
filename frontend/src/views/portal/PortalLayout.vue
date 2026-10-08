@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Building2, ChevronDown, LockKeyhole, LogOut, Menu, PanelLeft, ShieldCheck, Star, X } from '@lucide/vue'
+import { Building2, ChevronDown, LogOut, Menu, PanelLeft, ShieldCheck, Smartphone, Star, X } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { MenuInfo } from '../../services/auth'
 import AppBrandLogo from '../../components/AppBrandLogo.vue'
@@ -108,8 +108,8 @@ function toggleSidebarPin() {
 }
 
 function onUserMenuCommand(command: string) {
-  if (command === 'change-password') {
-    void router.push('/change-password')
+  if (command === 'account') {
+    void router.push('/account')
     return
   }
   if (command === 'logout') {
@@ -309,9 +309,9 @@ function onUserMenuCommand(command: string) {
                     {{ identityDisplayName(identity) }}
                   </el-dropdown-item>
                 </template>
-                <el-dropdown-item divided command="change-password">
-                  <LockKeyhole />
-                  修改密码
+                <el-dropdown-item divided command="account">
+                  <Smartphone />
+                  账号与安全
                 </el-dropdown-item>
                 <el-dropdown-item command="logout">
                   <LogOut />

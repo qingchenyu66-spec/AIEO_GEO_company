@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth'
 
 const LoginView = () => import('../views/LoginView.vue')
 const ChangePasswordView = () => import('../views/ChangePasswordView.vue')
+const AccountView = () => import('../views/AccountView.vue')
 const PortalView = () => import('../views/PortalView.vue')
 const H5DiagnosisLandingPage = () => import('../views/h5/H5DiagnosisLandingPage.vue')
 const H5DiagnosisApplyPage = () => import('../views/h5/H5DiagnosisApplyPage.vue')
@@ -17,6 +18,7 @@ const router = createRouter({
     { path: '/h5/diagnosis/apply', name: 'h5-diagnosis-apply', component: H5DiagnosisApplyPage, meta: { public: true } },
     { path: '/h5/diagnosis/result', name: 'h5-diagnosis-result', component: H5DiagnosisResultPage, meta: { public: true } },
     { path: '/change-password', name: 'change-password', component: ChangePasswordView },
+    { path: '/account', name: 'account', component: AccountView },
     { path: '/platform', name: 'platform', component: PortalView, meta: { identity: 'PLATFORM' } },
     { path: '/customer', name: 'customer', component: PortalView, meta: { identity: 'CUSTOMER' } },
   ],

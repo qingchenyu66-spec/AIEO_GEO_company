@@ -77,6 +77,13 @@ def get_current_session(
     )
     if identity is None or not identity.user.status:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或身份已停用")
+    changed = identity.user.password_changed_at
+    if changed is not None:
+        if changed.tzinfo is None:
+            changed = changed.replace(tzinfo=UTC)
+        # 登录时间只精确到秒. 同一秒内的新登录保留, 更早的凭证失效
+        if auth_time < changed.replace(microsecond=0):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="密码已变更, 请重新登录")
     # 2026-08-03 - 服务期只限模力提交；客户会话不因未开始/到期/停服被踢
     if identity.identity_type == "CUSTOMER" and (
         identity.tenant is None or bool(getattr(identity.tenant, "deleted", False))

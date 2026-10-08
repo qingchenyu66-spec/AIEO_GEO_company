@@ -37,6 +37,18 @@ def _sign(secret: str, string_to_sign: str) -> str:
     return base64.b64encode(digest).decode("utf-8")
 
 
+def public_sms_error(code: str, message: str) -> str:
+    """阿里云流控原文不给用户看."""
+    blob = f"{code} {message}"
+    if "小时级" in blob:
+        return "该手机号一小时内发送次数已达上限, 请稍后再试"
+    if "分钟级" in blob:
+        return "发送过于频繁, 请稍后再试"
+    if "天级" in blob or "日级" in blob:
+        return "该手机号今日发送次数已达上限, 请明天再试"
+    return "短信发送失败, 请稍后再试"
+
+
 def send_sms(
     *,
     phone: str,
@@ -91,5 +103,5 @@ def send_sms(
     if code != "OK":
         msg = str(data.get("Message") or code or "unknown")
         logger.warning("aliyun sms rejected phone=%s code=%s msg=%s", phone_text[-4:], code, msg)
-        raise ValueError(f"短信发送失败：{msg}")
+        raise ValueError(public_sms_error(code, msg))
     return {"biz_id": data.get("BizId"), "request_id": data.get("RequestId")}

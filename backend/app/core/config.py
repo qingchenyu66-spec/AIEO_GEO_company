@@ -150,6 +150,10 @@ class Settings(BaseSettings):
     aliyun_sms_sign_name: str = ""
     # 模板变量约定 ${brand} ${order}；链接须写死在模板正文（阿里云禁止变量传链）
     aliyun_sms_template_code_h5_ready: str = ""
+    # 登录/绑定验证码. 变量 ${code}, 仅数字. 默认用已审模板 SMS_338355304
+    aliyun_sms_template_code_login: str = "SMS_338355304"
+    # 同一手机号所有用途合计, 只计发送成功. 与阿里云小时流控对齐
+    sms_hourly_send_limit: int = 5
     aliyun_sms_region_id: str = "cn-hangzhou"
     # 2026-09-01 - H5 落地页「一键体验」观察号（不暴露密码）
     h5_observer_demo_login_enabled: bool = True
