@@ -134,9 +134,9 @@ def build_audit_description(request: Request) -> str:
     )
 
 
-def _skip_anonymous_probe(operator_user_id: int | None, status_code: int) -> bool:
-    # 2026-08-31 - 公网扫描器匿名 POST 乱撞路径 404/405 - 不是真实业务，勿记「匿名请求/提交」
-    return operator_user_id is None and status_code in {401, 404, 405}
+def _skip_anonymous_probe(operator_user_id: int | None, _status_code: int) -> bool:
+    # 未登录写操作不记审计. 短信登录, 忘记密码, 公网扫描都没有操作人.
+    return operator_user_id is None
 
 
 class OperationAuditMiddleware(BaseHTTPMiddleware):

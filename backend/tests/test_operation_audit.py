@@ -41,10 +41,11 @@ def test_keyword_miner_paths_skipped_from_middleware_audit() -> None:
     assert _should_audit("PATCH", "/api/v1/keyword-miner/examples/9") is False
 
 
-def test_anonymous_scanner_404_not_audited() -> None:
-    """公网扫描器匿名写接口打到 404/405 不应落审计。"""
+def test_unauthenticated_writes_not_audited() -> None:
+    """未登录的写操作不落审计, 不论成功还是失败."""
+    assert _skip_anonymous_probe(None, 200) is True
+    assert _skip_anonymous_probe(None, 400) is True
     assert _skip_anonymous_probe(None, 404) is True
-    assert _skip_anonymous_probe(None, 405) is True
-    assert _skip_anonymous_probe(None, 401) is True
-    assert _skip_anonymous_probe(None, 500) is False
+    assert _skip_anonymous_probe(None, 500) is True
     assert _skip_anonymous_probe(12, 404) is False
+    assert _skip_anonymous_probe(12, 200) is False
