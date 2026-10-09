@@ -142,6 +142,63 @@ def insert_window_snapshot_if_absent(
     return True
 
 
+def upsert_window_snapshot_if_newer_source(
+    db: Session,
+    *,
+    tenant_id: int,
+    kind: str,
+    window_days: int,
+    payload: dict[str, Any],
+    as_of_date: date,
+    filter_fp: str = DEFAULT_FILTER_FP,
+    source_version: str,
+    source_created_at: datetime,
+) -> bool:
+    """同日只允许更晚的完整来源批次替换快照。"""
+    fp = filter_fp or DEFAULT_FILTER_FP
+    row = db.scalar(
+        select(GeoMonitorWindowSnapshot).where(
+            GeoMonitorWindowSnapshot.tenant_id == int(tenant_id),
+            GeoMonitorWindowSnapshot.kind == kind,
+            GeoMonitorWindowSnapshot.window_days == int(window_days),
+            GeoMonitorWindowSnapshot.as_of_date == as_of_date,
+            GeoMonitorWindowSnapshot.filter_fp == fp,
+        )
+    )
+    if row is None:
+        row = GeoMonitorWindowSnapshot(
+            tenant_id=int(tenant_id),
+            kind=kind,
+            window_days=int(window_days),
+            as_of_date=as_of_date,
+            filter_fp=fp,
+            payload_json=payload,
+            computed_at=datetime.now(),
+        )
+        db.add(row)
+        db.commit()
+        return True
+
+    previous = row.payload_json if isinstance(row.payload_json, dict) else {}
+    previous_version = str(previous.get("source_batch_key") or "").strip()
+    if previous_version == str(source_version or "").strip():
+        return False
+
+    previous_created_raw = previous.get("source_task_created_at")
+    if previous_created_raw:
+        try:
+            previous_created_at = datetime.fromisoformat(str(previous_created_raw))
+        except (TypeError, ValueError):
+            previous_created_at = None
+        if previous_created_at is not None and previous_created_at >= source_created_at:
+            return False
+
+    row.payload_json = payload
+    row.computed_at = datetime.now()
+    db.commit()
+    return True
+
+
 def build_workspace_brief_window_payload(
     db: Session,
     *,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from celery.exceptions import Ignore, MaxRetriesExceededError, Retry
@@ -43,6 +43,7 @@ from app.services.schedule_service import (
     get_schedule_run,
     list_recoverable_schedule_runs,
     persist_schedule_group_failure,
+    register_schedule_group_plan,
     submit_schedule_group as execute_schedule_group,
 )
 
@@ -160,7 +161,11 @@ def scan_due_brand_word_weekly(max_prompts: int | None = None) -> dict[str, Any]
         enqueued = 0
         skipped = 0
         try:
-            for item in enumerate_due_brand_word_weekly_groups(db, max_prompts=max_prompts):
+            items = list(
+                enumerate_due_brand_word_weekly_groups(db, max_prompts=max_prompts)
+            )
+            register_schedule_group_plan(db, items)
+            for item in items:
                 existing = get_schedule_run(db, item.tenant_id, item.group_key)
                 is_retry = existing is not None and existing.status == "failed"
                 if _enqueue_task(
@@ -593,6 +598,61 @@ def _mark_callback_event_terminal_failed(db, event_id: int, message: str) -> Non
     event.error_message = str(message or "callback retries exhausted")[:2000]
     event.processed_at = datetime.now()
     db.commit()
+
+
+@celery_app.task(
+    name="app.tasks.monitor.scan_stale_callback_events",
+    ignore_result=True,
+    queue="sync",
+)
+def scan_stale_callback_events(
+    older_than_minutes: int = 10,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """重新投递已落库但因 Worker/队列中断而长期未处理的回调。"""
+    if not settings.celery_enabled:
+        return {"status": "disabled", "enqueued": 0, "event_ids": []}
+
+    cutoff = datetime.now() - timedelta(minutes=max(1, int(older_than_minutes)))
+    safe_limit = max(1, min(int(limit), 500))
+    db = SessionLocal()
+    try:
+        event_ids = list(
+            db.scalars(
+                select(GeoMonitorCallbackEvent.id)
+                .where(
+                    GeoMonitorCallbackEvent.process_status.in_(("queued", "retry_unknown")),
+                    GeoMonitorCallbackEvent.received_at <= cutoff,
+                )
+                .order_by(GeoMonitorCallbackEvent.received_at.asc())
+                .limit(safe_limit)
+            )
+        )
+    finally:
+        db.close()
+
+    enqueued_ids: list[int] = []
+    minute_bucket = datetime.now().strftime("%Y%m%d%H%M")
+    for event_id in event_ids:
+        try:
+            process_molizhishu_callback_task.apply_async(
+                kwargs={"event_id": int(event_id)},
+                task_id=f"molizhishu-callback-recover-{event_id}-{minute_bucket}",
+            )
+            enqueued_ids.append(int(event_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "requeue stale callback failed event_id=%s error=%s",
+                event_id,
+                redact_secrets_in_text(str(exc)),
+            )
+    result = {
+        "status": "ok",
+        "enqueued": len(enqueued_ids),
+        "event_ids": enqueued_ids,
+    }
+    record_beat_scan("app.tasks.monitor.scan_stale_callback_events", result)
+    return result
 
 
 @celery_app.task(

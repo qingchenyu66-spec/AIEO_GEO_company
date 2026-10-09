@@ -56,7 +56,11 @@ from app.services.enterprise_member_service import (
     update_enterprise_member,
 )
 from app.services.menu_permission_service import has_identity_menu_permission
-from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
+from app.services.schedule_service import (
+    enumerate_brand_word_once_groups,
+    register_schedule_group_plan,
+    submit_schedule_group,
+)
 from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
 from app.core.config import settings
 
@@ -542,12 +546,16 @@ def enterprise_brand_words_save(
                     raise ValueError("勾选立即跑一轮时请确认预估")
         asset, submit_rows = save_brand_word_groups(db, payload, current, respect_run_immediately=True)
         submitted = []
-        for item in enumerate_brand_word_once_groups(
-            db,
-            tenant_id=asset.tenant_id,
-            groups=[brand_word_group_to_dict(g) for g in submit_rows],
-            max_prompts=settings.celery_scan_submit_max_prompts,
-        ):
+        items = list(
+            enumerate_brand_word_once_groups(
+                db,
+                tenant_id=asset.tenant_id,
+                groups=[brand_word_group_to_dict(g) for g in submit_rows],
+                max_prompts=settings.celery_scan_submit_max_prompts,
+            )
+        )
+        register_schedule_group_plan(db, items, created_by=current.user.id)
+        for item in items:
             submitted.append(submit_schedule_group(db, current, item))
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         brand_word_groups = list_brand_word_groups(db, asset.tenant_id)

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from kombu.exceptions import OperationalError as KombuOperationalError
 from sqlalchemy import or_, select
@@ -168,6 +168,22 @@ def _downgrade_config_failed_schedule_run(
     db.commit()
 
 
+def mark_schedule_group_skipped(
+    db: Session,
+    *,
+    tenant_id: int,
+    group_key: str,
+    message: str | None = None,
+) -> None:
+    """把已登记但确定不再提交的计划落为 skipped，避免回收任务无限补投。"""
+    existing = get_schedule_run(db, tenant_id, group_key)
+    if existing is None or existing.task_id:
+        return
+    existing.status = "skipped"
+    existing.error_message = str(message or "")[:500] or None
+    db.commit()
+
+
 def _schedule_config_skip_result(item: DueScheduleGroup) -> dict[str, Any]:
     return {
         "tenant_id": item.tenant_id,
@@ -252,6 +268,36 @@ def get_schedule_run(db: Session, tenant_id: int, group_key: str) -> GeoMonitorS
     )
 
 
+def register_schedule_group_plan(
+    db: Session,
+    items: Sequence[DueScheduleGroup],
+    *,
+    created_by: int | None = None,
+) -> int:
+    """在提交任一词组前登记整批计划，供批次完整性判断。"""
+    created = 0
+    for item in items:
+        if get_schedule_run(db, item.tenant_id, item.group_key) is not None:
+            continue
+        db.add(
+            GeoMonitorScheduleRun(
+                tenant_id=item.tenant_id,
+                schedule_key=item.group_key,
+                status="pending",
+                prompt_count=0,
+                platform_count=0,
+                created_by=created_by,
+            )
+        )
+        created += 1
+    if created:
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+    return created
+
+
 def schedule_run_blocks_due(existing: GeoMonitorScheduleRun | None, *, now: datetime | None = None) -> bool:
     """已成功提交或仍在执行中的调度窗口不再重复入队；failed 允许重试。"""
     if existing is None:
@@ -320,7 +366,7 @@ def list_recoverable_schedule_runs(
 ) -> tuple[list[GeoMonitorScheduleRun], list[GeoMonitorScheduleRun]]:
     """返回 (需补投, 仅清尸) 的卡死/失败调度。
 
-    补投：近 resubmit_days 内、无 task_id 的陈旧 running，或瞬时 failed。
+    补投：近 resubmit_days 内、无 task_id 的陈旧 pending/running，或瞬时 failed。
     清尸：更早但仍在 cleanup_days 内的陈旧 running（只标 failed，不重打月前窗口）。
     """
     now = now or datetime.now()
@@ -341,6 +387,19 @@ def list_recoverable_schedule_runs(
             .limit(limit)
         )
     )
+    stale_pending = list(
+        db.scalars(
+            select(GeoMonitorScheduleRun)
+            .where(
+                GeoMonitorScheduleRun.task_id.is_(None),
+                GeoMonitorScheduleRun.status == "pending",
+                GeoMonitorScheduleRun.updated_at < stale_before,
+                GeoMonitorScheduleRun.created_at >= resubmit_since,
+            )
+            .order_by(GeoMonitorScheduleRun.updated_at.asc())
+            .limit(limit)
+        )
+    )
     failed_candidates = list(
         db.scalars(
             select(GeoMonitorScheduleRun)
@@ -354,7 +413,9 @@ def list_recoverable_schedule_runs(
             .limit(limit)
         )
     )
-    resubmit = stale_running + [row for row in failed_candidates if _failed_run_is_transient(row)]
+    resubmit = stale_pending + stale_running + [
+        row for row in failed_candidates if _failed_run_is_transient(row)
+    ]
     resubmit = resubmit[:limit]
     cleanup = list(
         db.scalars(
@@ -530,6 +591,13 @@ def submit_schedule_group(
         )
     )
     if asset is None:
+        persist_schedule_group_failure(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+            error_message="企业品牌资产不存在或未启用",
+            created_by=current.user.id,
+        )
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -541,6 +609,12 @@ def submit_schedule_group(
     skip_message = molizhishu_submit_skip_message(tenant)
     if skip_message:
         # 2026-08-03 - 服务未开通：跑之前跳过，不落 failed，避免看板「调度失败」吓人
+        mark_schedule_group_skipped(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+            message=skip_message,
+        )
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -549,10 +623,11 @@ def submit_schedule_group(
             "message": skip_message,
         }
     if not is_schedule_group_submittable(db, asset, item):
-        _downgrade_config_failed_schedule_run(
+        mark_schedule_group_skipped(
             db,
             tenant_id=item.tenant_id,
             group_key=item.group_key,
+            message="监测未配置完整",
         )
         return _schedule_config_skip_result(item)
     if schedule_run_blocks_due(get_schedule_run(db, item.tenant_id, item.group_key)):
@@ -617,6 +692,12 @@ def _submit_schedule_group_locked(
         None,
     )
     if keyword_group is None:
+        mark_schedule_group_skipped(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+            message=missing_message,
+        )
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -637,10 +718,11 @@ def _submit_schedule_group_locked(
         )
     except ValueError as exc:
         # 2026-08-31 - 空词组/无平台：skipped 不落 failed，与 enumerate 前置过滤一致
-        _downgrade_config_failed_schedule_run(
+        mark_schedule_group_skipped(
             db,
             tenant_id=item.tenant_id,
             group_key=item.group_key,
+            message=str(exc),
         )
         return {
             "tenant_id": item.tenant_id,
@@ -696,6 +778,12 @@ def _submit_schedule_group_locked(
             db.commit()
         except Exception:
             db.rollback()
+        mark_schedule_group_skipped(
+            db,
+            tenant_id=item.tenant_id,
+            group_key=item.group_key,
+            message=gate.message or "算力不足或尚未确认计费规则",
+        )
         return {
             "tenant_id": item.tenant_id,
             "schedule_key": item.group_key,
@@ -816,12 +904,19 @@ def _submit_schedule_group_locked(
             _release_credit_reserve("failed")
             db.commit()
             skip_tenant = tenant or db.scalar(select(Tenant).where(Tenant.id == item.tenant_id))
+            skip_message = molizhishu_submit_skip_message(skip_tenant) or "企业服务未开通，监测暂不提交"
+            mark_schedule_group_skipped(
+                db,
+                tenant_id=item.tenant_id,
+                group_key=item.group_key,
+                message=skip_message,
+            )
             return {
                 "tenant_id": item.tenant_id,
                 "schedule_key": item.group_key,
                 "status": "skipped",
                 "keyword": item.keyword,
-                "message": molizhishu_submit_skip_message(skip_tenant) or "企业服务未开通，监测暂不提交",
+                "message": skip_message,
             }
         _release_credit_reserve("failed")
         persist_schedule_group_failure(
@@ -1091,6 +1186,7 @@ def kick_brand_word_service_start_for_tenant(
     items = list(enumerate_brand_word_service_start_groups(db, tenant_id=tenant_id, max_prompts=max_prompts))
     if not items:
         return {"tenant_id": tenant_id, "status": "ok", "enqueued": 0, "submitted": 0, "skipped": 0}
+    register_schedule_group_plan(db, items)
 
     if settings.celery_enabled:
         from app.tasks.monitor import _enqueue_task, _schedule_submit_task_id, submit_schedule_group_task

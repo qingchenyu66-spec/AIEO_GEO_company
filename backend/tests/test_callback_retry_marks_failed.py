@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from celery.exceptions import MaxRetriesExceededError
@@ -111,3 +111,40 @@ def test_exception_exhaustion_marks_callback_event_failed(db_session, monkeypatc
     db_session.refresh(event)
     assert event.process_status == "failed"
     assert "boom" in (event.error_message or "")
+
+
+def test_scan_stale_callback_events_requeues_only_old_pending(db_session, monkeypatch) -> None:
+    old = _queued_event(db_session, suffix="old")
+    old.received_at = datetime.now() - timedelta(minutes=30)
+    fresh = _queued_event(db_session, suffix="fresh")
+    fresh.received_at = datetime.now()
+    db_session.commit()
+
+    monkeypatch.setattr(monitor_tasks.settings, "celery_enabled", True)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(monitor_tasks, "SessionLocal", lambda: db_session)
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        monitor_tasks.process_molizhishu_callback_task,
+        "apply_async",
+        lambda **kwargs: submitted.append(kwargs),
+    )
+
+    result = monitor_tasks.scan_stale_callback_events.run(
+        older_than_minutes=10,
+        limit=10,
+    )
+
+    assert result["enqueued"] == 1
+    assert result["event_ids"] == [old.id]
+    assert submitted[0]["kwargs"] == {"event_id": old.id}
+    assert str(old.id) in submitted[0]["task_id"]
+    assert fresh.id not in result["event_ids"]
+
+
+def test_stale_callback_recovery_beat_registered() -> None:
+    beat = monitor_tasks.celery_app.conf.beat_schedule or {}
+    assert (
+        beat["scan-stale-callback-events"]["task"]
+        == "app.tasks.monitor.scan_stale_callback_events"
+    )

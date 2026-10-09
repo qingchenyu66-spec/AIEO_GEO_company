@@ -52,6 +52,7 @@ celery_app.conf.update(
         "app.tasks.monitor.scan_pending_syncs": {"queue": "sync"},
         "app.tasks.monitor.sync_one_monitor_task": {"queue": "sync"},
         "app.tasks.monitor.process_molizhishu_callback_task": {"queue": "sync"},
+        "app.tasks.monitor.scan_stale_callback_events": {"queue": "sync"},
         "app.tasks.monitor.build_ranking_matrix_job_task": {"queue": "default"},
         "app.tasks.monitoring.check_queue_backlog": {"queue": "sync"},
         "app.tasks.monitoring.warm_window_snapshots": {"queue": "default"},
@@ -104,6 +105,11 @@ celery_app.conf.update(
                 "limit": settings.celery_sync_batch_limit,
                 "terminal_grace_hours": settings.celery_sync_terminal_grace_hours,
             },
+        },
+        "scan-stale-callback-events": {
+            "task": "app.tasks.monitor.scan_stale_callback_events",
+            "schedule": crontab(minute="*/5"),
+            "kwargs": {"older_than_minutes": 10, "limit": 100},
         },
         "check-queue-backlog": {
             "task": "app.tasks.monitoring.check_queue_backlog",
