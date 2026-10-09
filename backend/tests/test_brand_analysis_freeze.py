@@ -115,4 +115,5 @@ def test_anchor_label_matches_customer_explainable_week() -> None:
     crawl = datetime(2026, 9, 22, 9, 0, 0)
     win = brand_compare_windows(crawl, "week")
     assert win["current_label"].endswith("2026-09-22")
+    assert win["current_label"].startswith("2026-09-16")
     assert "2026-09-24" not in win["current_label"]
