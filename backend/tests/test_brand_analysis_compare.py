@@ -23,10 +23,11 @@ def test_brand_compare_windows_equal_length() -> None:
     anchor = datetime(2026, 9, 22, 9, 0, 0)
     win = brand_compare_windows(anchor, "week")
     assert win["days"] == 7
-    assert win["range_end"] == anchor
+    assert win["range_end"] == datetime(2026, 9, 23, 0, 0, 0)
     assert (win["current_start"] - win["previous_start"]).days == 7
     assert (win["range_end"] - win["current_start"]).days == 7
-    assert win["current_label"] == "2026-09-15 ~ 2026-09-22"
+    assert win["current_label"] == "2026-09-16 ~ 2026-09-22"
+    assert win["previous_label"] == "2026-09-09 ~ 2026-09-15"
 
 
 def test_brand_compare_windows_stable_when_calendar_day_moves() -> None:
@@ -112,3 +113,42 @@ def test_subtask_event_at_prefers_remote_time_over_updated_at() -> None:
         task=SimpleNamespace(created_at=datetime(2026, 8, 1, 0, 0, 0)),
     )
     assert _subtask_event_at(item) == datetime.fromtimestamp(1_725_000_000_000 / 1000.0)
+
+
+def test_latest_crawl_results_finished_after_task_creation_stay_in_current_week() -> None:
+    """09:00 创建、09:15 完成的本批结果应进入本周，七天前结果进入上周。"""
+    from types import SimpleNamespace
+
+    from app.services.brand_analysis_service import _subtask_in_window
+
+    anchor = datetime(2026, 10, 5, 9, 0, 0)
+    win = brand_compare_windows(anchor, "week")
+    latest = SimpleNamespace(
+        remote_time=int(datetime(2026, 10, 5, 9, 15, 18).timestamp() * 1000),
+        updated_at=datetime(2026, 10, 5, 9, 16, 4),
+        task=SimpleNamespace(created_at=anchor),
+    )
+    previous = SimpleNamespace(
+        remote_time=int(datetime(2026, 9, 28, 9, 58, 35).timestamp() * 1000),
+        updated_at=datetime(2026, 9, 28, 10, 10, 38),
+        task=SimpleNamespace(created_at=datetime(2026, 9, 28, 9, 0, 0)),
+    )
+
+    assert _subtask_in_window(
+        latest,
+        win["current_start"],
+        win["range_end"],
+        end_exclusive=True,
+    )
+    assert not _subtask_in_window(
+        previous,
+        win["current_start"],
+        win["range_end"],
+        end_exclusive=True,
+    )
+    assert _subtask_in_window(
+        previous,
+        win["previous_start"],
+        win["current_start"],
+        end_exclusive=True,
+    )

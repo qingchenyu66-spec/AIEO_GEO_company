@@ -947,15 +947,19 @@ def brand_analysis_filter_fp(platform_codes: list[str] | None) -> str:
 
 
 def brand_compare_windows(anchor: datetime, compare_period: str) -> dict[str, Any]:
-    """本期 [current_start, range_end]，上期 [previous_start, current_start)。
+    """按最近抓取日切自然日窗口，本期/上期均为左闭右开。
 
-    range_end 用抓取锚点，不用「今天打开页」的 now。
+    任务创建时间只负责确定抓取日。窗口上界取该日次日零点，避免任务
+    创建后才完成的子任务被排除，也避免上一抓取日的任务落入本期。
     """
     days = COMPARE_PERIOD_DAYS[compare_period]
-    range_end = anchor
-    current_start = anchor - timedelta(days=days)
-    previous_start = anchor - timedelta(days=days * 2)
+    anchor_day_start = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+    range_end = anchor_day_start + timedelta(days=1)
+    current_start = range_end - timedelta(days=days)
+    previous_start = current_start - timedelta(days=days)
     label = COMPARE_PERIOD_LABELS[compare_period]
+    current_end_date = (range_end - timedelta(microseconds=1)).date()
+    previous_end_date = (current_start - timedelta(microseconds=1)).date()
     return {
         "compare_period": compare_period,
         "compare_period_label": label,
@@ -963,8 +967,8 @@ def brand_compare_windows(anchor: datetime, compare_period: str) -> dict[str, An
         "current_start": current_start,
         "previous_start": previous_start,
         "range_end": range_end,
-        "current_label": f"{current_start.date().isoformat()} ~ {range_end.date().isoformat()}",
-        "previous_label": f"{previous_start.date().isoformat()} ~ {current_start.date().isoformat()}",
+        "current_label": f"{current_start.date().isoformat()} ~ {current_end_date.isoformat()}",
+        "previous_label": f"{previous_start.date().isoformat()} ~ {previous_end_date.isoformat()}",
     }
 
 
@@ -1484,7 +1488,7 @@ def build_brand_analysis_dashboard(
 
     current_subtasks = [
         item for item in subtasks
-        if _subtask_in_window(item, current_start, range_end, end_exclusive=False)
+        if _subtask_in_window(item, current_start, range_end, end_exclusive=True)
     ]
     previous_subtasks = [
         item for item in subtasks
@@ -1687,7 +1691,7 @@ def build_brand_analysis_dashboard_for_tenant(
     }
     current_subtasks = [
         item for item in subtasks
-        if _subtask_in_window(item, current_start, range_end, end_exclusive=False)
+        if _subtask_in_window(item, current_start, range_end, end_exclusive=True)
     ]
     previous_subtasks = [
         item for item in subtasks
