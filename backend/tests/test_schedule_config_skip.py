@@ -94,7 +94,7 @@ def test_submit_schedule_group_skips_unconfigured(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr("app.services.tenant_account_service.molizhishu_submit_skip_message", lambda *_a, **_k: None)
     monkeypatch.setattr("app.services.schedule_service.is_schedule_group_submittable", lambda *_a, **_k: False)
-    monkeypatch.setattr("app.services.schedule_service._downgrade_config_failed_schedule_run", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.schedule_service.mark_schedule_group_skipped", lambda *_a, **_k: None)
 
     item = DueScheduleGroup(
         tenant_id=132,

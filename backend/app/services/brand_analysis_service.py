@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.dependencies import CurrentSession
-from app.models.monitor import GeoMonitorSubtask, GeoMonitorTask
+from app.models.monitor import GeoMonitorScheduleRun, GeoMonitorSubtask, GeoMonitorTask
 from app.core.platform_order import sort_platform_codes
 from app.services.brand_service import (
     get_brand_asset,
@@ -933,12 +933,21 @@ def resolve_brand_compare_period(raw: str | None) -> str:
 
 
 def resolve_brand_analysis_anchor(db: Session, tenant_id: int) -> datetime | None:
-    """最近一次品牌词任务创建时间 = 本租户最近抓取批次锚点。"""
+    """优先以最近完整品牌词批次为锚点，避免半批数据进入展示窗口。"""
+    complete_source = _brand_analysis_freeze_source(db, tenant_id)
+    if complete_source is not None:
+        source_created_at = complete_source.get("source_task_created_at")
+        if source_created_at:
+            return datetime.fromisoformat(str(source_created_at))
     return db.scalar(
         select(func.max(GeoMonitorTask.created_at)).where(
             GeoMonitorTask.tenant_id == int(tenant_id),
             GeoMonitorTask.purpose == "brand_word",
             GeoMonitorTask.deleted.is_(False),
+            func.json_extract(
+                GeoMonitorTask.raw_request_json,
+                "$._geo_auto_retry",
+            ).is_(None),
         )
     )
 
@@ -982,47 +991,154 @@ def _brand_analysis_parse_settled(parse_meta: dict[str, Any]) -> bool:
     ) <= 0
 
 
-def _brand_analysis_freeze_source(db: Session, tenant_id: int) -> dict[str, Any] | None:
-    """仅在最新品牌词批次全部进入终态后返回冻结来源元数据。"""
-    task = db.scalar(
-        select(GeoMonitorTask)
-        .where(
-            GeoMonitorTask.tenant_id == int(tenant_id),
-            GeoMonitorTask.purpose == "brand_word",
-            GeoMonitorTask.deleted.is_(False),
-        )
-        .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorTask.id.desc())
-        .limit(1)
-    )
-    if task is None or str(task.status or "") not in BRAND_FREEZE_TASK_STATUSES:
-        return None
+def _brand_task_is_auto_retry(task: GeoMonitorTask) -> bool:
+    raw = task.raw_request_json if isinstance(task.raw_request_json, dict) else {}
+    return isinstance(raw.get("_geo_auto_retry"), dict)
 
-    statuses = list(
+
+def _brand_task_freeze_counts(
+    db: Session,
+    task: GeoMonitorTask,
+) -> tuple[int, int, int] | None:
+    if str(task.status or "") not in BRAND_FREEZE_TASK_STATUSES:
+        return None
+    subtasks = list(
         db.scalars(
-            select(GeoMonitorSubtask.status).where(
+            select(GeoMonitorSubtask).where(
                 GeoMonitorSubtask.task_id == task.task_id,
             )
         )
     )
-    actual_total = len(statuses)
+    actual_total = len(subtasks)
     expected_total = max(int(task.total_items or 0), actual_total)
     terminal_total = sum(
-        1 for status in statuses if str(status or "") in BRAND_FREEZE_SUBTASK_STATUSES
+        1
+        for subtask in subtasks
+        if str(subtask.status or "") in BRAND_FREEZE_SUBTASK_STATUSES
     )
+    usable = [
+        subtask
+        for subtask in subtasks
+        if str(subtask.status or "") in {"completed", "partial_completed"}
+    ]
     if (
         expected_total <= 0
         or actual_total < expected_total
         or terminal_total < expected_total
+        or any(
+            not _has_deepseek_sentiment(subtask)
+            or not _has_deepseek_description(subtask)
+            for subtask in usable
+        )
     ):
         return None
+    return expected_total, terminal_total, len(usable)
 
-    return {
-        "source_task_id": task.task_id,
-        "source_task_created_at": task.created_at.isoformat() if task.created_at else None,
-        "source_task_status": task.status,
-        "source_task_total_items": expected_total,
-        "source_task_terminal_items": terminal_total,
-    }
+
+def _brand_analysis_freeze_source(db: Session, tenant_id: int) -> dict[str, Any] | None:
+    """返回最近一个全部进入终态的品牌词调度批次来源元数据。"""
+    candidates = list(
+        db.scalars(
+            select(GeoMonitorTask)
+            .where(
+                GeoMonitorTask.tenant_id == int(tenant_id),
+                GeoMonitorTask.purpose == "brand_word",
+                GeoMonitorTask.deleted.is_(False),
+                func.json_extract(
+                    GeoMonitorTask.raw_request_json,
+                    "$._geo_auto_retry",
+                ).is_(None),
+            )
+            .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorTask.id.desc())
+            .limit(200)
+        )
+    )
+    seen_batches: set[str] = set()
+    skipped_newer_batch = False
+    for candidate in candidates:
+        run = db.scalar(
+            select(GeoMonitorScheduleRun).where(
+                GeoMonitorScheduleRun.tenant_id == int(tenant_id),
+                GeoMonitorScheduleRun.task_id == candidate.task_id,
+            )
+        )
+        if run is None or "-kw" not in str(run.schedule_key or ""):
+            batch_key = f"task:{candidate.task_id}"
+            tasks = [candidate]
+        else:
+            batch_key = str(run.schedule_key).split("-kw", 1)[0]
+            if batch_key in seen_batches:
+                continue
+            seen_batches.add(batch_key)
+            batch_runs = list(
+                db.scalars(
+                    select(GeoMonitorScheduleRun).where(
+                        GeoMonitorScheduleRun.tenant_id == int(tenant_id),
+                        GeoMonitorScheduleRun.schedule_key.startswith(f"{batch_key}-kw"),
+                    )
+                )
+            )
+            if not batch_runs or any(
+                str(item.status or "") != "submitted" or not item.task_id
+                for item in batch_runs
+            ):
+                skipped_newer_batch = True
+                continue
+            task_ids = [str(item.task_id) for item in batch_runs]
+            tasks = list(
+                db.scalars(
+                    select(GeoMonitorTask).where(
+                        GeoMonitorTask.task_id.in_(task_ids),
+                        GeoMonitorTask.deleted.is_(False),
+                    )
+                )
+            )
+            if len(tasks) != len(task_ids) or any(
+                _brand_task_is_auto_retry(task) for task in tasks
+            ):
+                skipped_newer_batch = True
+                continue
+
+        total_items = 0
+        terminal_items = 0
+        usable_items = 0
+        batch_complete = True
+        for task in tasks:
+            counts = _brand_task_freeze_counts(db, task)
+            if counts is None:
+                batch_complete = False
+                break
+            total_items += counts[0]
+            terminal_items += counts[1]
+            usable_items += counts[2]
+        if not batch_complete:
+            skipped_newer_batch = True
+            continue
+        if usable_items <= 0:
+            skipped_newer_batch = True
+            continue
+
+        source_task = max(tasks, key=lambda task: (task.created_at, task.id))
+        source_created_at = source_task.created_at
+        if source_created_at is None:
+            skipped_newer_batch = True
+            continue
+        source_task_ids = sorted(str(task.task_id) for task in tasks)
+        return {
+            "source_batch_key": batch_key,
+            "source_task_id": source_task.task_id,
+            "source_task_ids": source_task_ids,
+            "source_task_created_at": source_created_at.isoformat(),
+            "source_task_status": source_task.status,
+            "source_task_statuses": {
+                str(task.task_id): str(task.status or "") for task in tasks
+            },
+            "source_task_total_items": total_items,
+            "source_task_terminal_items": terminal_items,
+            "source_task_usable_items": usable_items,
+            "source_is_latest_batch": not skipped_newer_batch,
+        }
+    return None
 
 
 def _snapshot_payload_from_dashboard(data: dict[str, Any]) -> dict[str, Any]:
@@ -1060,6 +1176,15 @@ def _try_load_brand_analysis_snapshot(
     )
     if not snap:
         return None
+    freeze_source = _brand_analysis_freeze_source(db, tenant_id)
+    if freeze_source is not None:
+        snapshot_source = str(snap.get("source_batch_key") or "").strip()
+        current_source = str(freeze_source.get("source_batch_key") or "").strip()
+        keep_legacy_while_newer_batch_is_incomplete = (
+            not snapshot_source and not bool(freeze_source.get("source_is_latest_batch"))
+        )
+        if snapshot_source != current_source and not keep_legacy_while_newer_batch_is_incomplete:
+            return None
     out = dict(snap)
     out["frozen"] = True
     out["data_as_of"] = as_of.isoformat()
@@ -1095,10 +1220,10 @@ def _try_freeze_brand_analysis_snapshot(
     snapshot_data.update(freeze_source)
     from app.services.window_snapshot_service import (
         BRAND_ANALYSIS_KIND,
-        insert_window_snapshot_if_absent,
+        upsert_window_snapshot_if_newer_source,
     )
 
-    return insert_window_snapshot_if_absent(
+    return upsert_window_snapshot_if_newer_source(
         db,
         tenant_id=tenant_id,
         kind=BRAND_ANALYSIS_KIND,
@@ -1106,6 +1231,8 @@ def _try_freeze_brand_analysis_snapshot(
         payload=_snapshot_payload_from_dashboard(snapshot_data),
         as_of_date=as_of,
         filter_fp=filter_fp,
+        source_version=str(freeze_source["source_batch_key"]),
+        source_created_at=datetime.fromisoformat(str(freeze_source["source_task_created_at"])),
     )
 
 
@@ -1380,6 +1507,10 @@ def _load_brand_word_subtasks(
             GeoMonitorTask.deleted.is_(False),
             GeoMonitorTask.tenant_id == tenant_id,
             GeoMonitorTask.purpose == "brand_word",
+            func.json_extract(
+                GeoMonitorTask.raw_request_json,
+                "$._geo_auto_retry",
+            ).is_(None),
             GeoMonitorSubtask.status.in_(("completed", "partial_completed")),
             or_(
                 GeoMonitorSubtask.updated_at >= lookback_start,

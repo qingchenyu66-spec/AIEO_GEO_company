@@ -28,7 +28,11 @@ from app.services.brand_service import (
 from app.services.approval_preview_service import brand_asset_has_changes
 from app.services.approval_service import queue_or_run, requires_sales_approval
 from app.services.management_service import raise_if_new_tenant_name_unavailable
-from app.services.schedule_service import enumerate_brand_word_once_groups, submit_schedule_group
+from app.services.schedule_service import (
+    enumerate_brand_word_once_groups,
+    register_schedule_group_plan,
+    submit_schedule_group,
+)
 from app.services.tenant_scope import resolve_and_guard_tenant_id, resolve_customer_preview_tenant_id
 from app.services.tenant_logo_service import (
     maybe_apply_logo_staging_from_body,
@@ -241,12 +245,16 @@ def upsert_brand_word_groups(
         asset, submit_rows = save_brand_word_groups(db, payload, current)
         submit_dicts = [brand_word_group_to_dict(item) for item in submit_rows]
         submitted: list[dict] = []
-        for item in enumerate_brand_word_once_groups(
-            db,
-            tenant_id=asset.tenant_id,
-            groups=submit_dicts,
-            max_prompts=settings.celery_scan_submit_max_prompts,
-        ):
+        items = list(
+            enumerate_brand_word_once_groups(
+                db,
+                tenant_id=asset.tenant_id,
+                groups=submit_dicts,
+                max_prompts=settings.celery_scan_submit_max_prompts,
+            )
+        )
+        register_schedule_group_plan(db, items, created_by=current.user.id)
+        for item in items:
             submitted.append(submit_schedule_group(db, current, item))
         keyword_groups = editable_keyword_groups(db, asset.tenant_id)
         brand_word_groups = list_brand_word_groups(db, asset.tenant_id)

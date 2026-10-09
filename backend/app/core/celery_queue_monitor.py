@@ -29,6 +29,7 @@ TASK_LABELS: dict[str, str] = {
     "app.tasks.monitor.submit_schedule_group": "提交监测词组",
     "app.tasks.monitor.scan_pending_syncs": "扫描待同步任务",
     "app.tasks.monitor.sync_one_monitor_task": "同步监测结果",
+    "app.tasks.monitor.scan_stale_callback_events": "回收滞留回调事件",
     "app.tasks.monitoring.check_queue_backlog": "检查队列积压",
     "app.tasks.monitor.build_ranking_matrix_job_task": "排名矩阵异步构建",
     "app.tasks.snapshot_backfill.parse_and_apply_backfill_task": "补录分享页解析",
