@@ -921,6 +921,10 @@ COMPARE_LOAD_LIMIT: dict[str, int] = {
 }
 # 2026-09-07 - 不做「满 N 组才环比」魔法门槛：上期空=不比；上期有数=如实比
 COMPARE_MIN_PREV_GROUPS = 1
+BRAND_FREEZE_TASK_STATUSES = frozenset({"completed", "partial_completed"})
+BRAND_FREEZE_SUBTASK_STATUSES = frozenset(
+    {"completed", "partial_completed", "failed", "stopped"}
+)
 
 
 def resolve_brand_compare_period(raw: str | None) -> str:
@@ -976,6 +980,49 @@ def _brand_analysis_parse_settled(parse_meta: dict[str, Any]) -> bool:
     return int(parse_meta.get("pending_left") or 0) <= 0 and int(
         parse_meta.get("description_pending_left") or 0
     ) <= 0
+
+
+def _brand_analysis_freeze_source(db: Session, tenant_id: int) -> dict[str, Any] | None:
+    """仅在最新品牌词批次全部进入终态后返回冻结来源元数据。"""
+    task = db.scalar(
+        select(GeoMonitorTask)
+        .where(
+            GeoMonitorTask.tenant_id == int(tenant_id),
+            GeoMonitorTask.purpose == "brand_word",
+            GeoMonitorTask.deleted.is_(False),
+        )
+        .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorTask.id.desc())
+        .limit(1)
+    )
+    if task is None or str(task.status or "") not in BRAND_FREEZE_TASK_STATUSES:
+        return None
+
+    statuses = list(
+        db.scalars(
+            select(GeoMonitorSubtask.status).where(
+                GeoMonitorSubtask.task_id == task.task_id,
+            )
+        )
+    )
+    actual_total = len(statuses)
+    expected_total = max(int(task.total_items or 0), actual_total)
+    terminal_total = sum(
+        1 for status in statuses if str(status or "") in BRAND_FREEZE_SUBTASK_STATUSES
+    )
+    if (
+        expected_total <= 0
+        or actual_total < expected_total
+        or terminal_total < expected_total
+    ):
+        return None
+
+    return {
+        "source_task_id": task.task_id,
+        "source_task_created_at": task.created_at.isoformat() if task.created_at else None,
+        "source_task_status": task.status,
+        "source_task_total_items": expected_total,
+        "source_task_terminal_items": terminal_total,
+    }
 
 
 def _snapshot_payload_from_dashboard(data: dict[str, Any]) -> dict[str, Any]:
@@ -1036,6 +1083,16 @@ def _try_freeze_brand_analysis_snapshot(
         return False
     if int(data.get("sample_count") or 0) <= 0:
         return False
+
+    freeze_source = _brand_analysis_freeze_source(db, tenant_id)
+    if freeze_source is None:
+        return False
+    source_created_at = freeze_source.get("source_task_created_at")
+    if source_created_at and datetime.fromisoformat(str(source_created_at)).date() != as_of:
+        return False
+
+    snapshot_data = dict(data)
+    snapshot_data.update(freeze_source)
     from app.services.window_snapshot_service import (
         BRAND_ANALYSIS_KIND,
         insert_window_snapshot_if_absent,
@@ -1046,7 +1103,7 @@ def _try_freeze_brand_analysis_snapshot(
         tenant_id=tenant_id,
         kind=BRAND_ANALYSIS_KIND,
         window_days=COMPARE_PERIOD_DAYS[grain],
-        payload=_snapshot_payload_from_dashboard(data),
+        payload=_snapshot_payload_from_dashboard(snapshot_data),
         as_of_date=as_of,
         filter_fp=filter_fp,
     )
