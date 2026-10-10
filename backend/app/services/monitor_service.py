@@ -120,6 +120,29 @@ def _hydrate_subtasks_in_id_order(db: Session, ordered_ids: list[int], *option_a
     return [by_id[i] for i in ordered_ids if i in by_id]
 
 
+def _iter_hydrated_subtask_batches(
+    db: Session,
+    stmt,
+    *option_args,
+    batch_size: int = 2000,
+):
+    """按主键游标分批 hydrate；日期/任务范围限定总集，批次限定单次内存。"""
+    size = max(1, int(batch_size or 1))
+    page_stmt = stmt.order_by(None).order_by(GeoMonitorSubtask.id.desc())
+    last_id: int | None = None
+    while True:
+        current_stmt = page_stmt
+        if last_id is not None:
+            current_stmt = current_stmt.where(GeoMonitorSubtask.id < last_id)
+        ordered_ids = _ordered_subtask_ids(db, current_stmt.limit(size))
+        if not ordered_ids:
+            return
+        yield _hydrate_subtasks_in_id_order(db, ordered_ids, *option_args)
+        if len(ordered_ids) < size:
+            return
+        last_id = ordered_ids[-1]
+
+
 def _has_structured_rankings(value: Any) -> bool:
     return bool(normalize_structured_rankings(value or []))
 
@@ -9045,41 +9068,32 @@ def ranking_matrix(
     if selected_platform:
         stmt = stmt.where(GeoMonitorSubtask.platform == selected_platform)
 
-    # ponytail: 全平台×多词×多日轻松超 2000；截断会把冷门词变成「—」。有 schedule 范围时略放宽。
-    fetch_limit = 3500 if matrix_task_ids else 2000
-    if selected_platform:
-        fetch_limit = min(fetch_limit, 2500)
-    # 2026-07-30 - 1038 类风险 - ranking 矩阵 ORDER BY 勿带 JSON 宽列，id-first 再 hydrate
-    ordered_ids = _ordered_subtask_ids(db, stmt.limit(fetch_limit))
-    subtasks = _hydrate_subtasks_in_id_order(
-        db,
-        ordered_ids,
+    hydrate_options = (
         joinedload(GeoMonitorSubtask.task).load_only(
             GeoMonitorTask.monitor_keywords,
             GeoMonitorTask.created_at,
         ),
         load_only(*light_cols),
     )
+    # 有日程范围时，总集已受所选日期对应的 task_id 限定。按 2000 条分批 hydrate 并立即聚合，
+    # 不再设置 3500/60000 总条数截断；监控词、地区或场次增加也不会静默丢掉早期日期。
+    if matrix_task_ids:
+        subtask_batches = _iter_hydrated_subtask_batches(db, stmt, *hydrate_options)
+        task_ids = matrix_task_ids
+    else:
+        # 无日程映射的旧数据保持原有 2000 条保护，避免 45 天兼容查询无界扩大。
+        fallback_subtasks = _hydrate_subtasks_in_id_order(
+            db,
+            _ordered_subtask_ids(db, stmt.limit(2000)),
+            *hydrate_options,
+        )
+        subtask_batches = iter((fallback_subtasks,))
+        task_ids = list({item.task_id for item in fallback_subtasks if item.task_id})
+
     legacy_group_filter = str(monitor_group or keyword or "").strip()
     scoped_group = str(keyword_group or "").strip()
     scoped_monitor = str(monitor_keyword or "").strip()
     scoped_exposure = str(exposure_term or "").strip()
-    if scoped_group or scoped_monitor or scoped_exposure:
-        subtasks = _filter_subtasks_by_scope(
-            subtasks,
-            keyword_group=scoped_group or None,
-            monitor_keyword=scoped_monitor or None,
-            exposure_term=scoped_exposure or None,
-            keyword_groups=keyword_groups,
-            asset=asset,
-        )
-    elif legacy_group_filter:
-        subtasks = _filter_subtasks_by_monitor_group(subtasks, legacy_group_filter, keyword_groups)
-
-    if not all_platforms and subtasks:
-        selected_platform = subtasks[0].platform
-
-    task_ids = list({item.task_id for item in subtasks if item.task_id})
     schedule_runs_map = schedule_runs_for_tasks(db, task_ids)
     lead_runs_map = lead_diagnosis_runs_for_tasks(db, task_ids)
 
@@ -9089,81 +9103,94 @@ def ranking_matrix(
     ranking_terms = _ranking_match_terms(asset, keyword_groups)
     normalize_cache: dict[Any, list[dict[str, Any]]] = {}
 
-    for item in subtasks:
-        prompt = (item.prompt or "").strip()
-        task_id = (item.task_id or "").strip()
-        if not prompt or not task_id or item.task is None:
-            continue
-        if prompt_monitor_intent(prompt) != "ranking":
-            continue
-        schedule_ctx = _resolve_subtask_schedule_context(
-            item.task,
-            schedule_runs_map,
-            asset,
-            lead_runs_map,
-        )
-        detect_dt = _subtask_detect_datetime(item, item.task, schedule_ctx)
-        if detect_dt is None:
-            continue
-        if detect_dt < range_start or detect_dt > range_end:
-            continue
-        if not matrix_platform_visible(item.platform, purchased_platforms):
-            continue
-        day_key = detect_dt.date().isoformat()
-        keyword_group = (
-            _resolve_display_keyword_group(
-                item.task,
-                schedule_runs_map.get(task_id),
-                keyword_group_rows,
+    for subtasks in subtask_batches:
+        if scoped_group or scoped_monitor or scoped_exposure:
+            subtasks = _filter_subtasks_by_scope(
+                subtasks,
+                keyword_group=scoped_group or None,
+                monitor_keyword=scoped_monitor or None,
+                exposure_term=scoped_exposure or None,
+                keyword_groups=keyword_groups,
+                asset=asset,
             )
-            or _prompt_group_name(prompt, keyword_group_rows)
-            or schedule_ctx.get("keyword_group")
-        )
-        prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
-        row_key = _matrix_row_key(
-            day_key,
-            item.platform,
-            all_platforms=all_platforms,
-            keyword_group=keyword_group,
-        )
-        bucket = task_rows.setdefault(row_key, {
-            "day_key": day_key,
-            "task_id": task_id,
-            "platform": item.platform if all_platforms else None,
-            "keyword_group": keyword_group,
-            "latest_at": None,
-            "cell_samples": {},
-        })
-        if item.updated_at and (
-            bucket["latest_at"] is None or item.updated_at > bucket["latest_at"]
-        ):
-            bucket["latest_at"] = item.updated_at
-            bucket["task_id"] = task_id
-        monitor_keywords = item.task.monitor_keywords if item.task else None
-        rank_payload = _matrix_cell_rank(
-            item,
-            monitor_keywords,
-            asset,
-            keyword_groups,
-            ranking_terms=ranking_terms,
-            normalize_cache=normalize_cache,
-        )
-        cell = {
-            "subtask_id": item.subtask_id,
-            "task_id": task_id,
-            "schedule_window_key": schedule_ctx.get("schedule_window_key"),
-            "schedule_label": schedule_ctx.get("schedule_label"),
-            "schedule_source": schedule_ctx.get("schedule_source"),
-            "region_code": schedule_ctx.get("region_code"),
-            "region_label": schedule_ctx.get("region_label"),
-            "status": item.status,
-            "page_screenshot": None,
-            "sentiment": item.sentiment,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            **rank_payload,
-            "_updated_at": item.updated_at,
-        }
-        bucket["cell_samples"].setdefault(prompt, []).append(cell)
+        elif legacy_group_filter:
+            subtasks = _filter_subtasks_by_monitor_group(subtasks, legacy_group_filter, keyword_groups)
+
+        for item in subtasks:
+            prompt = (item.prompt or "").strip()
+            task_id = (item.task_id or "").strip()
+            if not prompt or not task_id or item.task is None:
+                continue
+            if prompt_monitor_intent(prompt) != "ranking":
+                continue
+            schedule_ctx = _resolve_subtask_schedule_context(
+                item.task,
+                schedule_runs_map,
+                asset,
+                lead_runs_map,
+            )
+            detect_dt = _subtask_detect_datetime(item, item.task, schedule_ctx)
+            if detect_dt is None:
+                continue
+            if detect_dt < range_start or detect_dt > range_end:
+                continue
+            if not matrix_platform_visible(item.platform, purchased_platforms):
+                continue
+            day_key = detect_dt.date().isoformat()
+            keyword_group = (
+                _resolve_display_keyword_group(
+                    item.task,
+                    schedule_runs_map.get(task_id),
+                    keyword_group_rows,
+                )
+                or _prompt_group_name(prompt, keyword_group_rows)
+                or schedule_ctx.get("keyword_group")
+            )
+            prompt_set.setdefault(prompt, _prompt_group_name(prompt, keyword_group_rows))
+            row_key = _matrix_row_key(
+                day_key,
+                item.platform,
+                all_platforms=all_platforms,
+                keyword_group=keyword_group,
+            )
+            bucket = task_rows.setdefault(row_key, {
+                "day_key": day_key,
+                "task_id": task_id,
+                "platform": item.platform if all_platforms else None,
+                "keyword_group": keyword_group,
+                "latest_at": None,
+                "cell_samples": {},
+            })
+            if item.updated_at and (
+                bucket["latest_at"] is None or item.updated_at > bucket["latest_at"]
+            ):
+                bucket["latest_at"] = item.updated_at
+                bucket["task_id"] = task_id
+            monitor_keywords = item.task.monitor_keywords if item.task else None
+            rank_payload = _matrix_cell_rank(
+                item,
+                monitor_keywords,
+                asset,
+                keyword_groups,
+                ranking_terms=ranking_terms,
+                normalize_cache=normalize_cache,
+            )
+            cell = {
+                "subtask_id": item.subtask_id,
+                "task_id": task_id,
+                "schedule_window_key": schedule_ctx.get("schedule_window_key"),
+                "schedule_label": schedule_ctx.get("schedule_label"),
+                "schedule_source": schedule_ctx.get("schedule_source"),
+                "region_code": schedule_ctx.get("region_code"),
+                "region_label": schedule_ctx.get("region_label"),
+                "status": item.status,
+                "page_screenshot": None,
+                "sentiment": item.sentiment,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                **rank_payload,
+                "_updated_at": item.updated_at,
+            }
+            bucket["cell_samples"].setdefault(prompt, []).append(cell)
 
     sorted_tasks = sorted(
         task_rows.values(),
