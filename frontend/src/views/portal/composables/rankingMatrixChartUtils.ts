@@ -1026,8 +1026,13 @@ export function buildMatrixHeatOption(
   const axisDates = dayKeys.map(heatAxisDateLabel)
   const tipDates = dayKeys.map(heatTooltipDateLabel)
   const dayCount = dayKeys.length
-  const axisRotate = dayCount > 7 ? 48 : dayCount > 4 ? 36 : 0
+  const visibleDayWindow = 31
+  const hasTimeZoom = dayCount > visibleDayWindow
+  const zoomStartIndex = Math.max(0, dayCount - visibleDayWindow)
+  const axisRotate = dayCount > 7 ? 36 : dayCount > 4 ? 24 : 0
   const axisFontSize = dayCount > 10 ? 10 : dayCount > 6 ? 11 : 12
+  const axisLabelInterval = dayCount > 14 ? 2 : dayCount > 7 ? 1 : 0
+  const gridBottom = hasTimeZoom ? 52 : axisRotate ? 8 : 12
   const keywords = slice.columns.map(labelMatrixPrompt)
   const data: MatrixHeatDataItem[] = []
   dayKeys.forEach((dayKey, xIndex) => {
@@ -1049,13 +1054,13 @@ export function buildMatrixHeatOption(
     labels: keywords,
     labelWidth,
     gridTop: 12,
-    gridBottom: axisRotate ? 8 : 12,
+    gridBottom,
     option: {
     grid: {
       left: labelWidth,
       right: 48,
       top: 12,
-      bottom: axisRotate ? 8 : 12,
+      bottom: gridBottom,
       containLabel: false,
     },
     tooltip: {
@@ -1074,8 +1079,8 @@ export function buildMatrixHeatOption(
       axisTick: { show: false },
       axisLabel: {
         show: true,
-        interval: 0,
-        hideOverlap: false,
+        interval: axisLabelInterval,
+        hideOverlap: true,
         rotate: axisRotate,
         color: '#58708f',
         fontSize: axisFontSize,
@@ -1083,6 +1088,39 @@ export function buildMatrixHeatOption(
         margin: axisRotate ? 14 : 10,
       },
     },
+    dataZoom: hasTimeZoom ? [
+      {
+        type: 'inside',
+        xAxisIndex: 0,
+        startValue: zoomStartIndex,
+        endValue: dayCount - 1,
+        filterMode: 'filter',
+        zoomOnMouseWheel: false,
+        moveOnMouseWheel: true,
+        moveOnMouseMove: true,
+      },
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        startValue: zoomStartIndex,
+        endValue: dayCount - 1,
+        filterMode: 'filter',
+        height: 18,
+        bottom: 4,
+        showDetail: false,
+        showDataShadow: false,
+        brushSelect: false,
+        borderColor: 'transparent',
+        backgroundColor: '#edf3fa',
+        fillerColor: 'rgba(45, 108, 223, 0.18)',
+        handleSize: 14,
+        handleStyle: {
+          color: '#fff',
+          borderColor: '#2d6cdf',
+          borderWidth: 2,
+        },
+      },
+    ] : undefined,
     yAxis: {
       type: 'category',
       data: keywords,
@@ -1101,7 +1139,7 @@ export function buildMatrixHeatOption(
       type: 'heatmap',
       data,
       label: {
-        show: true,
+        show: !hasTimeZoom,
         formatter: (params: { data: MatrixHeatDataItem }) => (
           heatPointRank(params.data) < 0 ? '—' : formatRank(heatPointRank(params.data))
         ),

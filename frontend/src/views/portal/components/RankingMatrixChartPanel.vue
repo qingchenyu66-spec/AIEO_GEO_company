@@ -16,6 +16,7 @@ import {
   buildMatrixRankScope,
   estimateMatrixAxisLabelWidth,
   matrixChartHeight,
+  matrixDayKeys,
   matrixPlatformKpi,
   resolveMatrixBarLayoutHint,
   resolveColumnCell,
@@ -161,7 +162,16 @@ const cardHint = computed(() => {
       : `${scope.label} 区间均值`
     return `${prefix} · ${activeSlice.value.columns.length} 个监测词`
   }
-  return `${activeSlice.value.rows.length} 天 × ${activeSlice.value.columns.length} 词`
+  return `${matrixDayKeys(activeSlice.value.rows).length} 天 × ${activeSlice.value.columns.length} 词`
+})
+
+const heatNavigationHint = computed(() => {
+  if (!activeSlice.value) return ''
+  const dayCount = matrixDayKeys(activeSlice.value.rows).length
+  if (dayCount > 31) {
+    return `当前显示最近 31 个监测日；拖动底部时间轴或滚轮平移，查看全部 ${dayCount} 天`
+  }
+  return '悬停查看日期与排名；左侧监测词可点击复制'
 })
 
 const cardHintExtra = computed(() => {
@@ -455,7 +465,7 @@ defineExpose({ resizeChart })
               <span class="legend-mid">4+ 待提升</span>
               <span class="legend-none">— 未提及</span>
               <span v-if="chartType === 'bar'" class="legend-axis">条形终点对应排名；右端 1 表示 AI 首推；左侧监测词可框选或点复制</span>
-              <span v-else class="legend-axis">词多时在图内向下滚动即可看全；左侧监测词可框选或点复制</span>
+              <span v-else class="legend-axis">{{ heatNavigationHint }}</span>
             </p>
           </div>
         </article>
