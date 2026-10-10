@@ -96,7 +96,7 @@ def ranking_matrix_cache_key(
     include_retired_keywords: bool = False,
 ) -> str:
     return (
-        f"monitor:ranking-matrix:v3:{identity_type}:{tenant_id}:"
+        f"monitor:ranking-matrix:v4:{identity_type}:{tenant_id}:"
         f"{platform or 'all'}:{start_date or 'default'}:{end_date or 'default'}:"
         f"{keyword or '-'}:{monitor_group or '-'}:{keyword_group or '-'}:"
         f"{monitor_keyword or '-'}:{exposure_term or '-'}:{limit_rows}:"
@@ -364,6 +364,8 @@ def invalidate_dashboard_caches(
         delete_cache_pattern(f"analytics:sentiment-keywords:v3:*:{tenant_id}:*")
         delete_cache_pattern(f"monitor:ranking-matrix:v1:*:{tenant_id}:*")
         delete_cache_pattern(f"monitor:ranking-matrix:v2:*:{tenant_id}:*")
+        delete_cache_pattern(f"monitor:ranking-matrix:v3:*:{tenant_id}:*")
+        delete_cache_pattern(f"monitor:ranking-matrix:v4:*:{tenant_id}:*")
         _memory_delete_prefix(f"monitor:summary:")
         _memory_delete_prefix(f"monitor:workspace-brief:")
         _memory_delete_prefix(f"monitor:source-stats:")
@@ -376,5 +378,7 @@ def invalidate_dashboard_caches(
     delete_cache_pattern("analytics:competitor-compare:v2:PLATFORM:*")
     delete_cache_pattern("monitor:ranking-matrix:v1:PLATFORM:*")
     delete_cache_pattern("monitor:ranking-matrix:v2:PLATFORM:*")
+    delete_cache_pattern("monitor:ranking-matrix:v3:PLATFORM:*")
+    delete_cache_pattern("monitor:ranking-matrix:v4:PLATFORM:*")
     _memory_delete_prefix("analytics:competitor-compare:")
     _memory_delete_prefix("monitor:ranking-matrix:")
