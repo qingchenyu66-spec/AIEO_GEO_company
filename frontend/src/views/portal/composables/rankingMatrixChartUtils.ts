@@ -89,14 +89,25 @@ export function enumerateDateKeys(startDate: string, endDate: string, maxDays = 
   return out
 }
 
-/** 热力 x 轴：有筛选区间则铺满，否则仅有样本日。渲染与点击必须共用，否则 xIndex 会错位。 */
+/**
+ * 热力 x 轴：短区间铺满日期，长区间仅展示实际监测日。
+ * enumerateDateKeys 会限制为 62 天；若直接使用截断结果，年视图会错误显示年初连续 62 天，
+ * 并把后续真实监测日全部排除。渲染与点击必须共用本结果，否则 xIndex 会错位。
+ */
 export function matrixHeatDayKeys(
   rows: RankingMatrixRow[],
   range?: { startDate?: string; endDate?: string },
 ) {
   const dataDays = matrixDayKeys(rows).map(key => key.slice(0, 10))
-  const ranged = enumerateDateKeys(range?.startDate || '', range?.endDate || '')
-  return ranged.length ? ranged : dataDays
+  const startDate = (range?.startDate || '').trim().slice(0, 10)
+  const endDate = (range?.endDate || '').trim().slice(0, 10)
+  const ranged = enumerateDateKeys(startDate, endDate)
+  const rangeWasFullyEnumerated = ranged.length > 0 && ranged[ranged.length - 1] === endDate
+  if (rangeWasFullyEnumerated) return ranged
+  if (ranged.length) {
+    return dataDays.filter(day => day >= startDate && day <= endDate)
+  }
+  return dataDays
 }
 
 function platformCodeFamily(code: string) {
