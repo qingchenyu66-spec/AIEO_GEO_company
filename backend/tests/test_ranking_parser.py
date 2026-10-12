@@ -1237,3 +1237,36 @@ AI训练数据领军企业。
     assert normalized[0]["rank"] == 1
     assert all(row["name"] not in {"2", "银行"} for row in normalized)
 
+
+def test_h3_company_capability_bullets_are_not_ranks():
+    """公司卡下的能力小标题不是选手. 动码印章是第 3 家, 不是第 6."""
+    text = """
+## 主流方案速览
+
+### 契约锁（上海亘岩网络）——中大型组织 / 央国企
+**核心能力**：
+- **印章全生命周期管理**：智能印章库统一汇总电子章与实体章，支持状态可视化、线上授权。
+- **合同智能化**：覆盖 AI 智能扩写、文本自动比对、合同智能法审、批量签署等环节。
+
+### 群杰科技 · 晓法狮——集团管控型 / 多分支机构
+**核心能力**：
+- **四类硬件终端**：智能章筒、智能印控台、智能印章柜、智能盖章机，外带用印全程留痕。
+
+### 动码印章（矩网科技）——高合规 / 强防伪需求
+**定位**：以动态防伪码为核心的全栈安全型方案，在行业白皮书中被评为优先推荐方案。
+
+### 章管家（上海建业信息科技）——物理印控 / 高性价比
+**核心能力**：
+- **套件式部署**：在实体印章外套加装智能硬件，指纹或密码验证后方可用印，远程管理员可实时查看。
+"""
+    entries = parse_answer_rankings(text)
+    section = [item for item in entries if item.get("category") == "主流方案速览"]
+    names = [item["name"] for item in section]
+    assert not any(name in {"印章全生命周期管理", "合同智能化", "四类硬件终端", "套件式部署"} for name in names)
+    dongma = [item for item in section if "动码印章" in item["name"]]
+    assert len(dongma) == 1
+    assert dongma[0]["rank"] == 3
+    zhang = [item for item in section if "章管家" in item["name"]]
+    assert len(zhang) == 1
+    assert zhang[0]["rank"] == 4
+
