@@ -1017,6 +1017,8 @@ def _looks_like_subcategory_header(content: str) -> bool:
     cleaned = _TIER_MEDAL_RE.sub("", cleaned).strip()
     # 剥 emoji 前缀（🌍🏛️🇨🇳）
     cleaned = re.sub(r"^[\U0001F300-\U0001F9FF\u2600-\u27BF]+\s*", "", cleaned).strip()
+    # 「章管家——物理印控 / 高性价比」卖点里的性价比不是子类
+    cleaned = re.split(r"[—–―]{2,}", cleaned, maxsplit=1)[0].strip()
     if SECTION_TITLE_RE.match(cleaned):
         return True
     # 像「### 福庆板材」品牌授权标题不是子类；「区域优质工程商/头部上市大厂」仍是子类
@@ -1212,6 +1214,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
     scene_subsection: str | None = None
     scene_counters: dict[str, int] = {}
     in_company_block = False
+    company_from_heading = False
 
     def append_item(name: str, rank: int | None, *, category: str | None = None) -> None:
         cleaned = _extract_list_item_name(name)
@@ -1355,6 +1358,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 # ### 一、广州伟源光电科技有限公司（…）→ 选手，不是分类
                 append_item(numbered_company, None)
                 in_company_block = True
+                company_from_heading = True
                 continue
             # 2026-08-24 - ### 7）大王椰｜生态板 / ### 7.大王椰 → 父级 ## 段内计位
             if level >= 3:
@@ -1364,6 +1368,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                     for name in pipe_nominees:
                         append_item(name, shared_rank, category=current_section or current_category)
                     in_company_block = True
+                    company_from_heading = True
                     continue
             numbered = NUMBERED_TITLE_RE.match(content)
             if numbered:
@@ -1377,9 +1382,11 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                     current_category = cat
                     appearance_counters.setdefault(current_section, 0)
                     in_company_block = False
+                    company_from_heading = False
                     continue
                 append_item(brand_side, _next_section_rank(appearance_counters, current_section))
                 in_company_block = True
+                company_from_heading = True
                 continue
             if level == 1:
                 # `# 怎么选公司？` 不能直接跳过：否则 1~7 对照表仍挂在上一 ## 节，rank 被吃成 7
@@ -1389,6 +1396,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                     current_category = cat
                     appearance_counters.setdefault(current_section, 0)
                     in_company_block = False
+                company_from_heading = False
                 continue
             if level == 2 or SECTION_TITLE_RE.match(content):
                 current_section = _extract_category_name(line)
@@ -1397,22 +1405,26 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 scene_subsection = None
                 scene_counters.clear()
                 in_company_block = False
+                company_from_heading = False
                 continue
             if level == 3 and _looks_like_subcategory_header(content):
                 current_section = _extract_category_name(line)
                 current_category = current_section
                 appearance_counters.setdefault(current_section, 0)
                 in_company_block = False
+                company_from_heading = False
                 continue
             combined = _split_combined_header_brands(content)
             if combined:
                 for index, name in enumerate(combined, 1):
                     append_item(name, index, category=current_section or current_category)
                 in_company_block = True
+                company_from_heading = True
                 continue
             if _is_subsection_label(content):
                 # 选择建议 / 补充推荐：结束公司详情块，不当选手
                 in_company_block = False
+                company_from_heading = False
                 if _is_non_rank_category(content) or content in SUBSECTION_LABELS:
                     current_section = _extract_category_name(line)
                     current_category = current_section
@@ -1426,15 +1438,18 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 current_category = current_section
                 appearance_counters.setdefault(current_section, 0)
                 in_company_block = False
+                company_from_heading = False
                 continue
             if _looks_like_geo_place_label(_clean_item_name(content)):
                 current_section = _extract_category_name(line)
                 current_category = current_section
                 appearance_counters[current_section] = 0
                 in_company_block = False
+                company_from_heading = False
                 continue
             append_item(content, _next_section_rank(appearance_counters, current_section))
             in_company_block = True
+            company_from_heading = True
             continue
 
         if _is_category_header(line):
@@ -1445,6 +1460,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             if numbered_company:
                 append_item(numbered_company, None)
                 in_company_block = True
+                company_from_heading = True
                 continue
             category_name = _extract_category_name(line)
             combined = _split_combined_header_brands(category_name)
@@ -1452,30 +1468,38 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 for index, name in enumerate(combined, 1):
                     append_item(name, index, category=current_section or current_category)
                 in_company_block = True
+                company_from_heading = True
                 continue
             current_section = category_name
             current_category = category_name
             appearance_counters.setdefault(current_category, 0)
             in_company_block = False
+            company_from_heading = False
             continue
 
         if in_company_block:
             # 2026-08-24 - 整合代理：如A、B、C 仍在公司块内，须放行给并列 bullet 分支
             if _extract_bullet_brand_candidates(line):
                 in_company_block = False
+                company_from_heading = False
             else:
                 peer = LIST_ITEM_RE.match(line)
                 if peer:
                     append_item(peer.group(4), None)
                     in_company_block = True
+                    company_from_heading = False
                     continue
-                # 2026-08-24 - 详情字段（无实体信号）跳过；同段新公司 bullet 才放行
+                # 详情字段跳过. 标题开出的公司卡里, 没有公司名的能力条目不是下一选手.
                 bullet_match = BULLET_ITEM_RE.match(line)
                 if bullet_match and re.search(r"\*\*[^*]+\*\*", line):
                     body = bullet_match.group(1) or bullet_match.group(2) or ""
                     name = _extract_list_item_name(body)
-                    if _is_peer_company_bullet(name, body):
+                    peer_ok = _is_peer_company_bullet(name, body)
+                    if company_from_heading and not _has_company_entity_signal(name):
+                        peer_ok = False
+                    if peer_ok:
                         in_company_block = False
+                        company_from_heading = False
                     else:
                         continue
                 else:
@@ -1486,6 +1510,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             scene_subsection = scene_key
             scene_counters[scene_key] = 0
             in_company_block = False
+            company_from_heading = False
             continue
 
         combo_brands = _extract_bullet_brand_candidates(line)
@@ -1502,6 +1527,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 if cleaned and _looks_like_company_list_name(cleaned):
                     results.append({"name": cleaned, "rank": bullet_rank, "category": bucket})
             in_company_block = True
+            company_from_heading = False
             continue
 
         if _ROLE_LABEL_BULLET_RE.match(re.sub(r"^[-•·▪*]\s*", "", line)):
@@ -1510,6 +1536,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
             if not re.search(r"[：:]\s*如", line):
                 appearance_counters[bucket] = appearance_counters.get(bucket, 0) + 1
             in_company_block = False
+            company_from_heading = False
             continue
 
         match = LIST_ITEM_RE.match(line)
@@ -1523,6 +1550,7 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 append_item(match.group(4), None)
             if len(results) > before:
                 in_company_block = True
+                company_from_heading = False
             continue
 
         bullet = BULLET_ITEM_RE.match(line)
