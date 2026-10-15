@@ -712,16 +712,7 @@ def evaluate_queue_alerts(snapshot: dict[str, Any] | None = None, *, persist: bo
 
     workers_online = int(snapshot.get("workers", {}).get("workers_online") or 0)
     if settings.celery_enabled and workers_online == 0:
-        alerts.append(
-            {
-                "queue": "workers",
-                "level": "critical",
-                "title": "Celery Worker 离线",
-                "message": "未检测到在线 Worker，队列任务将无法消费",
-                "queued": 0,
-                "threshold": 0,
-            }
-        )
+        alerts.append(_worker_offline_alert())
 
     if settings.celery_enabled:
         from app.core.database import SessionLocal
@@ -797,6 +788,25 @@ def _build_alert(queue_name: str, queued: int, threshold: int, level: str) -> di
     }
 
 
+def _worker_offline_alert() -> dict[str, Any]:
+    return {
+        "queue": "workers",
+        "level": "critical",
+        "title": "Celery Worker 离线",
+        "message": "未检测到在线 Worker，队列任务将无法消费",
+        "queued": 0,
+        "threshold": 0,
+    }
+
+
+def _align_alerts_with_workers(alerts: list[dict[str, Any]], workers_online: int) -> list[dict[str, Any]]:
+    """用实时 Worker 数校正离线告警, 避免缓存 snapshot 与卡片状态打架."""
+    aligned = [item for item in alerts if item.get("queue") != "workers"]
+    if settings.celery_enabled and int(workers_online or 0) <= 0:
+        aligned.append(_worker_offline_alert())
+    return aligned
+
+
 def _persist_alert_snapshot(snapshot: dict[str, Any], alerts: list[dict[str, Any]]) -> None:
     payload = {
         **snapshot,
@@ -810,7 +820,18 @@ def _persist_alert_snapshot(snapshot: dict[str, Any], alerts: list[dict[str, Any
 def get_queue_monitor_snapshot() -> dict[str, Any]:
     cached = get_json_cache("celery:queue:snapshot")
     if cached:
-        return cached
+        # 2026-10-15 - 缓存可能仍带离线告警; 用实时 inspect 校正 Worker 口径
+        runtime = _collect_runtime_tasks()
+        online = int(runtime.get("workers_online") or 0)
+        alerts = _align_alerts_with_workers(list(cached.get("alerts") or []), online)
+        return {
+            **cached,
+            "workers": _worker_stats_from_runtime(runtime),
+            "runtime": runtime,
+            "alerts": alerts,
+            "alert_count": len(alerts),
+            "has_critical": any(item.get("level") == "critical" for item in alerts),
+        }
     snapshot = collect_queue_stats()
     _persist_alert_snapshot(snapshot, snapshot.get("alerts") or evaluate_queue_alerts(snapshot, persist=False))
     return snapshot
@@ -855,19 +876,21 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
             }
         )
 
-    workers = snapshot.get("workers") or {}
+    # 始终实时 inspect(有 10s 内存缓存); 勿复用 snapshot.runtime, 避免与告警再次脱节
     runtime = _collect_runtime_tasks()
     beat_history = _get_beat_history()
     runtime_rows = [
         *(runtime.get("active") or []),
         *(runtime.get("reserved") or []),
     ]
-    online_count = int(runtime.get("workers_online") or workers.get("workers_online") or 0)
-    worker_names = runtime.get("worker_names") or workers.get("worker_names") or []
+    online_count = int(runtime.get("workers_online") or 0)
+    worker_names = runtime.get("worker_names") or []
     worker_rows = [
         {"name": name, "role": _worker_role_label(name)}
         for name in worker_names
     ]
+    # 2026-10-15 - 告警与卡片共用实时 Worker 数, 消掉「离线红条 + 正常卡片」打架
+    alerts = _align_alerts_with_workers(list(snapshot.get("alerts") or []), online_count)
 
     return {
         "checked_at": snapshot.get("checked_at"),
@@ -885,8 +908,8 @@ def format_celery_monitor_zh(snapshot: dict[str, Any] | None = None) -> dict[str
             "total": len(runtime_rows),
         },
         "beat_history": beat_history,
-        "alerts": snapshot.get("alerts") or [],
-        "alert_count": len(snapshot.get("alerts") or []),
+        "alerts": alerts,
+        "alert_count": len(alerts),
         "flower_url": snapshot.get("flower_url"),
         "tips": [
             "提交队列：负责把到点监测任务提交抓取",
