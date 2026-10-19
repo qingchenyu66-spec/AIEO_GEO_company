@@ -532,7 +532,13 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
         prompt="问题A",
         status="completed",
         answer_content="旧回答",
-        raw_result_json={"source": "remote"},
+        raw_result_json={
+            "source": "remote",
+            "_ba_sentiment_source": "deepseek-v3",
+            "_ba_sentiment": "neutral",
+            "_ba_description_source": "deepseek-v3",
+            "_ba_description": "旧描述",
+        },
     )
     task.subtasks = [subtask]
     db_session.add(task)
@@ -590,6 +596,8 @@ def test_apply_snapshot_backfill_overwrites_answer(db_session, monkeypatch) -> N
     assert subtask.answer_content.startswith("1.")
     assert subtask.reference_list_json and subtask.reference_list_json[0]["url"].startswith("https://example.com")
     assert subtask.raw_result_json.get("source") == "manual_snapshot"
+    assert "_ba_sentiment_source" not in subtask.raw_result_json
+    assert "_ba_description" not in subtask.raw_result_json
     assert subtask.raw_result_json.get("snapshot_url") == "https://www.doubao.com/thread/abc1234567890"
     assert subtask.page_screenshot is None
     assert subtask.raw_result_json.get("screenshot_pending") is True

@@ -568,3 +568,76 @@ def test_brand_analysis_same_day_new_batch_replaces_snapshot(db) -> None:
     assert snap is not None
     assert snap["version"] == 2
     assert snap["source_task_id"] == second_task_id
+
+
+def test_refresh_brand_analysis_freeze_rewrites_same_day_snapshot(db) -> None:
+    suffix = uuid.uuid4().hex[:8]
+    tenant = Tenant(name="ba-refresh", code=f"BAU{suffix}", status=True)
+    db.add(tenant)
+    db.flush()
+    created_at = datetime(2026, 10, 19, 9, 0, 0)
+    task_id = f"brand-refresh-{suffix}"
+    task = GeoMonitorTask(
+        task_id=task_id,
+        tenant_id=int(tenant.id),
+        monitor_keywords="载望升学",
+        status="completed",
+        total_items=1,
+        completed_items=1,
+        failed_items=0,
+        prompts_json=["载望规划师培训靠谱吗?"],
+        platforms_json=[{"platform": "doubao", "mode": "reasoning_search"}],
+        purpose="brand_word",
+        raw_request_json={},
+        raw_response_json={},
+        created_at=created_at,
+    )
+    db.add(task)
+    db.flush()
+    db.add(
+        GeoMonitorSubtask(
+            subtask_id=f"brand-refresh-sub-{suffix}",
+            task_id=task_id,
+            platform="doubao",
+            mode="reasoning_search",
+            prompt="载望规划师培训靠谱吗?",
+            status="completed",
+            answer_content="补录后的新回答，投诉风险很高",
+            sentiment="negative",
+            raw_result_json={
+                **PARSED_RAW,
+                "_ba_sentiment": "negative",
+                "_ba_description": "补录后描述",
+                "_ba_descriptions": ["补录后描述"],
+            },
+        )
+    )
+    db.flush()
+    as_of = date(2026, 10, 19)
+    upsert_window_snapshot(
+        db,
+        tenant_id=int(tenant.id),
+        kind=BRAND_ANALYSIS_KIND,
+        window_days=7,
+        payload={"sample_count": 1, "version": "stale", "source_batch_key": f"task:{task_id}"},
+        as_of_date=as_of,
+        filter_fp="default",
+    )
+    from app.services.brand_analysis_service import refresh_brand_analysis_freeze
+
+    outcome = refresh_brand_analysis_freeze(db, int(tenant.id))
+    assert outcome["released"] >= 1
+    assert "week" in outcome["frozen"]
+    snap = get_window_snapshot(
+        db,
+        tenant_id=int(tenant.id),
+        kind=BRAND_ANALYSIS_KIND,
+        window_days=7,
+        as_of_date=as_of,
+        filter_fp="default",
+    )
+    assert snap is not None
+    assert snap.get("version") != "stale"
+    assert snap.get("frozen") is True
+    descriptions = " ".join(str(row.get("description") or "") for row in snap.get("ai_descriptions") or [])
+    assert "补录后描述" in descriptions

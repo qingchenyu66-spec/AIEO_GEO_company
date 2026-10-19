@@ -113,6 +113,43 @@ def _purchased_platforms_for_brand_words(db: Session, tenant_id: int) -> list[st
     return _brand_word_group_platforms(db, tenant_id)
 
 
+def clear_brand_analysis_parse_markers(raw: dict[str, Any]) -> None:
+    """答案被补录覆盖后丢掉旧的情感/描述标记，否则重解析会当成已完成。"""
+    for key in list(raw):
+        if str(key).startswith("_ba_"):
+            raw.pop(key, None)
+
+
+def release_brand_analysis_freeze(db: Session, *, tenant_id: int, as_of: date) -> int:
+    """解冻某一抓取日的品牌分析快照，便于同一批次按新答案重写。"""
+    from sqlalchemy import delete
+
+    from app.models.monitor import GeoMonitorWindowSnapshot
+    from app.services.window_snapshot_service import BRAND_ANALYSIS_KIND
+
+    result = db.execute(
+        delete(GeoMonitorWindowSnapshot).where(
+            GeoMonitorWindowSnapshot.tenant_id == int(tenant_id),
+            GeoMonitorWindowSnapshot.kind == BRAND_ANALYSIS_KIND,
+            GeoMonitorWindowSnapshot.as_of_date == as_of,
+        )
+    )
+    db.flush()
+    return int(result.rowcount or 0)
+
+
+def refresh_brand_analysis_freeze(db: Session, tenant_id: int) -> dict[str, Any]:
+    """补录重解析之后：解冻当前完整批次对应的抓取日，再按新正文冻结。"""
+    source = _brand_analysis_freeze_source(db, int(tenant_id))
+    if source is None:
+        return {"tenant_id": int(tenant_id), "released": 0, "frozen": [], "skipped": ["incomplete"]}
+    as_of = datetime.fromisoformat(str(source["source_task_created_at"])).date()
+    released = release_brand_analysis_freeze(db, tenant_id=int(tenant_id), as_of=as_of)
+    outcome = maybe_freeze_brand_analysis_after_brand_word(db, int(tenant_id))
+    outcome["released"] = released
+    return outcome
+
+
 def _has_deepseek_sentiment(subtask: GeoMonitorSubtask) -> bool:
     raw = subtask.raw_result_json if isinstance(subtask.raw_result_json, dict) else {}
     return str(raw.get("_ba_sentiment_source") or "") == BA_SENTIMENT_SOURCE

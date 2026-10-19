@@ -140,15 +140,26 @@ def _ensure_backfill_groups_cached(
 
 def _parse_brand_word_after_backfill(db: Session, task: GeoMonitorTask) -> None:
     # 2026-09-08 - 品牌词补录后补跑情感/描述，否则品牌分析半截
+    # 2026-10-19 - 同一抓取日已冻结时先解冻再重写，客户页才能看到补录后的正文
     if _task_backfill_purpose(task) != "brand_word":
         return
+    if not task.tenant_id:
+        return
     try:
-        from app.services.brand_analysis_service import parse_sentiments_after_brand_word_sync
+        from app.services.brand_analysis_service import (
+            parse_sentiments_after_brand_word_sync,
+            refresh_brand_analysis_freeze,
+        )
 
         parse_sentiments_after_brand_word_sync(db, task)
+        refresh_brand_analysis_freeze(db, int(task.tenant_id))
         db.commit()
     except Exception:
         logger.exception("brand_word parse after backfill failed task_id=%s", task.task_id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _backfill_parse_age_seconds(raw: dict[str, Any]) -> float | None:
@@ -1177,6 +1188,9 @@ def _apply_share_fetched_backfill(
         raw.pop("screenshot_error", None)
     for key in _PENDING_PARSE_KEYS:
         raw.pop(key, None)
+    from app.services.brand_analysis_service import clear_brand_analysis_parse_markers
+
+    clear_brand_analysis_parse_markers(raw)
     # 2026-09-02 - 异步成功态写进同一次 commit - 勿 apply 后再 commit ok（会盖掉新 pending）
     if parse_job_id:
         raw["backfill_parse_status"] = "ok"
@@ -1963,6 +1977,9 @@ def apply_snapshot_backfill_reuse_history(
     raw.update(manual_meta)
     for key in _PENDING_PARSE_KEYS:
         raw.pop(key, None)
+    from app.services.brand_analysis_service import clear_brand_analysis_parse_markers
+
+    clear_brand_analysis_parse_markers(raw)
     subtask.raw_result_json = raw
 
     _reconcile_task_progress(task)
