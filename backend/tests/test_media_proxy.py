@@ -108,6 +108,52 @@ def test_media_shot_endpoint_rejects_bad_token_without_login(monkeypatch: pytest
     assert response.status_code == 404
 
 
+def _install_fake_client(monkeypatch: pytest.MonkeyPatch, response) -> None:
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return response
+
+    monkeypatch.setattr(mps.httpx, "Client", _Client)
+
+
+def test_fetch_accepts_octet_stream_png(monkeypatch: pytest.MonkeyPatch) -> None:
+    """千问 CDN 回 application/octet-stream，正文仍是 PNG。"""
+
+    class _Resp:
+        status_code = 200
+        is_redirect = False
+        headers = {"content-type": "application/octet-stream"}
+        content = b"\x89PNG\r\n\x1a\n" + b"x" * 16
+
+    _install_fake_client(monkeypatch, _Resp())
+    body, content_type = mps.fetch_shot_response(
+        "https://img.molizhishu.com/screenshots/qwen/2026/10/20/demo.png"
+    )
+    assert body.startswith(b"\x89PNG")
+    assert content_type == "image/png"
+
+
+def test_fetch_rejects_octet_stream_html(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        status_code = 200
+        is_redirect = False
+        headers = {"content-type": "application/octet-stream"}
+        content = b"<html>not an image</html>"
+
+    _install_fake_client(monkeypatch, _Resp())
+    with pytest.raises(ValueError, match="非图片"):
+        mps.fetch_shot_response("https://img.molizhishu.com/screenshots/qwen/demo.png")
+
+
 def test_fetch_blocks_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mps.settings, "secret_key", "unit-test-secret-key")
 

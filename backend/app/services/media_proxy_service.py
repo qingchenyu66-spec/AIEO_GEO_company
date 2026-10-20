@@ -31,6 +31,12 @@ SHOT_TOKEN_TTL_DAYS = 90
 SHOT_PATH_PREFIX = "/api/v1/media/shot/"
 _MAX_BYTES = 25 * 1024 * 1024
 _FETCH_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# 千问截图 CDN 用这个类型回 PNG，不能只看 Content-Type
+_GENERIC_BINARY_TYPES = frozenset({
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/binary",
+})
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -143,6 +149,19 @@ def is_proxied_shot_url(raw: str | None) -> bool:
     return bool(text) and (text.startswith(SHOT_PATH_PREFIX) or "/api/v1/media/shot/" in text)
 
 
+def _image_type_from_magic(body: bytes) -> str | None:
+    """Content-Type 不可信时，用文件头判断是不是图。"""
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if body.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if body.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(body) >= 12 and body.startswith(b"RIFF") and body[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def fetch_shot_response(url: str) -> tuple[bytes, str]:
     """拉取白名单图片；返回 (body, content_type)。"""
     if not is_allowed_shot_url(url):
@@ -154,13 +173,17 @@ def fetch_shot_response(url: str) -> tuple[bytes, str]:
             raise ValueError("上游快照发生跳转，已拒绝")
         if response.status_code >= 400:
             raise ValueError(f"上游快照不可用（{response.status_code}）")
-        content_type = (response.headers.get("content-type") or "image/png").split(";")[0].strip()
-        if not content_type.startswith("image/"):
-            raise ValueError("上游返回非图片内容")
+        content_type = (response.headers.get("content-type") or "image/png").split(";")[0].strip().lower()
         body = response.content
         if len(body) > _MAX_BYTES:
             raise ValueError("快照过大")
-        return body, content_type
+        if content_type.startswith("image/"):
+            return body, content_type
+        if content_type in _GENERIC_BINARY_TYPES:
+            sniffed = _image_type_from_magic(body)
+            if sniffed:
+                return body, sniffed
+        raise ValueError("上游返回非图片内容")
 
 
 def shot_meta_for_tests(url: str) -> dict[str, Any]:
