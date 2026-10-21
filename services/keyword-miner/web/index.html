@@ -1534,6 +1534,19 @@
       + '</div>';
   }
 
+  function tablePickBoxes(table) {
+    return table.querySelectorAll("tbody [data-f='pick']");
+  }
+
+  function syncTablePickAll(table) {
+    const all = table.querySelector("[data-f='pick-all']");
+    if (!all) return;
+    const boxes = Array.from(tablePickBoxes(table));
+    const checked = boxes.filter((b) => b.checked).length;
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  }
+
   function bindResultActions() {
     $("result").querySelectorAll("[data-act='revise']").forEach((btn) => {
       btn.onclick = () => openReviseModal({
@@ -1551,6 +1564,20 @@
         });
       };
     });
+    $("result").querySelectorAll("table").forEach((table) => {
+      const all = table.querySelector("[data-f='pick-all']");
+      if (all) {
+        all.onchange = () => {
+          const on = all.checked;
+          all.indeterminate = false;
+          tablePickBoxes(table).forEach((b) => { b.checked = on; });
+        };
+      }
+      tablePickBoxes(table).forEach((b) => {
+        b.onchange = () => syncTablePickAll(table);
+      });
+      syncTablePickAll(table);
+    });
   }
 
   function render(data) {
@@ -1561,7 +1588,7 @@
     let html = "";
     if (current.selection.length) {
       html += '<h3>一、选词建议</h3>';
-      html += "<table><thead><tr><th></th><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th><th>操作</th></tr></thead><tbody>";
+      html += "<table><thead><tr><th><input type='checkbox' data-f='pick-all' title='全选本表' aria-label='全选本表' /></th><th>关键词</th><th>类别</th><th>意图</th><th>评分</th><th>理由</th><th>操作</th></tr></thead><tbody>";
       current.selection.slice().sort((a,b)=>b.score-a.score).forEach((k, idx) => {
         // keep stable idx against unsorted source: map by word+score later via data-idx on sorted view
         const srcIdx = current.selection.indexOf(k);
@@ -1583,7 +1610,7 @@
       expStages.forEach(s => {
         const isBrand = (s === "品牌专属");
         html += '<div class="stage-h">' + s + '（' + current.expansion[s].length + '）</div>';
-        html += "<table><thead><tr><th></th><th>" + (isBrand ? '拓词（含品牌名）' : '拓词') + "</th><th>热度</th><th>说明</th><th>答案要点</th><th>操作</th></tr></thead><tbody>";
+        html += "<table><thead><tr><th><input type='checkbox' data-f='pick-all' title='全选本表' aria-label='全选本表' /></th><th>" + (isBrand ? '拓词（含品牌名）' : '拓词') + "</th><th>热度</th><th>说明</th><th>答案要点</th><th>操作</th></tr></thead><tbody>";
         current.expansion[s].forEach((it, idx) => {
           const h = Math.max(0,Math.min(100,it.heat));
           html += "<tr data-kind='expand' data-stage=\""+esc(s)+"\" data-idx=\""+idx+"\"><td><input type='checkbox' data-f='pick' /></td>"
