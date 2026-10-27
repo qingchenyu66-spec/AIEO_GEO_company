@@ -6,7 +6,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { useCustomerDisplayDate } from './useCustomerDisplayDate'
 import { PortalAnalyticsKey } from '../injectionKeys'
 import { platformLabelMap } from '../portalMaps'
-import { resolvePurchasedPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
+import { resolvePurchasedPlatformCodes, sortPlatformCodes, sortPlatformRows, sortPlatformTabs } from '../platformOrder'
 import {
   createEmptyCategoryBucket,
   collectBrandKnownHosts,
@@ -372,11 +372,17 @@ export function useSourceAnalysis(options?: {
   const allSources = brandedSources
 
   const platformRanking = computed(() => sortPlatformRows(sourceSummary.value?.platform_stats || []))
+  const includeRetired = ref(false)
 
-  const structurePlatformCodes = computed(() => resolvePurchasedPlatformCodes(
-    brandAsset.value?.monitored_platforms,
-    platformRanking.value.map(item => item.platform),
-  ))
+  const structurePlatformCodes = computed(() => {
+    const base = resolvePurchasedPlatformCodes(
+      brandAsset.value?.monitored_platforms,
+      platformRanking.value.map(item => item.platform),
+    )
+    if (!includeRetired.value) return base
+    const extra = (sourceSummary.value?.retired_platforms || []).filter(code => !base.includes(code))
+    return sortPlatformCodes([...base, ...extra])
+  })
 
   function applySourceFilters(rows: SourceRow[], options?: { ignoreCategory?: boolean }) {
     const keyword = keywordFilter.value.trim().toLowerCase()
@@ -480,12 +486,12 @@ export function useSourceAnalysis(options?: {
     const platformEntries = allowed.size
       ? structurePlatformCodes.value.map(code => ({
         code,
-        name: platformLabelMap[code] || code,
+        name: `${platformLabelMap[code] || code}${(sourceSummary.value?.retired_platforms || []).includes(code) ? '（已下线）' : ''}`,
         count: counts.get(code) || 0,
       }))
       : Array.from(counts.entries()).map(([code, count]) => ({
         code,
-        name: platformLabelMap[code] || code,
+        name: `${platformLabelMap[code] || code}${(sourceSummary.value?.retired_platforms || []).includes(code) ? '（已下线）' : ''}`,
         count,
       }))
     const totalCount = platformEntries.reduce((sum, item) => sum + item.count, 0)
@@ -643,6 +649,7 @@ export function useSourceAnalysis(options?: {
         start_date: range.startDate,
         end_date: range.endDate,
         ...(platformFilter.value !== 'all' ? { platform: platformFilter.value } : {}),
+        include_retired: includeRetired.value || undefined,
       })
       void force
     } catch (error: unknown) {
@@ -702,6 +709,13 @@ export function useSourceAnalysis(options?: {
   watch([datePreset, platformFilter], () => {
     void loadSummary()
   })
+  watch(includeRetired, () => {
+    if (platformFilter.value !== 'all') {
+      platformFilter.value = 'all'
+      return
+    }
+    void loadSummary(true)
+  })
   watch(rankTotalPages, pages => {
     if (rankPage.value > pages) rankPage.value = pages
   })
@@ -727,6 +741,7 @@ export function useSourceAnalysis(options?: {
     datePreset,
     inclusionDateRange,
     platformFilter,
+    includeRetired,
     categoryFilter,
     keywordFilter,
     domainFilter,

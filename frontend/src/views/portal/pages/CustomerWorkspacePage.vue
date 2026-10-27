@@ -37,6 +37,8 @@ const {
   periodSwitching,
   loadError,
   loadBrief,
+  includeRetired,
+  setIncludeRetired,
   navigateToMenu,
   canOpenRealtime,
   realtimeMenuName,
@@ -130,6 +132,16 @@ const selectedPeriodRange = computed(() => (
 
 const scheduleLine = computed(() => formatBoardScheduleLine(brandAsset.value, brief.value))
 
+function onIncludeRetiredChange(event: Event) {
+  const target = event.target as HTMLInputElement | null
+  setIncludeRetired(Boolean(target?.checked))
+}
+
+function exposurePlatformName(code: string) {
+  const name = getPlatformMeta(code).name
+  return (brief.value?.retired_platforms || []).includes(code) ? `${name}（已下线）` : name
+}
+
 const platformInsightNote = computed(() => {
   const leader = [...(brief.value?.platform_highlights || [])]
     .filter(row => row.sample_count > 0)
@@ -139,10 +151,10 @@ const platformInsightNote = computed(() => {
     .sort((a, b) => a.mention_rate - b.mention_rate)[0]
   const parts: string[] = []
   if (leader) {
-    parts.push(`${getPlatformMeta(leader.platform).name} 提及率最高（${leader.mention_rate.toFixed(1)}%）`)
+    parts.push(`${exposurePlatformName(leader.platform)} 提及率最高（${leader.mention_rate.toFixed(1)}%）`)
   }
   if (weak && weak.platform !== leader?.platform) {
-    parts.push(`${getPlatformMeta(weak.platform).name} 相对偏弱（${weak.mention_rate.toFixed(1)}%）`)
+    parts.push(`${exposurePlatformName(weak.platform)} 相对偏弱（${weak.mention_rate.toFixed(1)}%）`)
   }
   const warn = brief.value?.alerts.find(alert => alert.level === 'warn')
   if (warn) parts.push(warn.message)
@@ -194,7 +206,7 @@ const exposureDonutRows = computed(() => (
   [...platformRankList.value.filter(row => row.sample_count > 0)]
     .sort((a, b) => b.mention_rate - a.mention_rate)
     .map(row => ({
-      name: getPlatformMeta(row.platform).name,
+      name: exposurePlatformName(row.platform),
       value: Math.max(0, row.mention_rate),
       color: platformBarColor(row.platform),
     }))
@@ -493,6 +505,14 @@ onUnmounted(() => {
                   </button>
                 </div>
                 <span v-if="periodSwitching" class="ws-board-period-bar-hint">正在切换…</span>
+                <label class="ws-retired-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="includeRetired"
+                    @change="onIncludeRetiredChange"
+                  >
+                  含已下线词及平台
+                </label>
               </div>
             </div>
           </div>
@@ -641,6 +661,9 @@ onUnmounted(() => {
             平台露出率
           </div>
           <p v-if="platformInsightNote" class="ws-board-exposure-note">{{ platformInsightNote }}</p>
+          <p v-if="includeRetired" class="ws-board-exposure-note">
+            综合露出按平台汇总。打开后新增的是下线平台，历史词的样本原本就在该平台的数里。
+          </p>
         </div>
         <div v-if="platformRankList.length" class="ws-board-exposure-body">
           <div class="ws-board-exposure-stats">
@@ -658,7 +681,7 @@ onUnmounted(() => {
             <div v-if="exposureStats.highest" class="ws-board-stat-mini">
               <div class="ws-board-stat-mini-label">最高露出</div>
               <div class="ws-board-stat-mini-value is-sm">
-                {{ getPlatformMeta(exposureStats.highest.platform).name }}
+                {{ exposurePlatformName(exposureStats.highest.platform) }}
               </div>
               <div class="ws-board-stat-mini-delta is-up">
                 {{ exposureStats.highest.mention_rate.toFixed(1) }}%
@@ -667,7 +690,7 @@ onUnmounted(() => {
             <div v-if="exposureStats.lowest" class="ws-board-stat-mini">
               <div class="ws-board-stat-mini-label">最低露出</div>
               <div class="ws-board-stat-mini-value is-sm">
-                {{ getPlatformMeta(exposureStats.lowest.platform).name }}
+                {{ exposurePlatformName(exposureStats.lowest.platform) }}
               </div>
               <div class="ws-board-stat-mini-delta">
                 {{ exposureStats.lowest.mention_rate.toFixed(1) }}%

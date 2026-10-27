@@ -175,12 +175,17 @@ def workspace_brief_cache_key(
     end_date: str | None = None,
     scope: str = "full",
     purpose: str = "geo",
+    include_retired: bool = False,
 ) -> str:
     start_key = start_date or "default"
     end_key = end_date or "default"
     scope_key = scope if scope in ("full", "summary") else "full"
     purpose_key = purpose if purpose in ("geo", "brand_word") else "geo"
-    return f"monitor:workspace-brief:v14:{tenant_id}:{start_key}:{end_key}:{scope_key}:{purpose_key}"
+    retired_key = ":retired" if include_retired else ""
+    return (
+        f"monitor:workspace-brief:v14:{tenant_id}:{start_key}:{end_key}:"
+        f"{scope_key}:{purpose_key}{retired_key}"
+    )
 
 
 def celery_monitor_cache_key() -> str:

@@ -91,6 +91,24 @@
   margin-left: auto;
 }
 
+.source-retired-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.source-retired-toggle input {
+  margin: 0;
+  accent-color: #2563eb;
+}
+
 .source-platform-chips {
   display: flex;
   flex-wrap: wrap;

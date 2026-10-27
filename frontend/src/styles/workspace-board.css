@@ -409,6 +409,24 @@
   justify-content: flex-end;
 }
 
+.ws-retired-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ws-retired-toggle input {
+  margin: 0;
+  accent-color: #2563eb;
+}
+
 .ws-board-period-inline .ws-board-tabs {
   flex-wrap: wrap;
   justify-content: flex-end;

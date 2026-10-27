@@ -224,6 +224,7 @@ def source_stats(
     start_date: date | None = None,
     end_date: date | None = None,
     platform: str | None = None,
+    include_retired: bool = False,
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -245,6 +246,7 @@ def source_stats(
             start_date=start_date,
             end_date=end_date,
             platform=platform,
+            include_retired=include_retired is True,
         )
         return ApiResponse(data=data)
     except Exception as exc:

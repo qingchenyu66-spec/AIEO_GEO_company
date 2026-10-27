@@ -35,6 +35,7 @@ const {
   datePreset,
   inclusionDateRange,
   platformFilter,
+  includeRetired,
   categoryFilter,
   domainFilter,
   keywordFilter,
@@ -136,6 +137,10 @@ const categoryOptions = [
       <div class="source-sticky-inner">
         <div class="source-sticky-row">
           <div v-if="isCustomerView" class="source-customer-period">{{ customerPeriodLabel }}</div>
+          <label class="source-retired-toggle">
+            <input v-model="includeRetired" type="checkbox">
+            含已下线词及平台
+          </label>
           <div class="source-date-presets">
             <button
               v-for="preset in datePresets"

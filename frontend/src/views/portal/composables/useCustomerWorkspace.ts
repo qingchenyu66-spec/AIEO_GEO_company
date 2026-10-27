@@ -354,6 +354,7 @@ export function useCustomerWorkspace() {
   const alertsSectionRef = ref<HTMLElement | null>(null)
   const alertsFocused = ref(false)
   const trendPreset = ref<WorkspaceTrendPreset>('7d')
+  const includeRetired = ref(false)
   const initialTrendRange = trendRange('7d')
   const trendStartDate = ref(initialTrendRange.startDate)
   const trendEndDate = ref(initialTrendRange.endDate)
@@ -870,6 +871,7 @@ export function useCustomerWorkspace() {
       end_date: prevRange.endDate,
       tenant_id: tenantId,
       scope: 'summary',
+      include_retired: includeRetired.value || undefined,
     }, { force, silentError: true })
       .then((previous) => {
         if (seq !== briefLoadSeq) return
@@ -899,6 +901,7 @@ export function useCustomerWorkspace() {
       tenant_id: params.tenantId,
       scope: 'summary',
       record_access: params.recordAccess || undefined,
+      include_retired: includeRetired.value || undefined,
     }, { force: params.force })
     if (seq !== briefLoadSeq) return
     brief.value = summary
@@ -913,6 +916,7 @@ export function useCustomerWorkspace() {
       end_date: params.endDate,
       tenant_id: params.tenantId,
       scope: 'full',
+      include_retired: includeRetired.value || undefined,
     }, { force: params.force, silentError: true, timeout: 45000 })
       .then((full) => {
         if (seq !== briefLoadSeq || !brief.value) return
@@ -939,6 +943,12 @@ export function useCustomerWorkspace() {
         }
       })
       .catch(() => undefined)
+  }
+
+  function setIncludeRetired(value: boolean) {
+    if (includeRetired.value === value) return
+    includeRetired.value = value
+    void loadBrief({ periodSwitch: true, force: true })
   }
 
   async function loadBrief(options?: { force?: boolean; periodSwitch?: boolean }) {
@@ -981,6 +991,7 @@ export function useCustomerWorkspace() {
         tenant_id: tenantId,
         scope: 'summary',
         record_access: recordAccess || undefined,
+        include_retired: includeRetired.value || undefined,
       }, { force })
       if (seq !== briefLoadSeq) return
       brief.value = periodSwitch
@@ -999,6 +1010,7 @@ export function useCustomerWorkspace() {
           end_date: endDate,
           tenant_id: tenantId,
           scope: 'full',
+          include_retired: includeRetired.value || undefined,
         }, { force, silentError: true, timeout: 45000 })
           .then((full) => {
             if (seq !== briefLoadSeq || !brief.value) return
@@ -1164,6 +1176,8 @@ export function useCustomerWorkspace() {
     greetingLabel,
     customerPeriodLabel: periodLabel,
     trendPreset,
+    includeRetired,
+    setIncludeRetired,
     trendStartDate,
     trendEndDate,
     trendMaxDate,

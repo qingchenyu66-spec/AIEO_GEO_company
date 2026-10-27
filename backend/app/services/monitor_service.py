@@ -1705,6 +1705,86 @@ def scope_source_analysis_bundle(
     }
 
 
+def _retired_source_bundle(
+    db: Session,
+    tenant_id: int,
+    *,
+    start_d: date,
+    end_d: date,
+    display_platforms: list[str],
+    exposure_terms: list[str],
+) -> dict[str, Any]:
+    """按放宽后的平台重扫子任务。不写日物化，避免改掉当前平台的缓存指纹。"""
+    from app.core.platform_order import expand_platform_codes
+    from app.services.monitor_stats_service import load_subtasks_for_business_date_range
+
+    hist_rows, hist_tasks, hist_days = load_subtasks_for_business_date_range(
+        db,
+        tenant_id,
+        start_date=start_d,
+        end_date=end_d,
+        only_with_refs=True,
+    )
+    source_items: list[GeoMonitorSubtask] = []
+    source_day_by_id: dict[int, date] = {}
+    source_tenant_map: dict[int, int] = {}
+    task_tenant = {task.task_id: task.tenant_id for task in hist_tasks if task.task_id}
+    for item in hist_rows:
+        biz = hist_days.get(item.id)
+        if biz is None or biz < start_d or biz > end_d:
+            continue
+        source_items.append(item)
+        source_day_by_id[item.id] = biz
+        source_tenant_map[item.id] = int(task_tenant.get(item.task_id) or tenant_id)
+
+    branded_map, all_map, daily_counts, daily_by_platform = _aggregate_source_stats_pair_maps(
+        source_items,
+        business_day_by_id=source_day_by_id,
+        subtask_tenant_map=source_tenant_map,
+        purchased_platforms_by_tenant={tenant_id: expand_platform_codes(display_platforms)},
+        exposure_terms_by_tenant={tenant_id: exposure_terms},
+    )
+
+    def _rewrite(rows_map: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        rewritten: dict[str, dict[str, Any]] = {}
+        for key, row in rows_map.items():
+            plats = canonicalize_platforms_to_display(list(row.get("platforms") or []), display_platforms)
+            if not plats:
+                continue
+            cloned = dict(row)
+            cloned["platforms"] = plats
+            rewritten[key] = cloned
+        return rewritten
+
+    canon_daily: dict[str, dict[str, int]] = {}
+    for platform, bucket in daily_by_platform.items():
+        mapped = canonicalize_platforms_to_display([str(platform)], display_platforms)
+        if not mapped:
+            continue
+        dest = canon_daily.setdefault(mapped[0], {})
+        for day_key, count in (bucket or {}).items():
+            dest[day_key] = dest.get(day_key, 0) + int(count or 0)
+
+    range_start = datetime.combine(start_d, time.min)
+    range_end = datetime.combine(end_d, time.max)
+    return {
+        "source_stats": _finalize_source_stat_rows(list(_rewrite(branded_map).values())),
+        "source_stats_all": _finalize_source_stat_rows(list(_rewrite(all_map).values())),
+        "source_citation_trend": _build_source_citation_trend(
+            daily_counts,
+            range_start=range_start,
+            range_end=range_end,
+            only_with_data=True,
+        ),
+        "source_citation_trend_by_platform": _build_source_citation_trends_by_platform(
+            canon_daily,
+            range_start=range_start,
+            range_end=range_end,
+            only_with_data=True,
+        ),
+    }
+
+
 def build_source_analysis_summary(
     db: Session,
     current: CurrentSession,
@@ -1713,6 +1793,7 @@ def build_source_analysis_summary(
     start_date: date | None = None,
     end_date: date | None = None,
     platform: str | None = None,
+    include_retired: bool = False,
 ) -> dict[str, Any]:
     """信源分析页专用轻载荷：只聚合信源，不扫监测任务/子任务大表。
 
@@ -1747,21 +1828,55 @@ def build_source_analysis_summary(
     if start_d is not None and start_d > end_d:
         start_d = end_d
 
-    # 只补查询区间缺日，禁止每次先暖全历史
-    day_rows = ensure_source_daily_range(
-        db,
-        resolved,
-        start_day=start_d,
-        end_day=end_d,
-        purchased_platforms=purchased,
-        exposure_terms=exposure,
-    )
-    bundle = _bundle_from_day_rows(
-        day_rows,
-        cutoff_day=end_d,
-        range_start_day=start_d,
-    )
+    retired_platforms: list[str] = []
+    if include_retired:
+        from app.services.monitor_stats_service import list_daily_stats_for_tenant
+
+        since = start_d or end_d
+        inactive_platforms = tenant_keyword_group_platforms_including_inactive(db, resolved, asset)
+        sampled_platforms = {
+            str(row.platform or "").strip()
+            for row in list_daily_stats_for_tenant(db, resolved, since=since, until=end_d)
+            if str(row.platform or "").strip() and int(row.completed_count or 0) > 0
+        }
+        display_platforms, retired_platforms = split_retired_display_platforms(
+            sort_platform_codes(list(purchased)),
+            [*inactive_platforms, *sampled_platforms],
+            sampled_platforms,
+            observer_allow=allow,
+        )
+        bundle = _retired_source_bundle(
+            db,
+            resolved,
+            start_d=since,
+            end_d=end_d,
+            display_platforms=display_platforms,
+            exposure_terms=exposure,
+        )
+    else:
+        # 只补查询区间缺日，禁止每次先暖全历史
+        day_rows = ensure_source_daily_range(
+            db,
+            resolved,
+            start_day=start_d,
+            end_day=end_d,
+            purchased_platforms=purchased,
+            exposure_terms=exposure,
+        )
+        bundle = _bundle_from_day_rows(
+            day_rows,
+            cutoff_day=end_d,
+            range_start_day=start_d,
+        )
     bundle = scope_source_analysis_bundle(bundle, allow)
+    if include_retired:
+        cited = {
+            str(code)
+            for row in bundle.get("source_stats") or []
+            for code in (row.get("platforms") or [])
+            if str(code or "").strip()
+        }
+        retired_platforms = [code for code in retired_platforms if code in cited]
     platform_code = str(platform or "").strip()
     if platform_code:
         # ponytail: 多端同 URL 的 count 仍是跨端合计；精确分端需日物化拆 count
@@ -1853,6 +1968,7 @@ def build_source_analysis_summary(
         },
         "source_citation_trend_by_platform": bundle.get("source_citation_trend_by_platform") or {},
         "platform_stats": platform_stats,
+        "retired_platforms": retired_platforms,
     }
 
 
@@ -3171,6 +3287,75 @@ def merge_matrix_purchased_platforms(
         return list(configured)
     merged = sort_platform_codes(list(dict.fromkeys([*(configured or []), *(window_platforms or [])])))
     return narrow_platform_codes(merged, observer_allow)
+
+
+def split_retired_display_platforms(
+    configured: list[str],
+    extra_platforms: list[str],
+    sampled_platforms: set[str] | list[str],
+    *,
+    observer_allow: frozenset[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """当前平台保留。下线平台只留本周期有样本、且不属于当前平台家族的端。观察号再收窄。"""
+    from app.core.platform_order import platforms_compatible, sort_platform_codes
+    from app.services.observer_account import narrow_platform_codes
+
+    configured_list = [str(code).strip() for code in configured if str(code or "").strip()]
+    configured_set = set(configured_list)
+    sampled = {str(code).strip() for code in sampled_platforms if str(code or "").strip()}
+
+    def _covered(code: str) -> bool:
+        if code in configured_set:
+            return True
+        return any(platforms_compatible(code, base) for base in configured_set)
+
+    def _has_sample(code: str) -> bool:
+        if code in sampled:
+            return True
+        return any(platforms_compatible(code, sample) for sample in sampled)
+
+    retired_raw: list[str] = []
+    seen: set[str] = set()
+    for raw in [*extra_platforms, *sampled]:
+        code = str(raw or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        if _covered(code) or not _has_sample(code):
+            continue
+        if any(platforms_compatible(code, kept) for kept in retired_raw):
+            continue
+        retired_raw.append(code)
+
+    retired = sort_platform_codes(retired_raw)
+    display = sort_platform_codes([*configured_list, *retired])
+    if observer_allow is not None:
+        display = narrow_platform_codes(display, observer_allow)
+        allowed = set(display)
+        retired = [code for code in retired if code in allowed]
+    return display, retired
+
+
+def canonicalize_platforms_to_display(codes: list[str], display: list[str]) -> list[str]:
+    """把移动端等家族码并进展示平台，展示名单里没有的端丢掉。"""
+    from app.core.platform_order import platforms_compatible, sort_platform_codes
+
+    display_list = [str(code).strip() for code in display if str(code or "").strip()]
+    display_set = set(display_list)
+    found: list[str] = []
+    for raw in codes:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        canon = text if text in display_set else None
+        if canon is None:
+            for base in display_list:
+                if platforms_compatible(text, base):
+                    canon = base
+                    break
+        if canon and canon not in found:
+            found.append(canon)
+    return sort_platform_codes(found)
 
 
 def tenant_keyword_group_platforms_including_inactive(
@@ -9724,6 +9909,8 @@ def _workspace_brief_from_daily_stats(
     trend_start: datetime,
     trend_end: datetime,
     range_end: datetime,
+    include_retired: bool = False,
+    retired_platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     """ponytail: 日统计快路径 + 词热度/词×平台轻量聚合；不含快照/信源。"""
     from app.services.monitor_stats_service import (
@@ -9852,6 +10039,8 @@ def _workspace_brief_from_daily_stats(
         trend_start=trend_start,
         trend_end=trend_end,
         range_end=range_end,
+        include_retired=include_retired,
+        retired_platforms=list(retired_platforms or []),
     )
 
     return {
@@ -9896,6 +10085,7 @@ def _workspace_brief_from_daily_stats(
         "alerts": [],
         "keyword_heats": light["keyword_heats"],
         "keyword_platform_heatmap": light["keyword_platform_heatmap"],
+        "retired_platforms": list(retired_platforms or []),
         **_tenant_service_period_fields(db, tenant_id),
     }
 
@@ -9938,6 +10128,65 @@ def _workspace_match_monitor_keyword(
             best_score = score
             best = label
     return best if best_score >= 0 else None
+
+
+def _workspace_group_is_active(group: Any) -> bool:
+    if isinstance(group, dict):
+        if group.get("deleted"):
+            return False
+        return bool(group.get("status", True))
+    if getattr(group, "deleted", False):
+        return False
+    return bool(getattr(group, "status", True))
+
+
+def _best_contained_keyword(prompt: str, labels: list[str]) -> str | None:
+    """精确或包含才算对上。前缀相近（哪家好/推荐差几个字）不算。"""
+    best: tuple[int, str] | None = None
+    for label in labels:
+        token = str(label or "").strip()
+        if not token:
+            continue
+        score = _prompt_keyword_match_score(prompt, token)
+        if score < 1400:
+            continue
+        if best is None or score > best[0] or (score == best[0] and len(token) > len(best[1])):
+            best = (score, token)
+    return best[1] if best else None
+
+
+def _workspace_assign_monitor_keyword(
+    prompt: str,
+    keyword_group_rows: list,
+    active_labels: list[str],
+    *,
+    include_retired: bool,
+) -> tuple[str | None, bool]:
+    """返回 (词, 是否已下线)。打开下线时禁止把历史问题模糊并进现用词。"""
+    if not include_retired:
+        return _workspace_match_monitor_keyword(prompt, keyword_group_rows, active_labels), False
+    text = (prompt or "").strip()
+    if not text:
+        return None, False
+    active_hit = _best_contained_keyword(text, active_labels)
+    if active_hit:
+        return active_hit, False
+    inactive_labels: list[str] = []
+    seen: set[str] = set(active_labels)
+    for group in keyword_group_rows or []:
+        if _workspace_group_is_active(group):
+            continue
+        for token in keyword_group_monitor_keywords(group):
+            label = str(token or "").strip()
+            if label and label not in seen:
+                seen.add(label)
+                inactive_labels.append(label)
+    inactive_hit = _best_contained_keyword(text, inactive_labels)
+    if inactive_hit:
+        return inactive_hit, True
+    if text not in set(active_labels):
+        return text, True
+    return None, False
 
 
 def _workspace_period_day_bounds(
@@ -10653,6 +10902,8 @@ def _workspace_keyword_platform_light(
     trend_start: datetime,
     trend_end: datetime,
     range_end: datetime,
+    include_retired: bool = False,
+    retired_platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     """ponytail: 词热度 + 词×平台提及率；不走 ranking_matrix（limit 2000 + 复杂位次）。
 
@@ -10660,18 +10911,21 @@ def _workspace_keyword_platform_light(
     周期按调度业务日（schedule_key 日期前缀）；禁止裸 updated_at。
     """
     keywords = _workspace_monitor_keyword_labels(keyword_groups)
+    active_keywords = list(keywords)
     platforms = list(purchased_platforms or [])
+    retired_platform_set = {str(code).strip() for code in (retired_platforms or []) if str(code or "").strip()}
     empty = {
         "keyword_heats": [{"name": name, "heat": None} for name in keywords],
         "keyword_platform_heatmap": {
             "platforms": platforms,
             "platform_labels": [_platform_display_names().get(code, code) for code in platforms],
             "keywords": keywords,
+            "retired_keywords": [],
             "data": [],
             "source": "light",
         },
     }
-    if not keywords or not platforms:
+    if not platforms or (not keywords and not include_retired):
         return empty
 
     purchased_set = set(platforms)
@@ -10710,6 +10964,8 @@ def _workspace_keyword_platform_light(
         )
 
     bucket: dict[tuple[str, str], dict[str, int]] = {}
+    retired_keyword_order: list[str] = []
+    retired_keyword_seen: set[str] = set()
     if task_ids:
         # 购买 deepseek 时把 deepseek_mobile 计入 deepseek 列，避免漏数
         from app.core.platform_order import platforms_compatible
@@ -10748,9 +11004,17 @@ def _workspace_keyword_platform_light(
                 continue
             if prompt_monitor_intent(item.prompt) != "ranking":
                 continue
-            keyword = _workspace_match_monitor_keyword(item.prompt or "", keyword_group_rows, keywords)
+            keyword, is_retired = _workspace_assign_monitor_keyword(
+                item.prompt or "",
+                keyword_group_rows,
+                active_keywords,
+                include_retired=include_retired,
+            )
             if not keyword:
                 continue
+            if is_retired and keyword not in retired_keyword_seen:
+                retired_keyword_seen.add(keyword)
+                retired_keyword_order.append(keyword)
             key = (keyword, canon)
             stats = bucket.setdefault(key, {"mentioned": 0, "total": 0})
             stats["total"] += 1
@@ -10767,6 +11031,14 @@ def _workspace_keyword_platform_light(
             )
             if rank is not None:
                 stats["mentioned"] += 1
+
+    retired_kept = [
+        label
+        for label in retired_keyword_order
+        if any((bucket.get((label, platform)) or {}).get("total", 0) > 0 for platform in platforms)
+    ] if include_retired else []
+    keywords = [*active_keywords, *retired_kept]
+    retired_keyword_set = set(retired_kept)
 
     data: list[list[float | int]] = []
     keyword_avgs: list[float] = []
@@ -10794,12 +11066,30 @@ def _workspace_keyword_platform_light(
             keyword_heats.append({"name": name, "heat": int(round((avg / max_avg) * 100))})
 
     platform_names = _platform_display_names()
+
+    def _with_retired_mark(name: str, retired: bool) -> str:
+        text = str(name or "")
+        if not retired or text.endswith("（已下线）"):
+            return text
+        return f"{text}（已下线）"
+
+    display_keywords = [
+        _with_retired_mark(name, name in retired_keyword_set) for name in keywords
+    ]
+    keyword_heats = [
+        {**item, "name": display_name}
+        for item, display_name in zip(keyword_heats, display_keywords)
+    ]
     return {
         "keyword_heats": keyword_heats,
         "keyword_platform_heatmap": {
             "platforms": platforms,
-            "platform_labels": [platform_names.get(code, code) for code in platforms],
-            "keywords": keywords,
+            "platform_labels": [
+                _with_retired_mark(platform_names.get(code, code), code in retired_platform_set)
+                for code in platforms
+            ],
+            "keywords": display_keywords,
+            "retired_keywords": list(retired_kept),
             "data": data,
             "source": "light",
         },
@@ -10817,6 +11107,8 @@ def _workspace_brief_full_from_daily_stats(
     trend_start: datetime,
     trend_end: datetime,
     range_end: datetime,
+    include_retired: bool = False,
+    retired_platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     """ponytail: 有日统计时 full 走快路径——KPI/趋势用日表，子任务仅补快照/信源（limit 50）。"""
     base = _workspace_brief_from_daily_stats(
@@ -10829,6 +11121,8 @@ def _workspace_brief_full_from_daily_stats(
         trend_start=trend_start,
         trend_end=trend_end,
         range_end=range_end,
+        include_retired=include_retired,
+        retired_platforms=retired_platforms,
     )
     latest_day = base.get("display_day")
     purchased_set = set(purchased_platforms)
@@ -11068,6 +11362,7 @@ def workspace_brief(
     tenant_id: int | None = None,
     scope: str = "full",
     purpose: str = "geo",
+    include_retired: bool = False,
 ) -> dict[str, Any]:
     """Customer workspace dashboard: schedule round, intent-aware KPIs, snapshots, top sources.
 
@@ -11122,16 +11417,47 @@ def workspace_brief(
     # 2026-08-07 - 观察号工作台口径只含 kimi/元宝
     from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
 
+    observer_allow = observer_platforms_for_session(current)
     purchased_platforms = narrow_platform_codes(
         purchased_platforms,
-        observer_platforms_for_session(current),
+        observer_allow,
     )
+    configured_platforms = list(purchased_platforms)
+    retired_platforms: list[str] = []
+    if include_retired and purpose == PURPOSE_GEO:
+        from app.services.monitor_stats_service import list_daily_stats_for_tenant
+
+        period_end_day = min(trend_end, range_end).date()
+        inactive_platforms = (
+            tenant_keyword_group_platforms_including_inactive(db, tenant_id, asset) if asset else []
+        )
+        sampled_platforms = {
+            str(row.platform or "").strip()
+            for row in list_daily_stats_for_tenant(
+                db,
+                tenant_id,
+                since=trend_start.date(),
+                until=period_end_day,
+            )
+            if str(row.platform or "").strip() and int(row.completed_count or 0) > 0
+        }
+        purchased_platforms, retired_platforms = split_retired_display_platforms(
+            configured_platforms,
+            [*inactive_platforms, *sampled_platforms],
+            sampled_platforms,
+            observer_allow=observer_allow,
+        )
 
     from app.services.monitor_stats_service import has_daily_stats
 
+    def _stamp_platform_scope(payload: dict[str, Any]) -> dict[str, Any]:
+        payload["purchased_platforms"] = list(configured_platforms)
+        payload["retired_platforms"] = list(retired_platforms)
+        return payload
+
     # 日预聚合仅含 geo；品牌词必须走原始子任务路径
     if purpose == PURPOSE_GEO and scope == "summary" and has_daily_stats(db, [tenant_id]):
-        return _workspace_brief_from_daily_stats(
+        return _stamp_platform_scope(_workspace_brief_from_daily_stats(
             db,
             tenant_id=tenant_id,
             asset=asset,
@@ -11141,10 +11467,12 @@ def workspace_brief(
             trend_start=trend_start,
             trend_end=trend_end,
             range_end=range_end,
-        )
+            include_retired=include_retired,
+            retired_platforms=retired_platforms,
+        ))
 
     if purpose == PURPOSE_GEO and scope == "full" and has_daily_stats(db, [tenant_id]):
-        return _workspace_brief_full_from_daily_stats(
+        return _stamp_platform_scope(_workspace_brief_full_from_daily_stats(
             db,
             tenant_id=tenant_id,
             asset=asset,
@@ -11154,7 +11482,9 @@ def workspace_brief(
             trend_start=trend_start,
             trend_end=trend_end,
             range_end=range_end,
-        )
+            include_retired=include_retired,
+            retired_platforms=retired_platforms,
+        ))
 
     purchased_set = set(purchased_platforms)
 
@@ -11533,6 +11863,24 @@ def workspace_brief(
         competitor_count=competitor_count,
         competitor_score=competitor_metrics.get("competitor_score"),
     )
+    light_extra: dict[str, Any] = {}
+    if include_retired:
+        light = _workspace_keyword_platform_light(
+            db,
+            tenant_id=tenant_id,
+            keyword_group_rows=list(keyword_group_rows or []),
+            keyword_groups=keyword_groups,
+            purchased_platforms=purchased_platforms,
+            trend_start=trend_start,
+            trend_end=trend_end,
+            range_end=range_end,
+            include_retired=True,
+            retired_platforms=retired_platforms,
+        )
+        light_extra = {
+            "keyword_heats": light["keyword_heats"],
+            "keyword_platform_heatmap": light["keyword_platform_heatmap"],
+        }
 
     return {
         "tenant_id": tenant_id,
@@ -11566,7 +11914,8 @@ def workspace_brief(
             "keyword_group_count": len(keyword_groups),
             "competitor_count": competitor_count,
         },
-        "purchased_platforms": purchased_platforms,
+        "purchased_platforms": list(configured_platforms),
+        "retired_platforms": list(retired_platforms),
         "platform_highlights": platform_highlights,
         "top_sources": top_sources,
         "recent_snapshots": recent_snapshots,
@@ -11577,6 +11926,7 @@ def workspace_brief(
         "competitor_score": health["competitor_score"],
         "top_competitor_mention_rate": competitor_metrics.get("top_competitor_mention_rate"),
         "competitor_lead_delta": competitor_metrics.get("competitor_lead_delta"),
+        **light_extra,
         **_tenant_service_period_fields(db, tenant_id),
     }
 

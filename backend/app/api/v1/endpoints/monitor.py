@@ -359,6 +359,7 @@ def monitor_workspace_brief(
     record_access: bool = Query(default=False, description="平台预览首次进入时记一条审计"),
     scope: str = Query(default="full", pattern="^(full|summary)$", description="summary=仅 KPI/趋势，切换周期用"),
     purpose: str = Query(default="geo", pattern="^(geo|brand_word)$", description="geo=日常监测；brand_word=品牌分析专用"),
+    include_retired: bool = Query(default=False, description="含已下线词及平台"),
     current: CurrentSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -401,8 +402,9 @@ def monitor_workspace_brief(
 
     start_key = start_date.isoformat() if start_date else None
     end_key = end_date.isoformat() if end_date else None
-    # 2026-08-21 - 稳定性⑤：默认 7/30 日窗优先吃预聚合快照
-    if purpose == "geo" and scope == "full":
+    retired_on = include_retired is True
+    # 2026-08-21 - 稳定性⑤：默认 7/30 日窗优先吃预聚合快照。含已下线不吃快照。
+    if purpose == "geo" and scope == "full" and not retired_on:
         from app.services.window_snapshot_service import get_window_snapshot, match_workspace_window_days
 
         window_days = match_workspace_window_days(start_date, end_date)
@@ -417,7 +419,14 @@ def monitor_workspace_brief(
                 return ApiResponse(data={**snap, "window_snapshot": True, "window_days": window_days})
 
     # 2026-08-07 - 观察号与主账号分缓存，避免平台收窄互相污染
-    cache_key = workspace_brief_cache_key(resolved_tenant_id, start_key, end_key, scope, purpose) + observer_cache_suffix(current)
+    cache_key = workspace_brief_cache_key(
+        resolved_tenant_id,
+        start_key,
+        end_key,
+        scope,
+        purpose,
+        include_retired=retired_on,
+    ) + observer_cache_suffix(current)
     try:
         data = get_or_build_json_cache(
             cache_key,
@@ -429,6 +438,7 @@ def monitor_workspace_brief(
                 tenant_id=resolved_tenant_id,
                 scope=scope,
                 purpose=purpose,
+                include_retired=retired_on,
             ),
             ttl_seconds=WORKSPACE_BRIEF_CACHE_TTL,
         )

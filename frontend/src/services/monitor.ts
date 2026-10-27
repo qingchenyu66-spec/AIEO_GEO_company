@@ -450,6 +450,7 @@ export interface WorkspaceBrief {
   alerts: WorkspaceAlert[]
   keyword_heats?: WorkspaceKeywordHeat[]
   keyword_platform_heatmap?: WorkspaceKeywordPlatformHeatmap | null
+  retired_platforms?: string[]
   service_start_date?: string | null
   service_end_date?: string | null
   health_score?: number
@@ -589,6 +590,7 @@ export interface WorkspaceBriefQuery {
   scope?: 'full' | 'summary'
   /** geo=日常 GEO 监测（默认）；brand_word=品牌分析专用 */
   purpose?: 'geo' | 'brand_word'
+  include_retired?: boolean
 }
 
 const WORKSPACE_BRIEF_TTL_MS = 45_000
@@ -607,6 +609,7 @@ function workspaceBriefCacheKey(params?: WorkspaceBriefQuery) {
     params?.scope || 'full',
     params?.purpose || 'geo',
     params?.record_access ? '1' : '0',
+    params?.include_retired ? 'retired' : 'live',
   ].join('|')
 }
 

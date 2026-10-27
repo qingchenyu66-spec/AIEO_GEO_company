@@ -227,6 +227,7 @@ export type SourceAnalysisSummary = {
     mention_rate: number
     avg_rank: number | null
   }>
+  retired_platforms?: string[]
 }
 
 export async function getSourceStats(params?: {
@@ -234,6 +235,7 @@ export async function getSourceStats(params?: {
   start_date?: string
   end_date?: string
   platform?: string
+  include_retired?: boolean
 }): Promise<SourceAnalysisSummary> {
   const response = await http.get('/v1/analytics/source-stats', {
     params,
