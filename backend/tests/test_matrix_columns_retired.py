@@ -39,11 +39,17 @@ def test_append_retired_matrix_columns_appends_historical_prompts() -> None:
 
     with patch("app.services.monitor_service.keyword_group_platforms", return_value=[]):
         with patch("app.services.monitor_service._resolve_prompt_keyword_group", return_value=None):
-            merged = _append_retired_matrix_columns(active_columns, prompt_set, groups)
+            merged = _append_retired_matrix_columns(
+                active_columns,
+                prompt_set,
+                groups,
+                historical_platforms={"旧监测词A": ["kimi", "yuanbao"]},
+            )
 
     assert [c["prompt"] for c in merged] == ["仍在监测", "旧监测词A"]
     assert merged[1]["retired"] is True
     assert merged[1]["group_name"] == "已删词组"
+    assert merged[1]["platforms"] == ["yuanbao", "kimi"]  # market rank: yuanbao before kimi
 
 
 def test_build_matrix_columns_include_retired() -> None:

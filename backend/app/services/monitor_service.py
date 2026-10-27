@@ -2929,9 +2929,11 @@ def _append_retired_matrix_columns(
     keyword_groups: list[BrandKeywordGroup],
     *,
     asset: BrandAsset | None = None,
+    historical_platforms: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """2026-08-27 - 排名矩阵含已下线词 - 窗内有数据但不在当前监测配置里的 prompt 追加列"""
     active_prompts = {col["prompt"] for col in columns}
+    hist = historical_platforms or {}
     retired: list[dict[str, Any]] = []
     for prompt in sorted(prompt_set.keys(), key=lambda text: (prompt_set[text] or "zzz", text)):
         if prompt in active_prompts:
@@ -2940,12 +2942,15 @@ def _append_retired_matrix_columns(
         group_label = prompt_set.get(prompt) or (
             keyword_group_display_label(matched) if matched else None
         )
+        platforms = keyword_group_platforms(matched, asset) if matched else []
+        if not platforms:
+            platforms = sort_platform_codes(list(hist.get(prompt) or []))
         retired.append({
             "prompt": prompt,
             "group_name": group_label or "已下线监测词",
             "monitor_keyword": prompt,
             "group_id": matched.id if matched else None,
-            "platforms": keyword_group_platforms(matched, asset) if matched else [],
+            "platforms": platforms,
             "retired": True,
         })
     return columns + retired
@@ -3009,7 +3014,13 @@ def _build_matrix_columns(
     # 含已下线：无论当前配置是否映射出列, 都按 prompt_set 补历史词并打 retired.
     # 否则当前词全对不上窗内数据时会掉进下方兜底, 列无 retired, 前端下拉与图表两套词.
     if include_retired:
-        return _append_retired_matrix_columns(columns, prompt_set, keyword_groups, asset=asset)
+        return _append_retired_matrix_columns(
+            columns,
+            prompt_set,
+            keyword_groups,
+            asset=asset,
+            historical_platforms=_prompt_platforms_from_matrix_rows(matrix_rows),
+        )
 
     if columns:
         return columns
@@ -3130,6 +3141,49 @@ def matrix_platform_visible(platform: str | None, purchased_platforms: list[str]
     if not text:
         return False
     return text in expand_platform_codes(purchased)
+
+
+def matrix_filter_platforms_for_retired(
+    configured: list[str],
+    *,
+    include_retired: bool,
+    observer_allow: frozenset[str] | None,
+) -> list[str]:
+    """含已下线词时放宽聚合过滤：观察号仍限白名单，其它账号放开窗内历史平台。"""
+    if not include_retired:
+        return list(configured)
+    if observer_allow is not None:
+        return sort_platform_codes(list(observer_allow))
+    return []
+
+
+def merge_matrix_purchased_platforms(
+    configured: list[str],
+    window_platforms: list[str],
+    *,
+    include_retired: bool,
+    observer_allow: frozenset[str] | None = None,
+) -> list[str]:
+    """含已下线词时平台 Tab = 当前配置 ∪ 时间窗内历史平台（再经观察号收窄）。"""
+    from app.services.observer_account import narrow_platform_codes
+
+    if not include_retired:
+        return list(configured)
+    merged = sort_platform_codes(list(dict.fromkeys([*(configured or []), *(window_platforms or [])])))
+    return narrow_platform_codes(merged, observer_allow)
+
+
+def _prompt_platforms_from_matrix_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    found: dict[str, set[str]] = {}
+    for row in rows:
+        plat = str(row.get("platform") or "").strip()
+        if not plat:
+            continue
+        for prompt in (row.get("cells") or {}):
+            text = str(prompt or "").strip()
+            if text:
+                found.setdefault(text, set()).add(plat)
+    return {prompt: sort_platform_codes(list(codes)) for prompt, codes in found.items()}
 
 
 def _matrix_day_key(value: datetime | None) -> str | None:
@@ -8981,19 +9035,23 @@ def ranking_matrix(
         for item in keyword_group_rows
         if item.status and item.monitor_keyword
     ] if keyword_group_rows else active_keyword_groups(db, resolved_tenant_id)
-    purchased_platforms = tenant_purchased_platforms(db, resolved_tenant_id, asset) if asset else []
+    configured_platforms = tenant_purchased_platforms(db, resolved_tenant_id, asset) if asset else []
     # 2026-08-07 - 观察号矩阵列仅 kimi/元宝
     from app.services.observer_account import narrow_platform_codes, observer_platforms_for_session
 
-    purchased_platforms = narrow_platform_codes(
-        purchased_platforms,
-        observer_platforms_for_session(current),
+    allow = observer_platforms_for_session(current)
+    configured_platforms = narrow_platform_codes(configured_platforms, allow)
+    # 含已下线词：聚合放宽到窗内历史平台；响应 Tab 再并回当前配置
+    filter_platforms = matrix_filter_platforms_for_retired(
+        configured_platforms,
+        include_retired=bool(include_retired_keywords),
+        observer_allow=allow,
     )
+    purchased_platforms = list(configured_platforms)
     daily_sample_cap = int(getattr(asset, "schedule_frequency", 0) or 0) or None
     platform_filter = str(platform or "").strip()
     all_platforms = not platform_filter or platform_filter.lower() == "all"
     selected_platform = None if all_platforms else platform_filter
-    allow = observer_platforms_for_session(current)
     if selected_platform and allow is not None and selected_platform not in allow:
         selected_platform = None
         all_platforms = True
@@ -9134,7 +9192,7 @@ def ranking_matrix(
                 continue
             if detect_dt < range_start or detect_dt > range_end:
                 continue
-            if not matrix_platform_visible(item.platform, purchased_platforms):
+            if not matrix_platform_visible(item.platform, filter_platforms):
                 continue
             day_key = detect_dt.date().isoformat()
             keyword_group = (
@@ -9191,6 +9249,20 @@ def ranking_matrix(
                 "_updated_at": item.updated_at,
             }
             bucket["cell_samples"].setdefault(prompt, []).append(cell)
+
+    window_platforms = sort_platform_codes(
+        list({
+            str(bucket.get("platform") or "").strip()
+            for bucket in task_rows.values()
+            if str(bucket.get("platform") or "").strip()
+        })
+    )
+    purchased_platforms = merge_matrix_purchased_platforms(
+        configured_platforms,
+        window_platforms,
+        include_retired=bool(include_retired_keywords),
+        observer_allow=allow,
+    )
 
     sorted_tasks = sorted(
         task_rows.values(),
