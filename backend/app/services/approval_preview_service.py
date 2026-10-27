@@ -457,10 +457,14 @@ def _user_update_changes(db: Session, body: dict[str, Any], user_id: int | None)
     user = db.scalar(select(User).where(User.id == user_id)) if user_id else None
     rows = [_change("操作类型", after=f"修改用户 #{user_id}", kind="info")]
     if user is None:
+        rows.append(_change("登录账号", after=str(body.get("username") or "—"), kind="update"))
         rows.append(_change("显示名称", after=str(body.get("display_name") or "—"), kind="update"))
         rows.append(_change("登录身份", after=_identity_summary(body.get("identities")), kind="update"))
         return rows
 
+    new_username = str(body.get("username") or "").strip()
+    if new_username and new_username != (user.username or ""):
+        rows.append(_change("登录账号", before=user.username or "（空）", after=new_username))
     new_name = str(body.get("display_name") or "").strip()
     if new_name and new_name != (user.display_name or ""):
         rows.append(_change("显示名称", before=user.display_name or "（空）", after=new_name))

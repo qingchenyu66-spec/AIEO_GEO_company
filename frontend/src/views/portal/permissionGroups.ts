@@ -100,6 +100,7 @@ export type IdentityConfigForm = {
 }
 
 export type UserIdentityForm = {
+  username: string
   display_name: string
   identity_types: IdentityType[]
   identity_configs: Record<IdentityType, IdentityConfigForm>
@@ -123,6 +124,7 @@ export function createEmptyIdentityForm(): UserIdentityForm {
     menu_ids: [],
   })
   return {
+    username: '',
     display_name: '',
     identity_types: [],
     identity_configs: {
@@ -135,7 +137,7 @@ export function createEmptyIdentityForm(): UserIdentityForm {
 export function createUserCreateForm() {
   const base = createEmptyIdentityForm()
   return {
-    username: '',
+    username: base.username,
     password: generateInitialPassword(),
     phone: '',
     display_name: base.display_name,

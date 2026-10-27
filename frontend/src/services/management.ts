@@ -484,7 +484,7 @@ export async function createManagedUser(payload: CreateUserPayload): Promise<unk
   return response.data.data
 }
 
-export type UpdateUserPayload = Omit<CreateUserPayload, 'username' | 'password'> & {
+export type UpdateUserPayload = Omit<CreateUserPayload, 'password'> & {
   phone?: string | null
   /** Explicit soft-delete; omitted identities are kept (PATCH semantics). */
   remove_identity_types?: IdentityType[]

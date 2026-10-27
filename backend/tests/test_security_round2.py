@@ -58,6 +58,7 @@ def test_update_user_keeps_omitted_identity_without_remove_flag():
     )
     user = SimpleNamespace(
         id=9,
+        username="old_user",
         display_name="旧名",
         identities=[platform, customer],
         created_by=1,
@@ -71,6 +72,7 @@ def test_update_user_keeps_omitted_identity_without_remove_flag():
     db.scalar.side_effect = [user, None, None]
 
     payload = UserUpdateRequest(
+        username="old_user",
         display_name="新名",
         identities=[
             UserIdentityCreateItem(
@@ -91,7 +93,9 @@ def test_update_user_keeps_omitted_identity_without_remove_flag():
 
     with patch("app.services.management_service.get_managed_user", return_value=user), patch(
         "app.services.management_service._upsert_identity_for_user"
-    ) as upsert:
+    ) as upsert, patch("app.services.management_service.assert_actor_can_manage_target_user"), patch(
+        "app.services.management_service.assert_actor_can_assign_identities"
+    ):
         update_managed_user(db, 9, payload, current_user, current_identity, commit=False)
         assert customer.deleted is False
         assert customer.status is True
@@ -112,10 +116,11 @@ def test_update_user_removes_only_when_explicit():
         deleted=False,
         status=True,
     )
-    user = SimpleNamespace(id=9, display_name="旧名", identities=[platform, customer])
+    user = SimpleNamespace(id=9, username="old_user", display_name="旧名", identities=[platform, customer])
     current_user = SimpleNamespace(id=1)
     current_identity = SimpleNamespace(identity_type="PLATFORM", role_code="PLATFORM_ADMIN")
     payload = UserUpdateRequest(
+        username="old_user",
         display_name="新名",
         identities=[
             UserIdentityCreateItem(
@@ -134,8 +139,90 @@ def test_update_user_removes_only_when_explicit():
 
     with patch("app.services.management_service.get_managed_user", return_value=user), patch(
         "app.services.management_service._upsert_identity_for_user"
+    ), patch("app.services.management_service.assert_actor_can_manage_target_user"), patch(
+        "app.services.management_service.assert_actor_can_assign_identities"
     ):
         update_managed_user(db, 9, payload, current_user, current_identity, commit=False)
         assert customer.deleted is True
         assert customer.status is False
         assert platform.deleted is False
+
+
+def test_update_user_renames_username_when_available():
+    db = MagicMock()
+    user = SimpleNamespace(
+        id=9,
+        username="old_user",
+        display_name="旧名",
+        identities=[],
+        created_by=1,
+        deleted=False,
+        status=True,
+    )
+    current_user = SimpleNamespace(id=1)
+    current_identity = SimpleNamespace(identity_type="PLATFORM", role_code="PLATFORM_ADMIN")
+    payload = UserUpdateRequest(
+        username="new_user",
+        display_name="旧名",
+        identities=[
+            UserIdentityCreateItem(
+                identity_type="PLATFORM",
+                role_code="PLATFORM_ADMIN",
+                identity_name="平台",
+                position_id=None,
+                tenant_id=None,
+                tenant_name=None,
+                menu_ids=[],
+            )
+        ],
+    )
+    from unittest.mock import patch
+
+    with patch("app.services.management_service.get_managed_user", return_value=user), patch(
+        "app.services.management_service._upsert_identity_for_user"
+    ), patch("app.services.management_service.assert_actor_can_manage_target_user"), patch(
+        "app.services.management_service.assert_actor_can_assign_identities"
+    ):
+        db.scalar.return_value = None
+        update_managed_user(db, 9, payload, current_user, current_identity, commit=False)
+        assert user.username == "new_user"
+
+
+def test_update_user_rejects_taken_username():
+    db = MagicMock()
+    user = SimpleNamespace(
+        id=9,
+        username="old_user",
+        display_name="旧名",
+        identities=[],
+        created_by=1,
+        deleted=False,
+        status=True,
+    )
+    taken = SimpleNamespace(id=3, username="taken_user", deleted=False)
+    current_user = SimpleNamespace(id=1)
+    current_identity = SimpleNamespace(identity_type="PLATFORM", role_code="PLATFORM_ADMIN")
+    payload = UserUpdateRequest(
+        username="taken_user",
+        display_name="旧名",
+        identities=[
+            UserIdentityCreateItem(
+                identity_type="PLATFORM",
+                role_code="PLATFORM_ADMIN",
+                identity_name="平台",
+                position_id=None,
+                tenant_id=None,
+                tenant_name=None,
+                menu_ids=[],
+            )
+        ],
+    )
+    from unittest.mock import patch
+
+    with patch("app.services.management_service.get_managed_user", return_value=user), patch(
+        "app.services.management_service.assert_actor_can_manage_target_user"
+    ), patch("app.services.management_service.assert_actor_can_assign_identities"):
+        db.scalar.return_value = taken
+        with pytest.raises(ValueError, match="账号已存在"):
+            update_managed_user(db, 9, payload, current_user, current_identity, commit=False)
+        assert user.username == "old_user"

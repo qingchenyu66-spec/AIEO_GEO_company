@@ -134,7 +134,7 @@ function toggleAllowedPlatform(code: string, event: Event) {
 
   <el-dialog v-model="editDialog" width="860px" title="编辑用户与权限" class="user-maintain-dialog">
     <div class="form-grid">
-      <label><span>登录账号</span><input :value="editingUser?.username" disabled /></label>
+      <label><span>登录账号<el-tooltip content="至少 3 个字符，建议使用英文、数字或下划线；修改后需用新账号登录" placement="top"><HelpCircle /></el-tooltip></span><input v-model="editForm.username" placeholder="例如 zhangsan_01" /></label>
       <label><span>用户姓名<el-tooltip content="至少 2 个字符，展示在用户列表和登录身份信息里" placement="top"><HelpCircle /></el-tooltip></span><input v-model="editForm.display_name" /></label>
       <label><span>手机号<el-tooltip content="选填。保存后可直接收验证码登录；留空则解绑" placement="top"><HelpCircle /></el-tooltip></span><input v-model="editPhone" inputmode="numeric" maxlength="11" placeholder="选填, 11 位" /></label>
     </div>

@@ -184,6 +184,10 @@ export function useUserManagement(options: UserManagementOptions) {
   }
 
   function validateEditForm() {
+    if (!editForm.username.trim() || editForm.username.trim().length < 3) {
+      ElMessage.warning('登录账号至少填写 3 个字符')
+      return false
+    }
     if (!editForm.display_name.trim() || editForm.display_name.trim().length < 2) {
       ElMessage.warning('用户姓名至少填写 2 个字符')
       return false
@@ -285,6 +289,7 @@ export function useUserManagement(options: UserManagementOptions) {
     await loadAssignableOptions(tenants.value, userForm)
     editingUser.value = user
     editPhone.value = user.phone || ''
+    editForm.username = user.username
     editForm.display_name = user.display_name
     editForm.identity_types = user.identities.map(identity => identity.identity_type)
     for (const type of ['PLATFORM', 'CUSTOMER'] as IdentityType[]) {
@@ -313,6 +318,7 @@ export function useUserManagement(options: UserManagementOptions) {
         .map(identity => identity.identity_type)
         .filter((type): type is IdentityType => !keepTypes.has(type))
       const result = await updateManagedUser(editingUser.value.id, {
+        username: editForm.username.trim(),
         display_name: editForm.display_name,
         phone: nextPhone || null,
         identities,

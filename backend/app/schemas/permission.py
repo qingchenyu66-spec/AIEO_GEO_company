@@ -112,6 +112,7 @@ class UserUpdateRequest(BaseModel):
     remove_identity_types：仅当显式传入时才软删对应身份（防误删双身份）。
     """
 
+    username: str = Field(min_length=3, max_length=50)
     display_name: str = Field(min_length=2, max_length=50)
     phone: str | None = None
     identities: list[UserIdentityCreateItem] = Field(min_length=1)

@@ -584,13 +584,31 @@ def update_managed_user(
     *,
     commit: bool = True,
 ) -> User:
+    from app.services.observer_account import OBSERVER_USERNAME, is_observer_username
+
     user = get_managed_user(db, user_id, current_user, current_identity)
+    username = str(payload.username or "").strip()
+    if not username:
+        raise ValueError("登录账号不能为空")
     _reject_garbled_text(payload.display_name, "用户姓名")
     assert_actor_can_manage_target_user(db, current_identity, user)
     assert_actor_can_assign_identities(db, current_identity, list(payload.identities))
     identity_types = [item.identity_type for item in payload.identities]
     if len(identity_types) != len(set(identity_types)):
         raise ValueError("同一用户不能重复添加相同登录身份")
+
+    if username != (user.username or ""):
+        if is_observer_username(user.username):
+            raise ValueError("观察号登录账号不可修改")
+        if username == OBSERVER_USERNAME:
+            raise ValueError(f"登录账号「{OBSERVER_USERNAME}」为系统保留，请更换")
+        # 库级唯一含软删行；只查未删会漏拦
+        exists = db.scalar(select(User).where(User.username == username, User.id != user.id))
+        if exists is not None:
+            if exists.deleted:
+                raise ValueError(f"账号「{username}」已删除，请在「已删除账号」中恢复，或更换登录名")
+            raise ValueError("账号已存在")
+        user.username = username
 
     user.display_name = payload.display_name
     if "phone" in payload.model_fields_set:
