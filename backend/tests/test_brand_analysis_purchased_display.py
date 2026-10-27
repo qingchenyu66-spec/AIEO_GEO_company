@@ -9,24 +9,7 @@ from app.services.brand_analysis_service import (
 )
 
 
-def test_purchased_platforms_falls_back_to_brand_word_groups(monkeypatch):
-    asset = SimpleNamespace(monitored_platforms_json=[])
-    monkeypatch.setattr(
-        "app.services.brand_analysis_service.get_brand_asset",
-        lambda db, tenant_id: asset,
-    )
-    monkeypatch.setattr(
-        "app.services.brand_analysis_service.tenant_purchased_platforms",
-        lambda db, tenant_id, asset=None: [],
-    )
-    monkeypatch.setattr(
-        "app.services.brand_analysis_service._brand_word_group_platforms",
-        lambda db, tenant_id: ["doubao"],
-    )
-    assert _purchased_platforms_for_brand_words(MagicMock(), 132) == ["doubao"]
-
-
-def test_purchased_platforms_prefers_geo_keyword_groups(monkeypatch):
+def test_purchased_platforms_prefers_brand_word_groups(monkeypatch):
     asset = SimpleNamespace(monitored_platforms_json=["kimi"])
     monkeypatch.setattr(
         "app.services.brand_analysis_service.get_brand_asset",
@@ -40,7 +23,24 @@ def test_purchased_platforms_prefers_geo_keyword_groups(monkeypatch):
         "app.services.brand_analysis_service._brand_word_group_platforms",
         lambda db, tenant_id: ["doubao"],
     )
-    assert _purchased_platforms_for_brand_words(MagicMock(), 1) == ["kimi", "yuanbao"]
+    assert _purchased_platforms_for_brand_words(MagicMock(), 1) == ["doubao"]
+
+
+def test_purchased_platforms_falls_back_to_geo_when_no_brand_word_platforms(monkeypatch):
+    asset = SimpleNamespace(monitored_platforms_json=["kimi"])
+    monkeypatch.setattr(
+        "app.services.brand_analysis_service.get_brand_asset",
+        lambda db, tenant_id: asset,
+    )
+    monkeypatch.setattr(
+        "app.services.brand_analysis_service.tenant_purchased_platforms",
+        lambda db, tenant_id, asset=None: ["kimi", "yuanbao"],
+    )
+    monkeypatch.setattr(
+        "app.services.brand_analysis_service._brand_word_group_platforms",
+        lambda db, tenant_id: [],
+    )
+    assert _purchased_platforms_for_brand_words(MagicMock(), 132) == ["kimi", "yuanbao"]
 
 
 def test_brand_word_group_platforms_union(monkeypatch):

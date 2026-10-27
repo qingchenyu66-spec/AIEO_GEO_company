@@ -95,8 +95,9 @@ def ranking_matrix_cache_key(
     limit_rows: int,
     include_retired_keywords: bool = False,
 ) -> str:
+    # v5: 含已下线词时 purchased = 当前配置 ∪ 停用词组平台 ∪ 窗内历史平台
     return (
-        f"monitor:ranking-matrix:v4:{identity_type}:{tenant_id}:"
+        f"monitor:ranking-matrix:v5:{identity_type}:{tenant_id}:"
         f"{platform or 'all'}:{start_date or 'default'}:{end_date or 'default'}:"
         f"{keyword or '-'}:{monitor_group or '-'}:{keyword_group or '-'}:"
         f"{monitor_keyword or '-'}:{exposure_term or '-'}:{limit_rows}:"

@@ -102,15 +102,17 @@ def _brand_word_group_platforms(db: Session, tenant_id: int) -> list[str]:
 
 
 def _purchased_platforms_for_brand_words(db: Session, tenant_id: int) -> list[str]:
-    """品牌分析「已购」展示：监测词组优先；仅品牌词企业回退品牌词组勾选。
+    """品牌分析「已购」平台：以启用中的品牌词组勾选为准。
 
-    2026-08-28 - 载望升学无监测词组时已购显示 0 - 品牌词组有端仍回退，勿用空已购误导
+    监测词组平台只影响实时监测；品牌诊断样本按品牌词抓取端过滤，避免
+    监测词组停用某端后把已有 brand_word 样本全部滤空。
+    无品牌词组平台时再回退监测词组，避免已购显示空白。
     """
+    brand_word_platforms = _brand_word_group_platforms(db, tenant_id)
+    if brand_word_platforms:
+        return brand_word_platforms
     asset = get_brand_asset(db, tenant_id)
-    geo = tenant_purchased_platforms(db, tenant_id, asset) if asset else []
-    if geo:
-        return geo
-    return _brand_word_group_platforms(db, tenant_id)
+    return tenant_purchased_platforms(db, tenant_id, asset) if asset else []
 
 
 def clear_brand_analysis_parse_markers(raw: dict[str, Any]) -> None:

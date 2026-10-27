@@ -3164,13 +3164,27 @@ def merge_matrix_purchased_platforms(
     include_retired: bool,
     observer_allow: frozenset[str] | None = None,
 ) -> list[str]:
-    """含已下线词时平台 Tab = 当前配置 ∪ 时间窗内历史平台（再经观察号收窄）。"""
+    """含已下线词时平台 Tab = 当前配置 ∪ 附加平台 ∪ 窗内历史（再经观察号收窄）。"""
     from app.services.observer_account import narrow_platform_codes
 
     if not include_retired:
         return list(configured)
     merged = sort_platform_codes(list(dict.fromkeys([*(configured or []), *(window_platforms or [])])))
     return narrow_platform_codes(merged, observer_allow)
+
+
+def tenant_keyword_group_platforms_including_inactive(
+    db: Session,
+    tenant_id: int,
+    asset: BrandAsset | None = None,
+) -> list[str]:
+    """启用+停用未删监测词组的平台并集；含已下线词时用来补回曾配置过的端。"""
+    from app.services.brand_service import keyword_group_platforms, list_keyword_groups
+
+    union: set[str] = set()
+    for group in list_keyword_groups(db, tenant_id):
+        union.update(keyword_group_platforms(group, asset))
+    return sort_platform_codes(list(union))
 
 
 def _prompt_platforms_from_matrix_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -9041,6 +9055,14 @@ def ranking_matrix(
 
     allow = observer_platforms_for_session(current)
     configured_platforms = narrow_platform_codes(configured_platforms, allow)
+    # 含已下线词：把停用词组上的平台也并进基线（如豆包词组停用后仍要能看历史）
+    if include_retired_keywords:
+        configured_platforms = merge_matrix_purchased_platforms(
+            configured_platforms,
+            tenant_keyword_group_platforms_including_inactive(db, resolved_tenant_id, asset),
+            include_retired=True,
+            observer_allow=allow,
+        )
     # 含已下线词：聚合放宽到窗内历史平台；响应 Tab 再并回当前配置
     filter_platforms = matrix_filter_platforms_for_retired(
         configured_platforms,

@@ -505,9 +505,16 @@ export function useMonitorRealtime(externalTenantId: number | null = null) {
   }))
 
   const platformOptions = computed(() => {
-    // 含已下线词：平台 Tab 跟矩阵返回（当前配置 ∪ 窗内历史），勿再用品牌当前配置盖掉
-    if (filters.includeRetiredKeywords && (rankingMatrix.value?.purchased_platforms?.length || 0) > 0) {
-      return sortPlatformCodes((rankingMatrix.value?.purchased_platforms || []).filter(Boolean))
+    // 含已下线词：平台 Tab = 矩阵 purchased ∪ 行内实际平台，勿再用品牌当前配置盖掉
+    if (filters.includeRetiredKeywords) {
+      const fromMatrix = (rankingMatrix.value?.purchased_platforms || []).filter(Boolean)
+      const fromRows = [...new Set(
+        (rankingMatrix.value?.rows || [])
+          .map(row => (row.platform || '').trim())
+          .filter(Boolean),
+      )]
+      const merged = sortPlatformCodes([...new Set([...fromMatrix, ...fromRows])])
+      if (merged.length) return merged
     }
     const purchased = brandAsset.value?.monitored_platforms?.length
       ? brandAsset.value.monitored_platforms
