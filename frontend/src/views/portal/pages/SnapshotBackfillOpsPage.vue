@@ -11,12 +11,14 @@ import {
   dismissSnapshotBackfillBatch,
   type SnapshotBackfillBatchDismissSlot,
   ensureGapBackfillSubtask,
+  getPendingSnapshotBackfills,
   getSnapshotBackfillMatrix,
   undismissSnapshotBackfill,
   waitForBackfillParse,
   type SnapshotBackfillMatrixCell,
   type SnapshotBackfillMatrixPlatform,
   type SnapshotBackfillMatrixSlot,
+  type SnapshotBackfillListSummary,
   type SnapshotBackfillPendingItem,
 } from '../../../services/snapshotBackfill'
 import { getMonitorSubtask, type MonitorSubtask } from '../../../services/monitor'
@@ -35,6 +37,7 @@ import { useAuthStore } from '../../../stores/auth'
 import { notifyOperationError } from '../../../utils/requestError'
 import { withRetry } from '../../../composables/useRetry'
 import { mergeSnapshotBackfillItem } from '../snapshotBackfillDisplay'
+import { mergeSnapshotBackfillMobilePage } from '../snapshotBackfillMobile'
 import { emitMonitorRefresh } from '../../../utils/monitorRefresh'
 import { platformLabelMap, supportedPlatforms } from '../portalMaps'
 
@@ -47,6 +50,8 @@ const canViewBackfill = computed(() => Boolean(backfillMenu.value?.can_export))
 const canSubmitBackfill = computed(() => Boolean(backfillMenu.value?.can_update))
 
 const FILTER_DEBOUNCE_MS = 350
+const MOBILE_PAGE_SIZE = 24
+const MOBILE_BREAKPOINT = '(max-width: 767px)'
 
 const loading = ref(false)
 const batchDismissLoading = ref(false)
@@ -57,6 +62,11 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailItem = ref<SnapshotBackfillPendingItem | null>(null)
 const detailSubtask = ref<MonitorSubtask | null>(null)
+const isMobileViewport = ref(false)
+const mobileFiltersOpen = ref(false)
+const mobileItems = ref<SnapshotBackfillPendingItem[]>([])
+const mobileSummary = ref<SnapshotBackfillListSummary | null>(null)
+const mobileLoadingMore = ref(false)
 
 const tenantFilter = ref<number | ''>('')
 const filterDateFrom = ref('')
@@ -116,6 +126,7 @@ let listAbortController: AbortController | null = null
 const parsePollControllers = new Map<string, AbortController>()
 let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let filterBootstrapping = false
+let mobileMediaQuery: MediaQueryList | null = null
 
 function defaultDateRange() {
   const end = new Date()
@@ -259,7 +270,51 @@ function ensureActivePlatform() {
   }
 }
 
-async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
+async function loadMobileItems(options?: { append?: boolean; quiet?: boolean }) {
+  listAbortController?.abort()
+  const controller = new AbortController()
+  listAbortController = controller
+  const seq = ++listRequestSeq
+  const append = Boolean(options?.append)
+  const quiet = Boolean(options?.quiet)
+  const offset = append ? mobileItems.value.length : 0
+  if (append) mobileLoadingMore.value = true
+  else if (!quiet) loading.value = true
+  try {
+    const result = await getPendingSnapshotBackfills({
+      tenant_id: tenantFilter.value === '' ? null : Number(tenantFilter.value),
+      date_from: filterDateFrom.value || undefined,
+      date_to: filterDateTo.value || undefined,
+      source: sourceFilter.value || undefined,
+      platform: platformFilter.value || undefined,
+      keyword: keywordFilter.value.trim() || undefined,
+      keyword_group: keywordGroupFilter.value || undefined,
+      purpose: purposeFilter.value,
+      pending_only: todoOnly.value,
+      offset,
+      limit: MOBILE_PAGE_SIZE,
+      include_summary: true,
+    }, { signal: controller.signal })
+    if (seq !== listRequestSeq) return
+    if (append) {
+      mobileItems.value = mergeSnapshotBackfillMobilePage(mobileItems.value, result.items)
+    } else {
+      mobileItems.value = result.items
+    }
+    mobileSummary.value = result.summary
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    if ((error as { code?: string })?.code === 'ERR_CANCELED') return
+    notifyOperationError(error, '加载待补录任务失败')
+  } finally {
+    if (seq === listRequestSeq) {
+      if (!quiet) loading.value = false
+      mobileLoadingMore.value = false
+    }
+  }
+}
+
+async function loadDesktopMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
   listAbortController?.abort()
   const controller = new AbortController()
   listAbortController = controller
@@ -306,6 +361,14 @@ async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
   } finally {
     if (seq === listRequestSeq && !quiet) loading.value = false
   }
+}
+
+async function loadMatrix(options?: { quiet?: boolean; skipCache?: boolean }) {
+  if (isMobileViewport.value) {
+    await loadMobileItems({ quiet: options?.quiet })
+    return
+  }
+  await loadDesktopMatrix(options)
 }
 
 /** 扫描矩阵 pending 槽位，已在轮询的跳过，避免刷新丢续等。 */
@@ -864,6 +927,41 @@ async function openDetail(item: SnapshotBackfillPendingItem) {
   }
 }
 
+async function dismissMobileItem(item: SnapshotBackfillPendingItem) {
+  if (!canSubmitBackfill.value || !item.subtask_id) return
+  try {
+    if (item.needs_backfill && !item.has_answer) {
+      await ElMessageBox.confirm(
+        '当前无有效回答，忽略后将不再提醒补录，客户侧仍按未抓取/失败统计（不会补出排名）。确认忽略？',
+        '忽略待补录',
+        { type: 'warning', confirmButtonText: '确认忽略', cancelButtonText: '取消' },
+      )
+    }
+    await dismissSnapshotBackfill(item.subtask_id)
+    mobileItems.value = mobileItems.value.filter(row => row.subtask_id !== item.subtask_id)
+    ElMessage.success('已忽略，不再提醒')
+    emitMonitorRefresh({ tenantId: tenantFilter.value === '' ? null : Number(tenantFilter.value) })
+    await loadMobileItems({ quiet: true })
+  } catch (error: unknown) {
+    if (error === 'cancel') return
+    notifyOperationError(error, '忽略失败')
+  }
+}
+
+async function openMobileBackfill(item: SnapshotBackfillPendingItem) {
+  if (!canSubmitBackfill.value || !item.subtask_id) return
+  if (!statusAllowsSnapshotBackfill(item.status || item.task_status)) {
+    ElMessage.warning('该场次监测尚未结束，请等抓取完成或失败后再补录')
+    return
+  }
+  try {
+    backfillTarget.value = await loadSubtask(item.subtask_id)
+    backfillVisible.value = true
+  } catch (error: unknown) {
+    notifyOperationError(error, '加载子任务失败')
+  }
+}
+
 async function openDetailById(subtaskId: string, item: SnapshotBackfillPendingItem | null = null) {
   if (item) {
     await openDetail(item)
@@ -1391,7 +1489,39 @@ function slotStatusLabel(slot: SnapshotBackfillMatrixSlot) {
   return slot.status || '—'
 }
 
+function mobileStatusLabel(item: SnapshotBackfillPendingItem) {
+  if (item.backfill_dismissed) return '已忽略'
+  if (item.needs_backfill && !item.has_answer) return '失败待补'
+  if (item.needs_backfill) return '待补录'
+  if (item.has_answer) return '已有快照'
+  return item.status || item.task_status || '待处理'
+}
+
+function mobileSourceLabel(item: SnapshotBackfillPendingItem) {
+  if (item.source === 'lead_diagnosis') return '售前诊断'
+  return purposeFilter.value === 'brand_word' ? '品牌词监测' : 'GEO 监测'
+}
+
+function mobileItemDate(item: SnapshotBackfillPendingItem) {
+  const value = item.task_created_at || item.updated_at || ''
+  return value ? String(value).replace('T', ' ').slice(0, 16) : '时间未知'
+}
+
+function syncMobileViewport(matches: boolean) {
+  const changed = isMobileViewport.value !== matches
+  isMobileViewport.value = matches
+  mobileFiltersOpen.value = false
+  if (changed && canViewBackfill.value) void loadMatrix()
+}
+
+function onMobileMediaChange(event: MediaQueryListEvent) {
+  syncMobileViewport(event.matches)
+}
+
 onMounted(async () => {
+  mobileMediaQuery = window.matchMedia(MOBILE_BREAKPOINT)
+  isMobileViewport.value = mobileMediaQuery.matches
+  mobileMediaQuery.addEventListener('change', onMobileMediaChange)
   const range = defaultDateRange()
   filterDateFrom.value = range.from
   filterDateTo.value = range.to
@@ -1429,6 +1559,8 @@ onUnmounted(() => {
   listAbortController?.abort()
   for (const controller of parsePollControllers.values()) controller.abort()
   parsePollControllers.clear()
+  mobileMediaQuery?.removeEventListener('change', onMobileMediaChange)
+  mobileMediaQuery = null
 })
 
 watch(
@@ -1455,6 +1587,7 @@ watch(platformFilterOptions, (options) => {
 
 watch(todoOnly, () => {
   ensureActivePlatform()
+  if (isMobileViewport.value && !filterBootstrapping) scheduleLoadMatrix()
 })
 
 watch(purposeFilter, () => {
@@ -1483,7 +1616,7 @@ watch(
     </div>
   </section>
   <section v-else class="snapshot-backfill-page sb-skin">
-    <div class="snapshot-backfill-toolbar">
+    <div v-if="!isMobileViewport" class="snapshot-backfill-toolbar">
       <div class="snapshot-backfill-toolbar-inner">
         <div class="sb-purpose-tabs" title="补录分轨">
           <button
@@ -1569,7 +1702,7 @@ watch(
       </div>
     </div>
 
-    <div class="sb-layout" :class="{ 'is-compare': showBeforeCompare }">
+    <div v-if="!isMobileViewport" class="sb-layout" :class="{ 'is-compare': showBeforeCompare }">
       <section class="sb-panel sb-main">
         <div class="sb-main-head">
           <div class="sb-platform-title">
@@ -1972,6 +2105,157 @@ watch(
           </button>
         </div>
       </aside>
+    </div>
+
+    <div v-else class="sb-mobile">
+      <header class="sb-mobile-head">
+        <div>
+          <p class="sb-mobile-eyebrow">快照补录</p>
+          <h2>{{ purposeFilter === 'brand_word' ? '品牌词待处理' : '监测待处理' }}</h2>
+          <p>
+            {{ mobileSummary?.pending ?? mobileItems.length }} 条待补
+            <template v-if="tenantFilter !== ''"> · {{ tenants.find(item => item.id === tenantFilter)?.name || '当前企业' }}</template>
+          </p>
+        </div>
+        <button type="button" class="sb-mobile-icon-btn" :disabled="loading" @click="() => loadMatrix()">
+          <RefreshCw :size="18" />
+          <span class="sr-only">刷新</span>
+        </button>
+      </header>
+
+      <div class="sb-mobile-tabs" role="tablist" aria-label="补录分轨">
+        <button type="button" :class="{ on: purposeFilter === 'geo' }" @click="purposeFilter = 'geo'">日常监测</button>
+        <button type="button" :class="{ on: purposeFilter === 'brand_word' }" @click="purposeFilter = 'brand_word'">品牌词</button>
+      </div>
+
+      <div class="sb-mobile-tools">
+        <button type="button" class="sb-mobile-filter-btn" @click="mobileFiltersOpen = true">
+          筛选
+          <span v-if="tenantFilter !== '' || platformFilter || keywordFilter || sourceFilter" class="sb-mobile-filter-dot" />
+        </button>
+        <label class="sb-toggle" :class="{ on: todoOnly }">
+          <input v-model="todoOnly" type="checkbox">
+          只看待补
+        </label>
+        <span class="sb-mobile-range">{{ filterDateFrom.slice(5) }} 至 {{ filterDateTo.slice(5) }}</span>
+      </div>
+
+      <div class="sb-mobile-platforms" aria-label="平台筛选">
+        <button type="button" :class="{ on: !platformFilter }" @click="platformFilter = ''">全部</button>
+        <button
+          v-for="platform in platformFilterOptions"
+          :key="platform.code"
+          type="button"
+          :class="{ on: platformFilter === platform.code }"
+          @click="platformFilter = platform.code"
+        >{{ platform.name }}</button>
+      </div>
+
+      <div v-if="loading" class="sb-mobile-state">正在加载待处理任务…</div>
+      <div v-else-if="!mobileItems.length" class="sb-mobile-state is-empty">
+        <strong>当前筛选下没有待处理任务</strong>
+        <span>可以调整日期、企业或关闭“只看待补”。</span>
+      </div>
+      <div v-else class="sb-mobile-list">
+        <article v-for="item in mobileItems" :key="item.subtask_id" class="sb-mobile-card">
+          <div class="sb-mobile-card-top">
+            <span class="sb-mobile-platform">{{ platformDisplayName(item.platform) }}</span>
+            <span class="sb-mobile-status" :class="{ danger: item.needs_backfill && !item.has_answer }">
+              {{ mobileStatusLabel(item) }}
+            </span>
+          </div>
+          <h3>{{ item.prompt || '未命名监测问题' }}</h3>
+          <p class="sb-mobile-card-meta">
+            {{ item.tenant_name || item.brand_name || '未知企业' }} · {{ mobileSourceLabel(item) }} · {{ mobileItemDate(item) }}
+          </p>
+          <div class="sb-mobile-card-facts">
+            <span>监测词<strong>{{ item.monitor_keywords || '—' }}</strong></span>
+            <span>位次<strong>{{ rankText(item.mention_position) }}</strong></span>
+          </div>
+          <p v-if="item.error_message" class="sb-mobile-error">{{ item.error_message }}</p>
+          <div class="sb-mobile-card-actions">
+            <button type="button" class="sb-btn ghost" @click="openDetail(item)">查看详情</button>
+            <button
+              v-if="canSubmitBackfill"
+              type="button"
+              class="sb-btn"
+              @click="openMobileBackfill(item)"
+            >
+              <Upload :size="15" />
+              补录
+            </button>
+            <button
+              v-if="canSubmitBackfill && !item.backfill_dismissed"
+              type="button"
+              class="sb-btn ghost is-dismiss"
+              @click="dismissMobileItem(item)"
+            >
+              <EyeOff :size="15" />
+              忽略
+            </button>
+          </div>
+        </article>
+      </div>
+
+      <button
+        v-if="mobileSummary?.has_more"
+        type="button"
+        class="sb-mobile-load-more"
+        :disabled="mobileLoadingMore"
+        @click="loadMobileItems({ append: true })"
+      >{{ mobileLoadingMore ? '加载中…' : '加载更多' }}</button>
+
+      <div v-if="mobileFiltersOpen" class="sb-mobile-filter-layer" @click.self="mobileFiltersOpen = false">
+        <section class="sb-mobile-filter-sheet" role="dialog" aria-modal="true" aria-label="筛选待补录任务">
+          <header>
+            <div>
+              <p>筛选条件</p>
+              <span>修改后会自动刷新任务列表</span>
+            </div>
+            <button type="button" class="sb-mobile-filter-close" @click="mobileFiltersOpen = false">完成</button>
+          </header>
+          <div class="sb-mobile-filter-fields">
+            <label>
+              <span>企业</span>
+              <select v-model="tenantFilter">
+                <option value="">全部企业</option>
+                <option v-for="tenant in tenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option>
+              </select>
+            </label>
+            <div class="sb-mobile-date-row">
+              <label><span>开始日期</span><input v-model="filterDateFrom" type="date"></label>
+              <label><span>结束日期</span><input v-model="filterDateTo" type="date"></label>
+            </div>
+            <label>
+              <span>来源</span>
+              <select v-model="sourceFilter">
+                <option value="">全部来源</option>
+                <option value="tenant_monitor">{{ purposeFilter === 'brand_word' ? '品牌词监测' : 'GEO 监测' }}</option>
+                <option v-if="purposeFilter === 'geo'" value="lead_diagnosis">售前诊断</option>
+              </select>
+            </label>
+            <label>
+              <span>{{ purposeFilter === 'brand_word' ? '品牌词组' : '词组' }}</span>
+              <select v-model="keywordGroupFilter" :disabled="!keywordGroupOptions.length">
+                <option value="">全部</option>
+                <option
+                  v-for="(group, index) in keywordGroupOptions"
+                  :key="keywordGroupSelectValue(group, index)"
+                  :value="keywordGroupSelectValue(group, index)"
+                >{{ keywordGroupDisplayName(group, index) }}</option>
+              </select>
+            </label>
+            <label>
+              <span>{{ purposeFilter === 'brand_word' ? '品牌词' : '监测词' }}</span>
+              <select v-model="keywordFilter" :disabled="!monitorKeywordOptions.length">
+                <option value="">全部</option>
+                <option v-for="keyword in monitorKeywordOptions" :key="keyword" :value="keyword">{{ keyword }}</option>
+              </select>
+            </label>
+          </div>
+          <button type="button" class="sb-mobile-reset" @click="resetFilters">恢复默认筛选</button>
+        </section>
+      </div>
     </div>
 
     <div v-if="cellDrawerVisible && cellDrawer" class="sb-drawer" @click.self="closeCellDrawer">
