@@ -327,6 +327,15 @@ def _blob_claims_no_acquisition(obj: Any) -> bool:
     return any(n in text for n in needles)
 
 
+def _blob_zero_mention(obj: Any) -> bool:
+    text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+    return bool(re.search(r"提及率\s*0(?:\.0+)?\s*%", text))
+
+
+def _acquisition_has_rank(tagged: list[dict[str, Any]]) -> bool:
+    return any(p.get("lane") == "acquisition" and _prompt_display_rank(p) for p in tagged)
+
+
 def _blob_claims_acquisition_zero_as_na(obj: Any) -> bool:
     """有分母的 0% 被写成暂无。"""
     text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
@@ -402,12 +411,20 @@ def validate_cockpit_null0(cockpit: dict[str, Any]) -> list[str]:
         else:
             if avail is not True:
                 issues.append(f"{label}: primary_kpi_available 应为 true")
-            if vis != exp_nb["mention_rate"]:
+            sample_vis = slice_obj.get("sample_visibility")
+            sample_override = sample_vis is not None and vis == sample_vis
+            bar_vis = slice_obj.get("bar_visibility")
+            bar_top3 = slice_obj.get("bar_top3")
+            if bar_vis is None and not sample_override and vis != exp_nb["mention_rate"]:
                 issues.append(f"{label}: visibility {vis} != {exp_nb['mention_rate']}")
+            elif bar_vis is not None and vis != bar_vis:
+                issues.append(f"{label}: visibility {vis} != bar {bar_vis}")
             if rank != exp_nb["avg_rank"]:
                 issues.append(f"{label}: rank {rank} != {exp_nb['avg_rank']}")
-            if dec != exp_nb["top3_rate"]:
+            if bar_top3 is None and dec != exp_nb["top3_rate"]:
                 issues.append(f"{label}: top3 {dec} != {exp_nb['top3_rate']}")
+            elif bar_top3 is not None and dec != bar_top3:
+                issues.append(f"{label}: top3 {dec} != bar {bar_top3}")
             if int(nb.get("mention_cells") or 0) == 0:
                 if vis not in (0, 0.0):
                     issues.append(f"{label}: mention=0 时 visibility 应为 0，得 {vis}")
@@ -493,6 +510,95 @@ def publish_kpi_basis(kpi_basis: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _platform_grade_mention_rate(
+    matrix_rows: list[dict[str, Any]],
+    prompts: set[str],
+    slot: str,
+) -> float | None:
+    """平台条获客提及率: 过样本门槛的问法格 / 该平台问法格. 1/9 有名次仍是 0."""
+    total = 0
+    hit = 0
+    seen: set[tuple[str, str]] = set()
+    found = False
+    for row in matrix_rows or []:
+        if not isinstance(row, dict):
+            continue
+        prompt = str(row.get("prompt") or "").strip()
+        row_slot = _canonical_platform(str(row.get("platform") or ""))
+        if not prompt or prompt not in prompts or row_slot != slot:
+            continue
+        key = (prompt, row_slot)
+        if key in seen:
+            continue
+        seen.add(key)
+        found = True
+        total += 1
+        rank = _heat_rank_value(row.get("avg_rank"))
+        if rank > 0 and _cell_passes_mention_threshold(row):
+            hit += 1
+    if not found:
+        return None
+    return round(100.0 * hit / total, 1) if total else 0.0
+
+
+def _paint_grade_mention(slice_obj: dict[str, Any] | None, rate: float | None) -> None:
+    if rate is None or not isinstance(slice_obj, dict):
+        return
+    if slice_obj.get("cell_visibility") is None:
+        slice_obj["cell_visibility"] = slice_obj.get("visibility")
+    slice_obj["visibility"] = rate
+    slice_obj["bar_visibility"] = rate
+
+
+def _platform_sample_top3_rate(
+    matrix_rows: list[dict[str, Any]],
+    prompts: set[str],
+    slot: str,
+) -> float | None:
+    """平台条 Top3: 进前三的回答条数 / 该平台样本. 1/27 是 3.7, 不是 1/3 格的 33.3."""
+    total = 0
+    hit = 0
+    found = False
+    seen: set[tuple[str, str]] = set()
+    for row in matrix_rows or []:
+        if not isinstance(row, dict):
+            continue
+        prompt = str(row.get("prompt") or "").strip()
+        row_slot = _canonical_platform(str(row.get("platform") or ""))
+        if not prompt or prompt not in prompts or row_slot != slot:
+            continue
+        key = (prompt, row_slot)
+        if key in seen:
+            continue
+        seen.add(key)
+        found = True
+        samples = int(row.get("sample_count") or 0)
+        if samples <= 0:
+            continue
+        total += samples
+        rank = _heat_rank_value(row.get("avg_rank"))
+        if not 1 <= rank <= 3:
+            continue
+        mentioned = row.get("mentioned_count")
+        if mentioned is None:
+            hit += samples
+        else:
+            try:
+                hit += int(mentioned)
+            except (TypeError, ValueError):
+                hit += samples
+    if not found or total <= 0:
+        return None
+    return round(100.0 * hit / total, 1)
+
+
+def _paint_sample_top3(slice_obj: dict[str, Any] | None, rate: float | None) -> None:
+    if rate is None or not isinstance(slice_obj, dict):
+        return
+    slice_obj["decision"] = rate
+    slice_obj["bar_top3"] = rate
+
+
 def _row_answer_hit_rate(row: dict[str, Any]) -> float:
     raw = row.get("answer_hit_rate")
     if raw is None:
@@ -537,10 +643,8 @@ def _matrix_cell_map(matrix_rows: list[dict[str, Any]]) -> dict[tuple[str, str],
         slot = _canonical_platform(str(row.get("platform") or ""))
         if not prompt or not slot:
             continue
-        rank = _heat_rank_value(row.get("avg_rank"))
-        if _cell_has_hit_granularity(row) and rank > 0 and not _cell_passes_mention_threshold(row):
-            rank = 0
-        cell[(prompt, slot)] = rank
+        # 2026-10-29 - 有均排就计入格级/Top3。未满 3/5 仍把名次清零时，第 1 名会显示成提及率 0%、Top3 0%
+        cell[(prompt, slot)] = _heat_rank_value(row.get("avg_rank"))
     return cell
 
 
@@ -810,8 +914,7 @@ def _build_heat_scenarios(
         if not prompt or not slot:
             continue
         cell[(prompt, slot)] = _heat_rank_value(row.get("avg_rank"))
-        if _cell_has_hit_granularity(row) and cell[(prompt, slot)] > 0 and not _cell_passes_mention_threshold(row):
-            cell[(prompt, slot)] = 0
+        # 2026-10-29 - 未过 3/5 的格子不计入格级提及率，但热力仍写出已有名次，避免整表变成 —
         # 兼容旧字段 mention_rate；优先显式 answer_hit_rate
         raw_hit = row.get("answer_hit_rate")
         if raw_hit is None:
@@ -2762,38 +2865,15 @@ def _build_portfolio_dimension(
         if code in used:
             continue
         card = _generic_card(code, label, title)
-        # 2026-08-20 - 无对口样本的意图卡不进矩阵（尤其勿再出现选型标准空壳）
-        if card.get("tag") == "待补问法":
+        # 2026-08-20 - 选型标准空壳不进矩阵
+        # 2026-10-29 - 其它意图没有对口问法也留自己的卡, 不复制同一张「能力锚点」
+        if str(card.get("label") or "") in {"选型标准", "选型路径"}:
             continue
         product_cards.append(card)
         used.add(code)
         slice_labels[code] = card["label"]
         filter_options.append({"code": code, "label": card["label"]})
         product_focus_copy[code] = f"当前视角：{card['label']}。文案来自本次问法 / KPI / 入口上下文。"
-
-    # 兜底：仍不足 6 时用全部问法锚点卡补
-    while len(product_cards) < 6:
-        filler_code = f"fill_{len(product_cards)}"
-        acq_mentioned = int((kpis or {}).get("acquisition_sample_mentioned") or 0)
-        acq_total = int((kpis or {}).get("acquisition_sample_total") or 0)
-        if acq_mentioned and acq_total:
-            filler_metric = f"{acq_mentioned}/{acq_total}条"
-            filler_sub = "条级样本命中"
-        else:
-            weighted = _weighted_sample_from_prompts([p for p in tagged if p.get("lane") == "acquisition"])
-            filler_metric = _fmt_metric(weighted.get("mention_rate"), suffix="%")
-            filler_sub = metric_sub
-        product_cards.append(
-            {
-                "code": filler_code,
-                "label": all_label,
-                "title": f"{brand} 能力锚点",
-                "metric": filler_metric,
-                "metric_sub": filler_sub,
-                "desc": f"跨问法统一「为什么选{brand}」的决策底稿。",
-                "tag": "品牌锚点",
-            }
-        )
 
     if hit_scene_codes:
         hit_names = "、".join(SCENE_LABELS.get(c, c) for c in hit_scene_codes)
@@ -3163,13 +3243,21 @@ def build_diagnosis_cockpit_context(
     # 2026-09-03 - JS 圆环读 platformData.visibility；须与条级主展示一致
     if visibility is not None:
         platform_data["all"]["visibility"] = visibility
+        platform_data["all"]["sample_visibility"] = visibility
         platform_data["all"]["cell_visibility"] = cell_visibility
         all_slice = (platform_data["all"].get("slices") or {}).get("all")
         if isinstance(all_slice, dict):
             all_slice["visibility"] = visibility
+            all_slice["sample_visibility"] = visibility
             all_slice["cell_visibility"] = cell_visibility
     platform_rows: list[dict[str, Any]] = []
     platform_filter_options: list[dict[str, str]] = [{"code": "all", "label": "全平台"}]
+    matrix_list = matrix_rows if isinstance(matrix_rows, list) else []
+    acq_prompts = {
+        str(p.get("prompt") or "").strip()
+        for p in tagged
+        if p.get("lane") == "acquisition" and str(p.get("prompt") or "").strip()
+    }
     for slot in display_slots:
         plat_lanes = (kpi_basis.get("platforms") or {}).get(slot) or {}
         slice_all = _slice_metrics_from_lanes(
@@ -3179,11 +3267,43 @@ def build_diagnosis_cockpit_context(
             citation=citation,
         )
         label = _slot_label(slot, names_map)
+        # 2026-10-29 - 平台条提及率只数过门槛的格子. 豆包 1/9 不算露出
+        # 2026-10-30 - 绿条 Top3 按回答条数. 1/27=3.7, 不再把 1 个问法格算成 33.3
+        grade_vis = _platform_grade_mention_rate(matrix_list, acq_prompts, slot)
+        sample_top3 = _platform_sample_top3_rate(matrix_list, acq_prompts, slot)
+        _paint_grade_mention(slice_all, grade_vis)
+        _paint_sample_top3(slice_all, sample_top3)
+        slot_slices = _slices_for_platform(slot)
+        _paint_grade_mention(slot_slices.get("all") if isinstance(slot_slices.get("all"), dict) else None, grade_vis)
+        _paint_sample_top3(slot_slices.get("all") if isinstance(slot_slices.get("all"), dict) else None, sample_top3)
+        for code in ("brand_rank", "geo_source"):
+            copied = slot_slices.get(code)
+            _paint_grade_mention(copied if isinstance(copied, dict) else None, grade_vis)
+            _paint_sample_top3(copied if isinstance(copied, dict) else None, sample_top3)
+        for code in INTENT_LABELS:
+            intent_prompts = {
+                str(p.get("prompt") or "").strip()
+                for p in tagged
+                if p.get("lane") == "acquisition"
+                and str(p.get("intent_code") or "") == code
+                and str(p.get("prompt") or "").strip()
+            }
+            if not intent_prompts:
+                continue
+            copied = slot_slices.get(code)
+            _paint_grade_mention(
+                copied if isinstance(copied, dict) else None,
+                _platform_grade_mention_rate(matrix_list, intent_prompts, slot),
+            )
+            _paint_sample_top3(
+                copied if isinstance(copied, dict) else None,
+                _platform_sample_top3_rate(matrix_list, intent_prompts, slot),
+            )
         platform_data[slot] = {
             "name": label,
             **slice_all,
             "risks": 0,
-            "slices": _slices_for_platform(slot),
+            "slices": slot_slices,
         }
         platform_rows.append(
             {
@@ -3598,6 +3718,10 @@ def build_diagnosis_cockpit_context(
     data_priority = list(priority)
     data_risk_rows = list(risk_rows)
     data_actions = list(actions)
+    rule_stage_copy = {
+        key: dict(row) if isinstance(row, dict) else row
+        for key, row in stage_copy.items()
+    }
     narrative = payload.get("cockpit_narrative")
     if isinstance(narrative, dict) and narrative.get("stage_copy"):
         weak_ex, strong_ex = _kpi_prompt_examples(tagged)
@@ -3656,6 +3780,21 @@ def build_diagnosis_cockpit_context(
                 actions = _data_driven_actions(priority, filter_mode=filter_mode) or data_actions
             else:
                 actions = cand_a
+
+    # 2026-10-29 - 旧叙事把「有均排」写成提及率 0%。有名次时改回规则文案
+    if _acquisition_has_rank(tagged):
+        if _blob_zero_mention(priority):
+            priority = data_priority
+        if _blob_zero_mention(risk_rows):
+            risk_rows = data_risk_rows
+        if _blob_zero_mention(actions):
+            actions = data_actions
+        for key, row in list(stage_copy.items()):
+            if key == "all" or not isinstance(row, dict) or not _blob_zero_mention(row):
+                continue
+            backup = rule_stage_copy.get(key)
+            if isinstance(backup, dict):
+                stage_copy[key] = dict(backup)
 
     # 始终用当前格级 KPI 重写管理层摘要（null/0 唯一真相）
     weak_ex2, strong_ex2 = _kpi_prompt_examples(tagged)

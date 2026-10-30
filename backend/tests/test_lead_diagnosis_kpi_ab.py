@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
 from app.services.lead_diagnosis_service import _rule_health_score, _sample_kpis_from_subtasks
 from app.services.report_diagnosis_cockpit_service import (
+    _build_heat_scenarios,
     _cell_passes_mention_threshold,
     _matrix_cell_map,
     _worst_acquisition_matrix_cell,
     build_kpi_basis,
     build_rule_all_summary,
+    validate_cockpit_null0,
 )
 
 
@@ -20,7 +24,7 @@ def test_cell_mention_threshold_requires_three_of_five() -> None:
     assert _cell_passes_mention_threshold({"sample_count": 4, "avg_rank": 2.0})
 
 
-def test_matrix_cell_map_zeros_rank_when_hit_rate_too_low() -> None:
+def test_matrix_cell_map_keeps_sparse_rank() -> None:
     rows = [
         {
             "prompt": "获客问法",
@@ -31,10 +35,38 @@ def test_matrix_cell_map_zeros_rank_when_hit_rate_too_low() -> None:
             "avg_rank": 1.0,
         }
     ]
-    assert _matrix_cell_map(rows)[("获客问法", "doubao")] == 0
+    assert _matrix_cell_map(rows)[("获客问法", "doubao")] == 1
 
 
-def test_build_kpi_basis_strict_cell_excludes_one_of_five() -> None:
+def test_heat_shows_sparse_rank_while_grade_rate_stays_strict() -> None:
+    tagged = [
+        {
+            "prompt": "获客问法",
+            "lane": "acquisition",
+            "intent_code": "recommend",
+            "scene_code": None,
+        }
+    ]
+    matrix_rows = [
+        {
+            "prompt": "获客问法",
+            "platform": "doubao",
+            "sample_count": 9,
+            "mentioned_count": 1,
+            "answer_hit_rate": 11.1,
+            "avg_rank": 1.0,
+        }
+    ]
+    scenarios = _build_heat_scenarios(tagged, matrix_rows, ["doubao"])
+    assert scenarios[0]["values"] == [1]
+    basis = build_kpi_basis(tagged, matrix_rows, ["doubao"])
+    assert basis["nonbrand"]["mention_cells"] == 1
+    assert basis["nonbrand"]["top3_cells"] == 1
+    assert basis["nonbrand"]["total_cells"] == 1
+    assert basis["nonbrand"]["top3_rate"] == 100.0
+
+
+def test_build_kpi_basis_counts_sparse_top3_cell() -> None:
     tagged = [
         {
             "prompt": "获客问法",
@@ -54,7 +86,8 @@ def test_build_kpi_basis_strict_cell_excludes_one_of_five() -> None:
         }
     ]
     basis = build_kpi_basis(tagged, matrix_rows, ["doubao"])
-    assert basis["nonbrand"]["mention_cells"] == 0
+    assert basis["nonbrand"]["mention_cells"] == 1
+    assert basis["nonbrand"]["top3_cells"] == 1
     assert basis["nonbrand"]["total_cells"] == 1
 
 
@@ -261,6 +294,153 @@ def test_product_cards_sample_primary_not_duplicate_cell_seventy_five() -> None:
     assert rec["metric"] == "55.0%"
     assert rec["metric_sub"] == "条级获客提及率"
     assert "格级" in rec["desc"] and "4格" in rec["desc"]
-    filler = next(c for c in ctx["product_cards"] if str(c["code"]).startswith("fill_"))
-    assert filler["metric"] == "11/20条"
-    assert filler["metric_sub"] == "条级样本命中"
+    assert not any(str(c.get("code") or "").startswith("fill_") for c in ctx["product_cards"])
+    labels = [c["label"] for c in ctx["product_cards"]]
+    assert labels.count("全部问法意图") == 0
+
+
+def test_sparse_rank_counts_as_top3_and_drops_zero_mention_copy() -> None:
+    from app.services.report_diagnosis_cockpit_service import build_diagnosis_cockpit_context
+
+    ctx = build_diagnosis_cockpit_context(
+        {
+            "brand_name": "上海霞旭船舶服务有限公司",
+            "kpis": {
+                "acquisition_mention_rate": 1.9,
+                "acquisition_sample_mentioned": 1,
+                "acquisition_sample_total": 54,
+                "acquisition_avg_rank": 1.0,
+            },
+            "prompt_analytics": [
+                {
+                    "prompt": "哪个公司可以做压载水设备维修",
+                    "brand_mention_rate": 5.6,
+                    "brand_avg_rank": 1.0,
+                    "sample_count": 18,
+                },
+                {
+                    "prompt": "PFOS检测公司有哪些",
+                    "brand_mention_rate": 0.0,
+                    "brand_avg_rank": 0.0,
+                    "sample_count": 18,
+                },
+                {
+                    "prompt": "船舶有害物质检测公司推荐",
+                    "brand_mention_rate": 0.0,
+                    "brand_avg_rank": 0.0,
+                    "sample_count": 18,
+                },
+            ],
+            "matrix_rows": [
+                {
+                    "prompt": "哪个公司可以做压载水设备维修",
+                    "platform": "doubao",
+                    "avg_rank": 1.0,
+                    "sample_count": 9,
+                    "mentioned_count": 1,
+                    "answer_hit_rate": 11.1,
+                },
+                {
+                    "prompt": "哪个公司可以做压载水设备维修",
+                    "platform": "deepseek",
+                    "avg_rank": None,
+                    "sample_count": 9,
+                    "mentioned_count": 0,
+                    "answer_hit_rate": 0.0,
+                },
+                {
+                    "prompt": "PFOS检测公司有哪些",
+                    "platform": "doubao",
+                    "avg_rank": None,
+                    "sample_count": 9,
+                    "mentioned_count": 0,
+                    "answer_hit_rate": 0.0,
+                },
+                {
+                    "prompt": "PFOS检测公司有哪些",
+                    "platform": "deepseek",
+                    "avg_rank": None,
+                    "sample_count": 9,
+                    "mentioned_count": 0,
+                    "answer_hit_rate": 0.0,
+                },
+                {
+                    "prompt": "船舶有害物质检测公司推荐",
+                    "platform": "doubao",
+                    "avg_rank": None,
+                    "sample_count": 9,
+                    "mentioned_count": 0,
+                    "answer_hit_rate": 0.0,
+                },
+                {
+                    "prompt": "船舶有害物质检测公司推荐",
+                    "platform": "deepseek",
+                    "avg_rank": None,
+                    "sample_count": 9,
+                    "mentioned_count": 0,
+                    "answer_hit_rate": 0.0,
+                },
+            ],
+            "platform_stats": [
+                {"platform": "doubao", "mention_rate": 11.1, "avg_rank": 1.0},
+                {"platform": "deepseek", "mention_rate": 0.0, "avg_rank": None},
+            ],
+            "cockpit_narrative": {
+                "stage_copy": {
+                    "all": {"label": "总览", "title": "旧标题", "summary": "格级提及率 0.0%"},
+                    "recognition": {"label": "品牌认知", "title": "t", "summary": "提及率 0.0%"},
+                    "selection": {"label": "竞品对标", "title": "t", "summary": "s"},
+                    "procurement": {"label": "推荐名单", "title": "t", "summary": "s"},
+                    "risk": {"label": "口碑评价", "title": "t", "summary": "s"},
+                },
+                "priority_items": [
+                    {"level": "P0", "title": "a", "body": "提及率 0.0%"},
+                    {"level": "P1", "title": "b", "body": "b"},
+                    {"level": "P2", "title": "c", "body": "c"},
+                ],
+                "risk_rows": [
+                    {
+                        "topic": "「哪个公司可以做压载水设备维修」提及率 0.0%",
+                        "models": "豆包、DeepSeek",
+                        "impact": "格级均排 1.0 但提及率 0.0%，个别信号不足以形成获客",
+                        "evidence": "格级提及率 0.0%、均排 1.0、回答命中率 5.6%，样本 18",
+                        "priority": "P0",
+                    }
+                ],
+            },
+            "diagnosis": {},
+        }
+    )
+    assert ctx["_facts_for_narrative"]["kpis"]["decision"] == 16.7
+    cockpit = json.loads(ctx["cockpit_json"])
+    doubao = cockpit["platformData"]["doubao"]
+    deepseek = cockpit["platformData"]["deepseek"]
+    assert doubao["visibility"] == 0.0
+    assert doubao["slices"]["all"]["visibility"] == 0.0
+    assert doubao["decision"] == 3.7
+    assert doubao["slices"]["all"]["decision"] == 3.7
+    assert deepseek["visibility"] == 0.0
+    assert deepseek["decision"] == 0.0
+    assert validate_cockpit_null0(cockpit) == []
+    scenarios = json.loads(ctx["cockpit_json"])["scenarios"]
+    heat = next(row for row in scenarios if "压载水" in row["question"])
+    assert 1 in heat["values"]
+    blob = " ".join(
+        f"{row.get('topic') or ''} {row.get('impact') or ''} {row.get('evidence') or ''}"
+        for row in ctx["risk_rows"]
+    )
+    assert "个别信号" not in blob
+    assert "但提及率 0" not in blob
+    by_code = {card["code"]: card for card in ctx["product_cards"]}
+    assert [card["code"] for card in ctx["product_cards"]] == [
+        "recommend",
+        "compare",
+        "brand_rank",
+        "reputation",
+        "geo_source",
+        "awareness",
+    ]
+    assert by_code["recommend"]["metric"] == "1.9%"
+    assert by_code["awareness"]["tag"] == "待补问法"
+    assert by_code["awareness"]["metric"] == "—"
+    assert by_code["reputation"]["tag"] == "待补问法"
