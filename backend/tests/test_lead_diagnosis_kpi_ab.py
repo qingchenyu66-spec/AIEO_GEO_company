@@ -411,8 +411,9 @@ def test_sparse_rank_counts_as_top3_and_drops_zero_mention_copy() -> None:
             "diagnosis": {},
         }
     )
-    assert ctx["_facts_for_narrative"]["kpis"]["decision"] == 16.7
+    assert ctx["_facts_for_narrative"]["kpis"]["decision"] == 1.9
     cockpit = json.loads(ctx["cockpit_json"])
+    assert cockpit["platformData"]["all"]["slices"]["all"]["decision"] == 1.9
     doubao = cockpit["platformData"]["doubao"]
     deepseek = cockpit["platformData"]["deepseek"]
     assert doubao["visibility"] == 0.0

@@ -550,28 +550,28 @@ def _paint_grade_mention(slice_obj: dict[str, Any] | None, rate: float | None) -
     slice_obj["bar_visibility"] = rate
 
 
-def _platform_sample_top3_rate(
+def _sample_top3_counts(
     matrix_rows: list[dict[str, Any]],
     prompts: set[str],
-    slot: str,
-) -> float | None:
-    """平台条 Top3: 进前三的回答条数 / 该平台样本. 1/27 是 3.7, 不是 1/3 格的 33.3."""
+    slot: str | None,
+) -> tuple[int, int]:
+    """进前三的回答条数, 以及分母样本数. slot 为空时跨全部平台."""
     total = 0
     hit = 0
-    found = False
     seen: set[tuple[str, str]] = set()
     for row in matrix_rows or []:
         if not isinstance(row, dict):
             continue
         prompt = str(row.get("prompt") or "").strip()
         row_slot = _canonical_platform(str(row.get("platform") or ""))
-        if not prompt or prompt not in prompts or row_slot != slot:
+        if not prompt or prompt not in prompts or not row_slot:
+            continue
+        if slot and row_slot != slot:
             continue
         key = (prompt, row_slot)
         if key in seen:
             continue
         seen.add(key)
-        found = True
         samples = int(row.get("sample_count") or 0)
         if samples <= 0:
             continue
@@ -587,7 +587,17 @@ def _platform_sample_top3_rate(
                 hit += int(mentioned)
             except (TypeError, ValueError):
                 hit += samples
-    if not found or total <= 0:
+    return hit, total
+
+
+def _platform_sample_top3_rate(
+    matrix_rows: list[dict[str, Any]],
+    prompts: set[str],
+    slot: str | None,
+) -> float | None:
+    """Top3 按回答条数. 全平台 1/54=1.9, 豆包 1/27=3.7, 不是问法格的 16.7/33.3."""
+    hit, total = _sample_top3_counts(matrix_rows, prompts, slot)
+    if total <= 0:
         return None
     return round(100.0 * hit / total, 1)
 
@@ -3258,6 +3268,31 @@ def build_diagnosis_cockpit_context(
         for p in tagged
         if p.get("lane") == "acquisition" and str(p.get("prompt") or "").strip()
     }
+    # 2026-10-30 - 首屏 Top3 卡片按回答条数. 霞旭 1/54=1.9, 不再用 1/6 格的 16.7
+    sample_top3_hit, sample_top3_total = _sample_top3_counts(matrix_list, acq_prompts, None)
+    overall_top3 = _platform_sample_top3_rate(matrix_list, acq_prompts, None)
+    _paint_sample_top3(platform_data["all"], overall_top3)
+    all_slice_map = platform_data["all"].get("slices") if isinstance(platform_data["all"].get("slices"), dict) else {}
+    _paint_sample_top3(all_slice_map.get("all") if isinstance(all_slice_map.get("all"), dict) else None, overall_top3)
+    for code in ("brand_rank", "geo_source"):
+        copied = all_slice_map.get(code)
+        _paint_sample_top3(copied if isinstance(copied, dict) else None, overall_top3)
+    for code in INTENT_LABELS:
+        intent_prompts = {
+            str(p.get("prompt") or "").strip()
+            for p in tagged
+            if p.get("lane") == "acquisition"
+            and str(p.get("intent_code") or "") == code
+            and str(p.get("prompt") or "").strip()
+        }
+        if not intent_prompts:
+            continue
+        _paint_sample_top3(
+            all_slice_map.get(code) if isinstance(all_slice_map.get(code), dict) else None,
+            _platform_sample_top3_rate(matrix_list, intent_prompts, None),
+        )
+    if overall_top3 is not None:
+        decision = overall_top3
     for slot in display_slots:
         plat_lanes = (kpi_basis.get("platforms") or {}).get(slot) or {}
         slice_all = _slice_metrics_from_lanes(
@@ -3507,10 +3542,14 @@ def build_diagnosis_cockpit_context(
         "decision": {
             "title": "非品牌词 Top3 率",
             "body": (
-                f"<strong>格级口径：</strong>非品牌词热力格中排名 1–3 的占比"
-                f"（分母=total_cells）。分子 {int(nb.get('top3_cells') or 0)} / "
-                f"{int(nb.get('total_cells') or 0)} = {_fmt_metric(decision, suffix='%')}。"
-                f"<ul class='dialog-points'><li>分母为 0 → 暂无；分母&gt;0 且命中 0 → 0%。</li></ul>"
+                f"<strong>回答条数：</strong>进前三的回答 {sample_top3_hit} / 样本 {sample_top3_total} = "
+                f"{_fmt_metric(decision, suffix='%')}。"
+                if sample_top3_total
+                else (
+                    f"<strong>格级口径：</strong>非品牌词热力格中排名 1–3 的占比"
+                    f"（分母=total_cells）。分子 {int(nb.get('top3_cells') or 0)} / "
+                    f"{int(nb.get('total_cells') or 0)} = {_fmt_metric(decision, suffix='%')}。"
+                )
             ),
         },
         "brand_defense": {
