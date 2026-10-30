@@ -88,6 +88,8 @@ SALES_APPROVAL_BYPASS_KEYS = frozenset({
     "brand.competitor.create",
     "brand.competitor.update",
     "brand.competitor.delete",
+    # 2026-10-29 - 指定时段报告是销售自己导出, 不进审批队列
+    "reports.custom_period",
 })
 
 # 2026-09-02 - 驳回后销售可原单复活重新提交（方案 A）

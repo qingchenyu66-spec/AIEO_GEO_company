@@ -42,6 +42,7 @@ REPORT_TYPE_LABELS = {
     "quarterly": "监测季报",
     "annual": "监测年报",
     "completion": "项目结项报告",
+    "custom": "指定时段报告",
     "comparison": "对比报告",
     "periodic": "周期报告",
 }
@@ -300,6 +301,7 @@ def _normalize_export_payload(report: dict[str, Any]) -> dict[str, Any]:
         "premium_content": content.get("premium_content") or {},
         "report_modules": content.get("report_modules") or {},
         "report_type": report.get("report_type") or "",
+        "manual_span": bool(content.get("manual_span") or report.get("manual_span")),
         "period_start": content.get("period_start"),
         "period_end": content.get("period_end"),
         "sentiment_counts": snapshot.get("sentiment_counts") or {},
@@ -1112,7 +1114,7 @@ def _report_preview_fingerprint(report: dict[str, Any], *, theme: str) -> str:
             (
                 PERIOD_DECK_PIPELINE
                 if str(report.get("report_type") or "")
-                in {"weekly", "monthly", "quarterly", "annual"}
+                in {"weekly", "monthly", "quarterly", "annual", "custom"}
                 else COMPLETION_DECK_PIPELINE
                 if str(report.get("report_type") or "") == "completion"
                 else "cockpit-g-v15"  # 2026-08-21 - 信源图展示 11 条

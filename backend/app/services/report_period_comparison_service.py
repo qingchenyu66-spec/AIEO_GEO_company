@@ -44,6 +44,7 @@ TREND_META = {
     "monthly": {"title": "周趋势", "bucket": "week", "unit": "周"},
     "quarterly": {"title": "月趋势", "bucket": "month", "unit": "月"},
     "annual": {"title": "季趋势", "bucket": "quarter", "unit": "季"},
+    "custom": {"title": "日趋势", "bucket": "day", "unit": "天"},
 }
 
 OUT_DIR = Path.home() / "Desktop" / "周期报告样例_环比预览"
@@ -900,6 +901,7 @@ def render_competitor_html(
         "monthly": "全部纳入竞品",
         "quarterly": "全部纳入竞品",
         "annual": "全部纳入竞品",
+        "custom": "本段纳入竞品",
     }[report_type]
     if client:
         comp_note = (
@@ -955,6 +957,7 @@ _PLAN_VISION_TITLE = {
     "monthly": "下一月品牌传播工作设想",
     "quarterly": "下一季度品牌传播工作设想",
     "annual": "下一年度品牌传播工作设想",
+    "custom": "下一段品牌传播工作设想",
 }
 _CLIENT_PLAN_TITLE = {
     "weekly": "下一周工作规划建议",
@@ -977,6 +980,20 @@ _VISION_ACTION_PLAN: dict[str, dict[str, list[str]]] = {
             "高权重渠道：推进权威科普与选购指南类内容产出",
             "素材规范：梳理服务、价格等对外口径，便于各渠道统一引用",
             "监测复盘：结合周度数据回顾，动态调整下周内容与投放侧重",
+        ],
+    },
+    "custom": {
+        "goals": [
+            "巩固所选时段里表现较好的优势渠道",
+            "稳步提升品牌在 AI 问答场景下的可见度与推荐表现",
+            "针对短板平台推进一轮结构化内容补充与更新",
+            "持续跟踪监控词表现，优先优化明显偏弱项",
+        ],
+        "actions": [
+            "渠道分层：优势平台保持问答更新节奏，短板平台补充结构化内容",
+            "高权重渠道：推进权威科普与选购指南类内容产出",
+            "素材规范：梳理服务、价格等对外口径，便于各渠道统一引用",
+            "监测复盘：对照本段数据回顾缺口，再安排下一段内容侧重",
         ],
     },
     "monthly": {
@@ -1356,6 +1373,7 @@ def enrich_preface_from_modules(
         "monthly": "趋势模块按自然周展示本月每周提及率与平均排名变化。",
         "quarterly": "趋势模块按自然月展示本季度每月提及率与平均排名变化。",
         "annual": "趋势模块按自然季展示本年度每季提及率与平均排名变化。",
+        "custom": "趋势按天展示所选时段每日提及率与平均排名变化。",
     }
     preface["trend_note"] = trend_note.get(report_type, "")
     keywords = [str(item).strip() for item in (monitor_keywords or []) if str(item).strip()]
@@ -1630,6 +1648,9 @@ def previous_period_bounds(report_type: str, start: date, end: date) -> tuple[da
     if report_type == "annual":
         prev_year = prev_end.year
         return date(prev_year, 1, 1), date(prev_year, 12, 31)
+    if report_type == "custom":
+        span_days = (end - start).days
+        return prev_end - timedelta(days=span_days), prev_end
     raise ValueError(report_type)
 
 
@@ -1784,6 +1805,7 @@ def _comparison_highlights(
         "monthly": ("本月", "上月"),
         "quarterly": ("本季度", "上季度"),
         "annual": ("本年度", "上年度"),
+        "custom": ("本段", "上一段"),
     }[report_type]
     lines: list[str] = []
     cur_rank = ck.get("avg_rank")
@@ -1886,7 +1908,7 @@ def _month_week_ranges(year: int, month: int) -> list[tuple[int, date, date]]:
 
 def _trend_bucket_slots(report_type: str, start: date, end: date) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
-    if report_type == "weekly":
+    if report_type in {"weekly", "custom"}:
         cursor = start
         while cursor <= end:
             slots.append({"key": cursor.isoformat(), "label": cursor.strftime("%m-%d"), "start": cursor, "end": cursor})
@@ -1992,7 +2014,7 @@ def _aggregate_bucket(rows: list[GeoMonitorSubtask]) -> dict[str, Any]:
 
 
 def _trend_slot_key(report_type: str, day: date, slots: list[dict[str, Any]]) -> str | None:
-    if report_type == "weekly":
+    if report_type in {"weekly", "custom"}:
         return day.isoformat()
     if report_type == "monthly":
         return next((s["key"] for s in slots if s["start"] <= day <= s["end"]), None)
@@ -3191,19 +3213,26 @@ def assemble_period_report_bundle(
     period_start: date,
     period_end: date,
     generated: date | None = None,
+    align_span: bool = False,
 ) -> dict[str, Any]:
     """正式导出共用数据包：V2 环比，仅真实监测数据（不注入演示增强）。
 
     2026-07-28 - 周期报迁监测幻灯母版 - 抽出 bundle，供 A4 HTML 与 16:9 deck 共用。
+    align_span: 手导导出按填写的起止日做等长对比, 趋势按天. 标题仍用原类型.
     """
     from app.services.report_service import build_tenant_monitor_snapshot
 
     if report_type not in PERIOD_EXPORT_TYPES:
         raise ValueError(f"unsupported report type: {report_type}")
 
-    prev_start, prev_end = previous_period_bounds(report_type, period_start, period_end)
-    lbl = period_label(report_type, period_start, period_end)
-    prev_lbl = period_label(report_type, prev_start, prev_end)
+    calc_type = "custom" if align_span else report_type
+    prev_start, prev_end = previous_period_bounds(calc_type, period_start, period_end)
+    if align_span:
+        lbl = f"{period_start.isoformat()} 至 {period_end.isoformat()}"
+        prev_lbl = f"{prev_start.isoformat()} 至 {prev_end.isoformat()}"
+    else:
+        lbl = period_label(report_type, period_start, period_end)
+        prev_lbl = period_label(report_type, prev_start, prev_end)
 
     current = build_tenant_monitor_snapshot(db, tenant_id, start_date=period_start, end_date=period_end)
     brand_name = str(current.get("brand_name") or "")
@@ -3212,7 +3241,7 @@ def assemble_period_report_bundle(
     platform_codes = _resolve_platform_codes(current)
 
     comparison = build_comparison(
-        report_type,
+        calc_type,
         current,
         previous,
         prev_lbl,
@@ -3231,7 +3260,7 @@ def assemble_period_report_bundle(
     content_modules = build_sample_content_modules(
         brand_name=brand_name,
         snapshot=current,
-        report_type=report_type,
+        report_type=calc_type,
         period_lbl=lbl,
         period_start=period_start,
         period_end=period_end,
@@ -3241,7 +3270,7 @@ def assemble_period_report_bundle(
     preface = polish_preface_for_client_v2(
         build_preface(
             modules=content_modules,
-            report_type=report_type,
+            report_type=calc_type,
             previous_period_label=prev_lbl,
             monitor_keywords=all_keywords,
         ),
@@ -3250,18 +3279,18 @@ def assemble_period_report_bundle(
     content_modules = polish_content_modules_for_client_v2(
         content_modules,
         brand_name=brand_name,
-        report_type=report_type,
+        report_type=calc_type,
         period_range=str(preface.get("period_range") or lbl),
         completed=int((current.get("kpis") or {}).get("completed_count") or 0),
         platform_count=int(current.get("platform_count") or len(platform_codes)),
     )
-    trend = build_period_trend(db, tenant_id, report_type, period_start, period_end)
+    trend = build_period_trend(db, tenant_id, calc_type, period_start, period_end)
     competitor_analytics = build_competitor_analytics_from_periods(
         db,
         tenant_id=tenant_id,
         brand_name=brand_name,
         competitor_names=competitors,
-        report_type=report_type,
+        report_type=calc_type,
         trend=trend,
         cur_start=period_start,
         cur_end=period_end,
@@ -3282,6 +3311,7 @@ def assemble_period_report_bundle(
         "competitors": competitors,
         "platform_codes": platform_codes,
         "generated": generated or date.today(),
+        "narrative_type": calc_type,
     }
 
 

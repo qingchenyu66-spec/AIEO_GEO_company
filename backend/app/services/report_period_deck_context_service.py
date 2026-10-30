@@ -43,7 +43,7 @@ from app.services.report_premium_font_service import build_font_face_css
 # 2026-07-29 - v22：信源 TOP 改 HTML 条形榜（全文+渐变柱）
 # 2026-09-08 - v23：周报词表分平台后禁止 pack 拼成总表
 # 2026-09-08 - v24：短板未露面优先；禁空「续」页；短板平台勿写满全端
-PERIOD_DECK_PIPELINE = "monitor-deck-v24"
+PERIOD_DECK_PIPELINE = "monitor-deck-v25"
 
 
 def _esc(value: Any) -> str:
@@ -199,6 +199,7 @@ def build_period_deck_context(
     echarts_src: str = "",
 ) -> dict[str, Any]:
     report_type = str(bundle.get("report_type") or "")
+    copy_type = str(bundle.get("narrative_type") or report_type)
     brand = str(bundle.get("brand_name") or "品牌")
     period_lbl = str(bundle.get("period_lbl") or "")
     generated: date = bundle.get("generated") or date.today()
@@ -229,7 +230,7 @@ def build_period_deck_context(
 
     keyword_raw = _drop_echarts_src(
         _strip_h2(
-            _strip_outer_section(render_keyword_html(keyword_analytics, report_type=report_type, client=True))
+            _strip_outer_section(render_keyword_html(keyword_analytics, report_type=copy_type, client=True))
         )
     )
     # 成绩单页用模版3；矩阵单独走模版5，避免与 keyword HTML 内嵌矩阵重复
@@ -251,7 +252,7 @@ def build_period_deck_context(
         _strip_h2(
             _strip_outer_section(
                 render_competitor_html(
-                    competitor_analytics, report_type=report_type, client=True, presentation=True
+                    competitor_analytics, report_type=copy_type, client=True, presentation=True
                 )
             )
         )
@@ -287,9 +288,15 @@ def build_period_deck_context(
         )
         weekly_html = re.sub(r'<p\s+class="note plan-note">.*?</p>\s*', "", weekly_html, flags=re.I | re.S)
         weekly_html = weekly_html.replace("<ul>", "<ol>").replace("</ul>", "</ol>")
+        if copy_type == "custom":
+            weekly_html = (
+                weekly_html.replace("本周关注与下周规划", "本段关注与下一段规划")
+                .replace("本周关注要点", "本段关注要点")
+                .replace("下周规划建议", "下一段规划建议")
+            )
         if weekly_html.strip():
             tail_parts.append(weekly_html)
-        tail_title = "本周关注"
+        tail_title = "本段关注" if copy_type == "custom" else "本周关注"
     else:
         # 2026-08-12 - 缺模块时勿整单导出失败；无定制稿则空 tail
         try:

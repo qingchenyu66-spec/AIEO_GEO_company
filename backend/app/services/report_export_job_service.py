@@ -193,6 +193,7 @@ def _load_report_payload(db, report_id: int) -> dict[str, Any]:
 
     from app.models.report import GeoReport
     from app.models.tenant import Tenant
+    from app.services.report_period_service import manual_span_period_key
     from app.services.report_service import (
         _sanitize_report_content,
         _serialize_report_row,
@@ -205,11 +206,16 @@ def _load_report_payload(db, report_id: int) -> dict[str, Any]:
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
     payload = _serialize_report_row(report, tenant.name if tenant else None)
     brand_name = str((report.report_content_json or {}).get("brand_name") or _tenant_brand_name(db, report.tenant_id))
-    payload["report_content"] = _sanitize_report_content(
+    content = _sanitize_report_content(
         report.report_content_json,
         brand_name=brand_name,
         report_type=report.report_type,
     )
+    if manual_span_period_key(report.period_key):
+        content = dict(content or {})
+        content["manual_span"] = True
+    payload["report_content"] = content
+    payload["period_key"] = report.period_key
     return payload
 
 

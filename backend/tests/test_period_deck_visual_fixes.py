@@ -120,3 +120,24 @@ def test_competitor_trend_presentation_fonts() -> None:
     )
     assert "fontSize: 34" in html
     assert "fontSize: 30" in html
+    custom_html = render_competitor_html(
+        {
+            "rows": [
+                {
+                    "name": "品牌",
+                    "is_brand": True,
+                    "mention_rate": metric,
+                    "avg_rank": metric,
+                    "style": {"color": "#1677ff"},
+                    "risk": {"level": "good", "label": "达标"},
+                    "gap_mention_text": "—",
+                    "gap_rank_text": "—",
+                }
+            ],
+            "highlights": [],
+            "analysis": {},
+        },
+        report_type="custom",
+        client=True,
+    )
+    assert "本段纳入竞品" in custom_html

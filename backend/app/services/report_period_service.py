@@ -7,7 +7,8 @@ from datetime import date, timedelta
 
 AUTO_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
 COMPLETION_REPORT_TYPES = frozenset({"completion"})
-PERIOD_COMPARISON_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual"})
+CUSTOM_RANGE_REPORT_TYPE = "custom"
+PERIOD_COMPARISON_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual", CUSTOM_RANGE_REPORT_TYPE})
 HTML_TEMPLATE_REPORT_TYPES = PERIOD_COMPARISON_REPORT_TYPES | COMPLETION_REPORT_TYPES | frozenset({"diagnosis"})
 MANUAL_REPORT_TYPES = frozenset({"diagnosis"})
 
@@ -71,6 +72,8 @@ def period_key(report_type: str, start: date, end: date) -> str:
         return f"annual:{start.year}"
     if report_type == "completion":
         return f"completion:{start.isoformat()}_{end.isoformat()}"
+    if report_type == CUSTOM_RANGE_REPORT_TYPE:
+        return f"custom:{start.isoformat()}_{end.isoformat()}"
     raise ValueError(f"不支持的周期报告类型: {report_type}")
 
 
@@ -84,7 +87,7 @@ def period_label(report_type: str, start: date, end: date) -> str:
         return f"{start.year} 年第{quarter}季度"
     if report_type == "annual":
         return f"{start.year} 年度"
-    if report_type == "completion":
+    if report_type in {"completion", CUSTOM_RANGE_REPORT_TYPE}:
         return f"{start.strftime('%Y-%m-%d')} 至 {end.strftime('%Y-%m-%d')}"
     return f"截至 {end.strftime('%Y-%m-%d')}"
 
@@ -97,8 +100,59 @@ def default_report_title(report_type: str, brand_name: str, start: date, end: da
         "quarterly": "GEO 监测季报",
         "annual": "GEO 监测年报",
         "completion": "GEO 项目结项报告",
+        CUSTOM_RANGE_REPORT_TYPE: "GEO 监测报告",
     }.get(report_type, "GEO 监测报告")
     return f"{label}（{period_label(report_type, start, end)}）"
+
+
+_MANUAL_EXPORT_TITLES = {
+    "weekly": "GEO 监测周报",
+    "monthly": "GEO 监测月报",
+    "quarterly": "GEO 监测季报",
+    "annual": "GEO 监测年报",
+    CUSTOM_RANGE_REPORT_TYPE: "GEO 监测报告",
+}
+
+
+def manual_span_period_key(key: str | None) -> bool:
+    """手导报告的 period_key 末尾带 14 位生成时间, 自动周报没有这一段."""
+    if not key:
+        return False
+    parts = str(key).split(":")
+    stamp = parts[-1]
+    return len(parts) >= 3 and len(stamp) == 14 and stamp.isdigit()
+
+
+def manual_export_title(report_type: str, start: date, end: date) -> str:
+    name = _MANUAL_EXPORT_TITLES.get(report_type, "GEO 监测报告")
+    return f"{name}（{start.isoformat()} 至 {end.isoformat()}）"
+
+
+def _strip_export_stamp(value: str) -> str:
+    """手导报告的 period_key 末尾可带 :YYYYMMDDHHMMSS, 反推区间时丢掉."""
+    return value.split(":", 1)[0]
+
+
+def resolve_manual_export_bounds(
+    report_type: str,
+    start: date,
+    end: date,
+    *,
+    today: date | None = None,
+) -> tuple[date, date]:
+    """手导报告按填写的起止日统计. 结束日晚于今天时截到今天."""
+    today = today or date.today()
+    if report_type not in PERIOD_COMPARISON_REPORT_TYPES:
+        raise ValueError("不支持的报告类型")
+    if end < start:
+        raise ValueError("结束日期不能早于开始日期")
+    if start > today:
+        raise ValueError("该周期尚未开始")
+    if end > today:
+        end = today
+    if (end - start).days > 365:
+        raise ValueError("时间跨度不能超过 366 天")
+    return start, end
 
 
 def bounds_from_period_key(report_type: str, key: str) -> tuple[date, date] | None:
@@ -107,25 +161,36 @@ def bounds_from_period_key(report_type: str, key: str) -> tuple[date, date] | No
         return None
     _, payload = key.split(":", 1)
     try:
+        if "_" in payload:
+            start_text, rest = payload.split("_", 1)
+            end_text = _strip_export_stamp(rest)
+            try:
+                return date.fromisoformat(start_text), date.fromisoformat(end_text)
+            except ValueError:
+                pass
         if report_type == "weekly":
-            start_text, end_text = payload.split("_", 1)
+            start_text, rest = payload.split("_", 1)
+            end_text = _strip_export_stamp(rest)
             return date.fromisoformat(start_text), date.fromisoformat(end_text)
         if report_type == "monthly":
-            year_text, month_text = payload.split("-", 1)
+            year_text, rest = payload.split("-", 1)
+            month_text = _strip_export_stamp(rest)
             start = date(int(year_text), int(month_text), 1)
             return start, last_day_of_month(start)
         if report_type == "quarterly":
-            year_text, quarter_text = payload.split("-Q", 1)
-            quarter = int(quarter_text)
+            year_text, rest = payload.split("-Q", 1)
+            quarter = int(_strip_export_stamp(rest))
             start_month = (quarter - 1) * 3 + 1
             start = date(int(year_text), start_month, 1)
             end = last_day_of_month(date(int(year_text), start_month + 2, 1))
             return start, end
         if report_type == "annual":
-            year = int(payload)
+            year = int(_strip_export_stamp(payload))
             return date(year, 1, 1), date(year, 12, 31)
-        if report_type == "completion":
-            start_text, end_text = payload.split("_", 1)
+        if report_type in {"completion", CUSTOM_RANGE_REPORT_TYPE}:
+            # custom 键可带 :生成时间, 避免同一时段重复导出互相覆盖
+            start_text, rest = payload.split("_", 1)
+            end_text = _strip_export_stamp(rest)
             return date.fromisoformat(start_text), date.fromisoformat(end_text)
     except (TypeError, ValueError):
         return None

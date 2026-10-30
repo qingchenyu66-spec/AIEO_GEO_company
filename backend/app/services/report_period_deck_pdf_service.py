@@ -356,6 +356,7 @@ def build_period_deck_html(
         period_start=period_start,
         period_end=period_end,
         generated=generated,
+        align_span=bool(report.get("manual_span")),
     )
     return render_period_deck_html_from_bundle(bundle, embed_assets=embed_assets)
 

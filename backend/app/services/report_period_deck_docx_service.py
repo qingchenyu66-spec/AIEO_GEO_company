@@ -480,5 +480,6 @@ def build_period_deck_docx(db: Session, report: dict[str, Any], *, tenant_id: in
         period_start=period_start,
         period_end=period_end,
         generated=generated,
+        align_span=bool(report.get("manual_span")),
     )
     return render_period_deck_docx_from_bundle(bundle)

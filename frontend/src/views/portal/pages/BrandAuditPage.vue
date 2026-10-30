@@ -221,8 +221,20 @@ const {
   reportGenerating,
   reportTitle,
   canGenerateEnterpriseReport,
+  canExportPeriodReport,
   openReportDialog,
   submitEnterpriseReport,
+  periodExportDialog,
+  periodExportTenant,
+  periodExportKind,
+  periodExportKinds,
+  periodExportStart,
+  periodExportEnd,
+  periodExporting,
+  periodExportProgress,
+  periodExportHint,
+  openPeriodExportDialog,
+  submitPeriodExport,
   isEnterprisePinned,
   pinEnterprise,
   unpinEnterprise,
@@ -417,6 +429,7 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
                   >取消置顶</el-dropdown-item>
                   <el-dropdown-item v-if="canTransferTenantOwner" @click="openTenantTransferDialog(tenant)">转移</el-dropdown-item>
                   <el-dropdown-item v-if="canGenerateEnterpriseReport" @click="openReportDialog(tenant)">报告</el-dropdown-item>
+                  <el-dropdown-item v-if="canExportPeriodReport" @click="openPeriodExportDialog(tenant)">导出报告</el-dropdown-item>
                   <el-dropdown-item
                     v-if="canUploadKnowledgeFiles"
                     @click="openKnowledgeUploadDialog(tenant)"
@@ -1038,6 +1051,34 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           @click="downloadKnowledgeFileItem(knowledgePreviewFile)"
         >
           下载原文件
+        </button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="periodExportDialog" width="520px" title="导出报告">
+      <p v-if="periodExportTenant" class="report-dialog-hint">
+        为「{{ periodExportTenant.name }}」导出 {{ periodExportHint }}。已有监测数据会写入报告，未完成的日期不补。
+      </p>
+      <div class="form-grid password-grid">
+        <label class="form-field-full">
+          <span>报告类型</span>
+          <select v-model="periodExportKind" :disabled="periodExporting">
+            <option v-for="item in periodExportKinds" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>开始日期</span>
+          <input v-model="periodExportStart" type="date" :disabled="periodExporting" />
+        </label>
+        <label>
+          <span>结束日期</span>
+          <input v-model="periodExportEnd" type="date" :disabled="periodExporting" />
+        </label>
+      </div>
+      <template #footer>
+        <button class="plain-btn" :disabled="periodExporting" @click="periodExportDialog = false">取消</button>
+        <button class="primary-btn" :disabled="periodExporting" @click="submitPeriodExport">
+          {{ periodExporting ? (periodExportProgress || '导出中…') : '导出' }}
         </button>
       </template>
     </el-dialog>

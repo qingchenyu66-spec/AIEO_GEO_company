@@ -615,6 +615,13 @@ def build_approval_preview(db: Session, record: OperationApproval) -> dict[str, 
             _change("操作类型", after="恢复企业服务", kind="info"),
             _change("企业名称", after=(tenant.name if tenant else "—"), kind="update"),
         ]
+    elif key == "reports.custom_period":
+        changes = [
+            _change("操作类型", after="导出周期报告", kind="info"),
+            _change("报告类型", after=str(body.get("report_type") or "custom"), kind="add"),
+            _change("开始日期", after=str(body.get("period_start") or "—"), kind="add"),
+            _change("结束日期", after=str(body.get("period_end") or "—"), kind="add"),
+        ]
     elif key in {"reports.generate", "reports.update", "reports.publish"}:
         action = {"reports.generate": "create", "reports.update": "update", "reports.publish": "publish"}[key]
         changes = _report_changes(body, action=action)

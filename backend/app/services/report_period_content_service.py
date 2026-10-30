@@ -120,6 +120,13 @@ _TYPE_META: dict[str, dict[str, str]] = {
         "cadence": "结项",
         "plan_title": "后续常态化运营建议",
     },
+    "custom": {
+        "label": "指定时段报告",
+        "scope": "本段",
+        "next": "下一段",
+        "cadence": "指定时段",
+        "plan_title": "下一段品牌传播行动规划",
+    },
     "diagnosis": {
         "label": "企业诊断报告",
         "scope": "诊断周期",
@@ -403,7 +410,20 @@ def _action_plan_for_type(
     except (TypeError, ValueError):
         mention = 57.0
 
-    if report_type == "weekly":
+    if report_type == "custom":
+        goals = [
+            f"该时段健康分维持 {max(health, 70)} 分以上",
+            f"品牌提及率稳定在 {mention:.1f}% 以上",
+            "短板平台补一轮可引用内容",
+            "负面舆情占比控制在 10% 以内",
+        ]
+        actions = [
+            "按已有监测结果补短板平台的问答与证据页",
+            "把本段已出现的推荐理由写进官网与百科",
+            "口碑素材与价格、服务口径保持一致",
+            "下一段开始前复盘本段缺口",
+        ]
+    elif report_type == "weekly":
         goals = [
             f"周度健康分维持 {max(health, 70)} 分以上",
             f"品牌提及率稳定在 {mention:.1f}% 以上",

@@ -35,6 +35,7 @@ const reportTypeOptions: Array<{ value: ReportTypeFilter; label: string }> = [
   { value: 'quarterly', label: '监测季报' },
   { value: 'annual', label: '监测年报' },
   { value: 'completion', label: '项目结项报告' },
+  { value: 'custom', label: '指定时段' },
 ]
 
 const CUSTOMER_PORTAL_REPORT_TYPES = new Set(['weekly', 'monthly', 'quarterly', 'annual', 'completion'])

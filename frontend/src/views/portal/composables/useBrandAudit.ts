@@ -17,7 +17,7 @@ import {
 } from '../../../services/brand'
 import { getKnowledgeFiles, deleteKnowledgeFile, downloadKnowledgeFile, getKnowledgeFilePreviewObjectUrl, uploadKnowledgeFile, type KnowledgeFileRecord } from '../../../services/knowledge'
 import { getApproval, isDuplicateMergedApproval, isPendingApproval, isResubmittedApproval, pendingApprovalMessage, resubmitApproval } from '../../../services/approvals'
-import { createReport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
+import { createCustomPeriodReport, createReport, downloadReportExport, REPORT_TYPE_OPTIONS, type ReportType } from '../../../services/reports'
 import { getPlatformsForBrandConfig } from '../../../services/platforms'
 import { getTenantCredit } from '../../../services/credit'
 import { platformLabelMap, supportedPlatforms, formatPlatformLabels } from '../portalMaps'
@@ -126,6 +126,22 @@ function errorMessage(error: unknown) {
 
 function notifyError(error: unknown, context: string) {
   notifyOperationError(error, context, errorMessage)
+}
+
+type PeriodExportKind = 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'custom'
+
+function isoDate(value: Date) {
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${value.getFullYear()}-${month}-${day}`
+}
+
+function todayIso() {
+  return isoDate(new Date())
+}
+
+function capIso(value: string, today = todayIso()) {
+  return value > today ? today : value
 }
 
 export function useBrandAudit(options: UseBrandAuditOptions = {}) {
@@ -1961,6 +1977,82 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
   }
 
   const canGenerateEnterpriseReport = computed(() => Boolean(menuGrant('platform.reports')?.can_create))
+  const canExportPeriodReport = computed(() => Boolean(menuGrant('platform.reports')?.can_export))
+  const periodExportDialog = ref(false)
+  const periodExportTenant = ref<TenantInfo | null>(null)
+  const periodExportKind = ref<PeriodExportKind>('weekly')
+  const periodExportStart = ref('')
+  const periodExportEnd = ref('')
+  const periodExporting = ref(false)
+  const periodExportProgress = ref('')
+  const periodExportKinds: Array<{ value: PeriodExportKind; label: string }> = [
+    { value: 'weekly', label: '周报' },
+    { value: 'monthly', label: '月报' },
+    { value: 'quarterly', label: '季报' },
+    { value: 'annual', label: '年报' },
+    { value: 'custom', label: '指定时段' },
+  ]
+
+  function openPeriodExportDialog(tenant: TenantInfo) {
+    periodExportTenant.value = tenant
+    periodExportKind.value = 'weekly'
+    periodExportStart.value = ''
+    periodExportEnd.value = ''
+    periodExportProgress.value = ''
+    periodExportDialog.value = true
+  }
+
+  function periodExportBounds(): { start: string; end: string } | null {
+    const today = todayIso()
+    if (!periodExportStart.value || !periodExportEnd.value) return null
+    if (periodExportEnd.value < periodExportStart.value) return null
+    if (periodExportStart.value > today) return null
+    return { start: periodExportStart.value, end: capIso(periodExportEnd.value, today) }
+  }
+
+  const periodExportHint = computed(() => {
+    const bounds = periodExportBounds()
+    if (!bounds) return '填写开始和结束日期'
+    return `${bounds.start} 至 ${bounds.end}`
+  })
+
+  async function submitPeriodExport() {
+    if (!canExportPeriodReport.value) {
+      ElMessage.warning('当前账号无权导出报告')
+      return
+    }
+    if (!periodExportTenant.value) return
+    const bounds = periodExportBounds()
+    if (!bounds) {
+      ElMessage.warning('请填写有效的开始和结束日期')
+      return
+    }
+    periodExporting.value = true
+    periodExportProgress.value = '正在生成报告…'
+    try {
+      const created = await createCustomPeriodReport({
+        tenant_id: periodExportTenant.value.id,
+        report_type: periodExportKind.value,
+        period_start: bounds.start,
+        period_end: bounds.end,
+      })
+      if (!created?.id) {
+        ElMessage.success('已提交审批，通过后会出现在报告列表')
+        periodExportDialog.value = false
+        return
+      }
+      await downloadReportExport(created.id, 'pdf', (label) => {
+        periodExportProgress.value = label || '正在生成 PDF…'
+      })
+      ElMessage.success('报告已下载，并写入了报告列表')
+      periodExportDialog.value = false
+    } catch (error: unknown) {
+      notifyError(error, '报告导出失败')
+    } finally {
+      periodExporting.value = false
+      periodExportProgress.value = ''
+    }
+  }
 
   async function submitEnterpriseReport() {
     if (!canGenerateEnterpriseReport.value) {
@@ -2253,7 +2345,19 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     reportTitle,
     reportTypeOptions: REPORT_TYPE_OPTIONS,
     canGenerateEnterpriseReport,
+    canExportPeriodReport,
     openReportDialog,
     submitEnterpriseReport,
+    periodExportDialog,
+    periodExportTenant,
+    periodExportKind,
+    periodExportKinds,
+    periodExportStart,
+    periodExportEnd,
+    periodExporting,
+    periodExportProgress,
+    periodExportHint,
+    openPeriodExportDialog,
+    submitPeriodExport,
   }
 }

@@ -1,5 +1,6 @@
 """报告中心API——报告列表、生成、详情、导出。"""
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -19,6 +20,7 @@ from app.services.report_export_service import (
 )
 from app.services.report_service import (
     ensure_report_refresh_access,
+    generate_custom_period_report,
     generate_report,
     get_report_detail,
     list_reports,
@@ -79,6 +81,63 @@ def generate_report_endpoint(
         )
     except Exception as exc:
         raise_write_endpoint_error(exc, context="reports.generate")
+    return ApiResponse(data=result)
+
+
+@router.post("/custom-period", response_model=ApiResponse[dict])
+def create_custom_period_report(
+    payload: dict,
+    request: Request,
+    current: CurrentSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """按手填起止日生成周期报告并入库. 不切换当前预览."""
+    try:
+        tenant_id = int(payload.get("tenant_id") or 0)
+        period_start = date.fromisoformat(str(payload.get("period_start") or "")[:10])
+        period_end = date.fromisoformat(str(payload.get("period_end") or "")[:10])
+        report_type = str(payload.get("report_type") or "custom").strip() or "custom"
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请填写企业和起止日期") from exc
+    if tenant_id <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定企业")
+
+    def _execute():
+        data = generate_custom_period_report(
+            db,
+            tenant_id=tenant_id,
+            period_start=period_start,
+            period_end=period_end,
+            report_type=report_type,
+            current=current,
+        )
+        write_business_audit(
+            db,
+            current,
+            "报告生成",
+            f"导出指定时段报告：{data.get('report_title') or data.get('id')}",
+            request=request,
+            target_module="报告中心",
+            target_id=data.get("id"),
+            tenant_id=data.get("tenant_id"),
+        )
+        db.commit()
+        return data
+
+    try:
+        _pending, result = queue_or_run(
+            db,
+            current,
+            operation_key="reports.custom_period",
+            module="report",
+            action="create",
+            summary=f"导出指定时段报告：{period_start.isoformat()} 至 {period_end.isoformat()}",
+            payload={"body": payload},
+            tenant_id=tenant_id,
+            executor=_execute,
+        )
+    except Exception as exc:
+        raise_write_endpoint_error(exc, context="reports.custom_period")
     return ApiResponse(data=result)
 
 

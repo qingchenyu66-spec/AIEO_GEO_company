@@ -26,12 +26,15 @@ from app.services.report_period_service import (
     AUTO_REPORT_TYPES,
     COMPLETION_REPORT_TYPES,
     MANUAL_REPORT_TYPES,
+    PERIOD_COMPARISON_REPORT_TYPES,
     bounds_from_period_key,
+    manual_export_title,
+    manual_span_period_key,
     period_label as build_period_label,
 )
 from app.services.tenant_scope import ensure_sales_tenant_access, guard_tenant_resource_access, sales_owned_tenant_ids
 
-REFRESHABLE_REPORT_TYPES = MANUAL_REPORT_TYPES | AUTO_REPORT_TYPES | COMPLETION_REPORT_TYPES
+REFRESHABLE_REPORT_TYPES = MANUAL_REPORT_TYPES | AUTO_REPORT_TYPES | COMPLETION_REPORT_TYPES | frozenset({"custom"})
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,7 @@ REPORT_TYPE_LABELS = {
     "quarterly": "监测季报",
     "annual": "监测年报",
     "completion": "项目结项报告",
+    "custom": "指定时段报告",
     "comparison": "对比报告",
     "periodic": "周期报告",
 }
@@ -53,10 +57,14 @@ REPORT_STATUS_LABELS = {
 }
 
 # 客户端报告中心仅展示周期监测报告；企业诊断仅供运营内部预览导出。
+# 指定时段报告只给平台销售导出, 不进客户报告中心
 CUSTOMER_PORTAL_REPORT_TYPES = frozenset({"weekly", "monthly", "quarterly", "annual", "completion"})
 
 
 def _customer_can_view_report(report: GeoReport) -> bool:
+    # 销售在企业列表手导的周期报告带 created_by, 不进客户报告中心.
+    if report.created_by is not None:
+        return False
     return report.status == "published" and report.report_type in CUSTOMER_PORTAL_REPORT_TYPES
 
 
@@ -353,7 +361,11 @@ def _materialize_report_preview_html(db: Session, report: GeoReport) -> None:
             return
         invalidate_report_html_preview(int(report.id))
         payload = _serialize_report_row(report)
-        payload["report_content"] = report.report_content_json or {}
+        content = dict(report.report_content_json or {})
+        if manual_span_period_key(report.period_key):
+            content["manual_span"] = True
+        payload["report_content"] = content
+        payload["period_key"] = report.period_key
         materialize_report_html_preview(db, payload)
         # 2026-08-06 - 发布/更新后异步预热 PDF/Word，首次下载走指纹缓存
         if str(report.status or "") == "published":
@@ -627,6 +639,7 @@ def list_reports(db: Session, current: CurrentSession) -> list[dict[str, Any]]:
         stmt = stmt.where(GeoReport.tenant_id == tenant_scope)
         stmt = stmt.where(GeoReport.status == "published")
         stmt = stmt.where(GeoReport.report_type.in_(CUSTOMER_PORTAL_REPORT_TYPES))
+        stmt = stmt.where(GeoReport.created_by.is_(None))
     else:
         owned = sales_owned_tenant_ids(db, current)
         if owned is not None:
@@ -777,6 +790,19 @@ def generate_report(
     return _serialize_report_row(report, tenant.name if tenant else None)
 
 
+def _skip_empty_scheduled_period(
+    *,
+    completed_count: int,
+    report_type: str,
+    allow_empty: bool = False,
+    has_snapshot_override: bool = False,
+) -> bool:
+    """自动周期在样本为 0 时跳过. 手导导出和结项不跳过."""
+    if has_snapshot_override or allow_empty or completed_count > 0:
+        return False
+    return report_type not in {"completion", "custom"}
+
+
 def _compose_scheduled_report_bundle(
     db: Session,
     *,
@@ -786,6 +812,7 @@ def _compose_scheduled_report_bundle(
     period_end: date,
     generated_at: datetime | None = None,
     snapshot_override: dict[str, Any] | None = None,
+    allow_empty: bool = False,
 ) -> dict[str, Any] | None:
     """组装周期报告标题、摘要与正文 JSON；无样本且未注入 snapshot 时返回 None。"""
     snapshot = snapshot_override or build_tenant_monitor_snapshot(
@@ -795,7 +822,13 @@ def _compose_scheduled_report_bundle(
         end_date=period_end,
     )
     completed_count = int((snapshot.get("kpis") or {}).get("completed_count") or 0)
-    if snapshot_override is None and completed_count <= 0 and report_type != "completion":
+    # 手导导出允许样本为 0. 自动排程仍在无样本时跳过, 避免空周报入库.
+    if _skip_empty_scheduled_period(
+        completed_count=completed_count,
+        report_type=report_type,
+        allow_empty=allow_empty,
+        has_snapshot_override=snapshot_override is not None,
+    ):
         return None
 
     brand_name = snapshot.get("brand_name") or _tenant_brand_name(db, tenant_id)
@@ -863,6 +896,24 @@ def _compose_scheduled_report_bundle(
     }
 
 
+def _stamp_manual_span_bundle(
+    bundle: dict[str, Any],
+    *,
+    report_type: str,
+    period_start: date,
+    period_end: date,
+) -> None:
+    """手导报告标题保留周报/月报名, 括号里写实际起止日."""
+    span = f"{period_start.isoformat()} 至 {period_end.isoformat()}"
+    bundle["report_title"] = manual_export_title(report_type, period_start, period_end)
+    content = bundle["content"]
+    completed = int((content.get("kpis") or {}).get("completed_count") or 0)
+    bundle["data_summary"] = f"基于 {completed} 条已完成监测子任务 · {span}"
+    content["manual_span"] = True
+    content["period_label"] = span
+    content["auto_generated"] = False
+
+
 def refresh_scheduled_report_for_tenant(
     db: Session,
     *,
@@ -871,6 +922,7 @@ def refresh_scheduled_report_for_tenant(
     period_end: date,
     generated_at: datetime | None = None,
     snapshot_override: dict[str, Any] | None = None,
+    allow_empty: bool = False,
 ) -> dict[str, Any] | None:
     """原地刷新已发布周期报告正文（保留 id/period_key，用于 demo 重灌与内容升级）。"""
     report = db.scalar(select(GeoReport).where(GeoReport.id == report_id, GeoReport.deleted.is_(False)))
@@ -885,9 +937,17 @@ def refresh_scheduled_report_for_tenant(
         period_end=period_end,
         generated_at=generated_at,
         snapshot_override=snapshot_override,
+        allow_empty=allow_empty,
     )
     if bundle is None:
         return None
+    if allow_empty:
+        _stamp_manual_span_bundle(
+            bundle,
+            report_type=report.report_type,
+            period_start=period_start,
+            period_end=period_end,
+        )
 
     report.report_title = bundle["report_title"]
     report.data_summary = bundle["data_summary"]
@@ -938,11 +998,14 @@ def refresh_report_content(db: Session, report_id: int) -> dict[str, Any]:
         if bounds is None:
             raise ValueError("无法解析报告周期，不能重新计算")
         period_start, period_end = bounds
+        stored = report.report_content_json or {}
+        manual = bool(stored.get("manual_span")) or manual_span_period_key(report.period_key)
         row = refresh_scheduled_report_for_tenant(
             db,
             report_id=report.id,
             period_start=period_start,
             period_end=period_end,
+            allow_empty=manual,
         )
         if row is None:
             raise ValueError("周期内暂无可用监测数据，未能重新计算")
@@ -973,6 +1036,68 @@ def ensure_report_refresh_access(db: Session, report_id: int, current: CurrentSe
     if report.report_type not in REFRESHABLE_REPORT_TYPES:
         raise ValueError("该报告类型不支持重新计算")
     tenant = db.scalar(select(Tenant).where(Tenant.id == report.tenant_id, Tenant.deleted.is_(False)))
+    return _serialize_report_row(report, tenant.name if tenant else None)
+
+
+def generate_custom_period_report(
+    db: Session,
+    *,
+    tenant_id: int,
+    period_start: date,
+    period_end: date,
+    current: CurrentSession,
+    report_type: str = "custom",
+    auto_commit: bool = True,
+) -> dict[str, Any]:
+    """按销售选择的周/月/季/年或指定时段另存一份周期报告, 并供立即下载."""
+    from app.services.report_period_service import resolve_manual_export_bounds
+
+    _check_report_action(db, current, "can_export")
+    ensure_tenant(db, tenant_id)
+    ensure_sales_tenant_access(db, current, tenant_id)
+    if current.identity.identity_type != "PLATFORM":
+        raise ValueError("指定时段报告仅平台销售使用")
+    if report_type not in PERIOD_COMPARISON_REPORT_TYPES:
+        raise ValueError("不支持的报告类型")
+    period_start, period_end = resolve_manual_export_bounds(report_type, period_start, period_end)
+
+    now = datetime.now()
+    bundle = _compose_scheduled_report_bundle(
+        db,
+        tenant_id=tenant_id,
+        report_type=report_type,
+        period_start=period_start,
+        period_end=period_end,
+        generated_at=now,
+        allow_empty=True,
+    )
+    if bundle is None:
+        raise ValueError("该时段报告生成失败")
+    _stamp_manual_span_bundle(
+        bundle,
+        report_type=report_type,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    report = GeoReport(
+        tenant_id=tenant_id,
+        report_title=bundle["report_title"],
+        report_type=report_type,
+        status="published",
+        period_key=f"{report_type}:{period_start.isoformat()}_{period_end.isoformat()}:{now.strftime('%Y%m%d%H%M%S')}"[:80],
+        data_summary=bundle["data_summary"],
+        report_content_json=bundle["content"],
+        created_by=current.user.id,
+    )
+    db.add(report)
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
+    db.refresh(report)
+    _materialize_report_preview_html(db, report)
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted.is_(False)))
     return _serialize_report_row(report, tenant.name if tenant else None)
 
 

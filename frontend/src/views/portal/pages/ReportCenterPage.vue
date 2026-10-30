@@ -188,7 +188,7 @@ function diagnosisTitleText(title: string | null | undefined) {
         <div v-else-if="!filteredReports.length" class="report-empty-panel">
           <FileText />
           <h3>暂无报告</h3>
-          <p v-if="isPlatform">请前往「企业管理」生成企业内部诊断；周期报告由系统自动生成。</p>
+          <p v-if="isPlatform">在企业管理卡片的「更多」里可以导出周报、月报或指定时段。</p>
           <p v-else>暂无已发布的周期监测报告，请联系运营。</p>
         </div>
         <div v-else class="report-list-body">

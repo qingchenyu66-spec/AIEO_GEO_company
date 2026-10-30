@@ -2,7 +2,7 @@ import { http } from './http'
 
 export type ReportExportFormat = 'pdf' | 'docx' | 'html'
 
-export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'completion', 'diagnosis'] as const
+export const HTML_TEMPLATE_REPORT_TYPES = ['weekly', 'monthly', 'quarterly', 'annual', 'completion', 'diagnosis', 'custom'] as const
 
 export function isHtmlTemplateReportType(reportType: string | null | undefined) {
   return HTML_TEMPLATE_REPORT_TYPES.includes((reportType || '') as (typeof HTML_TEMPLATE_REPORT_TYPES)[number])
@@ -34,7 +34,7 @@ export async function fetchReportPreviewHtml(reportId: number): Promise<string> 
   return html
 }
 
-export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'completion' | 'comparison' | 'periodic'
+export type ReportType = 'diagnosis' | 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'completion' | 'comparison' | 'periodic' | 'custom'
 export type ReportStatus = 'draft' | 'published' | 'archived'
 
 export interface ReportListItem {
@@ -148,6 +148,16 @@ export async function getReportDetail(reportId: number): Promise<ReportDetail> {
 
 export async function createReport(data: GenerateReportPayload): Promise<ReportListItem> {
   const response = await http.post('/v1/reports/generate', data)
+  return response.data.data
+}
+
+export async function createCustomPeriodReport(data: {
+  tenant_id: number
+  period_start: string
+  period_end: string
+  report_type?: 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'custom'
+}): Promise<ReportListItem> {
+  const response = await http.post('/v1/reports/custom-period', data, { timeout: 120000 })
   return response.data.data
 }
 

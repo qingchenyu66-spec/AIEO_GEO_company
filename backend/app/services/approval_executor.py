@@ -99,6 +99,7 @@ def execute_approval(db: Session, current: CurrentSession, record: OperationAppr
         "brand.asset.upsert": _exec_brand_asset,
         "brand.brand_word_groups.upsert": _exec_brand_word_groups,
         "reports.generate": _exec_report_generate,
+        "reports.custom_period": _exec_custom_period_report,
         "reports.update": _exec_report_update,
         "reports.publish": _exec_report_publish,
         "diagnosis.record.create": _exec_diagnosis_create,
@@ -311,6 +312,22 @@ def _exec_brand_word_groups(
 def _exec_report_generate(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
     body = data.get("body") or data
     return generate_report(db, body, current, auto_commit=False)
+
+
+def _exec_custom_period_report(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
+    from app.services.report_service import generate_custom_period_report
+
+    body = data.get("body") or data
+    tenant_id = int(body.get("tenant_id") or record.tenant_id or 0)
+    return generate_custom_period_report(
+        db,
+        tenant_id=tenant_id,
+        period_start=date.fromisoformat(str(body.get("period_start") or "")[:10]),
+        period_end=date.fromisoformat(str(body.get("period_end") or "")[:10]),
+        report_type=str(body.get("report_type") or "custom"),
+        current=current,
+        auto_commit=False,
+    )
 
 
 def _exec_report_update(db: Session, current: CurrentSession, record: OperationApproval, data: dict[str, Any]) -> dict[str, Any]:
