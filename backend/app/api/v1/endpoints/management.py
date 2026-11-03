@@ -34,6 +34,7 @@ from app.services.deepseek_balance_service import fetch_deepseek_balance
 from app.services.lead_diagnosis_service import lead_diagnosis_task_displays
 from app.services.molizhishu_balance_service import fetch_molizhishu_balance
 from app.services.credit_service import credit_ops_summary
+from app.services.monitor_service import _exclude_gap_backfill_tasks
 from app.services.operation_log_service import tenant_names_by_id, write_operation_log
 from app.services.operation_log_labels import humanize_action_type, humanize_description, humanize_target_module
 from app.schemas.permission import (
@@ -959,6 +960,8 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         GeoMonitorTask.created_at >= datetime.combine(today, datetime.min.time()),
         GeoMonitorTask.created_at < datetime.combine(tomorrow, datetime.min.time()),
     )
+    # 漏跑补录占位保留在待补录中，不作为真实监测任务统计。
+    today_task_stmt = _exclude_gap_backfill_tasks(today_task_stmt)
     if tenant_ids is not None:
         today_task_stmt = today_task_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
     today_task_rows = list(db.scalars(today_task_stmt))
@@ -968,6 +971,7 @@ def _build_management_overview(db: Session, tenant_ids: list[int] | None = None)
         .order_by(GeoMonitorTask.created_at.desc())
         .limit(12)
     )
+    recent_task_stmt = _exclude_gap_backfill_tasks(recent_task_stmt)
     if tenant_ids is not None:
         recent_task_stmt = recent_task_stmt.where(GeoMonitorTask.tenant_id.in_(tenant_ids))
     all_recent_tasks = list(db.scalars(recent_task_stmt))
