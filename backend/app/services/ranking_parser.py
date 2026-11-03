@@ -1390,8 +1390,9 @@ def parse_answer_rankings(text: str) -> list[dict[str, Any]]:
                 continue
             if level == 1:
                 # `# 怎么选公司？` 不能直接跳过：否则 1~7 对照表仍挂在上一 ## 节，rank 被吃成 7
+                # 2026-10-29 - `# 一、` `# 二、` 也要切段。只切非排名标题时，后一段的「1.」会接上前一段出场序
                 cat = _extract_category_name(line)
-                if _is_non_rank_category(cat):
+                if cat:
                     current_section = cat
                     current_category = cat
                     appearance_counters.setdefault(current_section, 0)
