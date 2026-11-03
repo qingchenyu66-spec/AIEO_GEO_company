@@ -1,6 +1,8 @@
 """Isolated regressions: run with unittest, without shared database fixtures."""
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from app.models.user_identity import UserIdentity
 from app.models.monitor import GeoMonitorTask
 from app.services.platform_session import load_platform_session
 from app.services.monitor_service import _exclude_gap_backfill_tasks
+from scripts.recover_schedule_permission_failures import existing_slot_results
 
 
 class ScheduleIdentityRegression(unittest.TestCase):
@@ -83,6 +86,40 @@ class ScheduleIdentityRegression(unittest.TestCase):
         tasks = list(self.db.scalars(_exclude_gap_backfill_tasks(stmt)))
         self.assertEqual([task.task_id for task in tasks], ["task1"])
         self.assertEqual(tasks[0].failed_items, 1)
+
+
+class RecoveryCoverageRegression(unittest.TestCase):
+    def coverage(self, *, answer_len=0, status="failed", source=None,
+                 window="20261103-0930", region=None):
+        db = MagicMock()
+        db.scalar.side_effect = [SimpleNamespace(), None]
+        task = SimpleNamespace(task_id="existing", raw_request_json={"source": source},
+                               region_code_json=region or [])
+        db.scalars.side_effect = [[], [task]]
+        db.execute.return_value = [SimpleNamespace(platform="doubao", prompt="question",
+                                                  status=status, answer_len=answer_len)]
+        item = SimpleNamespace(schedule_key="20261103-0930", region_code=None, max_prompts=5)
+        row = SimpleNamespace(tenant_id=1, schedule_key="20261103-0930-kw1", prompt_count=5)
+        payload = SimpleNamespace(platforms=[SimpleNamespace(platform="doubao")], prompts=["question"])
+        with patch("app.services.schedule_service.due_item_from_group_key", return_value=item), \
+             patch("app.services.schedule_service.resolve_schedule_keyword_group", return_value={}), \
+             patch("app.services.schedule_service.build_scheduled_payload", return_value=payload), \
+             patch("app.services.schedule_context.resolve_task_schedule_context",
+                   return_value={"schedule_window_key": window}):
+            return existing_slot_results(db, row)
+
+    def test_manual_answer_prevents_resubmit(self):
+        self.assertIsNotNone(self.coverage(answer_len=100, source="gap_backfill", status="completed"))
+
+    def test_inflight_result_prevents_resubmit(self):
+        self.assertIsNotNone(self.coverage(status="processing"))
+
+    def test_unfilled_placeholder_can_recover(self):
+        self.assertIsNone(self.coverage(source="gap_backfill"))
+
+    def test_other_window_or_region_does_not_cover(self):
+        self.assertIsNone(self.coverage(answer_len=100, window="20261103-1230"))
+        self.assertIsNone(self.coverage(answer_len=100, region=["110000"]))
 
 
 if __name__ == "__main__":
