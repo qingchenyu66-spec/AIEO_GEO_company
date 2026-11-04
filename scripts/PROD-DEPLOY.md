@@ -1,13 +1,13 @@
 # 生产机 Git 部署
 
 服务器路径：`/opt/geo/AIEO_GEO`  
-仓库：`git@github.com:livingFather/AIEO_GEO.git`
+仓库：`git@github.com:qingchenyu66-spec/AIEO_GEO_company.git`
 
 ## 一次性：GitHub Deploy Key（必做）
 
 服务器已生成只读密钥，需你在 GitHub 仓库添加 **Deploy key（只读）**：
 
-1. 打开 [仓库 Settings → Deploy keys](https://github.com/livingFather/AIEO_GEO/settings/keys)
+1. 打开 [仓库 Settings → Deploy keys](https://github.com/qingchenyu66-spec/AIEO_GEO_company/settings/keys)
 2. **Add deploy key**
 3. Title：`geo-prod-101.200.152.71`
 4. Key（复制整行）：
@@ -23,7 +23,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXwJSvSMvI8lNGoo8sJOGEFzGAHyey8x+2qPg/Mcyng
 
 ```bash
 ssh -T git@github.com
-# 应看到：Hi livingFather/AIEO_GEO! You've successfully authenticated...
+# 应看到：Hi qingchenyu66-spec/AIEO_GEO_company! You've successfully authenticated...
 cd /opt/geo/AIEO_GEO && git fetch origin main
 ```
 
@@ -88,7 +88,7 @@ cd /opt/geo/AIEO_GEO
 git init
 git fetch /tmp/geo-deploy.bundle refs/heads/main:refs/heads/main
 git checkout -f main
-git remote add origin git@github.com:livingFather/AIEO_GEO.git
+git remote add origin git@github.com:qingchenyu66-spec/AIEO_GEO_company.git
 ```
 
 ## 注意

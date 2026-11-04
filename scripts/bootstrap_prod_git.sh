@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-REPO_URL="${GEO_REPO_URL:-git@github.com:livingFather/AIEO_GEO.git}"
+REPO_URL="${GEO_REPO_URL:-git@github.com:qingchenyu66-spec/AIEO_GEO_company.git}"
 
 if [[ -d .git ]]; then
   echo "已是 git 仓库，跳过 bootstrap"
