@@ -14,6 +14,13 @@ fi
 
 BEFORE_REV="$(git rev-parse HEAD)"
 
+# 公司生产环境只接受公司正式仓库，避免误切回历史交接源。
+EXPECTED_REPO='git@github.com:qingchenyu66-spec/AIEO_GEO_company.git'
+if [[ "$(git remote get-url origin)" != "$EXPECTED_REPO" ]]; then
+  echo "ERROR: origin 不是公司正式仓库，拒绝发布" >&2
+  exit 1
+fi
+
 echo "==> git pull"
 if ! GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch origin main; then
   echo "ERROR: git fetch 失败。请先在 GitHub 添加 Deploy Key，见 scripts/PROD-DEPLOY.md" >&2

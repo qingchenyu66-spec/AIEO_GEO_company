@@ -7,8 +7,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 REPO_URL="${GEO_REPO_URL:-git@github.com:qingchenyu66-spec/AIEO_GEO_company.git}"
+EXPECTED_REPO='git@github.com:qingchenyu66-spec/AIEO_GEO_company.git'
+if [[ "$REPO_URL" != "$EXPECTED_REPO" ]]; then
+  echo "ERROR: 只允许使用公司正式仓库" >&2
+  exit 1
+fi
 
 if [[ -d .git ]]; then
+  if [[ "$(git remote get-url origin)" != "$EXPECTED_REPO" ]]; then
+    echo "ERROR: origin 不是公司正式仓库，请先核查来源" >&2
+    exit 1
+  fi
   echo "已是 git 仓库，跳过 bootstrap"
   git remote -v
   exit 0
