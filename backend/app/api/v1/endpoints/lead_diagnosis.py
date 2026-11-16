@@ -179,7 +179,9 @@ def submit_run(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     def _execute():
-        return submit_due_lead_run(db, current, lead_id, schedule_key=schedule_key, force=force)
+        return submit_due_lead_run(
+            db, current, lead_id, schedule_key=schedule_key, force=force, manual_next=True,
+        )
 
     try:
         pending, result = queue_or_run(

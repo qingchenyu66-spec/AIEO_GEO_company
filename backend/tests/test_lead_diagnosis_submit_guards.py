@@ -12,7 +12,6 @@ from app.core.lead_diagnosis_config import DEFAULT_LEAD_SCHEDULE_TIMES
 from app.core.lead_diagnosis_prompts import normalize_lead_prompts
 from app.models.lead_diagnosis import LeadDiagnosis
 from app.services.lead_diagnosis_service import (
-    LEAD_MAX_PARALLEL_SUBMITS,
     _slot_is_future,
     submit_due_lead_run,
 )
@@ -66,7 +65,16 @@ def test_submit_rejects_future_force_slot() -> None:
             )
 
 
-def test_submit_rejects_parallel_limit() -> None:
+@pytest.mark.parametrize(
+    ("manual_next", "force", "schedule_key", "inflight", "limit"),
+    [
+        (False, False, None, 2, 2),
+        (True, True, "20260710-0930", 2, 2),
+        (True, True, None, 8, None),
+        (True, True, None, 9, 9),
+    ],
+)
+def test_submit_parallel_limits(manual_next, force, schedule_key, inflight, limit) -> None:
     lead = LeadDiagnosis(
         id=5,
         brand_name="艾迪亚",
@@ -87,7 +95,15 @@ def test_submit_rejects_parallel_limit() -> None:
     ), patch("app.services.lead_diagnosis_service._load_lead_diagnosis", return_value=lead), patch(
         "app.services.lead_diagnosis_service._task_map", return_value={}
     ), patch(
-        "app.services.lead_diagnosis_service._active_inflight_run_count", return_value=LEAD_MAX_PARALLEL_SUBMITS
+        "app.services.lead_diagnosis_service._active_inflight_run_count", return_value=inflight
+    ), patch(
+        "app.services.lead_diagnosis_service.enumerate_due_lead_runs", return_value=iter([])
+    ), patch(
+        "app.services.lead_diagnosis_service._iter_schedule_plan", return_value=iter([])
     ):
-        with pytest.raises(ValueError, match=str(LEAD_MAX_PARALLEL_SUBMITS)):
-            submit_due_lead_run(db, current, 5, force=True)
+        kwargs = dict(force=force, schedule_key=schedule_key, manual_next=manual_next)
+        if limit is None:
+            assert submit_due_lead_run(db, current, 5, **kwargs)["status"] == "skipped"
+        else:
+            with pytest.raises(ValueError, match=f"上限 {limit}"):
+                submit_due_lead_run(db, current, 5, **kwargs)

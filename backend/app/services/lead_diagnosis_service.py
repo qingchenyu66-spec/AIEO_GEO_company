@@ -10,7 +10,7 @@ from typing import Any, Iterator
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kombu.exceptions import OperationalError
 
@@ -55,6 +55,7 @@ ACTIVE_STATUSES = {"pending", "collecting"}
 RUN_TERMINAL = {"completed", "failed", "skipped"}
 LEAD_RUN_STALE_MINUTES = 10
 LEAD_MAX_PARALLEL_SUBMITS = 2
+LEAD_MAX_MANUAL_NEXT_SUBMITS = 9
 LEAD_DIAGNOSIS_TASK_SUBTITLE = "售前诊断"
 
 
@@ -331,12 +332,13 @@ def ensure_lead_diagnosis_owner_access(db: Session, current: CurrentSession, lea
         raise PermissionError("无权访问该售前诊断")
 
 
-def _load_lead_diagnosis(db: Session, lead_id: int) -> LeadDiagnosis | None:
-    return db.scalar(
-        select(LeadDiagnosis)
-        .where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
-        .options(selectinload(LeadDiagnosis.runs))
-    )
+def _load_lead_diagnosis(db: Session, lead_id: int, *, for_update: bool = False) -> LeadDiagnosis | None:
+    query = select(LeadDiagnosis).where(LeadDiagnosis.id == lead_id, LeadDiagnosis.deleted.is_(False))
+    if for_update:
+        # Serialize submissions for the same diagnosis and read the latest runs under the lock.
+        query = query.options(joinedload(LeadDiagnosis.runs)).execution_options(populate_existing=True)
+        return db.execute(query.with_for_update()).unique().scalar_one_or_none()
+    return db.scalar(query.options(selectinload(LeadDiagnosis.runs)))
 
 
 def ensure_lead_diagnosis_owner_access_by_id(db: Session, current: CurrentSession, lead_id: int) -> LeadDiagnosis:
@@ -1291,10 +1293,11 @@ def submit_due_lead_run(
     *,
     schedule_key: str | None = None,
     force: bool = False,
+    manual_next: bool = False,
 ) -> dict[str, Any]:
     require_lead_diagnosis_access(db, current, "can_create")
     now = datetime.now()
-    lead = _load_lead_diagnosis(db, lead_id)
+    lead = _load_lead_diagnosis(db, lead_id, for_update=True)
     if lead is None:
         raise ValueError("售前诊断不存在")
     ensure_lead_diagnosis_owner_access(db, current, lead)
@@ -1303,9 +1306,12 @@ def submit_due_lead_run(
 
     tasks = _task_map(db, lead)
     inflight = _active_inflight_run_count(lead, tasks)
-    if inflight >= LEAD_MAX_PARALLEL_SUBMITS:
+    limit = LEAD_MAX_PARALLEL_SUBMITS
+    if manual_next and force and schedule_key is None:
+        limit = LEAD_MAX_MANUAL_NEXT_SUBMITS
+    if inflight >= limit:
         raise ValueError(
-            f"当前已有 {inflight} 个批次在抓取中，请等待至少一个完成后再提交（上限 {LEAD_MAX_PARALLEL_SUBMITS}）"
+            f"当前已有 {inflight} 个批次在抓取中，请等待至少一个完成后再提交（上限 {limit}）"
         )
 
     due_items = list(enumerate_due_lead_runs(db, lead_id=lead_id, force=force))
@@ -1339,7 +1345,7 @@ def submit_due_lead_run(
         select(LeadDiagnosisRun).where(
             LeadDiagnosisRun.lead_diagnosis_id == lead.id,
             LeadDiagnosisRun.schedule_key == item.schedule_key,
-        )
+        ).with_for_update()
     )
     if existing_run is not None and existing_run.task_id:
         linked_task = db.scalar(

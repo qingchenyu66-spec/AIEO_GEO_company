@@ -410,4 +410,5 @@ def _exec_lead_submit_run(db: Session, current: CurrentSession, record: Operatio
         lead_id,
         schedule_key=data.get("schedule_key"),
         force=bool(data.get("force")),
+        manual_next=True,
     )
