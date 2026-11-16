@@ -54,6 +54,18 @@ class ScheduleIdentityRegression(unittest.TestCase):
         self.identity(2, 2, default=False)
         self.assertEqual(load_platform_session(self.db).user.id, 2)
 
+    def test_scheduled_lead_can_select_eligible_nondefault_operator(self):
+        self.positions()
+        sales = self.identity(1, 1)
+        self.identity(2, 2)
+        eligible = self.identity(3, 2, default=False)
+        self.assertEqual(load_platform_session(self.db).user.id, 2)
+        allowed_ids = {sales.id, eligible.id}
+        current = load_platform_session(self.db, allows=lambda identity: identity.id in allowed_ids)
+        self.assertEqual(current.identity.id, eligible.id)
+        with self.assertRaises(PermissionError):
+            load_platform_session(self.db, allows=lambda identity: identity.id == sales.id)
+
     def test_only_sales_fails_closed(self):
         self.positions()
         self.identity(1, 1)

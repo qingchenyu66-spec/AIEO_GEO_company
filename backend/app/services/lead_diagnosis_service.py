@@ -627,6 +627,23 @@ def _platform_configs_for_lead(lead: LeadDiagnosis) -> list[PlatformConfig]:
     return _all_platform_configs()
 
 
+def load_scheduled_lead_session(db: Session, lead_id: int) -> CurrentSession:
+    from app.services.menu_permission_service import identity_allowed_monitor_platforms
+    from app.services.platform_session import load_platform_session
+
+    lead = db.get(LeadDiagnosis, lead_id)
+    if lead is None or lead.deleted:
+        raise ValueError("售前诊断不存在")
+    required_platforms = {config.platform for config in _platform_configs_for_lead(lead)}
+    return load_platform_session(
+        db,
+        allows=lambda identity: (
+            has_identity_menu_permission(db, identity.id, "platform.lead_diagnosis", "can_create")
+            and required_platforms.issubset(identity_allowed_monitor_platforms(db, identity))
+        ),
+    )
+
+
 def _competitor_payload(names: list[str]) -> list[CompetitorBrand]:
     return [CompetitorBrand(name=name) for name in names if name.strip()]
 

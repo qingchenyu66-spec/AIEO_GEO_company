@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
@@ -11,8 +13,10 @@ from app.models.user_identity import UserIdentity
 from app.models.permission import Position
 
 
-def load_platform_session(db) -> CurrentSession:
-    identity = db.scalar(
+def load_platform_session(
+    db, *, allows: Callable[[UserIdentity], bool] | None = None
+) -> CurrentSession:
+    query = (
         select(UserIdentity)
         .options(joinedload(UserIdentity.user), joinedload(UserIdentity.tenant))
         .join(User, User.id == UserIdentity.user_id)
@@ -28,6 +32,12 @@ def load_platform_session(db) -> CurrentSession:
         )
         .order_by(UserIdentity.is_default.desc(), UserIdentity.id.asc())
     )
+    if allows is not None:
+        for candidate in db.scalars(query):
+            if allows(candidate):
+                return CurrentSession(user=candidate.user, identity=candidate)
+        raise PermissionError("没有具备售前诊断创建权限及所需平台范围的运营身份")
+    identity = db.scalar(query)
     if identity is None or identity.user is None or not identity.user.status:
         raise RuntimeError("没有可用的平台运营端身份，无法执行监测调度。")
     return CurrentSession(user=identity.user, identity=identity)

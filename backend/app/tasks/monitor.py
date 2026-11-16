@@ -22,6 +22,7 @@ from app.models.monitor import GeoMonitorCallbackEvent
 from app.services.lead_diagnosis_service import (
     enumerate_due_lead_runs,
     finalize_due_lead_diagnoses,
+    load_scheduled_lead_session,
     persist_lead_run_failure,
     submit_due_lead_run,
 )
@@ -466,7 +467,7 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
 
     db = SessionLocal()
     try:
-        current = load_platform_session(db)
+        current = load_scheduled_lead_session(db, lead_id)
         result = submit_due_lead_run(db, current, lead_id, schedule_key=schedule_key, force=False)
         if result.get("status") == "skipped":
             raise Ignore()
@@ -497,9 +498,10 @@ def submit_lead_diagnosis_run_task(self, lead_id: int, schedule_key: str) -> dic
                 "message": safe_error,
             }
         raise self.retry(exc=RuntimeError(safe_error)) from None
-    except PermissionError:
-        logger.warning("submit_lead_diagnosis_run skipped lead=%s no platform session", lead_id)
-        return {"status": "skipped", "message": "无可用平台运营身份"}
+    except PermissionError as exc:
+        reason = redact_secrets_in_text(str(exc))
+        logger.warning("submit_lead_diagnosis_run skipped lead=%s key=%s: %s", lead_id, schedule_key, reason)
+        return {"status": "skipped", "message": reason}
     finally:
         db.close()
 
