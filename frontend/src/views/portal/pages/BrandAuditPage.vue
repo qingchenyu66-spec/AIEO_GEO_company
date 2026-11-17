@@ -17,18 +17,13 @@ import { extractErrorDetail } from '../../../utils/requestError'
 
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
-const weeklyExecutionDay = computed({
-  get() {
-    if (brandForm.schedule_type === 'weekly') {
-      return brandForm.schedule_weekdays.length === 1 ? brandForm.schedule_weekdays[0] : -1
-    }
-    return brandForm.schedule_type === 'monthly' ? -1 : 0
-  },
-  set(day: number) {
-    brandForm.schedule_type = day ? 'weekly' : 'daily_times'
-    brandForm.schedule_weekdays = day ? [day] : []
+const weeklyExecutionDays = computed({
+  get: () => brandForm.schedule_type === 'weekly' ? brandForm.schedule_weekdays : [],
+  set(days: number[]) {
+    brandForm.schedule_type = days.length ? 'weekly' : 'daily_times'
+    brandForm.schedule_weekdays = [...days].sort((left, right) => left - right)
     brandForm.schedule_month_days = []
-    if (day && !brandForm.schedule_times.length) addScheduleTime()
+    if (days.length && !brandForm.schedule_times.length) addScheduleTime()
   },
 })
 
@@ -886,21 +881,21 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </section>
       <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">
         <div class="panel-head">
-          <div><h2>自动监测计划</h2><p>可选择每周一天执行。选择「不设置」时，每天按下方时间自动提交任务。</p></div>
+          <div><h2>自动监测计划</h2><p>可选择一个或多个星期几，所选日期共用下方时间。都不勾选时，每天执行。</p></div>
           <button v-if="!creatingDraftTenant && canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
         </div>
         <div class="brand-form-grid">
           <div class="schedule-time-picker">
-            <label class="schedule-weekday-field">
-              <span>每周执行日（可选）</span>
-              <select v-model="weeklyExecutionDay" :disabled="!canEditEnterpriseTab('schedule')">
-                <option v-if="weeklyExecutionDay === -1" :value="-1" disabled>保留现有计划</option>
-                <option :value="0">不设置（每天执行）</option>
-                <option v-for="(label, index) in weekdays" :key="label" :value="index + 1">{{ label }}</option>
-              </select>
-            </label>
+            <fieldset class="schedule-weekday-field" :disabled="!canEditEnterpriseTab('schedule')">
+              <legend>每周执行日（可选）</legend>
+              <label v-for="(label, index) in weekdays" :key="label">
+                <input v-model="weeklyExecutionDays" type="checkbox" :value="index + 1" />
+                {{ label }}
+              </label>
+              <p v-if="brandForm.schedule_type === 'monthly'">当前为按月执行。勾选星期后切换为按周执行。</p>
+            </fieldset>
             <div class="schedule-time-title">
-              <span>{{ weeklyExecutionDay > 0 ? `每${weekdays[weeklyExecutionDay - 1]}执行时间` : (brandForm.schedule_type === 'monthly' ? '计划执行时间' : '每日执行时间') }}</span>
+              <span>{{ weeklyExecutionDays.length || brandForm.schedule_type === 'monthly' ? '计划执行时间' : '每日执行时间' }}</span>
               <button v-if="canEditEnterpriseTab('schedule')" class="filter-reset-btn" @click="addScheduleTime">新增时间</button>
             </div>
             <div class="schedule-time-list">
@@ -1205,16 +1200,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
 
 <style scoped>
 .schedule-weekday-field {
-  display: grid;
-  gap: 8px;
-  max-width: 240px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
-.schedule-weekday-field select {
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid #cfe0f4;
-  border-radius: 8px;
-  color: #172840;
-  background: #fff;
+.schedule-weekday-field legend {
+  margin-bottom: 8px;
+}
+.schedule-weekday-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 </style>
