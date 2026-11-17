@@ -15,6 +15,22 @@ import { previewQueryFields } from '../customerPreview'
 import { prefetchCustomerPreviewMenus } from '../previewMenusCache'
 import { extractErrorDetail } from '../../../utils/requestError'
 
+const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+const weeklyExecutionDay = computed({
+  get() {
+    if (brandForm.schedule_type === 'weekly') {
+      return brandForm.schedule_weekdays.length === 1 ? brandForm.schedule_weekdays[0] : -1
+    }
+    return brandForm.schedule_type === 'monthly' ? -1 : 0
+  },
+  set(day: number) {
+    brandForm.schedule_type = day ? 'weekly' : 'daily_times'
+    brandForm.schedule_weekdays = day ? [day] : []
+    brandForm.schedule_month_days = []
+  },
+})
+
 function platformSelectionCount(group: { platforms?: unknown[] }) {
   return platformSelectionCodes((group.platforms || []) as never).length
 }
@@ -869,13 +885,21 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
       </section>
       <section v-if="enterpriseDetailTab === 'schedule'" class="schedule-box">
         <div class="panel-head">
-          <div><h2>自动监测计划</h2><p>每天在下方配置的时间点自动提交检测任务。</p></div>
+          <div><h2>自动监测计划</h2><p>可选择每周一天执行。选择「不设置」时，每天按下方时间自动提交任务。</p></div>
           <button v-if="!creatingDraftTenant && canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
         </div>
         <div class="brand-form-grid">
+          <label class="schedule-time-picker">
+            <span>每周执行日（可选）</span>
+            <el-select v-model="weeklyExecutionDay" :disabled="!canEditEnterpriseTab('schedule')">
+              <el-option v-if="weeklyExecutionDay === -1" :value="-1" label="保留现有计划" disabled />
+              <el-option :value="0" label="不设置（每天执行）" />
+              <el-option v-for="(label, index) in weekdays" :key="label" :value="index + 1" :label="label" />
+            </el-select>
+          </label>
           <div class="schedule-time-picker">
             <div class="schedule-time-title">
-              <span>每日执行时间</span>
+              <span>{{ brandForm.schedule_type === 'daily_times' ? '每日执行时间' : '计划执行时间' }}</span>
               <button v-if="canEditEnterpriseTab('schedule')" class="filter-reset-btn" @click="addScheduleTime">新增时间</button>
             </div>
             <div class="schedule-time-list">

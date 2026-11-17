@@ -400,7 +400,7 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     schedule_times: [] as string[],
     schedule_frequency: 1,
     schedule_weekdays: [] as number[],
-    schedule_month_days_text: '',
+    schedule_month_days: [] as number[],
   })
 
   watch(
@@ -939,11 +939,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
     brandForm.monitored_platforms = asset ? [...(asset.monitored_platforms || [])] : []
     brandForm.official_url = asset?.official_url || ''
     brandForm.description = asset?.description || ''
-    brandForm.schedule_type = 'daily_times'
+    brandForm.schedule_type = asset?.schedule_type || 'daily_times'
     brandForm.schedule_times = asset?.schedule_times?.length ? [...asset.schedule_times] : []
     brandForm.schedule_frequency = asset?.schedule_frequency || brandForm.schedule_times.length || 1
-    brandForm.schedule_weekdays = []
-    brandForm.schedule_month_days_text = ''
+    brandForm.schedule_weekdays = [...(asset?.schedule_weekdays || [])]
+    brandForm.schedule_month_days = [...(asset?.schedule_month_days || [])]
   }
 
   function fillCompetitorRows(rows: BrandCompetitor[]) {
@@ -1356,11 +1356,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
           region_codes: [...brandForm.region_codes],
           official_url: brandForm.official_url.trim() || null,
           description: brandForm.description.trim() || null,
-          schedule_type: 'daily_times',
+          schedule_type: brandForm.schedule_type,
           schedule_times: scheduleTimeList(),
           schedule_frequency: scheduleFrequency,
-          schedule_weekdays: [],
-          schedule_month_days: [],
+          schedule_weekdays: [...brandForm.schedule_weekdays],
+          schedule_month_days: [...brandForm.schedule_month_days],
         })
         await loadCustomerEnterpriseMonitor()
         ElMessage.success(successText)
@@ -1433,11 +1433,11 @@ export function useBrandAudit(options: UseBrandAuditOptions = {}) {
         region_codes: [...brandForm.region_codes],
         official_url: brandForm.official_url.trim() || null,
         description: brandForm.description.trim() || null,
-        schedule_type: 'daily_times' as const,
+        schedule_type: brandForm.schedule_type,
         schedule_times: scheduleTimeList(),
         schedule_frequency: scheduleFrequency,
-        schedule_weekdays: [] as number[],
-        schedule_month_days: [] as number[],
+        schedule_weekdays: [...brandForm.schedule_weekdays],
+        schedule_month_days: [...brandForm.schedule_month_days],
         service_start_date: brandForm.service_start_date || null,
         service_end_date: brandForm.service_end_date || null,
         billing_mode: brandForm.billing_mode,
