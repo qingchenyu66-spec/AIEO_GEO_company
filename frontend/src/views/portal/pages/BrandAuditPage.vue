@@ -28,6 +28,7 @@ const weeklyExecutionDay = computed({
     brandForm.schedule_type = day ? 'weekly' : 'daily_times'
     brandForm.schedule_weekdays = day ? [day] : []
     brandForm.schedule_month_days = []
+    if (day && !brandForm.schedule_times.length) addScheduleTime()
   },
 })
 
@@ -889,22 +890,22 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
           <button v-if="!creatingDraftTenant && canEditEnterpriseTab('schedule')" class="filter-search-btn" :disabled="loadingBrand || !canSubmitBrandAssetProfile" @click="submitBrandAsset('监测计划已保存')">保存监测计划</button>
         </div>
         <div class="brand-form-grid">
-          <label class="schedule-time-picker">
-            <span>每周执行日（可选）</span>
-            <el-select v-model="weeklyExecutionDay" :disabled="!canEditEnterpriseTab('schedule')">
-              <el-option v-if="weeklyExecutionDay === -1" :value="-1" label="保留现有计划" disabled />
-              <el-option :value="0" label="不设置（每天执行）" />
-              <el-option v-for="(label, index) in weekdays" :key="label" :value="index + 1" :label="label" />
-            </el-select>
-          </label>
           <div class="schedule-time-picker">
+            <label class="schedule-weekday-field">
+              <span>每周执行日（可选）</span>
+              <select v-model="weeklyExecutionDay" :disabled="!canEditEnterpriseTab('schedule')">
+                <option v-if="weeklyExecutionDay === -1" :value="-1" disabled>保留现有计划</option>
+                <option :value="0">不设置（每天执行）</option>
+                <option v-for="(label, index) in weekdays" :key="label" :value="index + 1">{{ label }}</option>
+              </select>
+            </label>
             <div class="schedule-time-title">
-              <span>{{ brandForm.schedule_type === 'daily_times' ? '每日执行时间' : '计划执行时间' }}</span>
+              <span>{{ weeklyExecutionDay > 0 ? `每${weekdays[weeklyExecutionDay - 1]}执行时间` : (brandForm.schedule_type === 'monthly' ? '计划执行时间' : '每日执行时间') }}</span>
               <button v-if="canEditEnterpriseTab('schedule')" class="filter-reset-btn" @click="addScheduleTime">新增时间</button>
             </div>
             <div class="schedule-time-list">
               <div v-for="(_, index) in brandForm.schedule_times" :key="`schedule-time-${index}`">
-                <input v-model="brandForm.schedule_times[index]" type="time" step="300" :disabled="!canEditEnterpriseTab('schedule')" />
+                <input v-model="brandForm.schedule_times[index]" :aria-label="`执行时间 ${index + 1}`" type="time" step="60" :disabled="!canEditEnterpriseTab('schedule')" />
                 <button v-if="canEditEnterpriseTab('schedule')" class="danger-text-btn" @click="removeScheduleTime(index)">删除</button>
               </div>
             </div>
@@ -1201,3 +1202,19 @@ defineExpose({ resetDetailMode, backToEnterpriseList, loadEnterpriseList })
     </el-dialog>
   </section>
 </template>
+
+<style scoped>
+.schedule-weekday-field {
+  display: grid;
+  gap: 8px;
+  max-width: 240px;
+}
+.schedule-weekday-field select {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #cfe0f4;
+  border-radius: 8px;
+  color: #172840;
+  background: #fff;
+}
+</style>
