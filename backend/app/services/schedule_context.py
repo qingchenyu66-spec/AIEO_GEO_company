@@ -49,7 +49,12 @@ def extract_schedule_window_key(schedule_key: str | None) -> str | None:
     text = str(schedule_key or "").strip()
     if not text:
         return None
-    return text.split("-kw", 1)[0]
+    window = text.split("-kw", 1)[0]
+    if window.startswith("bw"):
+        candidate = window[2:]
+        if len(candidate) == 13 and candidate[:8].isdigit() and candidate[8] == "-" and candidate[9:].isdigit():
+            return candidate
+    return window
 
 
 def format_schedule_window_label(window_key: str | None) -> str | None:

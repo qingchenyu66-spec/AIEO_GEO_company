@@ -48,3 +48,12 @@ def test_tenant_task_with_lead_run_is_tenant_monitor_not_lead_diagnosis() -> Non
     ctx = resolve_task_schedule_context(task, schedule_run=None, asset=None, lead_run=lead_run)
     assert ctx["schedule_source"] == "run"
     assert ctx["schedule_label"] == "2026-07-01 16:30"
+
+
+def test_brand_word_weekly_window_uses_original_schedule_day() -> None:
+    from app.services.schedule_context import extract_schedule_window_key, format_schedule_window_label
+
+    window = extract_schedule_window_key("bw20261019-0900-kw7")
+    assert window == "20261019-0900"
+    assert format_schedule_window_label(window) == "2026-10-19 09:00"
+    assert extract_schedule_window_key("20261019-0900-kw7") == window

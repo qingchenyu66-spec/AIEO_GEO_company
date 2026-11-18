@@ -3354,11 +3354,10 @@ def list_snapshot_backfill_matrix(
     d0 = detect_date_from or (d1 - timedelta(days=6))
     if d0 > d1:
         d0, d1 = d1, d0
-    # 区间最多 31 天，避免一次扫爆
-    if (d1 - d0).days > 30:
-        d0 = d1 - timedelta(days=30)
-
     purpose_lane = _normalize_backfill_purpose(purpose)
+    # 日常监测保留原扫描上限；品牌词按用户选择的日期展示稀疏周任务。
+    if purpose_lane != "brand_word" and (d1 - d0).days > 30:
+        d0 = d1 - timedelta(days=30)
     payload = list_snapshot_backfill_page(
         db,
         tenant_id=tenant_id,
