@@ -10204,7 +10204,7 @@ def _workspace_period_day_bounds(
 def _snapshot_recency_key(item: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(item.get("detect_day") or ""),
-        str(item.get("updated_at") or ""),
+        str(item.get("schedule_label") or item.get("detect_day") or ""),
         str(item.get("subtask_id") or ""),
     )
 
@@ -10395,7 +10395,7 @@ def _hydrate_inclusion_light_batch(
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
             "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "updated_at": light.get("schedule_label") or light.get("detect_day"),
         })
     return recent_snapshots
 
@@ -10558,7 +10558,7 @@ def _build_inclusion_light_pool(
             "prompt_intent": prompt_monitor_intent(row.prompt),
             "brand_rank": row.mention_position,
             "brand_mentioned": row.mention_position is not None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "updated_at": schedule_ctx.get("schedule_label") or row.created_at.isoformat(),
         }
         if keyword_q:
             light_row["source_articles"] = _light_source_articles_from_refs(
@@ -10787,7 +10787,7 @@ def _workspace_pick_snapshot_subtask_ids(
         select(
             GeoMonitorSubtask.subtask_id,
             GeoMonitorSubtask.platform,
-            GeoMonitorSubtask.updated_at,
+            GeoMonitorSubtask.task_id,
         )
         .join(GeoMonitorTask, GeoMonitorTask.task_id == GeoMonitorSubtask.task_id)
         .where(
@@ -10800,15 +10800,21 @@ def _workspace_pick_snapshot_subtask_ids(
                 GeoMonitorTask.created_at >= lookback_start,
             ),
         )
-        .order_by(GeoMonitorSubtask.updated_at.desc())
+        .order_by(GeoMonitorTask.created_at.desc(), GeoMonitorSubtask.id.desc())
         .limit(scan_limit)
     )
+    rows = list(db.execute(scan_stmt))
+    from app.services.schedule_context import planned_task_datetimes
+    task_ids = {row.task_id for row in rows}
+    tasks = list(db.scalars(select(GeoMonitorTask).where(GeoMonitorTask.task_id.in_(task_ids)))) if task_ids else []
+    planned_times = planned_task_datetimes(db, tasks)
     by_day: dict[str, list[str]] = {}
     latest_ids: list[str] = []
     from app.core.platform_order import expand_platform_codes
 
     purchased_family = expand_platform_codes(purchased_set) if purchased_set else set()
-    for subtask_id, platform, updated_at in db.execute(scan_stmt):
+    for subtask_id, platform, task_id in rows:
+        updated_at = planned_times.get(task_id)
         if purchased_family and platform not in purchased_family:
             continue
         if updated_at is None:
@@ -11231,7 +11237,7 @@ def _workspace_brief_full_from_daily_stats(
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
             "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "updated_at": schedule_ctx.get("schedule_label") or schedule_ctx.get("schedule_window_key"),
         }
         snapshot_candidates.append(row_payload)
         if latest_day and day_key == latest_day:
@@ -11620,7 +11626,7 @@ def workspace_brief(
             "answer_excerpt": _answer_excerpt(item.mention_context, 100),
             "page_screenshot": public_screenshot_url(item.page_screenshot),
             "source_articles": _snapshot_source_articles(item),
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "updated_at": schedule_ctx.get("schedule_label") or schedule_ctx.get("schedule_window_key"),
         }
         snapshot_candidates.append(row_payload)
 

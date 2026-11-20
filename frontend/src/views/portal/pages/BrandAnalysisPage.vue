@@ -310,7 +310,7 @@ async function openAnswerFromGroup(row: BrandAnalysisAnswer) {
 }
 
 const snapshotAnswerBlocks = computed(() => parseAnswerBlocks(snapshotSubtask.value?.answer_content || ''))
-const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at || null))
+const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.scheduled_at || null))
 const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?.page_screenshot || '') || '')
 const snapshotSourceTracks = computed(() =>
   buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
@@ -748,7 +748,7 @@ onMounted(() => {
           <span class="ws-board-drawer-chip">
             情感 {{ sentimentLabelMap[snapshotSubtask.sentiment || ''] || snapshotSubtask.sentiment || '暂无' }}
           </span>
-          <span v-if="snapshotUpdatedAt" class="ws-board-drawer-chip">更新 {{ snapshotUpdatedAt }}</span>
+          <span v-if="snapshotUpdatedAt" class="ws-board-drawer-chip">计划时间 {{ snapshotUpdatedAt }}</span>
           <a
             v-if="snapshotScreenshotUrl"
             :href="snapshotScreenshotUrl"

@@ -94,7 +94,7 @@ const snapshotAnswerBlocks = computed(() => {
 
 const snapshotScreenshotUrl = computed(() => externalLink(snapshotSubtask.value?.page_screenshot))
 
-const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.updated_at))
+const snapshotUpdatedAt = computed(() => formatDateTime(snapshotSubtask.value?.scheduled_at))
 
 const snapshotSourceTracks = computed(() =>
   buildSourceTrackRows(snapshotSubtask.value, { limit: 12, linkOf: externalLink }),
@@ -272,7 +272,7 @@ watch(
             <th>平台</th>
             <th>排名</th>
             <th>信源</th>
-            <th>更新时间</th>
+            <th>计划时间</th>
           </tr>
         </thead>
         <tbody>
@@ -305,7 +305,7 @@ watch(
               </template>
               <span v-else class="source-inclusion-empty-inline">—</span>
             </td>
-            <td class="source-inclusion-time">{{ formatDateTime(row.updated_at) || '—' }}</td>
+            <td class="source-inclusion-time">{{ formatDateTime(row.schedule_label || row.updated_at) || '—' }}</td>
           </tr>
         </tbody>
       </table>
@@ -349,7 +349,7 @@ watch(
           <span class="ws-board-drawer-chip">
             情感 {{ sentimentLabelMap[snapshotSubtask.sentiment || ''] || '暂无' }}
           </span>
-          <span v-if="snapshotUpdatedAt" class="ws-board-drawer-chip">更新 {{ snapshotUpdatedAt }}</span>
+          <span v-if="snapshotUpdatedAt" class="ws-board-drawer-chip">计划时间 {{ snapshotUpdatedAt }}</span>
           <a
             v-if="snapshotScreenshotUrl"
             :href="snapshotScreenshotUrl"

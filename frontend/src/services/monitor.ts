@@ -50,6 +50,7 @@ export interface MonitorSchedulePlan {
 }
 
 export interface MonitorSubtask {
+  scheduled_at?: string | null
   subtask_id: string
   task_id?: string
   platform: string

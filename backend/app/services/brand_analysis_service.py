@@ -874,7 +874,7 @@ def _group_ai_descriptions(
                 "prompt": item.prompt,
                 "excerpt": excerpt,
                 "sentiment": label,
-                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "updated_at": _subtask_event_at(item).isoformat() if _subtask_event_at(item) else None,
             }
             bucket = groups.get(key)
             if bucket is None:
@@ -1230,6 +1230,37 @@ def _try_load_brand_analysis_snapshot(
     out["compare_period"] = grain
     out["compare_period_label"] = COMPARE_PERIOD_LABELS[grain]
     out["generated_at"] = datetime.now().isoformat(timespec="seconds")
+    from app.services.schedule_context import planned_task_datetimes
+
+    def rows_in(value):
+        if isinstance(value, dict):
+            if value.get("subtask_id") and value.get("task_id"):
+                yield value
+            for child in value.values():
+                yield from rows_in(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from rows_in(child)
+
+    rows = list(rows_in(out))
+    ids = {row["task_id"] for row in rows}
+    tasks = list(db.scalars(select(GeoMonitorTask).where(GeoMonitorTask.task_id.in_(ids)))) if ids else []
+    times = planned_task_datetimes(db, tasks)
+    for row in rows:
+        planned = times.get(row["task_id"])
+        row["updated_at"] = planned.isoformat() if planned else None
+    def sort_answers(value):
+        if isinstance(value, dict):
+            answers = value.get("answers")
+            if isinstance(answers, list):
+                answers.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+            for child in value.values():
+                sort_answers(child)
+        elif isinstance(value, list):
+            for child in value:
+                sort_answers(child)
+
+    sort_answers(out)
     return align_platform_sentiment_shares(out)
 
 
@@ -1428,21 +1459,11 @@ def _description_compare_block(
 
 def _subtask_event_at(item: GeoMonitorSubtask) -> datetime | None:
     """监测发生时间：勿用 updated_at（情感/描述补解析会刷新，上期会被掏空）。"""
-    remote = getattr(item, "remote_time", None)
-    if remote is not None:
-        try:
-            ms = int(remote)
-            if ms > 10_000_000_000:  # ms
-                return datetime.fromtimestamp(ms / 1000.0)
-            if ms > 0:
-                return datetime.fromtimestamp(ms)
-        except (TypeError, ValueError, OSError, OverflowError):
-            pass
+    planned = getattr(item, "_planned_at", None)
+    if planned is not None:
+        return planned
     task = getattr(item, "task", None)
-    created = getattr(task, "created_at", None) if task is not None else None
-    if created is not None:
-        return created
-    return getattr(item, "updated_at", None)
+    return getattr(task, "created_at", None)
 
 
 def _subtask_in_window(item: GeoMonitorSubtask, start: datetime, end: datetime, *, end_exclusive: bool) -> bool:
@@ -1491,7 +1512,7 @@ def _build_platform_rows(
             "prompt": item.prompt,
             "excerpt": excerpt,
             "sentiment": label,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "updated_at": _subtask_event_at(item).isoformat() if _subtask_event_at(item) else None,
             "page_screenshot": public_screenshot_url(item.page_screenshot),
         })
 
@@ -1562,7 +1583,7 @@ def _load_brand_word_subtasks(
     )
     # 2026-07-30 - 1038 类风险 - 品牌分析 ORDER BY 勿带 answer/raw/screenshot，id-first 再 hydrate
     ordered_ids = _ordered_subtask_ids(db, stmt)
-    return _hydrate_subtasks_in_id_order(
+    items = _hydrate_subtasks_in_id_order(
         db,
         ordered_ids,
         joinedload(GeoMonitorSubtask.task).load_only(
@@ -1585,6 +1606,13 @@ def _load_brand_word_subtasks(
             GeoMonitorSubtask.updated_at,
         ),
     )
+
+    from app.services.schedule_context import planned_task_datetimes
+
+    times = planned_task_datetimes(db, list({item.task_id: item.task for item in items}.values()))
+    for item in items:
+        item._planned_at = times.get(item.task_id)
+    return items
 
 
 def build_brand_analysis_dashboard(

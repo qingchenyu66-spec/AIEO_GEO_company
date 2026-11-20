@@ -277,3 +277,20 @@ def schedule_window_sort_key(window_key: str | None) -> datetime:
         except ValueError:
             pass
     return datetime.min
+
+
+def planned_task_datetimes(db: Session, tasks: list[GeoMonitorTask]) -> dict[str, datetime | None]:
+    """Resolve original planned times in batches, falling back to task creation."""
+    ids = [task.task_id for task in tasks]
+    runs = schedule_runs_for_tasks(db, ids)
+    leads = lead_diagnosis_runs_for_tasks(db, ids)
+    result = {}
+    for task in tasks:
+        run = runs.get(task.task_id) or leads.get(task.task_id)
+        key = extract_schedule_window_key(run.schedule_key) if run else None
+        try:
+            planned = datetime.strptime(key[:13], "%Y%m%d-%H%M") if key else None
+        except (ValueError, TypeError):
+            planned = None
+        result[task.task_id] = planned or task.created_at
+    return result

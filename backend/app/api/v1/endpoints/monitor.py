@@ -1058,6 +1058,13 @@ def monitor_subtask_detail(
         asset=asset,
         keyword_groups=groups,
     )
+    from app.services.schedule_context import planned_task_datetimes
+
+    planned = planned_task_datetimes(db, [task]).get(task.task_id)
+    display["scheduled_at"] = planned.isoformat() if planned else None
+    if current.identity.identity_type == "CUSTOMER":
+        display["updated_at"] = display["scheduled_at"]
+        display["raw_result"] = None
     if not include_ops:
         return ApiResponse(data=display)
     if current.identity.identity_type == "PLATFORM":
